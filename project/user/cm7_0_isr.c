@@ -37,28 +37,28 @@
 ********************************************************************************************************************/
 
 #include "zf_common_headfile.h"
-
+#include "../code/PIT_Demo.h"
 
 // **************************** PIT中断函数 ****************************
-void pit0_ch0_isr()                     // 定时器通道 0 周期中断服务函数      
+void pit0_ch0_isr(void)
 {
     pit_isr_flag_clear(PIT_CH0);
-  
-    
-    
+    PIT_KeyVoltage_Task_5ms();
+    PIT_Adc_Task_5ms();
 }
 
-void pit0_ch1_isr()                     // 定时器通道 1 周期中断服务函数      
+void pit0_ch1_isr(void)
 {
     pit_isr_flag_clear(PIT_CH1);
-    
+    PIT_Control_Task_250us();
 }
 
-void pit0_ch2_isr()                     // 定时器通道 2 周期中断服务函数      
+void pit0_ch2_isr(void)
 {
     pit_isr_flag_clear(PIT_CH2);
-    
+    PIT_Motor_Task_500us();
 }
+
 
 void pit0_ch10_isr()                    // 定时器通道 10 周期中断服务函数      
 {

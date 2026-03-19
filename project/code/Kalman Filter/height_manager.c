@@ -1,6 +1,6 @@
 #include "height_manager.h"
-#include "ControlMath.h"
-#include "ir_localization.h"
+#include "../control/ControlMath.h"
+#include "../vision/ir_localization.h"
 #include "zf_device_dl1b.h"
 #include <math.h>
 

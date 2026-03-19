@@ -11,8 +11,8 @@
 // ==================== UART 硬件配置 ====================
 #define UART_INDEX              (UART_2)
 #define UART_BAUDRATE           (115200)
-#define UART_TX_PIN             (UART2_TX_P10_5)
-#define UART_RX_PIN             (UART2_RX_P10_6)
+#define UART_TX_PIN             (UART2_TX_P10_1)
+#define UART_RX_PIN             (UART2_RX_P10_0)
 
 // ==================== 模块对外接口 ====================
 void Init_uart(void);

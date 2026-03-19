@@ -5,11 +5,12 @@
 #include "zf_device_ips200.h"
 #include "../PIT_Demo.h"
 #include "../flight_control.h"
+#include "../icm/icm.h"
+#include "../icm/icm42688.h"
 
 #include <stdio.h>
 #include <string.h>
 
-extern int aa;
 
 /* ===================== 通用页面辅助 ===================== */
 
@@ -723,14 +724,12 @@ static uint8 screen_consume_monitor_button_event(uint8 button_id, key_index_enum
 
 static void screen_monitor_request_stop(void)
 {
-    aa = 0;
     Flight_Runtime_Emergency_Stop(EMERGENCY_STOP_REASON_MANUAL_BUTTON);
 }
 
 static void screen_monitor_arm_with_initial_target(void)
 {
     Flight_Runtime_Clear_Emergency_Stop_Latch();
-    aa = 1;
     Flight_Control_Arm();
     Flight_Control_Set_Throttle(MONITOR_ARM_START_THROTTLE);
 }

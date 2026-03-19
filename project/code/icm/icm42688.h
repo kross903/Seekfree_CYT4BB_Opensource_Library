@@ -4,12 +4,12 @@
 // ICM42688管脚宏定义
 #define ICM42688_SPI_SPEED      (24*1000*1000)      // 硬件SPI速率
 #define ICM42688_SPI            (SPI_0)             // 硬件SPI号
-#define ICM42688_SPC_PIN        (SPI0_SCLK_P20_11)   // 硬件SPI_SCK引脚
-#define ICM42688_SDI_PIN        (SPI0_MOSI_P20_14)  // 硬件SPI_MOSI引脚
-#define ICM42688_SDO_PIN        (SPI0_MISO_P20_12)  // 硬件SPI_MISO引脚
+#define ICM42688_SPC_PIN        (SPI0_CLK_P02_2)   // 硬件SPI_SCK引脚
+#define ICM42688_SDI_PIN        (SPI0_MOSI_P02_1)  // 硬件SPI_MOSI引脚
+#define ICM42688_SDO_PIN        (SPI0_MISO_P02_0)  // 硬件SPI_MISO引脚
 
 // ICM42688,CS管脚对应CH32V307VCT6引脚C10
-#define ICM42688_CS_PIN         SPI0_CS2_P20_13
+#define ICM42688_CS_PIN         SPI0_CS0_P02_3
 
 //#define ICM42688_SPI            (SPI_3)             // 硬件SPI号
 //#define ICM42688_SPC_PIN        (SPI3_SCLK_P22_0)   // 硬件SPI_SCK引脚
@@ -23,7 +23,7 @@
 // ICM42688延时
 #define ICM42688_DELAY_MS(time)  (system_delay_ms(time))
 // 对ICM42688的CS管脚进行高低电平操作
-#define ICM42688_CS_LEVEL(level) gpio_set_level(ICM42688_CS_PIN  , level);
+#define ICM42688_CS_LEVEL(level) gpio_set_level((gpio_pin_enum)ICM42688_CS_PIN, (gpio_level_enum)(level));
 
 
 extern float icm42688_acc_inv, icm42688_gyro_inv;

@@ -15,7 +15,7 @@
  */
 
 #include "ipm_interface.h"
-#include "ICM.h"
+#include "../icm/icm.h"
 
 /* ====================== 使用示例1: 目标点坐标转换 ====================== */
 

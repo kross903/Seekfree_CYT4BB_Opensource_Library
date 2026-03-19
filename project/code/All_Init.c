@@ -3,8 +3,8 @@
 #include "flight_control.h"
 #include "Kalman Filter/height_manager.h"
 #include "icm/icm.h"
-#include "parameter_flash.h"
-#include "menu.h"
+#include "menu/parameter_flash.h"
+#include "menu/menu.h"
 #include "menu/key.h"
 
 bool Send_state = 0;

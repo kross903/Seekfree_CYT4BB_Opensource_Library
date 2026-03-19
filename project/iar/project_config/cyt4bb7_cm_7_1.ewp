@@ -374,6 +374,11 @@
                     <state>$PROJ_DIR$\..\..\..\libraries\zf_components</state>
                     <state>$PROJ_DIR$\..\..\user</state>
                     <state>$PROJ_DIR$\..\..\code</state>
+                    <state>$PROJ_DIR$\..\..\code\control</state>
+                    <state>$PROJ_DIR$\..\..\code\icm</state>
+                    <state>$PROJ_DIR$\..\..\code\menu</state>
+                    <state>$PROJ_DIR$\..\..\code\vision</state>
+                    <state>$PROJ_DIR$\..\..\code\Kalman Filter</state>
                 </option>
                 <option>
                     <name>CCStdIncCheck</name>
@@ -1848,7 +1853,7 @@
             <name>$PROJ_DIR$\..\..\user\cm7_1_isr.c</name>
         </file>
         <file>
-            <name>$PROJ_DIR$\..\..\user\main_cm7_1_port.c</name>
+            <name>$PROJ_DIR$\..\..\user\main_cm7_1.c</name>
         </file>
     </group>
     <group>

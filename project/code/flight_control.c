@@ -1,7 +1,9 @@
 #include "flight_control.h"
 #include "PIT_Demo.h"
 #include "zf_common_headfile.h"
-#include "ICM.h"
+#include "icm/icm.h"
+#include "Kalman Filter/height_manager.h"
+#include "dshot600.h"
 
 /*********************************************************************************************************************
 * 文件名称: flight_control.c
@@ -356,7 +358,7 @@ void Flight_Control_Arm(void)
     Flight_Runtime_Reset_All_Throttle_States();
 
     Yaw_Lock();
-    gpio_set_level(LED1, GPIO_HIGH);
+    gpio_set_level(LED3, GPIO_HIGH);
     Flight_Control_Reset_All_PID();
     sync_runtime_snapshot();
 }
@@ -368,7 +370,7 @@ void Flight_Control_Disarm(void)
     Flight_Runtime_Reset_All_Throttle_States();
 
     clear_motor_throttle_buffer();
-    gpio_set_level(LED1, GPIO_LOW);
+    gpio_set_level(LED3, GPIO_LOW);
     Flight_Control_Reset_All_PID();
     sync_runtime_snapshot();
 }

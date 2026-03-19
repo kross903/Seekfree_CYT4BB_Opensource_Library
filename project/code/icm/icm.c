@@ -1,4 +1,4 @@
-#include "ICM.h"
+#include "icm.h"
 #include "zf_common_headfile.h"
 #include "../PIT_Demo.h"
 #include "../menu/screen_pages.h"
@@ -187,7 +187,7 @@ void ICM_Calculate_Init(void)
         icm_calibration_over_flag = 1;
     } else {
         // 使用经验值
-        flash_read_page_to_buffer(0,11);
+        flash_read_page_to_buffer(0, 11, 4);
         gyro_x_correction = gyro_x_correction_experience=flash_union_buffer[1].float_type;
         gyro_y_correction = gyro_y_correction_experience=flash_union_buffer[2].float_type;
         gyro_z_correction = gyro_z_correction_experience=flash_union_buffer[3].float_type;
@@ -712,7 +712,7 @@ void IMU_calibration(void)
 {
     uint32 s_cnt = 0, g_cnt = 0;
     float gyro_history[3][IMU_calibration_seconds];
-    sint32 gyro_history_sum[3] = {0, 0, 0};
+    int32 gyro_history_sum[3] = {0, 0, 0};
 
     // 校准提示
     ips200_show_string(0, 16*0, "IMU calibration");
@@ -763,7 +763,7 @@ void IMU_calibration(void)
 
 
     ips200_show_string(0, 16*2, "IMU Calibration OK      ");
-    flash_write_page_from_buffer(0,11);
+    flash_write_page_from_buffer(0, 11, 4);
     system_delay_ms(500);
 
 }

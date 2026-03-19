@@ -1,5 +1,5 @@
-
 #include "zf_common_headfile.h"
+#include "icm42688.h"
 
 int icm_calibration_over_flag = 0;
 int icm_calibration_flag = 0;
@@ -49,7 +49,7 @@ void Init_ICM42688(void)
         // left-top success prompts here to avoid overwriting the stage page.
 //        gpio_init(ICM42688_CS_PIN, GPO, GPIO_HIGH,GPO_PUSH_PULL);
     // 初始化超时
-    char time = 50;
+    int32 time = 50;
     // 读取陀螺仪型号陀螺仪自检
     unsigned char model = 0xff;
     while(1)
@@ -120,17 +120,11 @@ void Get_Acc_ICM42688(void)
 **/
 void Get_correction(void)
 {
-    unsigned char data[6][10];
-
-    int i = 0;
+    unsigned char data[6];
     Read_Datas_ICM42688(ICM42688_GYRO_DATA_X1, data, 6);
-    for(i = 0;i < 10;i++)
-    {
-
-        icm42688_gyro_x = icm42688_gyro_inv * (short int)(((short int)data[0][i] << 8) | data[1][i]);
-        icm42688_gyro_y = icm42688_gyro_inv * (short int)(((short int)data[2][i] << 8) | data[3][i]);
-        icm42688_gyro_z = icm42688_gyro_inv * (short int)(((short int)data[4][i] << 8) | data[5][i]);
-    }
+    icm42688_gyro_x = icm42688_gyro_inv * (short int)(((short int)data[0] << 8) | data[1]);
+    icm42688_gyro_y = icm42688_gyro_inv * (short int)(((short int)data[2] << 8) | data[3]);
+    icm42688_gyro_z = icm42688_gyro_inv * (short int)(((short int)data[4] << 8) | data[5]);
 }
 void Get_Gyro_ICM42688(void)
 {
@@ -228,9 +222,9 @@ void Set_LowpassFilter_Range_ICM42688(enum icm42688_afs afs, enum icm42688_aodr 
 **/
 static void Write_Data_ICM42688(unsigned char reg, unsigned char data)
 {
-    ICM42688_CS_LEVEL(0);
+    ICM42688_CS_LEVEL(GPIO_LOW);
     ICM42688_Write_Reg(reg, data);
-    ICM42688_CS_LEVEL(1);
+    ICM42688_CS_LEVEL(GPIO_HIGH);
 }
 
 /**
@@ -246,9 +240,9 @@ static void Write_Data_ICM42688(unsigned char reg, unsigned char data)
 **/
 static void Read_Datas_ICM42688(unsigned char reg, unsigned char *data, unsigned int num)
 {
-    ICM42688_CS_LEVEL(0);
+    ICM42688_CS_LEVEL(GPIO_LOW);
     ICM42688_Read_Regs(reg, data, num);
-    ICM42688_CS_LEVEL(1);
+    ICM42688_CS_LEVEL(GPIO_HIGH);
 }
 
 ///**

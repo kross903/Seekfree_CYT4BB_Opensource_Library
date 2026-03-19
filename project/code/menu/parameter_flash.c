@@ -3,6 +3,7 @@
 
 #include "PIT_Demo.h"
 #include "flight_control.h"
+#include "../Kalman Filter/height_manager.h"
 #include "key.h"
 #include "zf_device_ips200.h"
 #include "zf_driver_flash.h"
@@ -345,7 +346,7 @@ static void parameter_build_record(ParameterFlashRecord *record)
 
 static uint8 parameter_read_record(ParameterFlashRecord *record)
 {
-    flash_read_page_to_buffer(0, PARAMETER_INDEX);
+    flash_read_page_to_buffer(0, PARAMETER_INDEX, (sizeof(*record) + 3U) / 4U);
     memcpy(record, flash_union_buffer, sizeof(*record));
     return parameter_record_is_valid(record);
 }
@@ -572,7 +573,7 @@ void Parameter_flash_save(void)
     memset(flash_union_buffer, 0xFF, sizeof(flash_union_buffer));
     memcpy(flash_union_buffer, &record, sizeof(record));
     flash_erase_page(0, PARAMETER_INDEX);
-    flash_write_page_from_buffer(0, PARAMETER_INDEX);
+    flash_write_page_from_buffer(0, PARAMETER_INDEX, (sizeof(record) + 3U) / 4U);
 }
 
 void Parameter_Load_Or_Init_Storage(void)
@@ -999,3 +1000,4 @@ uint8 check_parameter_index_conflicts(void)
 
     return conflicts;
 }
+

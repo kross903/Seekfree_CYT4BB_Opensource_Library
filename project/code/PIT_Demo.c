@@ -1,7 +1,8 @@
 #include "PIT_Demo.h"
 #include "flight_control.h"
-#include "height_manager.h"
-#include "Joystick.h"
+#include "Kalman Filter/height_manager.h"
+#include "control/joystick.h"
+#include "icm/icm.h"
 #include "menu/key.h"
 #include "zf_common_headfile.h"
 

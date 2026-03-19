@@ -1,5 +1,8 @@
 #include "vofa.h"
 #include "flight_control.h"
+#include "PIT_Demo.h"
+#include "Kalman Filter/height_manager.h"
+#include "vision/ir_localization.h"
 #include <math.h>
 #include <string.h>
 

@@ -3,6 +3,8 @@
 #include "flight_control.h"
 #include "parameter_flash.h"
 #include "screen_pages.h"
+#include "../icm/icm.h"
+#include "../vofa.h"
 
 /* 主菜单对象 */
 Menu mainMenu;
@@ -63,7 +65,7 @@ static uint8 select_control_mode(void)
 /* 退出菜单系统并切入飞行监视页 */
 void exit_menu_system(void)
 {
-    gpio_set_level(P11_6,0);
+    gpio_set_level(P11_0, 0);
     // 先让用户确认当前飞控模式。
     if (!select_control_mode())
         return;  // 用户取消操作
