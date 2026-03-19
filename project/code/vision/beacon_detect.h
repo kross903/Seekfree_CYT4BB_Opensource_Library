@@ -1,0 +1,90 @@
+/**
+ * @file beacon_detect.h
+ * @brief 红外信标检测模块接口
+ *
+ * 模块职责:
+ * 1. 对原始灰度图执行固定阈值二值化
+ * 2. 用八邻域 BFS 提取连通域
+ * 3. 按面积、宽高比、占空比过滤候选区域
+ * 4. 通过 IPM 将像素坐标换算为地面坐标
+ *
+ * 说明:
+ * - 本模块只负责“找信标 + 输出图像/地面坐标”
+ * - 姿态补偿与逆透视由 ipm_interface / drone_ipm_embedded 提供
+ * - 核心算法来自 case02 Unicycle_Beacon_2025/dual_camera 的移植
+ */
+
+#ifndef _BEACON_DETECT_H_
+#define _BEACON_DETECT_H_
+
+#include "zf_common_headfile.h"
+
+/* ====================== 配置 ====================== */
+
+#define BEACON_MAX_DETECTIONS   50          /* 单帧最大检测数量 */
+#define BEACON_IMG_ROWS         MT9V03X_H   /* 120 */
+#define BEACON_IMG_COLS         MT9V03X_W   /* 188 */
+
+/* ====================== 数据结构 ====================== */
+
+/**
+ * @brief 单个信标检测结果
+ *
+ * 与原 case02 中的连通域结果一一对应，只是额外补充了逆透视后的地面坐标。
+ */
+typedef struct {
+    /* 图像域 */
+    float centroid_row, centroid_col;      /* 质心坐标(行, 列) */
+    int   area;                            /* 连通域像素面积 */
+    float average_brightness;              /* 区域平均亮度 */
+    float aspect_ratio;                    /* 外接矩形宽高比 */
+    float occupancy_ratio;                 /* 面积 / 外接矩形面积 */
+    /* 世界域 */
+    float world_x, world_y;                /* 地面坐标(cm), X向前 Y向右 */
+    float distance_cm;                     /* 相对正下方原点的距离(cm) */
+    float angle_deg;                       /* 方位角(度), 正前方为0 */
+} BeaconResult_t;
+
+/**
+ * @brief 运行时可调的检测阈值
+ */
+typedef struct {
+    int   binary_threshold;                /* 二值化阈值 */
+    int   area_threshold;                  /* 最小连通域面积 */
+    float min_aspect;                      /* 最小宽高比 */
+    float max_aspect;                      /* 最大宽高比 */
+    float min_occupancy;                   /* 最小占空比 */
+} BeaconConfig_t;
+
+/* ====================== 全局变量 ====================== */
+
+extern BeaconConfig_t g_beacon_config;
+
+/* ====================== 函数接口 ====================== */
+
+/* Runtime entry points used by cpu2_main.c */
+
+/**
+ * @brief 初始化信标检测模块
+ * @note 开机时调用一次即可，当前主要用于保留统一初始化入口
+ */
+void BeaconDetect_Init(void);
+
+/**
+ * @brief 处理一帧图像并输出全部信标候选
+ * @param image        MT9V03X 原始灰度图像
+ * @param results      输出结果数组
+ * @param max_results  结果数组容量(<= BEACON_MAX_DETECTIONS)
+ * @return 本帧检测到的信标数量
+ * @note 调用前需要先通过 IPM_Interface_UpdateFromIMU() 更新姿态与高度
+ */
+int BeaconDetect_Process(const uint8 image[MT9V03X_H][MT9V03X_W],
+                         BeaconResult_t *results, int max_results);
+
+/**
+ * @brief 在检测结果中找出距离正下方最近的信标
+ * @return 最近信标的下标，未检测到时返回 -1
+ */
+int BeaconDetect_GetNearestIndex(const BeaconResult_t *results, int count);
+
+#endif /* _BEACON_DETECT_H_ */

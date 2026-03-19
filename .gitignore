@@ -1,0 +1,22 @@
+﻿# Build outputs
+Debug/
+Release/
+**/Debug/
+**/Release/
+**/Obj/
+**/List/
+**/BrowseInfo/
+
+# IDE temps
+*.tmp
+*.bak
+*.log
+
+# IAR generated outputs
+**/project_config/Debug_*/
+*.pbd
+*.dep
+
+# OS
+Thumbs.db
+.DS_Store
