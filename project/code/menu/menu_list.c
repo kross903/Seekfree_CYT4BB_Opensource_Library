@@ -65,7 +65,6 @@ static uint8 select_control_mode(void)
 /* 退出菜单系统并切入飞行监视页 */
 void exit_menu_system(void)
 {
-    gpio_set_level(P11_0, 0);
     // 先让用户确认当前飞控模式。
     if (!select_control_mode())
         return;  // 用户取消操作
@@ -92,6 +91,7 @@ void icm_init_menu()
      * 2. 初始化完成后继续停留在结果页，直到用户主动返回，保持与菜单其他页面一致的交互方式。
      */
     key_flag = 0;
+    IMU_calibrate_flag = 0;
     ICM_Calculate_Init();
 
     ips200_clear();

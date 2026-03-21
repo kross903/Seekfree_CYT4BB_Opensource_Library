@@ -43,11 +43,11 @@ float icm42688_acc_inv = 1, icm42688_gyro_inv = 1;
 void Init_ICM42688(void)
 {
     // SPI初始化
-    system_delay_ms(10);
-        spi_init(ICM42688_SPI, SPI_MODE0, ICM42688_SPI_SPEED, ICM42688_SPC_PIN, ICM42688_SDI_PIN, ICM42688_SDO_PIN, ICM42688_CS_PIN);
-        // [2026-03-10] ICM init UI is now drawn by icm.c, so suppress the old
-        // left-top success prompts here to avoid overwriting the stage page.
-//        gpio_init(ICM42688_CS_PIN, GPO, GPIO_HIGH,GPO_PUSH_PULL);
+     system_delay_ms(10);
+    spi_init(ICM42688_SPI, SPI_MODE0, ICM42688_SPI_SPEED, ICM42688_SPC_PIN, ICM42688_SDI_PIN, ICM42688_SDO_PIN, SPI_CS_NULL);
+    gpio_init(ICM42688_CS_PIN, GPO, GPIO_HIGH, GPO_PUSH_PULL);
+    // [2026-03-10] ICM init UI is now drawn by icm.c, so suppress the old
+    // left-top success prompts here to avoid overwriting the stage page.
     // 初始化超时
     int32 time = 50;
     // 读取陀螺仪型号陀螺仪自检

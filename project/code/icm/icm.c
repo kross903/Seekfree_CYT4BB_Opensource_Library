@@ -83,7 +83,13 @@ typedef enum
     ORIGIN_AXIS_COUNT
 } origin_axis_enum;
 
+
 #define ORIGIN_GROUP_SAMPLE_COUNT 10U
+
+static uint8 icm_is_valid_gyro_bias(float value)
+{
+    return (value == value) && (fabsf(value) < 200.0f);
+}
 
 static void origin_sample_live_attitude(float history_sum[ORIGIN_AXIS_COUNT])
 {
@@ -186,13 +192,24 @@ void ICM_Calculate_Init(void)
         IMU_calibration();  // 自动校准
         icm_calibration_over_flag = 1;
     } else {
-        // 使用经验值
-        flash_read_page_to_buffer(0, 11, 4);
+
         gyro_x_correction = gyro_x_correction_experience=flash_union_buffer[1].float_type;
         gyro_y_correction = gyro_y_correction_experience=flash_union_buffer[2].float_type;
         gyro_z_correction = gyro_z_correction_experience=flash_union_buffer[3].float_type;
         ips200_show_string(0, 16*2, "Using Gyro Exp Val");
-    }
+        if(!(icm_is_valid_gyro_bias(gyro_x_correction) &&
+             icm_is_valid_gyro_bias(gyro_y_correction) &&
+             icm_is_valid_gyro_bias(gyro_z_correction)))
+        {
+            gyro_x_correction = gyro_x_correction_experience = 0.0f;
+            gyro_y_correction = gyro_y_correction_experience = 0.0f;
+            gyro_z_correction = gyro_z_correction_experience = 0.0f;
+            ips200_show_string(0, 16*2, "Gyro Bias Invalid ");
+            IMU_calibration();
+            icm_calibration_over_flag = 1;
+        }
+    }      
+    
 
     // 5. 预热姿态解算(让四元数收敛)
     ips200_show_string(0, 16*3, "Warming up...");

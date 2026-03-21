@@ -143,6 +143,7 @@ static void run_monitor_view_loop(void)
 static void initialize_control_core_modules(void)
 {
     Init_uart();
+    flash_init();
     Device_Init();
     IR_Localization_Init();
     IPM_Interface_Init();
