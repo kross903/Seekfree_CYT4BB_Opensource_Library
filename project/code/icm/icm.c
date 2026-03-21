@@ -174,7 +174,10 @@ void calculate_origin_point(void)
  */
 void ICM_Calculate_Init(void)
 {
+    icm_calibration_flag = 1;
+
     // 1. 硬件初始化
+    Init_ICM42688();
     Init_ICM42688();
     system_delay_ms(100);
     ips200_show_string(0, 16*0, "ICM Init...");
@@ -192,11 +195,15 @@ void ICM_Calculate_Init(void)
         IMU_calibration();  // 自动校准
         icm_calibration_over_flag = 1;
     } else {
+        flash_read_page_to_buffer(0, 11, 4); 
 
         gyro_x_correction = gyro_x_correction_experience=flash_union_buffer[1].float_type;
         gyro_y_correction = gyro_y_correction_experience=flash_union_buffer[2].float_type;
         gyro_z_correction = gyro_z_correction_experience=flash_union_buffer[3].float_type;
         ips200_show_string(0, 16*2, "Using Gyro Exp Val");
+        ips200_show_float(96, 56,  gyro_x_correction, 3, 3);
+        ips200_show_float(96, 80,  gyro_y_correction, 3, 3);
+        ips200_show_float(96, 104, gyro_z_correction, 3, 3);
         if(!(icm_is_valid_gyro_bias(gyro_x_correction) &&
              icm_is_valid_gyro_bias(gyro_y_correction) &&
              icm_is_valid_gyro_bias(gyro_z_correction)))
@@ -230,6 +237,7 @@ void ICM_Calculate_Init(void)
 
     ips200_show_string(0, 16*3, "ICM Ready!        ");
     system_delay_ms(500);
+    icm_calibration_flag = 0;
 
 }
 
@@ -760,7 +768,6 @@ void IMU_calibration(void)
             s_cnt++;
         }
     } while(s_cnt < IMU_calibration_seconds);
-
     // 计算平均零飘
     float sum[3] = {0, 0, 0};
     float k = icm42688_gyro_inv / IMU_calibration_seconds;
@@ -769,16 +776,16 @@ void IMU_calibration(void)
         sum[0] += gyro_history[0][i];
         sum[1] += gyro_history[1][i];
         sum[2] += gyro_history[2][i];
-        ips200_show_float(96, 56,  gyro_history[0][i], 3, 3);
-        ips200_show_float(96, 80,  gyro_history[1][i], 3, 3);
-        ips200_show_float(96, 104, gyro_history[2][i], 3, 3);
+ 
     }
     flash_buffer_clear();
     flash_union_buffer[1].float_type=  gyro_x_correction = k * sum[0];
     flash_union_buffer[2].float_type=gyro_y_correction = k * sum[1];
     flash_union_buffer[3].float_type=gyro_z_correction = k * sum[2];
 
-
+    ips200_show_float(96, 56, flash_union_buffer[1].float_type, 3, 3);
+    ips200_show_float(96, 80, flash_union_buffer[2].float_type, 3, 3);
+    ips200_show_float(96, 104, flash_union_buffer[3].float_type, 3, 3);
     ips200_show_string(0, 16*2, "IMU Calibration OK      ");
     flash_write_page_from_buffer(0, 11, 4);
     system_delay_ms(500);

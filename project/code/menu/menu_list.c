@@ -97,7 +97,6 @@ void icm_init_menu()
     ips200_clear();
     while(1)
     {
-        get_ICM_data();
         ui_menu_show_icm_init_result_page();
         if(key_flag == Button_4)
         {

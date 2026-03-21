@@ -292,6 +292,12 @@ void PIT_Control_Task_250us(void)
 {
     motor_pwm_init_once();
 
+    if(icm_calibration_flag)
+    {
+        clear_motor_throttle_state();
+        return;
+    }
+
     get_ICM_data();
     Get_Attitude_Angle(&current_roll, &current_pitch, &current_yaw);
     Get_Angular_Rate(&current_gyro_roll, &current_gyro_pitch, &current_gyro_yaw);

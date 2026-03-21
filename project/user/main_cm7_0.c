@@ -159,7 +159,7 @@ int main(void)
         
     initialize_control_core_modules();
     
-    
+    menu_open();
     // 此处编写用户代码 例如外设初始化代码等
     while(true)
     {
