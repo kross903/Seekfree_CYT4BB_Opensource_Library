@@ -27,6 +27,7 @@
  *    只需要优先校准 BATTERY_ADC_TO_VOLTAGE_SCALE 这一处。
  */
 #define BATTERY_ADC_TO_VOLTAGE_SCALE   0.008753698f
+#define BATTERY_ADC_CHANNEL            ADC1_CH24_P14_4
 #define BATTERY_SERIES_CELLS           6.0f
 #define BATTERY_LOW_CELL_WARN_V        3.55f
 #define BATTERY_LOW_CELL_RECOVER_V     3.65f
@@ -43,6 +44,7 @@
 #define EMERGENCY_STOP_REASON_ATTITUDE_ROLL   1
 #define EMERGENCY_STOP_REASON_ATTITUDE_PITCH  2
 #define EMERGENCY_STOP_REASON_MANUAL_BUTTON   3
+#define EMERGENCY_STOP_REASON_LINK_TIMEOUT    4
 
 // ==================== 解锁与控制模式 ====================
 extern volatile uint8 armed;

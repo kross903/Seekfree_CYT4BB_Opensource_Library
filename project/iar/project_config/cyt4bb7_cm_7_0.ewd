@@ -120,7 +120,7 @@
                 </option>
                 <option>
                     <name>OCImagesPath1</name>
-                    <state>$PROJ_DIR$\Debug_m7_0\Exe\cyt4bb7_cm_7_0.hex</state>
+                    <state>$PROJ_DIR$\cyt4bb7_cm_7_0.ewx</state>
                 </option>
                 <option>
                     <name>OCImagesSuppressCheck2</name>
@@ -212,7 +212,7 @@
                 </option>
                 <option>
                     <name>OCMulticoreAMPConfigType</name>
-                    <state>2</state>
+                    <state>0</state>
                 </option>
                 <option>
                     <name>OCMulticoreSessionFile</name>

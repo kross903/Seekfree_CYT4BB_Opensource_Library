@@ -1,5 +1,6 @@
 #include "PIT_Demo.h"
 #include "flight_control.h"
+#include "drone_car_link.h"
 #include "Kalman Filter/height_manager.h"
 #include "control/joystick.h"
 #include "icm/icm.h"
@@ -268,7 +269,7 @@ void PIT_KeyVoltage_Task_5ms(void)
 {
     key_scanner();
     key_scan();
-    adc_value = adc_mean_filter_convert(ADC1_CH20_P14_0, 50);
+    adc_value = adc_mean_filter_convert(BATTERY_ADC_CHANNEL, 50);
     voltage = adc_value * BATTERY_ADC_TO_VOLTAGE_SCALE;
     low_voltage_protect_flag = (voltage < BATTERY_LOW_WARN_THRESHOLD) ? 1 : 0;
 }
@@ -290,6 +291,10 @@ void PIT_Motor_Task_500us(void)
 
 void PIT_Control_Task_250us(void)
 {
+    float external_roll = 0.0f;
+    float external_pitch = 0.0f;
+    float external_yaw = 0.0f;
+
     motor_pwm_init_once();
 
     if(icm_calibration_flag)
@@ -306,8 +311,6 @@ void PIT_Control_Task_250us(void)
     {
         return;
     }
-
-    HeightManager_Update();
 
     if(!armed)
     {
@@ -327,14 +330,24 @@ void PIT_Control_Task_250us(void)
         return;
     }
 
-    target_angle_roll = PID_Calculate(&joystick_pid_roll,
-                                      adc_x_nomalize * JOYSTICK_ROLL_MAX_DEG,
-                                      current_roll,
-                                      CONTROL_DT_S);
-    target_angle_pitch = PID_Calculate(&joystick_pid_pitch,
-                                       adc_y_nomalize * JOYSTICK_PITCH_MAX_DEG,
-                                       current_pitch,
-                                       CONTROL_DT_S);
+    if(DroneCarLink_UsesExternalTargets())
+    {
+        DroneCarLink_Get_Target_Angles(&external_roll, &external_pitch, &external_yaw);
+        target_angle_roll = external_roll;
+        target_angle_pitch = external_pitch;
+        target_angle_yaw = external_yaw;
+    }
+    else
+    {
+        target_angle_roll = PID_Calculate(&joystick_pid_roll,
+                                          adc_x_nomalize * JOYSTICK_ROLL_MAX_DEG,
+                                          current_roll,
+                                          CONTROL_DT_S);
+        target_angle_pitch = PID_Calculate(&joystick_pid_pitch,
+                                           adc_y_nomalize * JOYSTICK_PITCH_MAX_DEG,
+                                           current_pitch,
+                                           CONTROL_DT_S);
+    }
 
     target_roll_rate = PID_Calculate(&angle_pid_roll, target_angle_roll + target_angle_roll_add, current_roll, CONTROL_DT_S);
     target_pitch_rate = PID_Calculate(&angle_pid_pitch, target_angle_pitch + target_angle_pitch_add, current_pitch, CONTROL_DT_S);

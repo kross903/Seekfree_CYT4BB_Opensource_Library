@@ -38,6 +38,8 @@
 
 #include "zf_common_headfile.h"
 #include "../code/PIT_Demo.h"
+#include "../code/drone_car_link.h"
+#include "../code/Kalman Filter/height_manager.h"
 
 // **************************** PIT中断函数 ****************************
 void pit0_ch0_isr(void)
@@ -63,13 +65,13 @@ void pit0_ch2_isr(void)
 void pit0_ch10_isr()                    // 定时器通道 10 周期中断服务函数      
 {
     pit_isr_flag_clear(PIT_CH10);
-    
+    DroneCarLink_Service_Task_10ms();
 }
 
 void pit0_ch11_isr()                    // 定时器通道 11 周期中断服务函数      
 {
     pit_isr_flag_clear(PIT_CH11);
-    
+    HeightManager_Task_25ms();
 }
 
 void pit0_ch12_isr()                    // 定时器通道 12 周期中断服务函数      

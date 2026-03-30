@@ -1,5 +1,6 @@
 #include "All_Init.h"
 #include "PIT_Demo.h"
+#include "drone_car_link.h"
 #include "flight_control.h"
 #include "Kalman Filter/height_manager.h"
 #include "icm/icm.h"
@@ -12,13 +13,14 @@ bool Send_state = 0;
 #define KEY_VOLT_PIT               PIT_CH0
 #define CONTROL_LOOP_PIT           PIT_CH1
 #define MOTOR_OUTPUT_PIT           PIT_CH2
+#define TOF_UPDATE_PIT             PIT_CH11
 
 static void init_display_and_basic_peripherals(void)
 {
     ips200_set_dir(IPS200_PORTAIT);
     ips200_init(IPS200_TYPE_SPI);
 
-    adc_init(ADC1_CH20_P14_0, ADC_12BIT);
+    adc_init(BATTERY_ADC_CHANNEL, ADC_12BIT);
     adc_init(ADC0_CH00_P06_0, ADC_12BIT);
     adc_init(ADC0_CH01_P06_1, ADC_12BIT);
     dl1b_init();
@@ -57,6 +59,8 @@ static void init_periodic_interrupts(void)
     pit_us_init(KEY_VOLT_PIT, 5000);      // 5ms
     pit_us_init(CONTROL_LOOP_PIT, 250);   // 4kHz control
     pit_us_init(MOTOR_OUTPUT_PIT, 500);   // 2kHz PWM update
+    pit_ms_init(TOF_UPDATE_PIT, 25);      // 40Hz TOF update
+    pit_ms_init(DRONE_CAR_LINK_SERVICE_PIT, 10);
 }
 
 void Device_Init(void)

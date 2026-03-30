@@ -44,6 +44,7 @@
 #include "../code/menu/menu.h"
 #include "../code/menu/screen_pages.h"
 #include "../code/cross_core_camera.h"
+#include "../code/drone_car_link.h"
 #include "../code/vofa.h"
 // 打开新的工程或者工程移动了位置务必执行以下操作
 // 第一步 关闭上面所有打开的文件
@@ -107,6 +108,7 @@ static void service_monitor_telemetry(void)
     Send_test();
     USART_PID_Adjust();
     send_date_back();
+    DroneCarLink_MainLoopTask();
 }
 
 static void update_monitor_view(void)
@@ -145,6 +147,7 @@ static void initialize_control_core_modules(void)
     Init_uart();
     flash_init();
     Device_Init();
+    DroneCarLink_Init();
     IR_Localization_Init();
     IPM_Interface_Init();
     BeaconDetect_Init();

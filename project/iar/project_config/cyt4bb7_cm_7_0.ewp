@@ -2166,6 +2166,7 @@
         <name>app_port</name>
         <file><name>$PROJ_DIR$\..\..\code\All_Init.c</name></file>
         <file><name>$PROJ_DIR$\..\..\code\cross_core_camera.c</name></file>
+        <file><name>$PROJ_DIR$\..\..\code\drone_car_link.c</name></file>
         <file><name>$PROJ_DIR$\..\..\code\flight_control.c</name></file>
         <file><name>$PROJ_DIR$\..\..\code\pid_controller.c</name></file>
         <file><name>$PROJ_DIR$\..\..\code\PIT_Demo.c</name></file>
