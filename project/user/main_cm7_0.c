@@ -86,6 +86,9 @@ static void build_monitor_runtime_snapshot(MonitorRuntimeSnapshot *snapshot)
     snapshot->fused_height_cm = g_height_result.height_cm;
     snapshot->ir_height_cm = ir_pose_estimate.z;
     snapshot->fused_velocity_cms = g_height_result.velocity_cms;
+    snapshot->optical_flow_dx = pmw3901_delta_x;
+    snapshot->optical_flow_dy = pmw3901_delta_y;
+    snapshot->optical_flow_x_integral = pmw3901_delta_x_i;
 }
 
 static void update_monitor_vision_state(void)
@@ -147,6 +150,8 @@ static void initialize_control_core_modules(void)
     Init_uart();
     flash_init();
     Device_Init();
+    pmw3901_init();
+    
     DroneCarLink_Init();
     IR_Localization_Init();
     IPM_Interface_Init();

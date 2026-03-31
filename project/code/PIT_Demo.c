@@ -284,6 +284,19 @@ void PIT_Adc_Task_5ms(void)
     adc_y_nomalize = joystick_normalize(adc_y);
 }
 
+void PIT_PMW3901_Task_20ms(void)
+{
+    static uint8 pmw3901_ready = 0;
+
+    if(!pmw3901_ready)
+    {
+        pmw3901_ready = (0 == pmw3901_init()) ? 1U : 0U;
+        return;
+    }
+
+    pmw3901_get_motion();
+}
+
 void PIT_Motor_Task_500us(void)
 {
     write_motor_pwm_output();

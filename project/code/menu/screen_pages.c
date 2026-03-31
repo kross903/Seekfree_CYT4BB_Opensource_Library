@@ -394,6 +394,9 @@ typedef struct
     float roll;
     float pitch;
     float yaw;
+    int32 optical_flow_dx;
+    int32 optical_flow_dy;
+    int32 optical_flow_x_integral;
 } MonitorTofAttitudeHudData;
 
 typedef struct
@@ -467,6 +470,9 @@ static void ui_monitor_fill_tof_attitude_hud(const MonitorRuntimeSnapshot *snaps
     data->roll = snapshot->roll;
     data->pitch = snapshot->pitch;
     data->yaw = snapshot->yaw;
+    data->optical_flow_dx = snapshot->optical_flow_dx;
+    data->optical_flow_dy = snapshot->optical_flow_dy;
+    data->optical_flow_x_integral = snapshot->optical_flow_x_integral;
 }
 
 static void ui_monitor_fill_reserved_hud(MonitorReservedHudData *data)
@@ -531,9 +537,9 @@ static void ui_monitor_draw_tof_attitude_layout(void)
     ips200_show_string(0U, UI_MONITOR_THROTTLE_Y, "ROLL:");
     ips200_show_string(0U, UI_MONITOR_ATTITUDE_Y, "PITCH:");
     ips200_show_string(0U, UI_MONITOR_YAW_Y, "YAW:");
-    ips200_show_string(0U, UI_MONITOR_NEAREST_Y, "date0:");
-    ips200_show_string(0U, UI_MONITOR_HEIGHT_Y, "date1:");
-    ips200_show_string(0U, UI_MONITOR_IR_Y, "date2:");
+    ips200_show_string(0U, UI_MONITOR_NEAREST_Y, "OF DX:");
+    ips200_show_string(0U, UI_MONITOR_HEIGHT_Y, "OF DY:");
+    ips200_show_string(0U, UI_MONITOR_IR_Y, "OF XI:");
     ips200_show_string(0U, UI_MONITOR_HINT_BOTTOM_Y, "K4:STOP HOLD K4:MENU");
     ips200_set_color(RGB565_WHITE, RGB565_BLACK);
 }
@@ -624,9 +630,9 @@ static void ui_monitor_draw_tof_attitude_hud(const MonitorTofAttitudeHudData *da
     ips200_show_float(UI_MONITOR_RIGHT_VALUE_X, UI_MONITOR_THROTTLE_Y, data->roll, 4U, 1U);
     ips200_show_float(UI_MONITOR_RIGHT_VALUE_X, UI_MONITOR_ATTITUDE_Y, data->pitch, 4U, 1U);
     ips200_show_float(UI_MONITOR_RIGHT_VALUE_X, UI_MONITOR_YAW_Y, data->yaw, 4U, 1U);
-    ui_show_padded_text(UI_MONITOR_RIGHT_VALUE_X, UI_MONITOR_NEAREST_Y, "date0", 8U, RGB565_WHITE);
-    ui_show_padded_text(UI_MONITOR_RIGHT_VALUE_X, UI_MONITOR_HEIGHT_Y, "date1", 8U, RGB565_WHITE);
-    ui_show_padded_text(UI_MONITOR_RIGHT_VALUE_X, UI_MONITOR_IR_Y, "date2", 8U, RGB565_WHITE);
+    ips200_show_int(UI_MONITOR_RIGHT_VALUE_X, UI_MONITOR_NEAREST_Y, data->optical_flow_dx, 6U);
+    ips200_show_int(UI_MONITOR_RIGHT_VALUE_X, UI_MONITOR_HEIGHT_Y, data->optical_flow_dy, 6U);
+    ips200_show_int(UI_MONITOR_RIGHT_VALUE_X, UI_MONITOR_IR_Y, data->optical_flow_x_integral, 6U);
     ui_show_padded_text(0U, UI_MONITOR_HINT_TOP_Y, data->hint_text, 28U, RGB565_WHITE);
 }
 

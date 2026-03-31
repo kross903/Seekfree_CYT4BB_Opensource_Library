@@ -77,6 +77,7 @@ void pit0_ch11_isr()                    // 定时器通道 11 周期中断服务函数
 void pit0_ch12_isr()                    // 定时器通道 12 周期中断服务函数      
 {
     pit_isr_flag_clear(PIT_CH12);
+    PIT_PMW3901_Task_20ms();
     
 }
 

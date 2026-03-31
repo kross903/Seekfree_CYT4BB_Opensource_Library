@@ -275,7 +275,12 @@ uint8 pmw3901_init(void)
         }
         else
         {
-            zf_log(0, "PMW3901 init config failed!!!");
+            while(1)
+            {
+                ips200_show_string(0, 0, "PMW3901 init failed!!!");
+               
+            }
+            
         }
     }
 

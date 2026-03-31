@@ -14,6 +14,7 @@ bool Send_state = 0;
 #define CONTROL_LOOP_PIT           PIT_CH1
 #define MOTOR_OUTPUT_PIT           PIT_CH2
 #define TOF_UPDATE_PIT             PIT_CH11
+#define PMW3901_UPDATE_PIT         PIT_CH12
 
 static void init_display_and_basic_peripherals(void)
 {
@@ -59,6 +60,7 @@ static void init_periodic_interrupts(void)
     pit_us_init(KEY_VOLT_PIT, 5000);      // 5ms
     pit_us_init(CONTROL_LOOP_PIT, 250);   // 4kHz control
     pit_us_init(MOTOR_OUTPUT_PIT, 500);   // 2kHz PWM update
+    pit_us_init(PMW3901_UPDATE_PIT, 20000);  // 20ms PMW3901 update
     pit_ms_init(TOF_UPDATE_PIT, 25);      // 40Hz TOF update
     pit_ms_init(DRONE_CAR_LINK_SERVICE_PIT, 10);
 }

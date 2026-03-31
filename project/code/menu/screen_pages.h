@@ -35,6 +35,9 @@ typedef struct
     float fused_height_cm;
     float ir_height_cm;
     float fused_velocity_cms;
+    int32 optical_flow_dx;
+    int32 optical_flow_dy;
+    int32 optical_flow_x_integral;
 } MonitorRuntimeSnapshot;
 
 void ui_menu_init_display(void);
