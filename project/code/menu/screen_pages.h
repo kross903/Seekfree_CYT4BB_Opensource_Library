@@ -10,7 +10,7 @@ typedef enum
     MONITOR_PAGE_DATA = 0,
     MONITOR_PAGE_IMAGE,
     MONITOR_PAGE_TOF_ATTITUDE,
-    MONITOR_PAGE_RESERVED,
+    MONITOR_PAGE_OPTICAL_FLOW,
     MONITOR_PAGE_COUNT
 } monitor_page_enum;
 
@@ -35,9 +35,26 @@ typedef struct
     float fused_height_cm;
     float ir_height_cm;
     float fused_velocity_cms;
+    uint8 optical_flow_valid;
     int32 optical_flow_dx;
     int32 optical_flow_dy;
     int32 optical_flow_x_integral;
+    float optical_flow_dt_s;
+    float optical_flow_tof_los_cm;
+    float optical_flow_range_cm;
+    float optical_flow_roll_deg;
+    float optical_flow_pitch_deg;
+    float optical_flow_x_rad;
+    float optical_flow_y_rad;
+    float optical_flow_gyro_x_delta_rad;
+    float optical_flow_gyro_y_delta_rad;
+    float optical_flow_comp_x_rad;
+    float optical_flow_comp_y_rad;
+    float optical_flow_vx_raw_cms;
+    float optical_flow_vy_raw_cms;
+    float optical_flow_vx_cms;
+    float optical_flow_vy_cms;
+    float optical_flow_speed_cms;
 } MonitorRuntimeSnapshot;
 
 void ui_menu_init_display(void);

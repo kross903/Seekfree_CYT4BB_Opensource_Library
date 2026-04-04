@@ -7,6 +7,7 @@
 #include "menu/parameter_flash.h"
 #include "menu/menu.h"
 #include "menu/key.h"
+#include "pmw/pmw_flow.h"
 
 bool Send_state = 0;
 
@@ -52,6 +53,7 @@ static void init_runtime_modules(void)
     IMU_calibrate_flag = 1;
     ICM_Calculate_Init();
     HeightManager_Init(100.0f);
+    PMW_Flow_Init();
     Flight_Control_Init();
 }
 

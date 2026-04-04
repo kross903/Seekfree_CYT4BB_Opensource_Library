@@ -2170,6 +2170,7 @@
         <file><name>$PROJ_DIR$\..\..\code\flight_control.c</name></file>
         <file><name>$PROJ_DIR$\..\..\code\pid_controller.c</name></file>
         <file><name>$PROJ_DIR$\..\..\code\PIT_Demo.c</name></file>
+        <file><name>$PROJ_DIR$\..\..\code\pmw\pmw_flow.c</name></file>
         <file><name>$PROJ_DIR$\..\..\code\shared_data.c</name></file>
         <file><name>$PROJ_DIR$\..\..\code\vofa.c</name></file>
         <file><name>$PROJ_DIR$\..\..\code\control\ControlMath.c</name></file>

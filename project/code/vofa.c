@@ -2,6 +2,7 @@
 #include "flight_control.h"
 #include "PIT_Demo.h"
 #include "Kalman Filter/height_manager.h"
+#include "pmw/pmw_flow.h"
 #include "vision/ir_localization.h"
 #include <math.h>
 #include <string.h>
@@ -604,11 +605,20 @@ void send_date_back(void)
     switch(send_back_flag)
     {
         case 0:
-            send_four_date(current_roll, current_pitch,
-                           HeightSpeedPID_output, g_height_result.height_cm,
-                           ir_pose_estimate.z, tof_height_true_filt * 100.0f,
-                           0, 0);
+        {
+            PMWFlowState_t pmw_flow_state = {0};
+            PMW_Flow_GetState(&pmw_flow_state);
+
+            send_four_date(pmw_flow_state.flow_x_rad,
+                           pmw_flow_state.gyro_flow_x_delta_rad,
+                           pmw_flow_state.flow_comp_x_rad,
+                           pmw_flow_state.velocity_y_raw_cms,
+                           pmw_flow_state.flow_y_rad,
+                           pmw_flow_state.gyro_flow_y_delta_rad,
+                           pmw_flow_state.flow_comp_y_rad,
+                           pmw_flow_state.velocity_x_raw_cms);
             break;
+        }
 
         case 1:
             send_pid_data_back(send_back_command);

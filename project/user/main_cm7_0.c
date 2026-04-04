@@ -43,6 +43,7 @@
 #include "../code/vision/beacon_detect.h"
 #include "../code/menu/menu.h"
 #include "../code/menu/screen_pages.h"
+#include "../code/pmw/pmw_flow.h"
 #include "../code/cross_core_camera.h"
 #include "../code/drone_car_link.h"
 #include "../code/vofa.h"
@@ -62,10 +63,13 @@ static int g_nearest_idx = -1;
 
 static void build_monitor_runtime_snapshot(MonitorRuntimeSnapshot *snapshot)
 {
+    PMWFlowState_t pmw_flow_state = {0};
     if(snapshot == NULL)
     {
         return;
     }
+
+    PMW_Flow_GetState(&pmw_flow_state);
 
     snapshot->image_buffer = mt9v03x_image[0];
     snapshot->control_mode = control_mode;
@@ -86,9 +90,26 @@ static void build_monitor_runtime_snapshot(MonitorRuntimeSnapshot *snapshot)
     snapshot->fused_height_cm = g_height_result.height_cm;
     snapshot->ir_height_cm = ir_pose_estimate.z;
     snapshot->fused_velocity_cms = g_height_result.velocity_cms;
-    snapshot->optical_flow_dx = pmw3901_delta_x;
-    snapshot->optical_flow_dy = pmw3901_delta_y;
+    snapshot->optical_flow_valid = pmw_flow_state.valid;
+    snapshot->optical_flow_dx = pmw_flow_state.flow_delta_x_count;
+    snapshot->optical_flow_dy = pmw_flow_state.flow_delta_y_count;
     snapshot->optical_flow_x_integral = pmw3901_delta_x_i;
+    snapshot->optical_flow_dt_s = pmw_flow_state.dt_s;
+    snapshot->optical_flow_tof_los_cm = pmw_flow_state.tof_los_cm;
+    snapshot->optical_flow_range_cm = pmw_flow_state.range_cm;
+    snapshot->optical_flow_roll_deg = pmw_flow_state.roll_deg;
+    snapshot->optical_flow_pitch_deg = pmw_flow_state.pitch_deg;
+    snapshot->optical_flow_x_rad = pmw_flow_state.flow_x_rad;
+    snapshot->optical_flow_y_rad = pmw_flow_state.flow_y_rad;
+    snapshot->optical_flow_gyro_x_delta_rad = pmw_flow_state.gyro_flow_x_delta_rad;
+    snapshot->optical_flow_gyro_y_delta_rad = pmw_flow_state.gyro_flow_y_delta_rad;
+    snapshot->optical_flow_comp_x_rad = pmw_flow_state.flow_comp_x_rad;
+    snapshot->optical_flow_comp_y_rad = pmw_flow_state.flow_comp_y_rad;
+    snapshot->optical_flow_vx_raw_cms = pmw_flow_state.velocity_x_raw_cms;
+    snapshot->optical_flow_vy_raw_cms = pmw_flow_state.velocity_y_raw_cms;
+    snapshot->optical_flow_vx_cms = pmw_flow_state.velocity_x_cms;
+    snapshot->optical_flow_vy_cms = pmw_flow_state.velocity_y_cms;
+    snapshot->optical_flow_speed_cms = pmw_flow_state.speed_cms;
 }
 
 static void update_monitor_vision_state(void)

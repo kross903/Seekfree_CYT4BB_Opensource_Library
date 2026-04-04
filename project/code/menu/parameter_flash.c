@@ -604,7 +604,7 @@ void Parameter_Load_Or_Init_Storage(void)
 void Parameter_System_Init(void)
 {
     Parameter_Capture_Runtime_Defaults();
-    //Parameter_Load_Or_Init_Storage();//注释掉该函数则不会使用flash中的参数，仍然使用默认值，手动调参依然有效
+    //Parameter_Load_Or_Init_Storage();//娉ㄩ噴鎺夎鍑芥暟鍒欎笉浼氫娇鐢╢lash涓殑鍙傛暟锛屼粛鐒朵娇鐢ㄩ粯璁ゅ�硷紝鎵嬪姩璋冨弬渚濈劧鏈夋晥
 }
 
 static uint8 parameter_find_config_index(uint8 group, uint8 object, uint8 item)

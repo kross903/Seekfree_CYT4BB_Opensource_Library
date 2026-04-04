@@ -5,6 +5,7 @@
 #include "control/joystick.h"
 #include "icm/icm.h"
 #include "menu/key.h"
+#include "pmw/pmw_flow.h"
 #include "zf_common_headfile.h"
 
 // PWM motor output: 50Hz ESC PWM, 5%-10% duty (1000us-2000us).
@@ -19,6 +20,7 @@
 #define THROTTLE_RAMP_RATE             2.0f
 #define CONTROL_DT_S                   0.00025f
 #define CONTROL_DT_MS                  0.25f
+#define PMW3901_SAMPLE_DT_S            0.020f
 #define JOYSTICK_ROLL_MAX_DEG          20.0f
 #define JOYSTICK_PITCH_MAX_DEG         20.0f
 #define BATTERY_NOMINAL_VOLTAGE        24.0f
@@ -287,14 +289,28 @@ void PIT_Adc_Task_5ms(void)
 void PIT_PMW3901_Task_20ms(void)
 {
     static uint8 pmw3901_ready = 0;
+    float tof_los_cm = 0.0f;
 
     if(!pmw3901_ready)
     {
+        PMW_Flow_Reset();
         pmw3901_ready = (0 == pmw3901_init()) ? 1U : 0U;
         return;
     }
 
     pmw3901_get_motion();
+
+    if(dl1b_distance_mm <= 4000U)
+    {
+        tof_los_cm = dl1b_distance_mm * 0.1f;
+    }
+
+    PMW_Flow_UpdateSample(pmw3901_delta_x,
+                          pmw3901_delta_y,
+                          current_roll,
+                          current_pitch,
+                          tof_los_cm,
+                          PMW3901_SAMPLE_DT_S);
 }
 
 void PIT_Motor_Task_500us(void)
@@ -319,6 +335,7 @@ void PIT_Control_Task_250us(void)
     get_ICM_data();
     Get_Attitude_Angle(&current_roll, &current_pitch, &current_yaw);
     Get_Angular_Rate(&current_gyro_roll, &current_gyro_pitch, &current_gyro_yaw);
+    PMW_Flow_AccumulateGyro(current_gyro_roll, current_gyro_pitch, CONTROL_DT_S);
 
     if(check_attitude_safety())
     {
