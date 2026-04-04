@@ -1,11 +1,4 @@
-#include "menu.h"
-#include "zf_common_headfile.h"
-#include "flight_control.h"
-#include "parameter_flash.h"
-#include "screen_pages.h"
-#include "../icm/icm.h"
-#include "../vofa.h"
-#include "../drone_car_link.h"
+#include "common/project_headfile.h"
 
 /* ????? */
 Menu mainMenu;

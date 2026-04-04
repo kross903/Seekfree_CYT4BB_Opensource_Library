@@ -1,9 +1,5 @@
-#include "vofa.h"
-#include "flight_control.h"
-#include "PIT_Demo.h"
-#include "Kalman Filter/height_manager.h"
-#include "pmw/pmw_flow.h"
-#include "vision/ir_localization.h"
+#include "communication/vofa.h"
+#include "common/project_headfile.h"
 #include <math.h>
 #include <string.h>
 

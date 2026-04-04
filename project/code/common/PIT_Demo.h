@@ -2,7 +2,7 @@
 #define _PIT_Demo_h_
 
 #include "zf_common_headfile.h"
-#include "pid_controller.h"
+#include "control/pid_controller.h"
 
 /*
  * PIT_Demo 对外主要暴露两类内容:

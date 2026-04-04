@@ -1,13 +1,5 @@
-#include "All_Init.h"
-#include "PIT_Demo.h"
-#include "drone_car_link.h"
-#include "flight_control.h"
-#include "Kalman Filter/height_manager.h"
-#include "icm/icm.h"
-#include "menu/parameter_flash.h"
-#include "menu/menu.h"
-#include "menu/key.h"
-#include "pmw/pmw_flow.h"
+#include "common/All_Init.h"
+#include "common/project_headfile.h"
 
 bool Send_state = 0;
 

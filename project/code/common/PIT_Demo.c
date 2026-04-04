@@ -1,12 +1,5 @@
-#include "PIT_Demo.h"
-#include "flight_control.h"
-#include "drone_car_link.h"
-#include "Kalman Filter/height_manager.h"
-#include "control/joystick.h"
-#include "icm/icm.h"
-#include "menu/key.h"
-#include "pmw/pmw_flow.h"
-#include "zf_common_headfile.h"
+#include "common/PIT_Demo.h"
+#include "common/project_headfile.h"
 
 // PWM motor output: 50Hz ESC PWM, 5%-10% duty (1000us-2000us).
 #define MOTOR_PWM_FREQ_HZ              50U

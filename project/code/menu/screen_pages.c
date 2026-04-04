@@ -1,16 +1,7 @@
 #include "screen_pages.h"
-
-#include "menu.h"
-#include "parameter_flash.h"
-#include "zf_device_ips200.h"
-#include "../PIT_Demo.h"
-#include "../flight_control.h"
-#include "../icm/icm.h"
-#include "../icm/icm42688.h"
-
+#include "common/project_headfile.h"
 #include <stdio.h>
 #include <string.h>
-
 
 /* ===================== 通用页面辅助 ===================== */
 

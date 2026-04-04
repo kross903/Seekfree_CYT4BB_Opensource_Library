@@ -1,6 +1,5 @@
 #include "menu.h"
-#include "screen_pages.h"
-#include "zf_device_ips200.h"
+#include "common/project_headfile.h"
 
 Menu* g_currentMenu = NULL;
 uint8 g_menu_exit_flag = 0;

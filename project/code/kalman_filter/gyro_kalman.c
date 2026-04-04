@@ -9,6 +9,7 @@
  */
 
 #include "gyro_kalman.h"
+#include "common/project_headfile.h"
 
 // 单轴角速度卡尔曼滤波器状态。
 typedef struct {

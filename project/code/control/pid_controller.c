@@ -3,7 +3,8 @@
 * 功能说明: PID 控制器实现
 ********************************************************************************************************************/
 
-#include "pid_controller.h"
+#include "control/pid_controller.h"
+#include "common/project_headfile.h"
 #include <math.h>
 
 /*

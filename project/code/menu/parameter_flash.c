@@ -1,13 +1,5 @@
 #include "parameter_flash.h"
-#include "screen_pages.h"
-
-#include "PIT_Demo.h"
-#include "flight_control.h"
-#include "../Kalman Filter/height_manager.h"
-#include "key.h"
-#include "zf_device_ips200.h"
-#include "zf_driver_flash.h"
-
+#include "common/project_headfile.h"
 #include <stdio.h>
 #include <string.h>
 

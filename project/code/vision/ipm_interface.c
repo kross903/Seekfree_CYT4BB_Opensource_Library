@@ -6,7 +6,7 @@
  */
 
 #include "ipm_interface.h"
-#include "../icm/icm.h"  /* ?? IMU ???? */
+#include "common/project_headfile.h"
 
 /*
  * 模块定位:

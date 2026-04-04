@@ -1,4 +1,5 @@
 #include "key.h"
+#include "common/project_headfile.h"
 
 volatile uint8 key_flag = 0;
 

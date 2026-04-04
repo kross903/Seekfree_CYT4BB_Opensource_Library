@@ -1,7 +1,7 @@
 #ifndef FLIGHT_CONTROL_H_
 #define FLIGHT_CONTROL_H_
 
-#include "pid_controller.h"
+#include "control/pid_controller.h"
 #include "zf_common_typedef.h"
 
 /*********************************************************************************************************************

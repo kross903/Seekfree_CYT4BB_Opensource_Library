@@ -1,4 +1,5 @@
-#include "cross_core_camera.h"
+#include "communication/cross_core_camera.h"
+#include "common/project_headfile.h"
 #include <string.h>
 
 #define SHARED_CAMERA_BASE_ADDR   0x28001000u

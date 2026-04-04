@@ -1,9 +1,5 @@
-#include "drone_car_link.h"
-
-#include "PIT_Demo.h"
-#include "flight_control.h"
-#include "Kalman Filter/height_manager.h"
-#include "zf_device_type.h"
+#include "communication/drone_car_link.h"
+#include "common/project_headfile.h"
 
 /*
  * 串口协议约定

@@ -2,7 +2,7 @@
 #define HEIGHT_MANAGER_H_
 
 #include "zf_common_typedef.h"
-#include "pid_controller.h"
+#include "control/pid_controller.h"
 
 #ifdef __cplusplus
 extern "C" {

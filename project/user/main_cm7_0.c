@@ -33,20 +33,8 @@
 * 2024-1-4       pudding            first version
 ********************************************************************************************************************/
 
-#include "zf_common_headfile.h"
-#include "../code/All_Init.h"
-#include "../code/PIT_Demo.h"
-#include "../code/flight_control.h"
-#include "../code/Kalman Filter/height_manager.h"
-#include "../code/vision/ipm_interface.h"
-#include "../code/vision/ir_localization.h"
-#include "../code/vision/beacon_detect.h"
-#include "../code/menu/menu.h"
-#include "../code/menu/screen_pages.h"
-#include "../code/pmw/pmw_flow.h"
-#include "../code/cross_core_camera.h"
-#include "../code/drone_car_link.h"
-#include "../code/vofa.h"
+#include "../code/common/project_headfile.h"
+
 // 打开新的工程或者工程移动了位置务必执行以下操作
 // 第一步 关闭上面所有打开的文件
 // 第二步 project->clean  等待下方进度条走完

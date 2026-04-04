@@ -1,4 +1,5 @@
 #include "joystick.h"
+#include "common/project_headfile.h"
 
 /* ===================== 内部常量（由宏计算得到） ===================== */
 

@@ -37,9 +37,9 @@
 ********************************************************************************************************************/
 
 #include "zf_common_headfile.h"
-#include "../code/PIT_Demo.h"
-#include "../code/drone_car_link.h"
-#include "../code/Kalman Filter/height_manager.h"
+#include "../code/common/PIT_Demo.h"
+#include "../code/communication/drone_car_link.h"
+#include "../code/kalman_filter/height_manager.h"
 
 // **************************** PITÖÐ¶Ïº¯Êý ****************************
 void pit0_ch0_isr(void)

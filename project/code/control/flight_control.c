@@ -1,9 +1,5 @@
-#include "flight_control.h"
-#include "PIT_Demo.h"
-#include "zf_common_headfile.h"
-#include "icm/icm.h"
-#include "Kalman Filter/height_manager.h"
-#include "dshot600.h"
+#include "control/flight_control.h"
+#include "common/project_headfile.h"
 
 /*********************************************************************************************************************
 * 文件名称: flight_control.c

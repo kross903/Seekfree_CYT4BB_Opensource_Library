@@ -1,7 +1,5 @@
 #include "icm.h"
-#include "zf_common_headfile.h"
-#include "../PIT_Demo.h"
-#include "../menu/screen_pages.h"
+#include "common/project_headfile.h"
 #include <math.h>
 
 // ==================== 全局变量定义 ====================

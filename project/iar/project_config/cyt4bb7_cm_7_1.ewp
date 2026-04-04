@@ -2161,6 +2161,6 @@
     </group>
     <group>
         <name>app_port</name>
-        <file><name>$PROJ_DIR$\..\..\code\cross_core_camera.c</name></file>
+        <file><name>$PROJ_DIR$\..\..\code\communication\cross_core_camera.c</name></file>
     </group>
 </project>

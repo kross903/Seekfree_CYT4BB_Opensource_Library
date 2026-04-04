@@ -15,6 +15,7 @@
  */
 
 #include "drone_ipm.h"
+#include "common/project_headfile.h"
 #include <string.h>
 #include <stdlib.h>
 

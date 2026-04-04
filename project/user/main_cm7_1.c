@@ -33,8 +33,8 @@
 * 2024-1-4       pudding            first version
 ********************************************************************************************************************/
 
-#include "zf_common_headfile.h"
-#include "../code/cross_core_camera.h"
+#include "../code/common/project_headfile.h"
+
 // 打开新的工程或者工程移动了位置务必执行以下操作
 // 第一步 关闭上面所有打开的文件
 // 第二步 project->clean  等待下方进度条走完

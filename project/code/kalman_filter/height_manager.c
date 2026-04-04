@@ -1,6 +1,5 @@
 #include "height_manager.h"
-#include "../control/ControlMath.h"
-#include "zf_device_dl1b.h"
+#include "common/project_headfile.h"
 #include <math.h>
 
 extern float current_roll;

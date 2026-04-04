@@ -14,6 +14,7 @@
  */
 
 #include "drone_ipm_embedded.h"
+#include "common/project_headfile.h"
 #include <string.h>
 
 /*
@@ -26,8 +27,6 @@
 DroneIPM_Coeff_t g_ipm;
 
 /* 图像尺寸常量 */
-static const float W = (float)IMAGE_WIDTH;
-static const float H = (float)IMAGE_HEIGHT;
 static const float W_half = (float)IMAGE_WIDTH / 2.0f;
 static const float H_half = (float)IMAGE_HEIGHT / 2.0f;
 

@@ -14,8 +14,7 @@
  * - 不承担主流程运行职责，主要用于理解接口和集成方式
  */
 
-#include "ipm_interface.h"
-#include "../icm/icm.h"
+#include "common/project_headfile.h"
 
 /* ====================== 使用示例1: 目标点坐标转换 ====================== */
 

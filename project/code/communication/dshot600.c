@@ -3,8 +3,8 @@
 * 功能说明          DShot600协议驱动实现 - 双核版本（仅通讯功能）
 ********************************************************************************************************************/
 
-#include "dshot600.h"
-#include "zf_common_headfile.h"
+#include "communication/dshot600.h"
+#include "common/project_headfile.h"
 
 /*
  * DShot 驱动模块:
