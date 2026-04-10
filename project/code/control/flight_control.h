@@ -59,9 +59,9 @@ typedef struct
     float target_angle_pitch;
     float target_angle_yaw;
 
-    float target_angle_roll_trim;
-    float target_angle_pitch_trim;
-    float target_angle_yaw_trim;
+    float angle_roll_compensation;
+    float angle_pitch_compensation;
+    float angle_yaw_compensation;
 
     uint8 armed;
     uint8 control_mode;
@@ -112,8 +112,8 @@ void Flight_Control_Get_Target_Gyro(float *roll, float *pitch, float *yaw);
 void Flight_Control_Set_Target_Angle(float roll, float pitch, float yaw);
 void Flight_Control_Get_Target_Angle(float *roll, float *pitch, float *yaw);
 
-void Flight_Control_Set_Target_Angle_Trim(float roll_trim, float pitch_trim, float yaw_trim);
-void Flight_Control_Get_Target_Angle_Trim(float *roll_trim, float *pitch_trim, float *yaw_trim);
+void Flight_Control_Set_Angle_Compensation(float roll_compensation, float pitch_compensation, float yaw_compensation);
+void Flight_Control_Get_Angle_Compensation(float *roll_compensation, float *pitch_compensation, float *yaw_compensation);
 
 /*
  * 解锁 / 模式 / 油门接口。

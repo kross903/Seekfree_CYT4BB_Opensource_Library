@@ -66,9 +66,9 @@ static void sync_runtime_snapshot(void)
     g_flight_ctrl.target_angle_pitch = target_angle_pitch;
     g_flight_ctrl.target_angle_yaw = target_angle_yaw;
 
-    g_flight_ctrl.target_angle_roll_trim = target_angle_roll_add;
-    g_flight_ctrl.target_angle_pitch_trim = target_angle_pitch_add;
-    g_flight_ctrl.target_angle_yaw_trim = target_angle_yaw_add;
+    g_flight_ctrl.angle_roll_compensation = angle_roll_compensation;
+    g_flight_ctrl.angle_pitch_compensation = angle_pitch_compensation;
+    g_flight_ctrl.angle_yaw_compensation = angle_yaw_compensation;
 
     g_flight_ctrl.armed = armed;
     g_flight_ctrl.control_mode = control_mode;
@@ -308,29 +308,29 @@ void Flight_Control_Get_Target_Angle(float *roll, float *pitch, float *yaw)
     }
 }
 
-/* 姿态微调量，通常通过 VOFA 在线调整。 */
-void Flight_Control_Set_Target_Angle_Trim(float roll_trim, float pitch_trim, float yaw_trim)
+/* 传感器安装补偿角，当前用于 IMU roll/pitch 旋转补偿。 */
+void Flight_Control_Set_Angle_Compensation(float roll_compensation, float pitch_compensation, float yaw_compensation)
 {
-    target_angle_roll_add = roll_trim;
-    target_angle_pitch_add = pitch_trim;
-    target_angle_yaw_add = yaw_trim;
+    angle_roll_compensation = roll_compensation;
+    angle_pitch_compensation = pitch_compensation;
+    angle_yaw_compensation = yaw_compensation;
 
     sync_runtime_snapshot();
 }
 
-void Flight_Control_Get_Target_Angle_Trim(float *roll_trim, float *pitch_trim, float *yaw_trim)
+void Flight_Control_Get_Angle_Compensation(float *roll_compensation, float *pitch_compensation, float *yaw_compensation)
 {
-    if(roll_trim != NULL)
+    if(roll_compensation != NULL)
     {
-        *roll_trim = target_angle_roll_add;
+        *roll_compensation = angle_roll_compensation;
     }
-    if(pitch_trim != NULL)
+    if(pitch_compensation != NULL)
     {
-        *pitch_trim = target_angle_pitch_add;
+        *pitch_compensation = angle_pitch_compensation;
     }
-    if(yaw_trim != NULL)
+    if(yaw_compensation != NULL)
     {
-        *yaw_trim = target_angle_yaw_add;
+        *yaw_compensation = angle_yaw_compensation;
     }
 }
 

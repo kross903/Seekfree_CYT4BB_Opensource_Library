@@ -78,9 +78,9 @@ extern volatile float target_angle_roll;
 extern volatile float target_angle_pitch;
 extern volatile float target_angle_yaw;
 
-extern volatile float target_angle_roll_add;
-extern volatile float target_angle_pitch_add;
-extern volatile float target_angle_yaw_add;
+extern volatile float angle_roll_compensation;
+extern volatile float angle_pitch_compensation;
+extern volatile float angle_yaw_compensation;
 
 extern float target_roll_rate;
 extern float target_pitch_rate;

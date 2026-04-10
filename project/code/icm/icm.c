@@ -176,7 +176,6 @@ void ICM_Calculate_Init(void)
 
     // 1. 硬件初始化
     Init_ICM42688();
-    Init_ICM42688();
     system_delay_ms(100);
     ips200_show_string(0, 16*0, "ICM Init...");
 

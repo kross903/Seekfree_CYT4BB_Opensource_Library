@@ -41,6 +41,7 @@ extern float icm42688_acc_inv, icm42688_gyro_inv;
 // 声明ICM42688加速度计数据
 extern float icm42688_acc_x  , icm42688_acc_y  , icm42688_acc_z  ;
 extern float icm42688_acc_x_use, icm42688_acc_y_use, icm42688_acc_z_use;
+extern short int icm42688_acc_x_r, icm42688_acc_y_r, icm42688_acc_z_r;
 extern float acc;
 extern float acc_use;
 // 声明ICM42688角加速度数据
@@ -143,6 +144,7 @@ void Init_ICM42688(void);
 *
 **/
 void Get_Acc_ICM42688(void);
+void Get_RAW_Acc_ICM42688(void);
 
 /**
 *

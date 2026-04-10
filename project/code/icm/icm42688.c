@@ -1,11 +1,13 @@
 #include "icm42688.h"
 #include "common/project_headfile.h"
+#include <math.h>
 
 int icm_calibration_over_flag = 0;
 int icm_calibration_flag = 0;
 // ICM42688加速度计数据
 float icm42688_acc_x  = 0, icm42688_acc_y  = 0, icm42688_acc_z  = 0;
 float icm42688_acc_x_use  = 0, icm42688_acc_y_use  = 0, icm42688_acc_z_use  = 0;
+short int icm42688_acc_x_r = 0, icm42688_acc_y_r = 0, icm42688_acc_z_r = 0;
 float acc = 0;
 float acc_use = 0;
 // ICM42688角加速度数据
@@ -103,10 +105,50 @@ void Init_ICM42688(void)
 void Get_Acc_ICM42688(void)
 {
     unsigned char data[6];
+    short int raw_x_r;
+    short int raw_y_r;
+    short int raw_z_r;
+    float raw_x;
+    float raw_y;
+    float raw_z;
+    float roll_rad;
+    float pitch_rad;
+    float sin_roll;
+    float cos_roll;
+    float sin_pitch;
+    float cos_pitch;
+    float roll_y;
+    float roll_z;
+
     Read_Datas_ICM42688(ICM42688_ACCEL_DATA_X1, data, 6);
-    icm42688_acc_x = icm42688_acc_inv * (short int)(((short int)data[0] << 8) | data[1]);
-    icm42688_acc_y = icm42688_acc_inv * (short int)(((short int)data[2] << 8) | data[3]);
-    icm42688_acc_z = icm42688_acc_inv * (short int)(((short int)data[4] << 8) | data[5]);
+    raw_x_r = (short int)(((short int)data[0] << 8) | data[1]);
+    raw_y_r = (short int)(((short int)data[2] << 8) | data[3]);
+    raw_z_r = (short int)(((short int)data[4] << 8) | data[5]);
+    icm42688_acc_x_r = raw_x_r;
+    icm42688_acc_y_r = raw_y_r;
+    icm42688_acc_z_r = raw_z_r;
+
+    raw_x = icm42688_acc_inv * raw_x_r;
+    raw_y = icm42688_acc_inv * raw_y_r;
+    raw_z = icm42688_acc_inv * raw_z_r;
+
+    /*
+     * Apply fixed sensor-to-body installation compensation before the data
+     * enters the attitude solver. We currently compensate roll and pitch only.
+     */
+    roll_rad = angle_roll_compensation * DEG2RAD;
+    pitch_rad = angle_pitch_compensation * DEG2RAD;
+    sin_roll = sinf(roll_rad);
+    cos_roll = cosf(roll_rad);
+    sin_pitch = sinf(pitch_rad);
+    cos_pitch = cosf(pitch_rad);
+
+    roll_y = cos_roll * raw_y - sin_roll * raw_z;
+    roll_z = sin_roll * raw_y + cos_roll * raw_z;
+
+    icm42688_acc_x = cos_pitch * raw_x + sin_pitch * roll_z;
+    icm42688_acc_y = roll_y;
+    icm42688_acc_z = -sin_pitch * raw_x + cos_pitch * roll_z;
 }
 
 /**
@@ -118,6 +160,15 @@ void Get_Acc_ICM42688(void)
 * Example:  Get_Gyro_ICM42688();
 *
 **/
+void Get_RAW_Acc_ICM42688(void)
+{
+    unsigned char data[6];
+    Read_Datas_ICM42688(ICM42688_ACCEL_DATA_X1, data, 6);
+    icm42688_acc_x_r = (short int)(((short int)data[0] << 8) | data[1]);
+    icm42688_acc_y_r = (short int)(((short int)data[2] << 8) | data[3]);
+    icm42688_acc_z_r = (short int)(((short int)data[4] << 8) | data[5]);
+}
+
 void Get_correction(void)
 {
     unsigned char data[6];
@@ -129,10 +180,46 @@ void Get_correction(void)
 void Get_Gyro_ICM42688(void)
 {
     unsigned char data[6];
+    short int raw_x_r;
+    short int raw_y_r;
+    short int raw_z_r;
+    float raw_x;
+    float raw_y;
+    float raw_z;
+    float roll_rad;
+    float pitch_rad;
+    float sin_roll;
+    float cos_roll;
+    float sin_pitch;
+    float cos_pitch;
+    float roll_y;
+    float roll_z;
+
     Read_Datas_ICM42688(ICM42688_GYRO_DATA_X1, data, 6);
-    icm42688_gyro_x = icm42688_gyro_inv * (short int)(((short int)data[0] << 8) | data[1]) - gyro_x_correction;
-    icm42688_gyro_y = icm42688_gyro_inv * (short int)(((short int)data[2] << 8) | data[3]) - gyro_y_correction;
-    icm42688_gyro_z = icm42688_gyro_inv * (short int)(((short int)data[4] << 8) | data[5]) - gyro_z_correction;
+    raw_x_r = (short int)(((short int)data[0] << 8) | data[1]);
+    raw_y_r = (short int)(((short int)data[2] << 8) | data[3]);
+    raw_z_r = (short int)(((short int)data[4] << 8) | data[5]);
+    icm42688_gyro_x_r = raw_x_r;
+    icm42688_gyro_y_r = raw_y_r;
+    icm42688_gyro_z_r = raw_z_r;
+
+    raw_x = icm42688_gyro_inv * raw_x_r - gyro_x_correction;
+    raw_y = icm42688_gyro_inv * raw_y_r - gyro_y_correction;
+    raw_z = icm42688_gyro_inv * raw_z_r - gyro_z_correction;
+
+    roll_rad = angle_roll_compensation * DEG2RAD;
+    pitch_rad = angle_pitch_compensation * DEG2RAD;
+    sin_roll = sinf(roll_rad);
+    cos_roll = cosf(roll_rad);
+    sin_pitch = sinf(pitch_rad);
+    cos_pitch = cosf(pitch_rad);
+
+    roll_y = cos_roll * raw_y - sin_roll * raw_z;
+    roll_z = sin_roll * raw_y + cos_roll * raw_z;
+
+    icm42688_gyro_x = cos_pitch * raw_x + sin_pitch * roll_z;
+    icm42688_gyro_y = roll_y;
+    icm42688_gyro_z = -sin_pitch * raw_x + cos_pitch * roll_z;
 }
 void Get_RAW_Gyro_ICM42688(void)
 {

@@ -1,14 +1,15 @@
 #include "common/PIT_Demo.h"
 #include "common/project_headfile.h"
 
-// PWM motor output: 50Hz ESC PWM, 5%-10% duty (1000us-2000us).
+// PWM motor output: 50Hz ESC PWM, 2000 = stop, 4000 = full output.
+// We intentionally cap the commanded range to 60%, so the real max duty is 3200.
 #define MOTOR_PWM_FREQ_HZ              50U
-#define MOTOR_PWM_CH1                  TCPWM_CH28_P10_0
-#define MOTOR_PWM_CH2                  TCPWM_CH29_P10_1
-#define MOTOR_PWM_CH3                  TCPWM_CH30_P10_2
-#define MOTOR_PWM_CH4                  TCPWM_CH31_P10_3
-#define MOTOR_PWM_DUTY_MIN             500U
-#define MOTOR_PWM_DUTY_MAX             1000U
+#define MOTOR_PWM_CH1                  TCPWM_CH09_P05_0
+#define MOTOR_PWM_CH2                  TCPWM_CH10_P05_1
+#define MOTOR_PWM_CH3                  TCPWM_CH11_P05_2
+#define MOTOR_PWM_CH4                  TCPWM_CH12_P05_3
+#define MOTOR_PWM_DUTY_MIN             2000U
+#define MOTOR_PWM_DUTY_MAX             3200U
 
 #define THROTTLE_RAMP_RATE             2.0f
 #define CONTROL_DT_S                   0.00025f
@@ -39,9 +40,9 @@ volatile float base_throttle = 0.0f;
 volatile float target_angle_roll = 0.0f;
 volatile float target_angle_pitch = 0.0f;
 volatile float target_angle_yaw = 0.0f;
-volatile float target_angle_roll_add = -0.7f;
-volatile float target_angle_pitch_add = -1.4f;
-volatile float target_angle_yaw_add = 0.0f;
+volatile float angle_roll_compensation = -0.60f;
+volatile float angle_pitch_compensation = -0.21f;
+volatile float angle_yaw_compensation = 0.0f;
 
 int low_voltage_protect_flag = 0;
 float voltage = BATTERY_NOMINAL_VOLTAGE;
@@ -167,7 +168,7 @@ static uint8 check_attitude_safety(void)
     if(!armed)
     {
         return 0U;
-    }
+    }//未解锁时不要因为姿态超限去触发急停
 
     if(current_roll > SAFE_MAX_ANGLE_ROLL || current_roll < -SAFE_MAX_ANGLE_ROLL)
     {
@@ -328,12 +329,11 @@ void PIT_Control_Task_250us(void)
     get_ICM_data();
     Get_Attitude_Angle(&current_roll, &current_pitch, &current_yaw);
     Get_Angular_Rate(&current_gyro_roll, &current_gyro_pitch, &current_gyro_yaw);
-    PMW_Flow_AccumulateGyro(current_gyro_roll, current_gyro_pitch, CONTROL_DT_S);
-
+    PMW_Flow_AccumulateGyro(current_gyro_roll, current_gyro_pitch, CONTROL_DT_S);// 更新PMW光流传感器的陀螺仪积分值，用于后续的运动补偿计算
     if(check_attitude_safety())
     {
         return;
-    }
+    }// 急停触发后不继续执行后续的飞控计算，保持电机输出为0，直到飞行器被重置或重新解锁
 
     if(!armed)
     {
@@ -372,9 +372,9 @@ void PIT_Control_Task_250us(void)
                                            CONTROL_DT_S);
     }
 
-    target_roll_rate = PID_Calculate(&angle_pid_roll, target_angle_roll + target_angle_roll_add, current_roll, CONTROL_DT_S);
-    target_pitch_rate = PID_Calculate(&angle_pid_pitch, target_angle_pitch + target_angle_pitch_add, current_pitch, CONTROL_DT_S);
-    target_yaw_rate = PID_Calculate(&angle_pid_yaw, target_angle_yaw + target_angle_yaw_add, current_yaw, CONTROL_DT_S);
+    target_roll_rate = PID_Calculate(&angle_pid_roll, target_angle_roll, current_roll, CONTROL_DT_S);
+    target_pitch_rate = PID_Calculate(&angle_pid_pitch, target_angle_pitch, current_pitch, CONTROL_DT_S);
+    target_yaw_rate = PID_Calculate(&angle_pid_yaw, target_angle_yaw, current_yaw, CONTROL_DT_S);
 
     roll_output = PID_Calculate(&gyro_pid_roll, target_roll_rate, current_gyro_roll, CONTROL_DT_S);
     pitch_output = PID_Calculate(&gyro_pid_pitch, target_pitch_rate, current_gyro_pitch, CONTROL_DT_S);

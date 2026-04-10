@@ -140,37 +140,34 @@ static void set_height_pid_value(uint8 item, float value)
 
     Flight_Control_Set_Height_PID(kp, ki, kd);
 }
-
-static void set_angle_trim_value(uint8 item, float value)
+    float roll_compensation = 0.0f;
+    float pitch_compensation = 0.0f;
+    float yaw_compensation = 0.0f;
+static void set_angle_compensation_value(uint8 item, float value)
 {
-    float roll_trim = 0.0f;
-    float pitch_trim = 0.0f;
-    float yaw_trim = 0.0f;
 
-    Flight_Control_Get_Target_Angle_Trim(&roll_trim, &pitch_trim, &yaw_trim);
+
+    Flight_Control_Get_Angle_Compensation(&roll_compensation, &pitch_compensation, &yaw_compensation);
 
     switch(item)
     {
-        case '1': roll_trim = value; break;
-        case '2': pitch_trim = value; break;
-        case '3': yaw_trim = value; break;
+        case '1': roll_compensation = value; break;
+        case '2': pitch_compensation = value; break;
+        case '3': yaw_compensation = value; break;
         default:  return;
     }
 
-    Flight_Control_Set_Target_Angle_Trim(roll_trim, pitch_trim, yaw_trim);
+    Flight_Control_Set_Angle_Compensation(roll_compensation, pitch_compensation, yaw_compensation);
 }
 
+    float roll = 0.0f;
+    float pitch = 0.0f;
+    float yaw = 0.0f;
 static void send_pid_data_back(uint8 command)
 {
     float value_1 = 0.0f;
     float value_2 = 0.0f;
     float value_3 = 0.0f;
-    float roll = 0.0f;
-    float pitch = 0.0f;
-    float yaw = 0.0f;
-    float roll_trim = 0.0f;
-    float pitch_trim = 0.0f;
-    float yaw_trim = 0.0f;
 
     switch(command)
     {
@@ -208,14 +205,11 @@ static void send_pid_data_back(uint8 command)
 
         case 'T':
             Flight_Control_Get_Target_Angle(&roll, &pitch, &yaw);
-            Flight_Control_Get_Target_Angle_Trim(&roll_trim, &pitch_trim, &yaw_trim);
-            send_four_date(roll + roll_trim,
-                           pitch + pitch_trim,
-                           yaw + yaw_trim,
-                           current_roll,
-                           current_pitch,
-                           current_yaw,
-                           0, 0);
+            Flight_Control_Get_Angle_Compensation(&roll_compensation, &pitch_compensation, NULL);
+            send_four_date(current_roll, current_pitch, current_yaw, icm42688_acc_x,
+                icm42688_acc_y, icm42688_acc_z,
+                roll_compensation, pitch_compensation);
+
             return;
 
         default:
@@ -558,7 +552,7 @@ void USART_PID_Adjust(void)
         case 'T':
             if(has_value)
             {
-                set_angle_trim_value(item, data_get);
+                set_angle_compensation_value(item, data_get);
             }
             send_back_command = 'T';
             break;
@@ -570,8 +564,11 @@ void USART_PID_Adjust(void)
                 case '1': send_back_flag = 1; break;
                 case '2': send_back_flag = 2; break;
                 case '3': send_back_flag = 3; break;
+                case '4': send_back_flag = 4; break;
+                case '5': send_back_flag = 5; break;
                 default: break;
             }
+
             break;
 
         case '0':
@@ -632,6 +629,20 @@ void send_date_back(void)
                            current_pitch, current_yaw,
                            g_height_result.height_cm, tof_height_true_filt * 100.0f,
                            ir_pose_estimate.z, HeightSpeedPID_output);
+            break;
+
+        case 4:
+            send_four_date((float)icm42688_gyro_x_r, (float)icm42688_gyro_y_r,
+                           (float)icm42688_gyro_z_r, icm42688_gyro_x,
+                           icm42688_gyro_y, icm42688_gyro_z,
+                           angle_roll_compensation, angle_pitch_compensation);
+            break;
+
+        case 5:
+            send_four_date((float)icm42688_acc_x_r, (float)icm42688_acc_y_r,
+                           (float)icm42688_acc_z_r, icm42688_acc_x,
+                           icm42688_acc_y, icm42688_acc_z,
+                           angle_roll_compensation, angle_pitch_compensation);
             break;
 
         default:
