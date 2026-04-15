@@ -1,9 +1,9 @@
 #include "common/PIT_Demo.h"
 #include "common/project_headfile.h"
 
-// PWM motor output: 50Hz ESC PWM, 2000 = stop, 4000 = full output.
+// PWM motor output: 200Hz ESC PWM, 2000 = stop, 4000 = full output.
 // We intentionally cap the commanded range to 60%, so the real max duty is 3200.
-#define MOTOR_PWM_FREQ_HZ              50U
+#define MOTOR_PWM_FREQ_HZ              200U
 #define MOTOR_PWM_CH1                  TCPWM_CH09_P05_0
 #define MOTOR_PWM_CH2                  TCPWM_CH10_P05_1
 #define MOTOR_PWM_CH3                  TCPWM_CH11_P05_2

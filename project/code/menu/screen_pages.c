@@ -48,7 +48,7 @@
 #define UI_MONITOR_VISION_Y          216U
 #define UI_MONITOR_HINT_TOP_Y        288U
 #define UI_MONITOR_HINT_BOTTOM_Y     304U
-#define MONITOR_ARM_START_THROTTLE   100.0f
+#define MONITOR_ARM_START_THROTTLE   400.0f
 
 static uint16 ui_origin_line_y(uint16 row)
 {
@@ -423,7 +423,7 @@ static const char *ui_monitor_mode_text(uint8 control_mode)
 
 static const char *ui_monitor_hint_text(uint8 armed)
 {
-    return armed ? "K1:+50 K2:-50 K3:KEEP" : "K1:PREV K2:NEXT K3:ARM";
+    return armed ? "K1:+100 K2:-100 K3:KEEP" : "K1:PREV K2:NEXT K3:ARM";
 }
 
 static const char *ui_monitor_flow_valid_text(uint8 optical_flow_valid)
@@ -902,6 +902,11 @@ uint8 screen_monitor_handle_input(monitor_page_enum *page,
                                   const MonitorRuntimeSnapshot *snapshot,
                                   float throttle_step)
 {
+    if(throttle_step < 100.0f)
+    {
+        throttle_step = 100.0f;
+    }
+
     if(page == NULL)
     {
         return 0U;

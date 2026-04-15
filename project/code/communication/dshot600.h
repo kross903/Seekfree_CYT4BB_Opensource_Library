@@ -9,10 +9,14 @@
 #include "zf_common_headfile.h"
 
 // ==================== 硬件配置 ====================
-#define MOTOR1_PIN              P05_0
-#define MOTOR2_PIN              P05_1
-#define MOTOR3_PIN              P05_2
-#define MOTOR4_PIN              P05_3
+// #define MOTOR1_PIN              P05_0
+// #define MOTOR2_PIN              P05_1
+// #define MOTOR3_PIN              P05_2
+// #define MOTOR4_PIN              P05_3
+#define MOTOR1_PIN             P05_3 
+#define MOTOR2_PIN             P05_0 
+#define MOTOR3_PIN             P05_1 
+#define MOTOR4_PIN             P05_2 
 
 #define LED1                    P20_9
 #define LED2                    P20_8
