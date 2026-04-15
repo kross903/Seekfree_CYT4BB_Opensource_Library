@@ -11,9 +11,12 @@
  */
 
 // ==================== 安全限制参数 ====================
-#define SAFE_MAX_THROTTLE       1600.0f
-#define SAFE_MIN_THROTTLE       100.0f
-#define SAFE_MAX_MOTOR_OUTPUT   1600
+#define MOTOR_OUTPUT_SCALE_MAX      1200U
+#define SAFE_MAX_MOTOR_OUTPUT_LIMIT MOTOR_OUTPUT_SCALE_MAX
+#define SAFE_MAX_THROTTLE           ((float)SAFE_MAX_MOTOR_OUTPUT_LIMIT)
+#define SAFE_MIN_THROTTLE           100.0f
+#define MOTOR_TEST_MAX_THROTTLE     450U
+#define MOTOR_TEST_STEP             50U
 
 #define SAFE_MAX_ANGLE_ROLL     20.0f
 #define SAFE_MAX_ANGLE_PITCH    20.0f
@@ -62,6 +65,7 @@ extern volatile float target_throttle;
 extern volatile float current_throttle;
 extern volatile float base_throttle;
 
+extern volatile uint16 motor_throttle[4];
 extern uint16 throttle_buffer[4];
 
 // ==================== ???? ====================
@@ -130,6 +134,17 @@ void Flight_Runtime_Set_Throttle_For_Mode(uint8 mode, float throttle);
 float Flight_Runtime_Get_Target_Throttle_For_Mode(uint8 mode);
 float Flight_Runtime_Get_Base_Throttle_For_Mode(uint8 mode);
 void Flight_Runtime_Sync_Public_Throttle_State(void);
+
+void Flight_Motor_Test_Start(void);
+void Flight_Motor_Test_Stop(void);
+uint8 Flight_Motor_Test_Is_Active(void);
+void Flight_Motor_Test_Set_Selected(uint8 motor_index);
+uint8 Flight_Motor_Test_Get_Selected(void);
+void Flight_Motor_Test_Set_Throttle(uint16 throttle);
+uint16 Flight_Motor_Test_Get_Throttle(void);
+void Flight_Motor_Test_Set_Output_Enable(uint8 enable);
+uint8 Flight_Motor_Test_Get_Output_Enable(void);
+uint16 Flight_Motor_Test_Get_Output_Limit(void);
 
 void PIT_KeyVoltage_Task_5ms(void);
 void PIT_Adc_Task_5ms(void);

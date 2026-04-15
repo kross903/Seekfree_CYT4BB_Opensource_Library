@@ -75,6 +75,10 @@ volatile float adc_x_nomalize = 0.0f;
 volatile float adc_y_nomalize = 0.0f;
 
 static uint8 motor_pwm_initialized = 0U;
+static volatile uint8 motor_test_active = 0U;
+static volatile uint8 motor_test_selected = 0U;
+static volatile uint16 motor_test_throttle = 0U;
+static volatile uint8 motor_test_output_enabled = 0U;
 
 static void motor_pwm_init_once(void)
 {
@@ -90,18 +94,24 @@ static void motor_pwm_init_once(void)
     motor_pwm_initialized = 1U;
 }
 
-static uint16 throttle_to_pwm_duty(uint16 throttle)
+static uint16 motor_output_limit_max(void)
 {
-    uint32 span = (uint32)(MOTOR_PWM_DUTY_MAX - MOTOR_PWM_DUTY_MIN);
-    uint32 duty = (uint32)MOTOR_PWM_DUTY_MIN;
-
-    if(throttle > SAFE_MAX_MOTOR_OUTPUT)
+    if(SAFE_MAX_MOTOR_OUTPUT_LIMIT > MOTOR_OUTPUT_SCALE_MAX)
     {
-        throttle = SAFE_MAX_MOTOR_OUTPUT;
+        return MOTOR_OUTPUT_SCALE_MAX;
     }
 
-    duty += (span * throttle) / SAFE_MAX_MOTOR_OUTPUT;
-    return (uint16)duty;
+    return SAFE_MAX_MOTOR_OUTPUT_LIMIT;
+}
+
+static uint16 throttle_to_pwm_duty(uint16 throttle)
+{
+    if(throttle > MOTOR_OUTPUT_SCALE_MAX)
+    {
+        throttle = MOTOR_OUTPUT_SCALE_MAX;
+    }
+
+    return (uint16)(MOTOR_PWM_DUTY_MIN + throttle);
 }
 
 static inline float throttle_safe_limit(float throttle)
@@ -146,9 +156,24 @@ static void clear_motor_throttle_state(void)
     motor_throttle[3] = 0U;
 }
 
+static void apply_motor_test_output(void)
+{
+    clear_motor_throttle_state();
+
+    if(!motor_test_output_enabled)
+    {
+        return;
+    }
+
+    if(motor_test_selected < 4U)
+    {
+        motor_throttle[motor_test_selected] = motor_test_throttle;
+    }
+}
+
 static void write_motor_pwm_output(void)
 {
-    if(!armed)
+    if(!armed && !motor_test_output_enabled)
     {
         pwm_set_duty(MOTOR_PWM_CH1, MOTOR_PWM_DUTY_MIN);
         pwm_set_duty(MOTOR_PWM_CH2, MOTOR_PWM_DUTY_MIN);
@@ -185,9 +210,11 @@ static uint8 check_attitude_safety(void)
 
 static uint16 motor_output_safe_limit(float output)
 {
-    if(output > SAFE_MAX_MOTOR_OUTPUT)
+    uint16 output_limit = motor_output_limit_max();
+
+    if(output > output_limit)
     {
-        output = SAFE_MAX_MOTOR_OUTPUT;
+        output = output_limit;
     }
     else if(output < 0.0f)
     {
@@ -220,6 +247,9 @@ void Flight_Runtime_Emergency_Stop(uint8 reason)
     armed = 0U;
     emergency_stop_triggered = 1U;
     emergency_stop_reason = reason;
+    motor_test_active = 0U;
+    motor_test_output_enabled = 0U;
+    motor_test_throttle = 0U;
     target_throttle = 0.0f;
     current_throttle = 0.0f;
     base_throttle = 0.0f;
@@ -237,6 +267,9 @@ void Flight_Runtime_Reset_All_Throttle_States(void)
     target_throttle = 0.0f;
     current_throttle = 0.0f;
     base_throttle = 0.0f;
+    motor_test_output_enabled = 0U;
+    motor_test_throttle = 0U;
+    clear_motor_throttle_state();
 }
 
 void Flight_Runtime_Set_Throttle_For_Mode(uint8 mode, float throttle)
@@ -259,6 +292,92 @@ float Flight_Runtime_Get_Base_Throttle_For_Mode(uint8 mode)
 
 void Flight_Runtime_Sync_Public_Throttle_State(void)
 {
+}
+
+void Flight_Motor_Test_Start(void)
+{
+    target_throttle = 0.0f;
+    current_throttle = 0.0f;
+    base_throttle = 0.0f;
+
+    if(!motor_test_active)
+    {
+        motor_test_selected = 0U;
+        motor_test_throttle = 0U;
+        motor_test_output_enabled = 0U;
+    }
+
+    motor_test_active = 1U;
+    clear_motor_throttle_state();
+}
+
+void Flight_Motor_Test_Stop(void)
+{
+    motor_test_active = 0U;
+    motor_test_output_enabled = 0U;
+    motor_test_throttle = 0U;
+    target_throttle = 0.0f;
+    current_throttle = 0.0f;
+    base_throttle = 0.0f;
+    clear_motor_throttle_state();
+}
+
+uint8 Flight_Motor_Test_Is_Active(void)
+{
+    return motor_test_active;
+}
+
+void Flight_Motor_Test_Set_Selected(uint8 motor_index)
+{
+    if(motor_index >= 4U)
+    {
+        motor_index = 3U;
+    }
+
+    motor_test_selected = motor_index;
+}
+
+uint8 Flight_Motor_Test_Get_Selected(void)
+{
+    return motor_test_selected;
+}
+
+void Flight_Motor_Test_Set_Throttle(uint16 throttle)
+{
+    uint16 output_limit = motor_output_limit_max();
+    uint16 test_limit = MOTOR_TEST_MAX_THROTTLE;
+
+    if(test_limit > output_limit)
+    {
+        test_limit = output_limit;
+    }
+
+    if(throttle > test_limit)
+    {
+        throttle = test_limit;
+    }
+
+    motor_test_throttle = throttle;
+}
+
+uint16 Flight_Motor_Test_Get_Throttle(void)
+{
+    return motor_test_throttle;
+}
+
+void Flight_Motor_Test_Set_Output_Enable(uint8 enable)
+{
+    motor_test_output_enabled = enable ? 1U : 0U;
+}
+
+uint8 Flight_Motor_Test_Get_Output_Enable(void)
+{
+    return motor_test_output_enabled;
+}
+
+uint16 Flight_Motor_Test_Get_Output_Limit(void)
+{
+    return motor_output_limit_max();
 }
 
 void PIT_KeyVoltage_Task_5ms(void)
@@ -322,6 +441,7 @@ void PIT_Control_Task_250us(void)
 
     if(icm_calibration_flag)
     {
+        motor_test_output_enabled = 0U;
         clear_motor_throttle_state();
         return;
     }
@@ -335,6 +455,19 @@ void PIT_Control_Task_250us(void)
         return;
     }// 急停触发后不继续执行后续的飞控计算，保持电机输出为0，直到飞行器被重置或重新解锁
 
+    if(motor_test_active)
+    {
+        if(emergency_stop_triggered)
+        {
+            motor_test_output_enabled = 0U;
+            clear_motor_throttle_state();
+            return;
+        }
+
+        apply_motor_test_output();
+        return;
+    }
+
     if(!armed)
     {
         clear_motor_throttle_state();
@@ -346,10 +479,12 @@ void PIT_Control_Task_250us(void)
 
     if(control_mode == CONTROL_MODE_MANUAL)
     {
-        motor_throttle[0] = (uint16)base_throttle;
-        motor_throttle[1] = (uint16)base_throttle;
-        motor_throttle[2] = (uint16)base_throttle;
-        motor_throttle[3] = (uint16)base_throttle;
+        uint16 manual_output = motor_output_safe_limit(base_throttle);
+
+        motor_throttle[0] = manual_output;
+        motor_throttle[1] = manual_output;
+        motor_throttle[2] = manual_output;
+        motor_throttle[3] = manual_output;
         return;
     }
 
