@@ -11,10 +11,10 @@
  */
 
 // ==================== 安全限制参数 ====================
-#define MOTOR_OUTPUT_SCALE_MAX      1200U
+#define MOTOR_OUTPUT_SCALE_MAX      1800U
 #define SAFE_MAX_MOTOR_OUTPUT_LIMIT MOTOR_OUTPUT_SCALE_MAX
 #define SAFE_MAX_THROTTLE           ((float)SAFE_MAX_MOTOR_OUTPUT_LIMIT)
-#define SAFE_MIN_THROTTLE           100.0f
+#define SAFE_MIN_THROTTLE           300.0f
 #define MOTOR_TEST_MAX_THROTTLE     450U
 #define MOTOR_TEST_STEP             50U
 

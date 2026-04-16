@@ -15,8 +15,8 @@ static void init_display_and_basic_peripherals(void)
     ips200_init(IPS200_TYPE_SPI);
 
     adc_init(BATTERY_ADC_CHANNEL, ADC_12BIT);
-    adc_init(ADC0_CH00_P06_0, ADC_12BIT);
-    adc_init(ADC0_CH01_P06_1, ADC_12BIT);
+    adc_init(ADC1_CH20_P14_0, ADC_12BIT);
+    adc_init(ADC1_CH21_P14_1, ADC_12BIT);
     dl1b_init();
 }
 

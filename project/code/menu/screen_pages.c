@@ -673,6 +673,8 @@ static void ui_monitor_draw_image_hud(const MonitorImageHudData *data)
     ips200_show_int(UI_MONITOR_LEFT_VALUE_X, UI_MONITOR_HEIGHT_Y, data->target_throttle, 4U);
     ips200_show_int(UI_MONITOR_RIGHT_VALUE_X, UI_MONITOR_HEIGHT_Y, data->armed, 1U);
     ips200_show_int(UI_MONITOR_LEFT_VALUE_X, UI_MONITOR_IR_Y, data->beacon_count, 2U);
+    ips200_show_float(48,200,adc_x_nomalize,2,4);   
+    ips200_show_float(48,220,adc_y_nomalize,2,4);
     ui_show_padded_text(UI_MONITOR_RIGHT_VALUE_X, UI_MONITOR_IR_Y, data->mode_text, 8U, RGB565_WHITE);
     ui_show_padded_text(0U, UI_MONITOR_HINT_TOP_Y, data->hint_text, 28U, RGB565_WHITE);
 }

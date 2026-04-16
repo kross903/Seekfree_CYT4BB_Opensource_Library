@@ -13,10 +13,10 @@
 // #define MOTOR2_PIN              P05_1
 // #define MOTOR3_PIN              P05_2
 // #define MOTOR4_PIN              P05_3
-#define MOTOR1_PIN             P05_3 
-#define MOTOR2_PIN             P05_0 
-#define MOTOR3_PIN             P05_1 
-#define MOTOR4_PIN             P05_2 
+#define MOTOR1_PIN             P05_1 
+#define MOTOR2_PIN             P05_2
+#define MOTOR3_PIN             P05_3
+#define MOTOR4_PIN             P05_4
 
 #define LED1                    P20_9
 #define LED2                    P20_8
@@ -33,7 +33,7 @@
 
 // ==================== DShot 协议参数 ====================
 #define DSHOT_MOTOR_NUM         4
-#define DSHOT_MIN_THROTTLE      48
+#define DSHOT_MIN_THROTTLE      300
 #define DSHOT_MAX_THROTTLE      2047
 #define DSHOT_DISARM            0
 

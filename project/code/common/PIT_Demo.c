@@ -40,8 +40,10 @@ volatile float base_throttle = 0.0f;
 volatile float target_angle_roll = 0.0f;
 volatile float target_angle_pitch = 0.0f;
 volatile float target_angle_yaw = 0.0f;
-volatile float angle_roll_compensation = -0.60f;
-volatile float angle_pitch_compensation = -0.21f;
+// volatile float angle_roll_compensation = -0.60f;
+// volatile float angle_pitch_compensation = -0.21f;
+volatile float angle_roll_compensation = 0.0f;
+volatile float angle_pitch_compensation = 0.0f;
 volatile float angle_yaw_compensation = 0.0f;
 
 int low_voltage_protect_flag = 0;
@@ -227,10 +229,10 @@ static void mix_motor_output(void)
 {
     uint8 i = 0U;
 
-    motor_output[3] = HeightSpeedPID_output + base_throttle + roll_output - pitch_output - yaw_output;
-    motor_output[2] = HeightSpeedPID_output + base_throttle - roll_output - pitch_output + yaw_output;
-    motor_output[1] = HeightSpeedPID_output + base_throttle + roll_output + pitch_output + yaw_output;
-    motor_output[0] = HeightSpeedPID_output + base_throttle - roll_output + pitch_output - yaw_output;
+    motor_output[3] = HeightSpeedPID_output + base_throttle + roll_output + pitch_output - yaw_output;
+    motor_output[2] = HeightSpeedPID_output + base_throttle + roll_output - pitch_output + yaw_output;
+    motor_output[1] = HeightSpeedPID_output + base_throttle - roll_output + pitch_output + yaw_output;
+    motor_output[0] = HeightSpeedPID_output + base_throttle - roll_output - pitch_output - yaw_output;
 
     for(i = 0U; i < 4U; i++)
     {
@@ -391,8 +393,8 @@ void PIT_KeyVoltage_Task_5ms(void)
 
 void PIT_Adc_Task_5ms(void)
 {
-    adc_x = adc_convert(ADC0_CH00_P06_0);
-    adc_y = adc_convert(ADC0_CH01_P06_1);
+    adc_x = adc_convert(ADC1_CH20_P14_0);
+    adc_y = adc_convert(ADC1_CH21_P14_1);
     adc_x_filtered = (float)adc_x;
     adc_y_filtered = (float)adc_y;
     adc_x_nomalize = joystick_normalize(adc_x);
