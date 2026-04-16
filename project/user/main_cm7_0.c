@@ -120,7 +120,6 @@ static void service_monitor_telemetry(void)
     Send_test();
     USART_PID_Adjust();
     send_date_back();
-    DroneCarLink_MainLoopTask();
 }
 
 static void update_monitor_view(void)
@@ -160,8 +159,7 @@ static void initialize_control_core_modules(void)
     flash_init();
     Device_Init();
     pmw3901_init();
-    
-    DroneCarLink_Init();
+
     IR_Localization_Init();
     IPM_Interface_Init();
     BeaconDetect_Init();

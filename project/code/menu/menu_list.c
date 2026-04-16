@@ -293,7 +293,6 @@ void menu_open(void)
         g_currentMenu = menu_process(g_currentMenu);
         Send_test();
         USART_PID_Adjust();
-        DroneCarLink_MainLoopTask();
         if (g_currentMenu == NULL)
         {
             // ?????????

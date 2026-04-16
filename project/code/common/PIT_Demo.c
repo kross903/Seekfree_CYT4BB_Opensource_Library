@@ -17,7 +17,7 @@
 #define PMW3901_SAMPLE_DT_S            0.020f
 #define JOYSTICK_ROLL_MAX_DEG          20.0f
 #define JOYSTICK_PITCH_MAX_DEG         20.0f
-#define BATTERY_NOMINAL_VOLTAGE        24.0f
+#define BATTERY_NOMINAL_VOLTAGE        11.1f
 
 PID_Controller gyro_pid_roll;
 PID_Controller gyro_pid_pitch;
@@ -386,15 +386,15 @@ void PIT_KeyVoltage_Task_5ms(void)
 {
     key_scanner();
     key_scan();
-    adc_value = adc_mean_filter_convert(BATTERY_ADC_CHANNEL, 50);
+    adc_value = adc_mean_filter_convert(BATTERY_ADC_CHANNEL, 10);
     voltage = adc_value * BATTERY_ADC_TO_VOLTAGE_SCALE;
     low_voltage_protect_flag = (voltage < BATTERY_LOW_WARN_THRESHOLD) ? 1 : 0;
 }
 
 void PIT_Adc_Task_5ms(void)
 {
-    adc_x = adc_convert(ADC1_CH20_P14_0);
-    adc_y = adc_convert(ADC1_CH21_P14_1);
+    // adc_x = adc_convert(ADC1_CH20_P14_0);
+    // adc_y = adc_convert(ADC1_CH21_P14_1);
     adc_x_filtered = (float)adc_x;
     adc_y_filtered = (float)adc_y;
     adc_x_nomalize = joystick_normalize(adc_x);
