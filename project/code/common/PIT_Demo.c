@@ -40,10 +40,9 @@ volatile float base_throttle = 0.0f;
 volatile float target_angle_roll = 0.0f;
 volatile float target_angle_pitch = 0.0f;
 volatile float target_angle_yaw = 0.0f;
-// volatile float angle_roll_compensation = -0.60f;
-// volatile float angle_pitch_compensation = -0.21f;
-volatile float angle_roll_compensation = 0.0f;
-volatile float angle_pitch_compensation = 0.0f;
+
+volatile float angle_roll_compensation = 10.0f;
+volatile float angle_pitch_compensation = 16.0f;
 volatile float angle_yaw_compensation = 0.0f;
 
 int low_voltage_protect_flag = 0;
@@ -71,8 +70,8 @@ uint16 throttle_buffer[4] = {0, 0, 0, 0};
 
 volatile int adc_x = 0;
 volatile int adc_y = 0;
-volatile float adc_x_filtered = 0.0f;
-volatile float adc_y_filtered = 0.0f;
+volatile int adc_x_filtered = 0.0f;
+volatile int adc_y_filtered = 0.0f;
 volatile float adc_x_nomalize = 0.0f;
 volatile float adc_y_nomalize = 0.0f;
 
@@ -395,10 +394,10 @@ void PIT_Adc_Task_5ms(void)
 {
     // adc_x = adc_convert(ADC1_CH20_P14_0);
     // adc_y = adc_convert(ADC1_CH21_P14_1);
-    adc_x_filtered = (float)adc_x;
-    adc_y_filtered = (float)adc_y;
-    adc_x_nomalize = joystick_normalize(adc_x);
-    adc_y_nomalize = joystick_normalize(adc_y);
+    adc_x_filtered = adc_x;
+    adc_y_filtered = adc_y;
+    adc_x_nomalize = joystick_normalize(adc_x_filtered);
+    adc_y_nomalize = joystick_normalize(adc_y_filtered);
 }
 
 void PIT_PMW3901_Task_20ms(void)

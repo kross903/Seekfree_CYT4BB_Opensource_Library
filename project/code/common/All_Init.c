@@ -20,15 +20,15 @@ static void init_display_and_basic_peripherals(void)
 
 static void init_default_pid_parameters(void)
 {
-    PID_Init(&gyro_pid_roll, 1.60f, 0.0f, 0.120f, 600.0f, 100.0f, 10.0f, 0.8f);
-    PID_Init(&gyro_pid_pitch, 1.60f, 0.0f, 0.120f, 600.0f, 100.0f, 10.0f, 0.8f);
-    PID_Init(&gyro_pid_yaw, 1.0f, 0.0f, 0.0f, 400.0f, 10.0f, 0.0f, 0.0f);
+    PID_Init(&gyro_pid_roll, 4.50f, 0.0f, 0.120f, 1000.0f, 100.0f, 10.0f, 0.8f);
+    PID_Init(&gyro_pid_pitch, 2.90f, 0.0f, 0.120f, 1000.0f, 100.0f, 10.0f, 0.8f);
+    PID_Init(&gyro_pid_yaw, 5.5f, 0.0f, 0.0f, 400.0f, 10.0f, 0.0f, 0.0f);
 
     PID_Init(&HeightPID, 5.0f, 0.0f, 0.0f, 200.0f, 50.0f, 10.0f, 0.0f);
 
-    PID_Init(&angle_pid_roll, 3.50f, 0.0f, 0.0f, 200.0f, 30.0f, 0.0f, 0.0f);
-    PID_Init(&angle_pid_pitch, 3.50f, 0.0f, 0.0f, 200.0f, 30.0f, 0.0f, 0.0f);
-    PID_Init(&angle_pid_yaw, 3.0f, 0.0f, 0.0f, 100.0f, 20.0f, 0.0f, 0.0f);
+    PID_Init(&angle_pid_roll, 3.50f, 0.0f, 0.0f, 300.0f, 30.0f, 0.0f, 0.0f);
+    PID_Init(&angle_pid_pitch, 3.50f, 0.0f, 0.0f, 300.0f, 30.0f, 0.0f, 0.0f);
+    PID_Init(&angle_pid_yaw, 1.0f, 0.0f, 0.0f, 100.0f, 20.0f, 0.0f, 0.0f);
 
     PID_Init(&joystick_pid_roll, 1.0f, 0.0f, 0.0f, 20.0f, 10.0f, 0.0f, 0.0f);
     PID_Init(&joystick_pid_pitch, 1.0f, 0.0f, 0.0f, 20.0f, 10.0f, 0.0f, 0.0f);

@@ -18,8 +18,8 @@
 #define MOTOR_TEST_MAX_THROTTLE     450U
 #define MOTOR_TEST_STEP             50U
 
-#define SAFE_MAX_ANGLE_ROLL     20.0f
-#define SAFE_MAX_ANGLE_PITCH    20.0f
+#define SAFE_MAX_ANGLE_ROLL     40.0f
+#define SAFE_MAX_ANGLE_PITCH    40.0f
 #define SAFE_MAX_ANGLE_YAW      180.0f
 
 /*
@@ -101,8 +101,8 @@ extern float voltage;
 // ==================== ??ADC?? ====================
 extern volatile int adc_x;
 extern volatile int adc_y;
-extern volatile float adc_x_filtered;
-extern volatile float adc_y_filtered;
+extern volatile int adc_x_filtered;
+extern volatile int adc_y_filtered;
 extern volatile float adc_x_nomalize ;
 extern volatile float adc_y_nomalize ;
 /*

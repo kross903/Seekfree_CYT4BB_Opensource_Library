@@ -122,23 +122,29 @@ static void service_monitor_telemetry(void)
     send_date_back();
 }
 volatile uint8 Car_Copy_Screen_Flag = 0;
-static void drone_car_link_task(void)
+static uint8 drone_car_link_task(void)
 {
+    uint8 link_tick = 0;
+
     if(Car_Copy_Screen_Flag)
     {
         Car_Copy_Screen_Flag = 0;
+        link_tick = 1;
     }
 
     core_link_user_poll();
+    return link_tick;
 }
 
 static void update_monitor_view(void)
 {
+    static uint8 drone_status_tick_div = 0;
+    uint8 link_tick = 0;
     MonitorRuntimeSnapshot snapshot;
 
     (void)CrossCoreCamera_ControlCoreFetchFrame();
     build_monitor_runtime_snapshot(&snapshot);
-    drone_car_link_task();
+    link_tick = drone_car_link_task();
 
     if(screen_monitor_handle_input(&g_monitor_page, &snapshot, 50.0f))
     {
@@ -148,6 +154,17 @@ static void update_monitor_view(void)
     update_monitor_vision_state();
     service_monitor_telemetry();
     build_monitor_runtime_snapshot(&snapshot);
+
+    if(link_tick)
+    {
+        drone_status_tick_div ++;
+        if(drone_status_tick_div >= 10U)
+        {
+            drone_status_tick_div = 0;
+            core_link_user_send_drone_status_from_snapshot(&snapshot);
+        }
+    }
+
     screen_monitor_refresh_page(g_monitor_page, &snapshot);
 }
 

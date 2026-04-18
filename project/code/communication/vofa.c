@@ -385,6 +385,7 @@ static uint8 Get_Data(float *value)
     uint8 data_start_num = 0;
     uint8 data_end_num = 0;
     uint8 minus_flag = 0;
+    uint8 has_point = 0;
     uint8 valid = 0;
     uint8 cursor = 0;
     uint8 has_digit = 0;
@@ -397,6 +398,8 @@ static uint8 Get_Data(float *value)
         return 0;
     }
 
+    // 先扫描当前命令包，找到数字区间。
+    // 例如 "T2=0.21!" 中，真正的数据部分是 '=' 后、'!' 前的 "0.21"。
     for(cursor = 0; cursor < VOFA_PACKET_MAX_LEN; cursor++)
     {
         if(fifo_get_data[cursor] == '=')
@@ -418,23 +421,52 @@ static uint8 Get_Data(float *value)
     }
 
     cursor = data_start_num;
+    // 允许数字带一个前导负号，例如 "-0.25"。
     if(fifo_get_data[cursor] == '-')
     {
         minus_flag = 1;
         cursor++;
     }
 
+    /*
+     * 下面开始逐字符手动解析数字。
+     *
+     * 1. 在遇到小数点之前，按“整数部分”处理：
+     *    integer_part = integer_part * 10 + 当前数字
+     *    例如 "12"：
+     *      读到 '1' -> 0 * 10 + 1 = 1
+     *      读到 '2' -> 1 * 10 + 2 = 12
+     *
+     * 2. 遇到小数点之后，按“小数部分”处理：
+     *    第一位小数权重是 0.1
+     *    第二位小数权重是 0.01
+     *    第三位小数权重是 0.001
+     *
+     * 这里的实现方法是：
+     *    - 看到 '.' 时，把 fractional_scale 设为 1.0f
+     *    - 每次加入 digit * (fractional_scale * 0.1f)
+     *    - 然后再把 fractional_scale 乘 0.1f
+     *
+     * 例如 "0.21"：
+     *    读到小数点后，fractional_scale = 1.0
+     *    读到 '2'：2 * (1.0 * 0.1) = 0.2
+     *    再把 fractional_scale 变成 0.1
+     *    读到 '1'：1 * (0.1 * 0.1) = 0.01
+     *    所以小数部分最终是 0.2 + 0.01 = 0.21
+     */
     for(; cursor < data_end_num; cursor++)
     {
         uint8 current_char = fifo_get_data[cursor];
 
         if(current_char == '.')
         {
-            if(fractional_scale != 0.1f)
+            // 如果已经进过一次小数部分，又再次遇到 '.'，说明数据格式错误。
+            if(has_point)
             {
                 return 0;
             }
-            fractional_scale = 1.0f;
+            // 从这里开始，后续字符按小数部分处理。
+            has_point = 1;
             continue;
         }
 
@@ -444,13 +476,15 @@ static uint8 Get_Data(float *value)
         }
 
         has_digit = 1;
-        if(fractional_scale == 0.1f)
+        if(!has_point)
         {
+            // 还在整数部分，旧值先左移一位十进制，再加上当前数字。
             integer_part = integer_part * 10.0f + (float)(current_char - '0');
         }
         else
         {
-            fractional_part += (float)(current_char - '0') * (fractional_scale * 0.1f);
+            // 已进入小数部分，当前位按 0.1 / 0.01 / 0.001 ... 这样的权重累加。
+            fractional_part += (float)(current_char - '0') * fractional_scale;
             fractional_scale *= 0.1f;
         }
     }

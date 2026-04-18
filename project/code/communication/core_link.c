@@ -342,6 +342,18 @@ void core_link_send_param_ascii (uint8 command, uint8 item, float value)
     core_link_send_frame(CORE_LINK_PROTOCOL_PARAM_ASCII, (const uint8 *)payload, (uint8)strlen(payload));
 }
 
+void core_link_send_drone_status (const core_link_drone_status_packet_struct *status)
+{
+    if(NULL == status)
+    {
+        return;
+    }
+
+    core_link_send_frame(CORE_LINK_PROTOCOL_DRONE_STATUS,
+                         (const uint8 *)status,
+                         (uint8)sizeof(core_link_drone_status_packet_struct));
+}
+
 __weak void core_link_on_frame_received (uint8 protocol_id, const uint8 *payload, uint8 length)
 {
     (void)protocol_id;

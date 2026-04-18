@@ -93,6 +93,31 @@ uint8 core_link_user_consume_monitor_exit_request (void)
     return 1;
 }
 
+void core_link_user_send_drone_status_from_snapshot (const MonitorRuntimeSnapshot *snapshot)
+{
+    core_link_drone_status_packet_struct status = {0};
+
+    if(NULL == snapshot)
+    {
+        return;
+    }
+
+    status.armed = snapshot->armed;
+    status.control_mode = snapshot->control_mode;
+    status.low_voltage = snapshot->low_voltage;
+    status.beacon_count = (uint8)((snapshot->beacon_count < 0) ? 0 : snapshot->beacon_count);
+    status.voltage_mv = (uint16)(snapshot->voltage * 1000.0f);
+    status.target_throttle = (int16)snapshot->target_throttle;
+    status.base_throttle = (int16)snapshot->base_throttle;
+    status.roll_ddeg = (int16)(snapshot->roll * 10.0f);
+    status.pitch_ddeg = (int16)(snapshot->pitch * 10.0f);
+    status.yaw_ddeg = (int16)(snapshot->yaw * 10.0f);
+    status.tof_height_dcm = (int16)(snapshot->tof_height_cm * 10.0f);
+    status.fused_height_dcm = (int16)(snapshot->fused_height_cm * 10.0f);
+
+    core_link_send_drone_status(&status);
+}
+
 void core_link_on_text_received (const uint8 *text, uint8 length)
 {
     uint8 copy_length = 0;

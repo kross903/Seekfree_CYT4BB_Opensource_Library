@@ -20,6 +20,7 @@ typedef enum
 {
     CORE_LINK_PROTOCOL_TEXT        = 0x01,                                      // Text payload, such as "HELLO"
     CORE_LINK_PROTOCOL_PARAM_ASCII = 0x02,                                      // Param payload, such as "R1=1.234"
+    CORE_LINK_PROTOCOL_DRONE_STATUS = 0x10,                                     // Fixed-length drone status summary
 }core_link_protocol_enum;
 
 typedef struct
@@ -29,6 +30,22 @@ typedef struct
     float value;
 }core_link_param_packet_struct;
 
+typedef struct
+{
+    uint8 armed;
+    uint8 control_mode;
+    uint8 low_voltage;
+    uint8 beacon_count;
+    uint16 voltage_mv;
+    int16 target_throttle;
+    int16 base_throttle;
+    int16 roll_ddeg;
+    int16 pitch_ddeg;
+    int16 yaw_ddeg;
+    int16 tof_height_dcm;
+    int16 fused_height_dcm;
+} core_link_drone_status_packet_struct;
+
 void core_link_init             (void);                                         // Init UART4, FIFO, and parser
 void core_link_task             (void);                                         // Run receive, unpack, and dispatch in main loop
 void core_link_uart4_rx_handler (void);                                         // Call from uart4_isr to push rx bytes into FIFO
@@ -36,6 +53,7 @@ void core_link_uart4_rx_handler (void);                                         
 void core_link_send_frame       (uint8 protocol_id, const uint8 *payload, uint8 length);   // Send generic frame
 void core_link_send_text        (const char *text);                             // Send text payload frame
 void core_link_send_param_ascii (uint8 command, uint8 item, float value);       // Send ASCII param payload like "R1=1.234"
+void core_link_send_drone_status(const core_link_drone_status_packet_struct *status);
 
 void core_link_on_frame_received (uint8 protocol_id, const uint8 *payload, uint8 length);       // Optional generic callback for new protocol ids
 void core_link_on_text_received  (const uint8 *text, uint8 length);                              // Optional text callback
