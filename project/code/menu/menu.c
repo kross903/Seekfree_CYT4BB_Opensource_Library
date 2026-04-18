@@ -30,6 +30,8 @@ Menu* menu_process(Menu* currentMenu)
 {
     Menu* menu = currentMenu;
 
+    core_link_user_poll();
+
     if(g_menu_exit_flag)
     {
         return NULL;
@@ -212,6 +214,7 @@ void menu_execute_function(Menu* menu)
 
     while(1)
     {
+        core_link_user_poll();
         item->function();
 
         if(g_menu_exit_flag || menu_is_monitor_view())

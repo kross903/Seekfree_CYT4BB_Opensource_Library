@@ -15,8 +15,6 @@ static void init_display_and_basic_peripherals(void)
     ips200_init(IPS200_TYPE_SPI);
 
     adc_init(BATTERY_ADC_CHANNEL, ADC_12BIT);
-    adc_init(ADC1_CH20_P14_0, ADC_12BIT);
-    adc_init(ADC1_CH21_P14_1, ADC_12BIT);
     dl1b_init();
 }
 
@@ -56,7 +54,6 @@ static void init_periodic_interrupts(void)
     pit_us_init(MOTOR_OUTPUT_PIT, 500);   // 2kHz PWM update
     pit_us_init(PMW3901_UPDATE_PIT, 20000);  // 20ms PMW3901 update
     pit_ms_init(TOF_UPDATE_PIT, 25);      // 40Hz TOF update
-    pit_ms_init(DRONE_CAR_LINK_SERVICE_PIT, 10);
 }
 
 void Device_Init(void)

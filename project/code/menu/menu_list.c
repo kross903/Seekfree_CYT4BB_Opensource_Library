@@ -31,6 +31,8 @@ static uint8 select_control_mode(void)
 
     while(1)
     {
+        core_link_user_poll();
+
         if(key_flag != 0)
         {
             switch(key_flag)
@@ -92,6 +94,7 @@ void icm_init_menu()
     ips200_clear();
     while(1)
     {
+        core_link_user_poll();
         ui_menu_show_icm_init_result_page();
         if(key_flag == Button_4)
         {

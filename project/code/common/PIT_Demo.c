@@ -435,10 +435,6 @@ void PIT_Motor_Task_500us(void)
 
 void PIT_Control_Task_250us(void)
 {
-    float external_roll = 0.0f;
-    float external_pitch = 0.0f;
-    float external_yaw = 0.0f;
-
     motor_pwm_init_once();
 
     if(icm_calibration_flag)
@@ -490,24 +486,14 @@ void PIT_Control_Task_250us(void)
         return;
     }
 
-    if(DroneCarLink_UsesExternalTargets())
-    {
-        DroneCarLink_Get_Target_Angles(&external_roll, &external_pitch, &external_yaw);
-        target_angle_roll = external_roll;
-        target_angle_pitch = external_pitch;
-        target_angle_yaw = external_yaw;
-    }
-    else
-    {
-        target_angle_roll = PID_Calculate(&joystick_pid_roll,
-                                          adc_x_nomalize * JOYSTICK_ROLL_MAX_DEG,
-                                          current_roll,
-                                          CONTROL_DT_S);
-        target_angle_pitch = PID_Calculate(&joystick_pid_pitch,
-                                           adc_y_nomalize * JOYSTICK_PITCH_MAX_DEG,
-                                           current_pitch,
-                                           CONTROL_DT_S);
-    }
+    target_angle_roll = PID_Calculate(&joystick_pid_roll,
+                                      adc_x_nomalize * JOYSTICK_ROLL_MAX_DEG,
+                                      current_roll,
+                                      CONTROL_DT_S);
+    target_angle_pitch = PID_Calculate(&joystick_pid_pitch,
+                                       adc_y_nomalize * JOYSTICK_PITCH_MAX_DEG,
+                                       current_pitch,
+                                       CONTROL_DT_S);
 
     target_roll_rate = PID_Calculate(&angle_pid_roll, target_angle_roll, current_roll, CONTROL_DT_S);
     target_pitch_rate = PID_Calculate(&angle_pid_pitch, target_angle_pitch, current_pitch, CONTROL_DT_S);

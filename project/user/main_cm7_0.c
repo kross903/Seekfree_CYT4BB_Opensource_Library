@@ -121,6 +121,16 @@ static void service_monitor_telemetry(void)
     USART_PID_Adjust();
     send_date_back();
 }
+volatile uint8 Car_Copy_Screen_Flag = 0;
+static void drone_car_link_task(void)
+{
+    if(Car_Copy_Screen_Flag)
+    {
+        Car_Copy_Screen_Flag = 0;
+    }
+
+    core_link_user_poll();
+}
 
 static void update_monitor_view(void)
 {
@@ -128,6 +138,7 @@ static void update_monitor_view(void)
 
     (void)CrossCoreCamera_ControlCoreFetchFrame();
     build_monitor_runtime_snapshot(&snapshot);
+    drone_car_link_task();
 
     if(screen_monitor_handle_input(&g_monitor_page, &snapshot, 50.0f))
     {
@@ -136,7 +147,6 @@ static void update_monitor_view(void)
 
     update_monitor_vision_state();
     service_monitor_telemetry();
-
     build_monitor_runtime_snapshot(&snapshot);
     screen_monitor_refresh_page(g_monitor_page, &snapshot);
 }
@@ -156,6 +166,8 @@ static void run_monitor_view_loop(void)
 static void initialize_control_core_modules(void)
 {
     Init_uart();
+    core_link_init();
+    core_link_user_init();
     flash_init();
     Device_Init();
     pmw3901_init();

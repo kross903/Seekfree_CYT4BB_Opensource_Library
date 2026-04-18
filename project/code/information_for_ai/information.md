@@ -1,4 +1,4 @@
-# Project Information
+﻿# Project Information
 
 本文件用于帮助 AI 快速建立对本项目结构、入口和常改位置的认识，减少每次任务前的重复摸索。
 
@@ -23,7 +23,7 @@
   - 放通信和上位机交互相关代码。
   - 典型模块：
     - `vofa.c/.h`：VOFA 调试数据回传
-    - `drone_car_link.c/.h`：遥控/串口链路
+    - `core_link.c/.h`：核心串口链路
     - `cross_core_camera.c/.h`
     - `dshot600.c/.h`
 

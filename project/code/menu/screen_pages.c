@@ -904,6 +904,8 @@ uint8 screen_monitor_handle_input(monitor_page_enum *page,
                                   const MonitorRuntimeSnapshot *snapshot,
                                   float throttle_step)
 {
+    uint8 remote_exit_requested = core_link_user_consume_monitor_exit_request();
+
     if(throttle_step < 100.0f)
     {
         throttle_step = 100.0f;
@@ -915,10 +917,13 @@ uint8 screen_monitor_handle_input(monitor_page_enum *page,
     }
 
     /* ?? KEY_4?????????????? */
-    if(key_get_state(KEY_4) == KEY_LONG_PRESS)
+    if((key_get_state(KEY_4) == KEY_LONG_PRESS) || remote_exit_requested)
     {
         screen_monitor_request_stop();
-        key_clear_state(KEY_4);
+        if(key_get_state(KEY_4) == KEY_LONG_PRESS)
+        {
+            key_clear_state(KEY_4);
+        }
         key_flag = 0;
         menu_enter_main_menu_view();
         return 1U;

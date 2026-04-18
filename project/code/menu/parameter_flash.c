@@ -769,6 +769,8 @@ void parameter_menu_entry(void)
     {
         uint8 key = 0;
 
+        core_link_user_poll();
+
         if(redraw)
         {
             parameter_render();

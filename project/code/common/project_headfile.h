@@ -15,8 +15,9 @@
 #include "common/shared_data.h"
 
 // ================================================= Communication =================================================
+#include "communication/core_link.h"
+#include "communication/core_link_user.h"
 #include "communication/cross_core_camera.h"
-#include "communication/drone_car_link.h"
 #include "communication/dshot600.h"
 #include "communication/vofa.h"
 
