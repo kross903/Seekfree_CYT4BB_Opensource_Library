@@ -134,8 +134,31 @@ void core_link_on_text_received (const uint8 *text, uint8 length)
 
 void core_link_on_param_received (const core_link_param_packet_struct *param)
 {
+    int32 adc_value = 0;
+
     if(NULL == param)
     {
+        return;
+    }
+
+    if('A' == param->command)
+    {
+        adc_value = (int32)(param->value + ((param->value >= 0.0f) ? 0.5f : -0.5f));
+
+        switch(param->item)
+        {
+            case '1':
+                adc_x = (int)adc_value;
+                break;
+
+            case '2':
+                adc_y = (int)adc_value;
+                break;
+
+            default:
+                break;
+        }
+
         return;
     }
 

@@ -15,6 +15,7 @@
 #define CONTROL_DT_S                   0.00025f
 #define CONTROL_DT_MS                  0.25f
 #define PMW3901_SAMPLE_DT_S            0.020f
+#define ADC_INPUT_LPF_ALPHA            0.20f
 #define JOYSTICK_ROLL_MAX_DEG          20.0f
 #define JOYSTICK_PITCH_MAX_DEG         20.0f
 #define BATTERY_NOMINAL_VOLTAGE        11.1f
@@ -392,10 +393,24 @@ void PIT_KeyVoltage_Task_5ms(void)
 
 void PIT_Adc_Task_5ms(void)
 {
-    // adc_x = adc_convert(ADC1_CH20_P14_0);
-    // adc_y = adc_convert(ADC1_CH21_P14_1);
-    adc_x_filtered = adc_x;
-    adc_y_filtered = adc_y;
+    static uint8 adc_lpf_initialized = 0U;
+    static float adc_x_lpf_state = 0.0f;
+    static float adc_y_lpf_state = 0.0f;
+
+    if(!adc_lpf_initialized)
+    {
+        adc_x_lpf_state = (float)adc_x;
+        adc_y_lpf_state = (float)adc_y;
+        adc_lpf_initialized = 1U;
+    }
+    else
+    {
+        adc_x_lpf_state += ((float)adc_x - adc_x_lpf_state) * ADC_INPUT_LPF_ALPHA;
+        adc_y_lpf_state += ((float)adc_y - adc_y_lpf_state) * ADC_INPUT_LPF_ALPHA;
+    }
+
+    adc_x_filtered = (int)adc_x_lpf_state;
+    adc_y_filtered = (int)adc_y_lpf_state;
     adc_x_nomalize = joystick_normalize(adc_x_filtered);
     adc_y_nomalize = joystick_normalize(adc_y_filtered);
 }
