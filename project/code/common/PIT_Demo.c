@@ -16,8 +16,8 @@
 #define CONTROL_DT_MS                  0.25f
 #define PMW3901_SAMPLE_DT_S            0.020f
 #define ADC_INPUT_LPF_ALPHA            0.20f
-#define JOYSTICK_ROLL_MAX_DEG          20.0f
-#define JOYSTICK_PITCH_MAX_DEG         20.0f
+#define JOYSTICK_ROLL_MAX_DEG          30.0f
+#define JOYSTICK_PITCH_MAX_DEG         30.0f
 #define BATTERY_NOMINAL_VOLTAGE        11.1f
 
 PID_Controller gyro_pid_roll;
@@ -502,11 +502,11 @@ void PIT_Control_Task_250us(void)
 
     target_angle_roll = PID_Calculate(&joystick_pid_roll,
                                       adc_x_nomalize * JOYSTICK_ROLL_MAX_DEG,
-                                      current_roll,
+                                      0.0f,
                                       CONTROL_DT_S);
     target_angle_pitch = PID_Calculate(&joystick_pid_pitch,
                                        adc_y_nomalize * JOYSTICK_PITCH_MAX_DEG,
-                                       current_pitch,
+                                       0.0f,
                                        CONTROL_DT_S);
 
     target_roll_rate = PID_Calculate(&angle_pid_roll, target_angle_roll, current_roll, CONTROL_DT_S);

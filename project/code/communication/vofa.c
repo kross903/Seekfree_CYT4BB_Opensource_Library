@@ -140,6 +140,34 @@ static void set_height_pid_value(uint8 item, float value)
 
     Flight_Control_Set_Height_PID(kp, ki, kd);
 }
+
+static void set_joystick_pid_value(uint8 axis, uint8 item, float value)
+{
+    PID_Controller *pid = NULL;
+
+    if(axis == AXIS_ROLL)
+    {
+        pid = &joystick_pid_roll;
+    }
+    else if(axis == AXIS_PITCH)
+    {
+        pid = &joystick_pid_pitch;
+    }
+    else
+    {
+        return;
+    }
+
+    switch(item)
+    {
+        case '1': pid->Kp = value; break;
+        case '2': pid->Ki = value; break;
+        case '3': pid->Kd = value; break;
+        case '4': pid->output_limit = value; break;
+        case '5': pid->integral_limit = value; break;
+        default:  return;
+    }
+}
     float roll_compensation = 0.0f;
     float pitch_compensation = 0.0f;
     float yaw_compensation = 0.0f;
@@ -198,6 +226,26 @@ static void send_pid_data_back(uint8 command)
         case 'H':
             Flight_Control_Get_Height_PID(&value_1, &value_2, &value_3);
             break;
+
+        case 'J':
+            value_1 = joystick_pid_roll.Kp;
+            value_2 = joystick_pid_roll.Ki;
+            value_3 = joystick_pid_roll.Kd;
+            send_four_date(value_1, value_2, value_3,
+                           joystick_pid_roll.output_limit,
+                           joystick_pid_roll.integral_limit,
+                           0, 0, 0);
+            return;
+
+        case 'K':
+            value_1 = joystick_pid_pitch.Kp;
+            value_2 = joystick_pid_pitch.Ki;
+            value_3 = joystick_pid_pitch.Kd;
+            send_four_date(value_1, value_2, value_3,
+                           joystick_pid_pitch.output_limit,
+                           joystick_pid_pitch.integral_limit,
+                           0, 0, 0);
+            return;
 
         case 'S':
             value_1 = Flight_Control_Get_Target_Throttle();
@@ -591,6 +639,22 @@ void USART_PID_Adjust(void)
             send_back_command = 'T';
             break;
 
+        case 'J':
+            if(has_value)
+            {
+                set_joystick_pid_value(AXIS_ROLL, item, data_get);
+            }
+            send_back_command = 'J';
+            break;
+
+        case 'K':
+            if(has_value)
+            {
+                set_joystick_pid_value(AXIS_PITCH, item, data_get);
+            }
+            send_back_command = 'K';
+            break;
+
         case 'F':
             switch(item)
             {
@@ -600,6 +664,8 @@ void USART_PID_Adjust(void)
                 case '3': send_back_flag = 3; break;
                 case '4': send_back_flag = 4; break;
                 case '5': send_back_flag = 5; break;
+                case '6': send_back_flag = 6; break;
+                case '7': send_back_flag = 7; break;
                 default: break;
             }
 
@@ -677,6 +743,20 @@ void send_date_back(void)
                            (float)icm42688_acc_z_r, icm42688_acc_x,
                            icm42688_acc_y, icm42688_acc_z,
                            angle_roll_compensation, angle_pitch_compensation);
+            break;
+
+        case 6:
+            send_four_date(current_roll, target_angle_roll,
+                           current_gyro_roll, target_roll_rate,
+                           current_pitch, target_angle_pitch,
+                           current_gyro_pitch, target_pitch_rate);
+            break;
+
+        case 7:
+            send_four_date((float)adc_x, (float)adc_y,
+                           (float)adc_x_filtered, (float)adc_y_filtered,
+                           adc_x_nomalize, adc_y_nomalize,
+                           target_angle_roll, target_angle_pitch);
             break;
 
         default:

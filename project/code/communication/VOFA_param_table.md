@@ -88,7 +88,7 @@
 
 ### 1.8 摇杆到姿态的 PID
 
-这组参数当前在代码中初始化，但 **没有在 VOFA 指令里开放**。
+这组参数当前已经接入 VOFA 调参，但只覆盖 `Roll / Pitch` 两轴，**不控制 Yaw**。
 
 | 参数 | Roll 默认值 | Pitch 默认值 |
 |---|---:|---:|
@@ -97,6 +97,21 @@
 | `Kd` | `0.00` | `0.00` |
 | 输出限幅 `output_limit` | `20.0` | `20.0` |
 | 积分限幅 `integral_limit` | `10.0` | `10.0` |
+
+对应指令：
+
+| 轴 | 参数 | VOFA 指令 |
+|---|---|---|
+| Roll | `Kp` | `J1=<value>!` |
+| Roll | `Ki` | `J2=<value>!` |
+| Roll | `Kd` | `J3=<value>!` |
+| Roll | `output_limit` | `J4=<value>!` |
+| Roll | `integral_limit` | `J5=<value>!` |
+| Pitch | `Kp` | `K1=<value>!` |
+| Pitch | `Ki` | `K2=<value>!` |
+| Pitch | `Kd` | `K3=<value>!` |
+| Pitch | `output_limit` | `K4=<value>!` |
+| Pitch | `integral_limit` | `K5=<value>!` |
 
 ## 2. 可通过 VOFA 调整的非 PID 参数
 
@@ -175,6 +190,8 @@
 | `F3!` | 链路测试 |
 | `F4!` | 陀螺仪调试 |
 | `F5!` | 加速度调试 |
+| `F6!` | Roll/Pitch 角度与角速度对比 |
+| `F7!` | ADC 原始值、滤波值与目标角 |
 
 ## 6. 常用发送指令示例
 
@@ -211,6 +228,26 @@ T2=0.21!
 T3=0.00!
 ```
 
+### 调 Roll 摇杆 PID
+
+```text
+J1=1.00!
+J2=0.00!
+J3=0.00!
+J4=20.0!
+J5=10.0!
+```
+
+### 调 Pitch 摇杆 PID
+
+```text
+K1=1.00!
+K2=0.00!
+K3=0.00!
+K4=20.0!
+K5=10.0!
+```
+
 ### 设置油门
 
 ```text
@@ -226,6 +263,8 @@ F2!
 F3!
 F4!
 F5!
+F6!
+F7!
 ```
 
 ### 强制失锁
