@@ -18,7 +18,7 @@
 #define ADC_INPUT_LPF_ALPHA            0.20f
 #define JOYSTICK_ROLL_MAX_DEG          30.0f
 #define JOYSTICK_PITCH_MAX_DEG         30.0f
-#define BATTERY_NOMINAL_VOLTAGE        11.1f
+#define BATTERY_NOMINAL_VOLTAGE        12.4f   /* 3S 充满电压，单位 V。 */
 
 PID_Controller gyro_pid_roll;
 PID_Controller gyro_pid_pitch;
@@ -75,6 +75,7 @@ volatile int adc_x_filtered = 0.0f;
 volatile int adc_y_filtered = 0.0f;
 volatile float adc_x_nomalize = 0.0f;
 volatile float adc_y_nomalize = 0.0f;
+volatile float car_bat_voltage = 0.0f;  /* 小车通过 core_link 发送的电池电压，单位 V。 */
 
 static uint8 motor_pwm_initialized = 0U;
 static volatile uint8 motor_test_active = 0U;
@@ -388,7 +389,20 @@ void PIT_KeyVoltage_Task_5ms(void)
     key_scan();
     adc_value = adc_mean_filter_convert(BATTERY_ADC_CHANNEL, 10);
     voltage = adc_value * BATTERY_ADC_TO_VOLTAGE_SCALE;
-    low_voltage_protect_flag = (voltage < BATTERY_LOW_WARN_THRESHOLD) ? 1 : 0;
+
+    /* 使用小车实测电压做低电保护判断（小车与飞机共用同一块电池）。
+     * car_bat_voltage == 0.0f 表示小车未建立通信，此时不做判断。 */
+    if(car_bat_voltage > 0.0f)
+    {
+        if(car_bat_voltage < BATTERY_LOW_WARN_THRESHOLD)
+        {
+            low_voltage_protect_flag = 1;
+        }
+        else if(car_bat_voltage >= BATTERY_LOW_RECOVER_THRESHOLD)
+        {
+            low_voltage_protect_flag = 0;
+        }
+    }
 }
 
 void PIT_Adc_Task_5ms(void)

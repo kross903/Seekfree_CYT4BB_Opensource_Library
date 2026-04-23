@@ -64,7 +64,7 @@ static void build_monitor_runtime_snapshot(MonitorRuntimeSnapshot *snapshot)
     snapshot->armed = (uint8)(armed ? 1U : 0U);
     snapshot->low_voltage = (uint8)(low_voltage_protect_flag ? 1U : 0U);
     snapshot->has_nearest = (uint8)((g_nearest_idx >= 0) ? 1U : 0U);
-    snapshot->voltage = voltage;
+    snapshot->voltage = car_bat_voltage;  /* 小车与飞机共用电池，直接显示小车上的实测电压。 */
     snapshot->target_throttle = (int32)Flight_Control_Get_Target_Throttle();
     snapshot->base_throttle = (int32)base_throttle;
     snapshot->roll = current_roll;

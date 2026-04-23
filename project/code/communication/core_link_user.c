@@ -1,5 +1,7 @@
 #include "common/project_headfile.h"
 
+extern volatile float car_bat_voltage;
+
 #define CORE_LINK_USER_KEY_QUEUE_SIZE       (8U)
 #define CORE_LINK_USER_KEY_ACTIVE_THRESHOLD (0.5f)
 
@@ -106,6 +108,7 @@ void core_link_user_send_drone_status_from_snapshot (const MonitorRuntimeSnapsho
     status.control_mode = snapshot->control_mode;
     status.low_voltage = snapshot->low_voltage;
     status.beacon_count = (uint8)((snapshot->beacon_count < 0) ? 0 : snapshot->beacon_count);
+    // status.voltage_mv = (uint16)(snapshot->voltage * 1000.0f);
     status.voltage_mv = (uint16)(snapshot->voltage * 1000.0f);
     status.target_throttle = (int16)snapshot->target_throttle;
     status.base_throttle = (int16)snapshot->base_throttle;
@@ -138,6 +141,16 @@ void core_link_on_param_received (const core_link_param_packet_struct *param)
 
     if(NULL == param)
     {
+        return;
+    }
+
+    if('B' == param->command && 'V' == param->item)
+    {
+        /* 小车发来的电池电压，单位 V。小车与飞机共用同一块电池，直接用于监视页显示。 */
+        if(param->value >= 9.0f && param->value <= 12.6f)
+        {
+            car_bat_voltage = param->value;
+        }
         return;
     }
 

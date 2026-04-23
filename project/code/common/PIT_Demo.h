@@ -32,8 +32,8 @@
 #define BATTERY_ADC_TO_VOLTAGE_SCALE   0.00820715f
 #define BATTERY_ADC_CHANNEL            ADC1_CH24_P14_4
 #define BATTERY_SERIES_CELLS           3.0f
-#define BATTERY_LOW_CELL_WARN_V        3.55f
-#define BATTERY_LOW_CELL_RECOVER_V     3.65f
+#define BATTERY_LOW_CELL_WARN_V        3.767f   /* 11.3V / 3，低于此值需要充电。 */
+#define BATTERY_LOW_CELL_RECOVER_V     3.833f   /* 11.5V / 3，超过此值才解除警报（过溶放电）。 */
 #define BATTERY_LOW_WARN_THRESHOLD     (BATTERY_SERIES_CELLS * BATTERY_LOW_CELL_WARN_V)
 #define BATTERY_LOW_RECOVER_THRESHOLD  (BATTERY_SERIES_CELLS * BATTERY_LOW_CELL_RECOVER_V)
 
@@ -105,6 +105,7 @@ extern volatile int adc_x_filtered;
 extern volatile int adc_y_filtered;
 extern volatile float adc_x_nomalize ;
 extern volatile float adc_y_nomalize ;
+extern volatile float car_bat_voltage;  /* 小车通过 core_link 发送的电池电压，单位 V。 */
 /*
  * [2026-03-10]
  * 修改目的:
