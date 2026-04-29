@@ -21,7 +21,31 @@ typedef enum
     CORE_LINK_PROTOCOL_TEXT        = 0x01,                                      // Text payload, such as "HELLO"
     CORE_LINK_PROTOCOL_PARAM_ASCII = 0x02,                                      // Param payload, such as "R1=1.234"
     CORE_LINK_PROTOCOL_DRONE_STATUS = 0x10,                                     // Fixed-length drone status summary
+    CORE_LINK_PROTOCOL_SCREEN_CMD   = 0x11,                                     // IPS200 mirror command stream
 }core_link_protocol_enum;
+
+typedef enum
+{
+    CORE_LINK_SCREEN_PACKET_BEGIN = 1,
+    CORE_LINK_SCREEN_PACKET_DATA,
+    CORE_LINK_SCREEN_PACKET_END,
+}core_link_screen_packet_enum;
+
+typedef enum
+{
+    CORE_LINK_SCREEN_CMD_CLEAR = 1,
+    CORE_LINK_SCREEN_CMD_FULL,
+    CORE_LINK_SCREEN_CMD_SET_DIR,
+    CORE_LINK_SCREEN_CMD_SET_FONT,
+    CORE_LINK_SCREEN_CMD_SET_COLOR,
+    CORE_LINK_SCREEN_CMD_DRAW_LINE,
+    CORE_LINK_SCREEN_CMD_SHOW_CHAR,
+    CORE_LINK_SCREEN_CMD_SHOW_STRING,
+    CORE_LINK_SCREEN_CMD_SHOW_INT,
+    CORE_LINK_SCREEN_CMD_SHOW_UINT,
+    CORE_LINK_SCREEN_CMD_SHOW_FLOAT,
+    CORE_LINK_SCREEN_CMD_DRAW_POINT,
+}core_link_screen_cmd_enum;
 
 typedef struct
 {
@@ -54,11 +78,6 @@ void core_link_send_frame       (uint8 protocol_id, const uint8 *payload, uint8 
 void core_link_send_text        (const char *text);                             // Send text payload frame
 void core_link_send_param_ascii (uint8 command, uint8 item, float value);       // Send ASCII param payload like "R1=1.234"
 void core_link_send_drone_status(const core_link_drone_status_packet_struct *status);
-
-/* 指定 UART 的版本：帧格式与上面完全一致，仅改变物理通道。
- * 用于把同一份协议同时下发给非 UART4 的第二块主控板。 */
-void core_link_send_frame_via       (uart_index_enum uart_n, uint8 protocol_id, const uint8 *payload, uint8 length);
-void core_link_send_param_ascii_via (uart_index_enum uart_n, uint8 command, uint8 item, float value);
 
 void core_link_on_frame_received (uint8 protocol_id, const uint8 *payload, uint8 length);       // Optional generic callback for new protocol ids
 void core_link_on_text_received  (const uint8 *text, uint8 length);                              // Optional text callback

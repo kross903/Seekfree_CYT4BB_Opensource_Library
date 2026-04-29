@@ -136,17 +136,46 @@ static uint8 drone_car_link_task(void)
     return link_tick;
 }
 
+static void drone_screen_mirror_begin(uint8 enable)
+{
+    ips200_mirror_clear_buffer();
+    ips200_mirror_set_enable(enable ? 1U : 0U);
+}
+
+static void drone_screen_mirror_end(uint8 send)
+{
+    ips200_mirror_set_enable(0U);
+
+    if(send)
+    {
+        ips200_mirror_flush();
+    }
+    else
+    {
+        ips200_mirror_clear_buffer();
+    }
+}
+
 static void update_monitor_view(void)
 {
     static uint8 drone_status_tick_div = 0;
     uint8 link_tick = 0;
+    uint8 input_handled = 0U;
+    uint8 page_changed = 0U;
+    monitor_page_enum page_before;
     MonitorRuntimeSnapshot snapshot;
 
     (void)CrossCoreCamera_ControlCoreFetchFrame();
     build_monitor_runtime_snapshot(&snapshot);
     link_tick = drone_car_link_task();
 
-    if(screen_monitor_handle_input(&g_monitor_page, &snapshot, 50.0f))
+    page_before = g_monitor_page;
+    drone_screen_mirror_begin(1U);
+    input_handled = screen_monitor_handle_input(&g_monitor_page, &snapshot, 50.0f);
+    page_changed = (page_before != g_monitor_page) ? 1U : 0U;
+    drone_screen_mirror_end(page_changed);
+
+    if(input_handled)
     {
         return;
     }
@@ -165,14 +194,18 @@ static void update_monitor_view(void)
         }
     }
 
+    drone_screen_mirror_begin(link_tick);
     screen_monitor_refresh_page(g_monitor_page, &snapshot);
+    drone_screen_mirror_end(link_tick);
 }
 
 static void run_monitor_view_loop(void)
 {
     MonitorRuntimeSnapshot snapshot;
     build_monitor_runtime_snapshot(&snapshot);
+    drone_screen_mirror_begin(1U);
     screen_monitor_enter_page(g_monitor_page, &snapshot);
+    drone_screen_mirror_end(1U);
 
     while(menu_is_monitor_view())
     {

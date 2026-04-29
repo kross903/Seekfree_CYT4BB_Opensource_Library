@@ -81,6 +81,251 @@ static gpio_pin_enum            ips_rst_pin         = IPS200_RST_PIN_SPI;       
 static gpio_pin_enum            ips_bl_pin          = IPS200_BLk_PIN_SPI;               // 定义背光所用引脚
 static gpio_pin_enum            ips_cs_pin          = IPS200_CS_PIN_SPI;                // 定义片选所用引脚
 
+#define IPS200_MIRROR_BUFFER_SIZE       (1024U)
+#define IPS200_MIRROR_MAX_TEXT_LEN      (48U)
+#define IPS200_MIRROR_PACKET_BEGIN      (1U)
+#define IPS200_MIRROR_PACKET_DATA       (2U)
+#define IPS200_MIRROR_PACKET_END        (3U)
+#define IPS200_MIRROR_PACKET_DATA_MAX   (60U)
+
+#define IPS200_MIRROR_CMD_CLEAR         (1U)
+#define IPS200_MIRROR_CMD_FULL          (2U)
+#define IPS200_MIRROR_CMD_SET_DIR       (3U)
+#define IPS200_MIRROR_CMD_SET_FONT      (4U)
+#define IPS200_MIRROR_CMD_SET_COLOR     (5U)
+#define IPS200_MIRROR_CMD_DRAW_LINE     (6U)
+#define IPS200_MIRROR_CMD_SHOW_CHAR     (7U)
+#define IPS200_MIRROR_CMD_SHOW_STRING   (8U)
+#define IPS200_MIRROR_CMD_SHOW_INT      (9U)
+#define IPS200_MIRROR_CMD_SHOW_UINT     (10U)
+#define IPS200_MIRROR_CMD_SHOW_FLOAT    (11U)
+#define IPS200_MIRROR_CMD_DRAW_POINT    (12U)
+
+static uint8                    ips200_mirror_enable = 0U;
+static uint8                    ips200_mirror_suppress = 0U;
+static uint8                    ips200_mirror_dropped = 0U;
+static uint16                   ips200_mirror_used = 0U;
+static uint16                   ips200_mirror_frame_id = 0U;
+static uint8                    ips200_mirror_buffer[IPS200_MIRROR_BUFFER_SIZE];
+
+static void ips200_mirror_put_u16(uint8 *buffer, uint16 value)
+{
+    buffer[0] = (uint8)(value & 0xFFU);
+    buffer[1] = (uint8)((value >> 8) & 0xFFU);
+}
+
+static void ips200_mirror_put_u32(uint8 *buffer, uint32 value)
+{
+    buffer[0] = (uint8)(value & 0xFFU);
+    buffer[1] = (uint8)((value >> 8) & 0xFFU);
+    buffer[2] = (uint8)((value >> 16) & 0xFFU);
+    buffer[3] = (uint8)((value >> 24) & 0xFFU);
+}
+
+static void ips200_mirror_record(uint8 command, const uint8 *payload, uint8 length)
+{
+    if(!ips200_mirror_enable || ips200_mirror_suppress)
+    {
+        return;
+    }
+
+    if((ips200_mirror_used + 2U + length) > IPS200_MIRROR_BUFFER_SIZE)
+    {
+        ips200_mirror_used = 0U;
+        ips200_mirror_dropped = 1U;
+        return;
+    }
+
+    ips200_mirror_buffer[ips200_mirror_used++] = command;
+    ips200_mirror_buffer[ips200_mirror_used++] = length;
+    if((length > 0U) && (NULL != payload))
+    {
+        memcpy(&ips200_mirror_buffer[ips200_mirror_used], payload, length);
+        ips200_mirror_used = (uint16)(ips200_mirror_used + length);
+    }
+}
+
+static void ips200_mirror_record_clear(void)
+{
+    ips200_mirror_record(IPS200_MIRROR_CMD_CLEAR, NULL, 0U);
+}
+
+static void ips200_mirror_record_full(uint16 color)
+{
+    uint8 payload[2];
+    ips200_mirror_put_u16(payload, color);
+    ips200_mirror_record(IPS200_MIRROR_CMD_FULL, payload, sizeof(payload));
+}
+
+static void ips200_mirror_record_set_dir(ips200_dir_enum dir)
+{
+    uint8 payload = (uint8)dir;
+    ips200_mirror_record(IPS200_MIRROR_CMD_SET_DIR, &payload, sizeof(payload));
+}
+
+static void ips200_mirror_record_set_font(ips200_font_size_enum font)
+{
+    uint8 payload = (uint8)font;
+    ips200_mirror_record(IPS200_MIRROR_CMD_SET_FONT, &payload, sizeof(payload));
+}
+
+static void ips200_mirror_record_set_color(uint16 pen, uint16 bgcolor)
+{
+    uint8 payload[4];
+    ips200_mirror_put_u16(&payload[0], pen);
+    ips200_mirror_put_u16(&payload[2], bgcolor);
+    ips200_mirror_record(IPS200_MIRROR_CMD_SET_COLOR, payload, sizeof(payload));
+}
+
+static void ips200_mirror_record_point(uint16 x, uint16 y, uint16 color)
+{
+    uint8 payload[6];
+    ips200_mirror_put_u16(&payload[0], x);
+    ips200_mirror_put_u16(&payload[2], y);
+    ips200_mirror_put_u16(&payload[4], color);
+    ips200_mirror_record(IPS200_MIRROR_CMD_DRAW_POINT, payload, sizeof(payload));
+}
+
+static void ips200_mirror_record_line(uint16 x_start, uint16 y_start, uint16 x_end, uint16 y_end, uint16 color)
+{
+    uint8 payload[10];
+    ips200_mirror_put_u16(&payload[0], x_start);
+    ips200_mirror_put_u16(&payload[2], y_start);
+    ips200_mirror_put_u16(&payload[4], x_end);
+    ips200_mirror_put_u16(&payload[6], y_end);
+    ips200_mirror_put_u16(&payload[8], color);
+    ips200_mirror_record(IPS200_MIRROR_CMD_DRAW_LINE, payload, sizeof(payload));
+}
+
+static void ips200_mirror_record_char(uint16 x, uint16 y, char dat)
+{
+    uint8 payload[5];
+    ips200_mirror_put_u16(&payload[0], x);
+    ips200_mirror_put_u16(&payload[2], y);
+    payload[4] = (uint8)dat;
+    ips200_mirror_record(IPS200_MIRROR_CMD_SHOW_CHAR, payload, sizeof(payload));
+}
+
+static void ips200_mirror_record_string(uint16 x, uint16 y, const char dat[])
+{
+    uint8 payload[5 + IPS200_MIRROR_MAX_TEXT_LEN];
+    uint8 length = 0U;
+
+    if(NULL == dat)
+    {
+        return;
+    }
+
+    while(('\0' != dat[length]) && (length < IPS200_MIRROR_MAX_TEXT_LEN))
+    {
+        payload[5U + length] = (uint8)dat[length];
+        length++;
+    }
+
+    ips200_mirror_put_u16(&payload[0], x);
+    ips200_mirror_put_u16(&payload[2], y);
+    payload[4] = length;
+    ips200_mirror_record(IPS200_MIRROR_CMD_SHOW_STRING, payload, (uint8)(5U + length));
+}
+
+static void ips200_mirror_record_int(uint16 x, uint16 y, int32 dat, uint8 num)
+{
+    uint8 payload[9];
+    ips200_mirror_put_u16(&payload[0], x);
+    ips200_mirror_put_u16(&payload[2], y);
+    ips200_mirror_put_u32(&payload[4], (uint32)dat);
+    payload[8] = num;
+    ips200_mirror_record(IPS200_MIRROR_CMD_SHOW_INT, payload, sizeof(payload));
+}
+
+static void ips200_mirror_record_uint(uint16 x, uint16 y, uint32 dat, uint8 num)
+{
+    uint8 payload[9];
+    ips200_mirror_put_u16(&payload[0], x);
+    ips200_mirror_put_u16(&payload[2], y);
+    ips200_mirror_put_u32(&payload[4], dat);
+    payload[8] = num;
+    ips200_mirror_record(IPS200_MIRROR_CMD_SHOW_UINT, payload, sizeof(payload));
+}
+
+static void ips200_mirror_record_float(uint16 x, uint16 y, double dat, uint8 num, uint8 pointnum)
+{
+    uint8 payload[10];
+    float value = (float)dat;
+    uint32 raw = 0U;
+    memcpy(&raw, &value, sizeof(raw));
+    ips200_mirror_put_u16(&payload[0], x);
+    ips200_mirror_put_u16(&payload[2], y);
+    ips200_mirror_put_u32(&payload[4], raw);
+    payload[8] = num;
+    payload[9] = pointnum;
+    ips200_mirror_record(IPS200_MIRROR_CMD_SHOW_FLOAT, payload, sizeof(payload));
+}
+
+void ips200_mirror_set_enable(uint8 enable)
+{
+    ips200_mirror_enable = enable ? 1U : 0U;
+}
+
+void ips200_mirror_clear_buffer(void)
+{
+    ips200_mirror_used = 0U;
+    ips200_mirror_dropped = 0U;
+    memset(ips200_mirror_buffer, 0, sizeof(ips200_mirror_buffer));
+}
+
+__weak void ips200_mirror_send_packet(const uint8 *payload, uint8 length)
+{
+    (void)payload;
+    (void)length;
+}
+
+void ips200_mirror_flush(void)
+{
+    uint16 offset = 0U;
+    uint8 packet[64];
+
+    ips200_mirror_frame_id++;
+
+    packet[0] = IPS200_MIRROR_PACKET_BEGIN;
+    ips200_mirror_put_u16(&packet[1], ips200_mirror_frame_id);
+    packet[3] = ips200_mirror_dropped;
+    ips200_mirror_send_packet(packet, 4U);
+
+    while(offset < ips200_mirror_used)
+    {
+        uint8 packet_data_len = 0U;
+
+        packet[0] = IPS200_MIRROR_PACKET_DATA;
+        ips200_mirror_put_u16(&packet[1], ips200_mirror_frame_id);
+        packet[3] = 0U;
+
+        while(offset < ips200_mirror_used)
+        {
+            uint8 cmd_len = ips200_mirror_buffer[offset + 1U];
+            uint8 total_len = (uint8)(cmd_len + 2U);
+
+            if((packet_data_len + total_len) > IPS200_MIRROR_PACKET_DATA_MAX)
+            {
+                break;
+            }
+
+            memcpy(&packet[4U + packet_data_len], &ips200_mirror_buffer[offset], total_len);
+            packet_data_len = (uint8)(packet_data_len + total_len);
+            offset = (uint16)(offset + total_len);
+        }
+
+        packet[3] = packet_data_len;
+        ips200_mirror_send_packet(packet, (uint8)(4U + packet_data_len));
+    }
+
+    packet[0] = IPS200_MIRROR_PACKET_END;
+    ips200_mirror_put_u16(&packet[1], ips200_mirror_frame_id);
+    packet[3] = ips200_mirror_dropped;
+    ips200_mirror_send_packet(packet, 4U);
+
+    ips200_mirror_clear_buffer();
+}
 #if IPS200_USE_SOFT_SPI
 static soft_spi_info_struct                 ips200_spi;
 //-------------------------------------------------------------------------------------------------------------------
@@ -393,6 +638,7 @@ void ips200_clear (void)
     uint16 color_buffer[ips200_width_max];
     uint16 i = 0, j = 0;
 
+    ips200_mirror_record_clear();
     if(IPS200_TYPE_SPI == ips200_display_type)
     {
         IPS200_CS(0);
@@ -424,6 +670,7 @@ void ips200_full (const uint16 color)
     uint16 color_buffer[ips200_width_max];
     uint16 i = 0, j = 0;
 
+    ips200_mirror_record_full(color);
     if(IPS200_TYPE_SPI == ips200_display_type)
     {
         IPS200_CS(0);
@@ -453,6 +700,7 @@ void ips200_full (const uint16 color)
 void ips200_set_dir (ips200_dir_enum dir)
 {
     ips200_display_dir = dir;
+    ips200_mirror_record_set_dir(dir);
     switch(ips200_display_dir)
     {
         case IPS200_PORTAIT:
@@ -480,6 +728,7 @@ void ips200_set_dir (ips200_dir_enum dir)
 void ips200_set_font (ips200_font_size_enum font)
 {
     ips200_display_font = font;
+    ips200_mirror_record_set_font(font);
 }
 
 //-------------------------------------------------------------------------------------------------------------------
@@ -494,6 +743,7 @@ void ips200_set_color (const uint16 pen, const uint16 bgcolor)
 {
     ips200_pencolor = pen;
     ips200_bgcolor = bgcolor;
+    ips200_mirror_record_set_color(pen, bgcolor);
 }
 
 //-------------------------------------------------------------------------------------------------------------------
@@ -511,6 +761,8 @@ void ips200_draw_point (uint16 x, uint16 y, const uint16 color)
     // 那么一般是屏幕显示的时候超过屏幕分辨率范围了
     zf_assert(x < ips200_width_max);
     zf_assert(y < ips200_height_max);
+
+    ips200_mirror_record_point(x, y, color);
 
     if(IPS200_TYPE_SPI == ips200_display_type)
     {
@@ -544,6 +796,8 @@ void ips200_draw_line (uint16 x_start, uint16 y_start, uint16 x_end, uint16 y_en
     zf_assert(x_end < ips200_width_max);
     zf_assert(y_end < ips200_height_max);
 
+    ips200_mirror_record_line(x_start, y_start, x_end, y_end, color);
+    ips200_mirror_suppress ++;
     int16 x_dir = (x_start < x_end ? 1 : -1);
     int16 y_dir = (y_start < y_end ? 1 : -1);
     float temp_rate = 0;
@@ -587,6 +841,7 @@ void ips200_draw_line (uint16 x_start, uint16 y_start, uint16 x_end, uint16 y_en
             ips200_draw_point(x_start, y_start, color);
         }
     }while(0);
+    ips200_mirror_suppress --;
 }
 
 //-------------------------------------------------------------------------------------------------------------------
@@ -605,6 +860,7 @@ void ips200_show_char (uint16 x, uint16 y, const char dat)
     zf_assert(x < ips200_width_max);
     zf_assert(y < ips200_height_max);
 
+    ips200_mirror_record_char(x, y, dat);
     uint8 i = 0, j = 0;
 
     if(IPS200_TYPE_SPI == ips200_display_type)
@@ -699,6 +955,8 @@ void ips200_show_string (uint16 x, uint16 y, const char dat[])
     zf_assert(y < ips200_height_max);
     
     uint16 j = 0;
+    ips200_mirror_record_string(x, y, dat);
+    ips200_mirror_suppress ++;
     while('\0' != dat[j])
     {
         switch(ips200_display_font)
@@ -709,6 +967,7 @@ void ips200_show_string (uint16 x, uint16 y, const char dat[])
         }
         j ++;
     }
+    ips200_mirror_suppress --;
 }
 
 //-------------------------------------------------------------------------------------------------------------------
@@ -730,6 +989,9 @@ void ips200_show_int (uint16 x, uint16 y, const int32 dat, uint8 num)
     zf_assert(0 < num);
     zf_assert(10 >= num);
 
+    ips200_mirror_record_int(x, y, dat, num);
+    ips200_mirror_suppress ++;
+
     int32 dat_temp = dat;
     int32 offset = 1;
     char data_buffer[12];
@@ -748,6 +1010,7 @@ void ips200_show_int (uint16 x, uint16 y, const int32 dat, uint8 num)
     }
     func_int_to_str(data_buffer, dat_temp);
     ips200_show_string(x, y, (const char *)&data_buffer);
+    ips200_mirror_suppress --;
 }
 
 //-------------------------------------------------------------------------------------------------------------------
@@ -769,6 +1032,9 @@ void ips200_show_uint (uint16 x, uint16 y, const uint32 dat, uint8 num)
     zf_assert(0 < num);
     zf_assert(10 >= num);
 
+    ips200_mirror_record_uint(x, y, dat, num);
+    ips200_mirror_suppress ++;
+
     uint32 dat_temp = dat;
     int32 offset = 1;
     char data_buffer[12];
@@ -786,6 +1052,7 @@ void ips200_show_uint (uint16 x, uint16 y, const uint32 dat, uint8 num)
     }
     func_uint_to_str(data_buffer, dat_temp);
     ips200_show_string(x, y, (const char *)&data_buffer);
+    ips200_mirror_suppress --;
 }
 
 //-------------------------------------------------------------------------------------------------------------------
@@ -813,6 +1080,9 @@ void ips200_show_float (uint16 x, uint16 y, const double dat, uint8 num, uint8 p
     zf_assert(0 < pointnum);
     zf_assert(6 >= pointnum);
 
+    ips200_mirror_record_float(x, y, dat, num, pointnum);
+    ips200_mirror_suppress ++;
+
     double dat_temp = dat;
     double offset = 1.0;
     char data_buffer[17];
@@ -827,6 +1097,7 @@ void ips200_show_float (uint16 x, uint16 y, const double dat, uint8 num, uint8 p
     dat_temp = dat_temp - ((int)dat_temp / (int)offset) * offset;
     func_double_to_str(data_buffer, dat_temp, pointnum);
     ips200_show_string(x, y, data_buffer);
+    ips200_mirror_suppress --;
 }
 
 //-------------------------------------------------------------------------------------------------------------------
