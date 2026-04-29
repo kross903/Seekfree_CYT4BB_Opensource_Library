@@ -364,6 +364,9 @@ void Flight_Control_Disarm(void)
 {
     armed = 0;
     Flight_Runtime_Reset_All_Throttle_States();
+    /* 若 disarm 发生在自动起飞流程中（采样或爬坡阶段），必须同步中断状态机，
+     * 否则采样结束会再次 Arm，出现意外解锁。 */
+    Flight_Takeoff_Abort();
 
     clear_motor_throttle_buffer();
     gpio_set_level(LED3, GPIO_LOW);
@@ -432,6 +435,8 @@ void Flight_Control_Reset_All_PID(void)
     PID_Reset(&angle_pid_roll);
     PID_Reset(&angle_pid_pitch);
     PID_Reset(&angle_pid_yaw);
+    PID_Reset(&joystick_pid_roll);
+    PID_Reset(&joystick_pid_pitch);
     PID_Reset(&HeightPID);
 
     sync_runtime_snapshot();
@@ -472,4 +477,159 @@ float Flight_Control_Get_Max_Throttle(void)
 uint8 Flight_Control_Is_Throttle_Safe(float throttle)
 {
     return (throttle >= FLIGHT_CONTROL_MIN_THROTTLE && throttle <= SAFE_MAX_THROTTLE);
+}
+
+/*********************************************************************************************************************
+ * 自动起飞流程实现
+ *
+ * 控制任务 (PIT_Control_Task_250us) 运行频率 4kHz (250us)，采样阶段每 8 次 tick 采一次，
+ * 得到 500Hz 采样率，3s 共 1500 个样本。ramp 阶段共 12000 tick，逐拍线性累加。
+ *********************************************************************************************************************/
+#define TAKEOFF_CTRL_TICK_HZ        4000U   /* PIT_Control_Task_250us */
+#define TAKEOFF_SAMPLE_DIVIDER      (TAKEOFF_CTRL_TICK_HZ / FLIGHT_TAKEOFF_SAMPLE_HZ)
+#define TAKEOFF_CAPTURE_SAMPLES     ((uint32)(FLIGHT_TAKEOFF_SAMPLE_HZ * FLIGHT_TAKEOFF_CAPTURE_DURATION_S))
+#define TAKEOFF_RAMP_TICKS          ((uint32)(TAKEOFF_CTRL_TICK_HZ * FLIGHT_TAKEOFF_RAMP_DURATION_S))
+
+static volatile flight_takeoff_state_enum g_takeoff_state = FLIGHT_TAKEOFF_IDLE;
+static volatile uint32 g_takeoff_tick_in_state = 0U;
+static volatile uint32 g_takeoff_sample_count = 0U;
+static volatile float  g_takeoff_roll_sum = 0.0f;
+static volatile float  g_takeoff_pitch_sum = 0.0f;
+static volatile float  g_takeoff_captured_roll = 0.0f;
+static volatile float  g_takeoff_captured_pitch = 0.0f;
+
+static void takeoff_reset_state(void)
+{
+    g_takeoff_state = FLIGHT_TAKEOFF_IDLE;
+    g_takeoff_tick_in_state = 0U;
+    g_takeoff_sample_count = 0U;
+    g_takeoff_roll_sum = 0.0f;
+    g_takeoff_pitch_sum = 0.0f;
+}
+
+uint8 Flight_Takeoff_Start(void)
+{
+    /* 仅在角度闭环模式、且流程处于 IDLE 时才接受启动。 */
+    if(control_mode != CONTROL_MODE_ANGLE)
+    {
+        return 0U;
+    }
+    if(g_takeoff_state != FLIGHT_TAKEOFF_IDLE)
+    {
+        return 0U;
+    }
+
+    /* 进入采样阶段前保持当前 disarmed 状态，避免电机输出。 */
+    g_takeoff_tick_in_state = 0U;
+    g_takeoff_sample_count = 0U;
+    g_takeoff_roll_sum = 0.0f;
+    g_takeoff_pitch_sum = 0.0f;
+    g_takeoff_captured_roll = 0.0f;
+    g_takeoff_captured_pitch = 0.0f;
+    g_takeoff_state = FLIGHT_TAKEOFF_CAPTURE;
+    return 1U;
+}
+
+void Flight_Takeoff_Abort(void)
+{
+    takeoff_reset_state();
+}
+
+uint8 Flight_Takeoff_Is_Active(void)
+{
+    return (g_takeoff_state != FLIGHT_TAKEOFF_IDLE) ? 1U : 0U;
+}
+
+flight_takeoff_state_enum Flight_Takeoff_Get_State(void)
+{
+    return g_takeoff_state;
+}
+
+void Flight_Takeoff_Get_Captured_Angles(float *roll, float *pitch)
+{
+    if(roll != NULL)
+    {
+        *roll = g_takeoff_captured_roll;
+    }
+    if(pitch != NULL)
+    {
+        *pitch = g_takeoff_captured_pitch;
+    }
+}
+
+uint8 Flight_Takeoff_Tick_250us(void)
+{
+    switch(g_takeoff_state)
+    {
+        case FLIGHT_TAKEOFF_CAPTURE:
+        {
+            /* 500Hz 采样：每 TAKEOFF_SAMPLE_DIVIDER 个 250us tick 取一次样本。 */
+            if((g_takeoff_tick_in_state % TAKEOFF_SAMPLE_DIVIDER) == 0U)
+            {
+                g_takeoff_roll_sum  += current_roll;
+                g_takeoff_pitch_sum += current_pitch;
+                g_takeoff_sample_count++;
+            }
+            g_takeoff_tick_in_state++;
+
+            if(g_takeoff_sample_count >= TAKEOFF_CAPTURE_SAMPLES)
+            {
+                float n = (float)g_takeoff_sample_count;
+                g_takeoff_captured_roll  = g_takeoff_roll_sum  / n;
+                g_takeoff_captured_pitch = g_takeoff_pitch_sum / n;
+
+                /* 采样完成 -> 自动解锁并进入 ramp 阶段。Arm() 内部会重置所有 PID 与油门状态。 */
+                Flight_Runtime_Clear_Emergency_Stop_Latch();
+                Flight_Control_Arm();
+
+                g_takeoff_tick_in_state = 0U;
+                g_takeoff_state = FLIGHT_TAKEOFF_RAMP;
+            }
+
+            /* 采样阶段不接管目标角度/油门：飞机停在地面，由 !armed 分支直接把电机清零。 */
+            return 0U;
+        }
+
+        case FLIGHT_TAKEOFF_RAMP:
+        {
+            float progress;
+            float ramped;
+
+            if(!armed)
+            {
+                /* 外部触发了急停/disarm，ramp 途中被打断：直接退出。 */
+                takeoff_reset_state();
+                return 0U;
+            }
+
+            g_takeoff_tick_in_state++;
+            if(g_takeoff_tick_in_state > TAKEOFF_RAMP_TICKS)
+            {
+                g_takeoff_tick_in_state = TAKEOFF_RAMP_TICKS;
+            }
+
+            progress = (float)g_takeoff_tick_in_state / (float)TAKEOFF_RAMP_TICKS;
+            ramped = FLIGHT_TAKEOFF_RAMP_TARGET_THROTTLE * progress;
+
+            /* 接管油门：绕过默认 throttle_ramp，直接写 base/current/target，保持三者一致。 */
+            target_throttle = ramped;
+            current_throttle = ramped;
+            base_throttle = ramped;
+
+            /* 接管目标角度：锁定到采样均值，覆盖摇杆 PID 的输出。 */
+            target_angle_roll  = g_takeoff_captured_roll;
+            target_angle_pitch = g_takeoff_captured_pitch;
+
+            if(g_takeoff_tick_in_state >= TAKEOFF_RAMP_TICKS)
+            {
+                /* ramp 结束：保持飞机 armed，油门停在 1000，交还控制权给摇杆。 */
+                takeoff_reset_state();
+            }
+            return 1U;
+        }
+
+        case FLIGHT_TAKEOFF_IDLE:
+        default:
+            return 0U;
+    }
 }

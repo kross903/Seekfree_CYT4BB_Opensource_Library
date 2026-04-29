@@ -705,11 +705,11 @@ void send_date_back(void)
             send_four_date(pmw_flow_state.flow_x_rad,
                            pmw_flow_state.gyro_flow_x_delta_rad,
                            pmw_flow_state.flow_comp_x_rad,
-                           pmw_flow_state.velocity_y_raw_cms,
+                           pmw_flow_state.velocity_y_cms,
                            pmw_flow_state.flow_y_rad,
                            pmw_flow_state.gyro_flow_y_delta_rad,
                            pmw_flow_state.flow_comp_y_rad,
-                           pmw_flow_state.velocity_x_raw_cms);
+                           pmw_flow_state.velocity_x_cms);
             break;
         }
 

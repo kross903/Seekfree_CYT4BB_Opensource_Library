@@ -5,6 +5,20 @@ extern volatile float car_bat_voltage;
 #define CORE_LINK_USER_KEY_QUEUE_SIZE       (8U)
 #define CORE_LINK_USER_KEY_ACTIVE_THRESHOLD (0.5f)
 
+/* ====================== 遥感 X/Y 转发到第二主控板 ======================
+ * 小车通过 core_link (UART4) 把摇杆 adc_x/adc_y 推给飞控；这里把同一对值
+ * 用 *相同* 的 core_link 帧格式（SOF1/SOF2 + protocol_id + len + payload + xor），
+ * 通过另一条 UART 原样转发给第二块主控板。对面只要跑同一份 core_link 解析，
+ * 在 core_link_on_param_received 里看到 'A''1'/'A''2' 即可，无需任何改动。
+ *
+ * 默认 UART_3 + P17_2(TX) / P17_1(RX)，115200 8N1，只发不收。若硬件用的是
+ * UART3 另一组引脚 (P13_1/P13_0) 或别的串口，改下面四个宏即可。RX 中断
+ * 始终不开，cm7_0_isr.c::uart3_isr 保留为空。 */
+#define XY_LINK_UART_INDEX      (UART_3)
+#define XY_LINK_UART_BAUDRATE   (115200)
+#define XY_LINK_UART_TX_PIN     (UART3_TX_P17_2)
+#define XY_LINK_UART_RX_PIN     (UART3_RX_P17_1)
+
 static volatile uint8 s_core_link_user_key_queue[CORE_LINK_USER_KEY_QUEUE_SIZE] = {0};
 static volatile uint8 s_core_link_user_key_queue_head = 0;
 static volatile uint8 s_core_link_user_key_queue_tail = 0;
@@ -54,6 +68,23 @@ static uint8 core_link_user_pop_key_event (uint8 *key)
     return 1;
 }
 
+static void xy_link_init (void)
+{
+    uart_init(XY_LINK_UART_INDEX,
+              XY_LINK_UART_BAUDRATE,
+              XY_LINK_UART_TX_PIN,
+              XY_LINK_UART_RX_PIN);
+    /* 不调用 uart_rx_interrupt：本通道只发不收，避免和空 uart3_isr 串扰。 */
+}
+
+static void xy_link_send_axis (uint8 axis_item, int value)
+{
+    /* 用 core_link 自身的 ASCII 参数帧（"A1=value" / "A2=value"）转发，跟车端
+     * 推给飞控的格式完全一致；接收侧 'A''1' 写 adc_x，'A''2' 写 adc_y。
+     * 一次只发一轴，跟车端的发送节奏对齐，避免双倍带宽。 */
+    core_link_send_param_ascii_via(XY_LINK_UART_INDEX, 'A', axis_item, (float)value);
+}
+
 void core_link_user_init (void)
 {
     s_core_link_user_key_queue_head = 0;
@@ -61,6 +92,8 @@ void core_link_user_init (void)
     s_core_link_user_monitor_exit_request = 0;
     memset((void *)s_core_link_user_key_queue, 0, sizeof(s_core_link_user_key_queue));
     memset(s_core_link_user_text_receive, 0, sizeof(s_core_link_user_text_receive));
+
+    xy_link_init();
 }
 
 void core_link_user_task (void)
@@ -162,10 +195,12 @@ void core_link_on_param_received (const core_link_param_packet_struct *param)
         {
             case '1':
                 adc_x = (int)adc_value;
+                xy_link_send_axis('1', adc_x);
                 break;
 
             case '2':
                 adc_y = (int)adc_value;
+                xy_link_send_axis('2', adc_y);
                 break;
 
             default:

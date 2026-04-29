@@ -145,4 +145,43 @@ void Flight_Control_Reset_Height_PID(void);
 float Flight_Control_Get_Max_Throttle(void);
 uint8 Flight_Control_Is_Throttle_Safe(float throttle);
 
+/*
+ * 自动起飞流程（在角度闭环模式下触发）
+ *
+ * 阶段 1（3s）: 以 500Hz 采样 pitch/roll（每 8 次 250us 控制任务采一次），
+ *               累加求均值，作为 "原始水平地面" 的目标姿态角。
+ * 阶段 2（3s）: 自动解锁，将 target_angle_roll/pitch 保持为阶段 1 得到的均值，
+ *               并把 base_throttle 在 3s 内线性从 0 ramp 到 1000。
+ *
+ * Start: 在角度模式、且流程未运行时才会接受；其他模式下返回 0 不生效。
+ * Tick_250us: 必须每次 PIT_Control_Task_250us 调用一次；返回 1 表示流程激活，
+ *             此时上层应跳过摇杆→目标角度、以及摇杆油门爬坡对 base_throttle 的覆盖，
+ *             让本模块接管 target_angle_roll/pitch/base_throttle。
+ * Abort: 任何安全路径（急停、disarm）都会调用，无条件回到 IDLE。
+ */
+#define FLIGHT_TAKEOFF_CAPTURE_DURATION_S   3.0f
+#define FLIGHT_TAKEOFF_RAMP_DURATION_S      3.0f
+#define FLIGHT_TAKEOFF_RAMP_TARGET_THROTTLE 1000.0f
+#define FLIGHT_TAKEOFF_SAMPLE_HZ            500U
+
+typedef enum
+{
+    FLIGHT_TAKEOFF_IDLE = 0,
+    FLIGHT_TAKEOFF_CAPTURE,
+    FLIGHT_TAKEOFF_RAMP
+} flight_takeoff_state_enum;
+
+uint8                     Flight_Takeoff_Start(void);
+void                      Flight_Takeoff_Abort(void);
+uint8                     Flight_Takeoff_Is_Active(void);
+flight_takeoff_state_enum Flight_Takeoff_Get_State(void);
+uint8                     Flight_Takeoff_Tick_250us(void);
+
+/*
+ * 读取起飞采样阶段得到的"地面均值"角度。
+ * 未运行过起飞流程时两者均为 0；位置闭环以此为基准，配合 ±3° 限幅
+ * 锁定遥感单元只能在该基准附近驱动小幅姿态修正。
+ */
+void                      Flight_Takeoff_Get_Captured_Angles(float *roll, float *pitch);
+
 #endif /* FLIGHT_CONTROL_H_ */

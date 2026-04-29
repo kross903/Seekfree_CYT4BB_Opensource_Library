@@ -558,8 +558,8 @@ static void ui_monitor_draw_image_layout(void)
     ips200_show_string(0U, UI_MONITOR_TITLE_Y, "FLIGHT IMAGE");
     ips200_show_string(0U, UI_MONITOR_HEIGHT_Y, "THR:");
     ips200_show_string(120U, UI_MONITOR_HEIGHT_Y, "ARM:");
-    ips200_show_string(0U, UI_MONITOR_IR_Y, "BCN:");
-    ips200_show_string(120U, UI_MONITOR_IR_Y, "MODE:");
+    ips200_show_string(0U, UI_MONITOR_IR_Y, "X:");
+    ips200_show_string(120U, UI_MONITOR_IR_Y, "Y:");
     ips200_show_string(0U, UI_MONITOR_HINT_BOTTOM_Y, "K4:STOP HOLD K4:MENU");
     ips200_set_color(RGB565_WHITE, RGB565_BLACK);
 }
@@ -672,10 +672,8 @@ static void ui_monitor_draw_image_hud(const MonitorImageHudData *data)
 
     ips200_show_int(UI_MONITOR_LEFT_VALUE_X, UI_MONITOR_HEIGHT_Y, data->target_throttle, 4U);
     ips200_show_int(UI_MONITOR_RIGHT_VALUE_X, UI_MONITOR_HEIGHT_Y, data->armed, 1U);
-    ips200_show_int(UI_MONITOR_LEFT_VALUE_X, UI_MONITOR_IR_Y, data->beacon_count, 2U);
-    ips200_show_float(48,200,adc_x_nomalize,2,4);   
-    ips200_show_float(48,220,adc_y_nomalize,2,4);
-    ui_show_padded_text(UI_MONITOR_RIGHT_VALUE_X, UI_MONITOR_IR_Y, data->mode_text, 8U, RGB565_WHITE);
+    ips200_show_int(UI_MONITOR_LEFT_VALUE_X, UI_MONITOR_IR_Y, adc_x, 5U);
+    ips200_show_int(UI_MONITOR_RIGHT_VALUE_X, UI_MONITOR_IR_Y, adc_y, 5U);
     ui_show_padded_text(0U, UI_MONITOR_HINT_TOP_Y, data->hint_text, 28U, RGB565_WHITE);
 }
 
@@ -957,7 +955,13 @@ uint8 screen_monitor_handle_input(monitor_page_enum *page,
 
     if(screen_consume_monitor_button_event(Button_3, KEY_3))
     {
-        if(!armed)
+        if(control_mode == CONTROL_MODE_ANGLE)
+        {
+            /* 角度闭环模式：走自动水平标定 + 起飞爬坡流程，不走立即解锁分支。
+             * 采样阶段保持 disarmed，状态机到 RAMP 时自行 Arm。 */
+            Flight_Takeoff_Start();
+        }
+        else if(!armed)
         {
             screen_monitor_arm_with_initial_target();
         }

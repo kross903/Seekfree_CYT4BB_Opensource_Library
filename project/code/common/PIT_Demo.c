@@ -14,10 +14,62 @@
 #define THROTTLE_RAMP_RATE             2.0f
 #define CONTROL_DT_S                   0.00025f
 #define CONTROL_DT_MS                  0.25f
+
+/*
+ * 硬件转速补偿：motor 1 / 3 / 4 实测转速偏弱，在最终 PWM 指令上按各自系数乘以抵消。
+ * motor 2 不补偿。
+ *
+ * 挂点位置：PWM 出口（write_motor_pwm_output）。这样 MANUAL 直通和 ANGLE 混控两条
+ * 路径写入的 motor_throttle[] 都会过这一层，开环/闭环都生效。
+ * 越界保护：补偿后如超过 MOTOR_OUTPUT_SCALE_MAX 会被截断，不会击穿 ESC 限幅。
+ * 电机测试模式会旁路掉，方便单独测量硬件差异。
+ */
+#define MOTOR_HW_COMP_M1_SCALE         1.00f
+#define MOTOR_HW_COMP_M3_SCALE         1.00f
+#define MOTOR_HW_COMP_M4_SCALE         1.00f
 #define PMW3901_SAMPLE_DT_S            0.020f
 #define ADC_INPUT_LPF_ALPHA            0.20f
 #define JOYSTICK_ROLL_MAX_DEG          30.0f
 #define JOYSTICK_PITCH_MAX_DEG         30.0f
+
+/*
+ * 真位置闭环参数。
+ *
+ * 物理布置：无人机由长 ROPE_LENGTH_M 的绳子系留在地面遥感单元上，期望
+ * 始终飞在遥感正上方。adc_x_nomalize / adc_y_nomalize 由遥感单元给出，
+ * 已归一化到 [-1, 1]；满量程对应绳子与地面夹角为 ROPE_GROUND_ANGLE_FULL_DEG。
+ *
+ * 由此推得无人机相对遥感中心的水平位移：
+ *   adc 归一化幅值=1 时位移 = L * cos(50°) = ROPE_LENGTH_M * 0.642788 ≈ 0.8678 m
+ * 实现里直接按线性折算 position_error = adc_norm * POSITION_ERROR_MAX_M。
+ *
+ * ATTITUDE_MAX_DEG 是位置环输出（即偏离起飞基准的姿态修正量）的硬限幅，
+ * 等价于无人机姿态控制允许的最大倾角。
+ */
+#define ROPE_LENGTH_M                  1.35f
+#define ROPE_GROUND_ANGLE_FULL_DEG     50.0f
+#define POSITION_ERROR_MAX_M           (ROPE_LENGTH_M * 0.642788f) /* L * cos(50°) */
+#define ATTITUDE_MAX_DEG               3.0f
+
+/*
+ * 双数据源校验 + 加权融合参数。
+ *
+ * 思路：
+ *   r_adc 由 adc_x/adc_y 折算得到水平半径；
+ *   r_tof 由 sqrt(L² - h²) 反推（h 来自 tof_height_true_filt，单位 m）；
+ *   两条独立观测在残差通过 innovation 门限时按方差倒数加权融合，否则记 fault
+ *   并退回只信 adc，避免 ToF 失效（出量程、绳子松弛）把控制器带偏。
+ *
+ * σ 系数是经验起步值，可在试飞时调；权重在编译期算完，热路径上没有除法。
+ */
+#define FUSION_SIGMA_ADC_M             0.05f
+#define FUSION_SIGMA_TOF_M             0.02f
+#define FUSION_GATE_M                  0.16f   /* ~3·sqrt(σ_adc² + σ_tof²) */
+#define FUSION_R_ADC_EPS_M             0.01f   /* r_adc 太小时不缩放，避免方向放大 */
+#define FUSION_TOF_MIN_M               0.10f
+#define FUSION_TOF_MAX_M               ROPE_LENGTH_M
+#define FUSION_W_ADC                   (1.0f / (FUSION_SIGMA_ADC_M * FUSION_SIGMA_ADC_M))
+#define FUSION_W_TOF                   (1.0f / (FUSION_SIGMA_TOF_M * FUSION_SIGMA_TOF_M))
 #define BATTERY_NOMINAL_VOLTAGE        12.4f   /* 3S 充满电压，单位 V。 */
 
 PID_Controller gyro_pid_roll;
@@ -42,8 +94,13 @@ volatile float target_angle_roll = 0.0f;
 volatile float target_angle_pitch = 0.0f;
 volatile float target_angle_yaw = 0.0f;
 
-volatile float angle_roll_compensation = 10.0f;
-volatile float angle_pitch_compensation = 16.0f;
+/*
+ * IMU 安装角补偿关闭（0/0/0）：飞行前的自动水平标定流程（Flight_Takeoff_Start）
+ * 会在起飞前采样 3s 的 pitch/roll 并作为目标角度，等价于动态的地面标定，
+ * 因此不再需要这组静态的安装角偏置。
+ */
+volatile float angle_roll_compensation = 0.0f;
+volatile float angle_pitch_compensation = 0.0f;
 volatile float angle_yaw_compensation = 0.0f;
 
 int low_voltage_protect_flag = 0;
@@ -76,6 +133,13 @@ volatile int adc_y_filtered = 0.0f;
 volatile float adc_x_nomalize = 0.0f;
 volatile float adc_y_nomalize = 0.0f;
 volatile float car_bat_voltage = 0.0f;  /* 小车通过 core_link 发送的电池电压，单位 V。 */
+
+/* 位置闭环 adc/ToF 双数据校验观测量（VOFA / 监视页可读）。 */
+volatile float pos_fusion_r_adc    = 0.0f;
+volatile float pos_fusion_r_tof    = 0.0f;
+volatile float pos_fusion_r_fused  = 0.0f;
+volatile float pos_fusion_residual = 0.0f;
+volatile uint8 pos_fusion_fault    = 0U;
 
 static uint8 motor_pwm_initialized = 0U;
 static volatile uint8 motor_test_active = 0U;
@@ -115,6 +179,46 @@ static uint16 throttle_to_pwm_duty(uint16 throttle)
     }
 
     return (uint16)(MOTOR_PWM_DUTY_MIN + throttle);
+}
+
+/*
+ * 单电机硬件转速补偿钩子：MANUAL 和 ANGLE 两条路径写完 motor_throttle[] 后，
+ * 都会从 write_motor_pwm_output 过这里乘系数。对 motor 1/3/4 生效，motor 2 不补偿。
+ * 电机测试模式返回原值，方便单独对比硬件差异。
+ */
+static uint16 apply_motor_hw_compensation(uint8 motor_idx, uint16 throttle)
+{
+    float scale;
+    float scaled;
+
+    if(motor_test_active)
+    {
+        return throttle;
+    }
+
+    if(motor_idx == 0U)
+    {
+        scale = MOTOR_HW_COMP_M1_SCALE;
+    }
+    else if(motor_idx == 2U)
+    {
+        scale = MOTOR_HW_COMP_M3_SCALE;
+    }
+    else if(motor_idx == 3U)
+    {
+        scale = MOTOR_HW_COMP_M4_SCALE;
+    }
+    else
+    {
+        return throttle;
+    }
+
+    scaled = (float)throttle * scale;
+    if(scaled > (float)MOTOR_OUTPUT_SCALE_MAX)
+    {
+        scaled = (float)MOTOR_OUTPUT_SCALE_MAX;
+    }
+    return (uint16)scaled;
 }
 
 static inline float throttle_safe_limit(float throttle)
@@ -185,10 +289,10 @@ static void write_motor_pwm_output(void)
         return;
     }
 
-    pwm_set_duty(MOTOR_PWM_CH1, throttle_to_pwm_duty(motor_throttle[0]));
-    pwm_set_duty(MOTOR_PWM_CH2, throttle_to_pwm_duty(motor_throttle[1]));
-    pwm_set_duty(MOTOR_PWM_CH3, throttle_to_pwm_duty(motor_throttle[2]));
-    pwm_set_duty(MOTOR_PWM_CH4, throttle_to_pwm_duty(motor_throttle[3]));
+    pwm_set_duty(MOTOR_PWM_CH1, throttle_to_pwm_duty(apply_motor_hw_compensation(0U, motor_throttle[0])));
+    pwm_set_duty(MOTOR_PWM_CH2, throttle_to_pwm_duty(apply_motor_hw_compensation(1U, motor_throttle[1])));
+    pwm_set_duty(MOTOR_PWM_CH3, throttle_to_pwm_duty(apply_motor_hw_compensation(2U, motor_throttle[2])));
+    pwm_set_duty(MOTOR_PWM_CH4, throttle_to_pwm_duty(apply_motor_hw_compensation(3U, motor_throttle[3])));
 }
 
 static uint8 check_attitude_safety(void)
@@ -256,6 +360,7 @@ void Flight_Runtime_Emergency_Stop(uint8 reason)
     target_throttle = 0.0f;
     current_throttle = 0.0f;
     base_throttle = 0.0f;
+    Flight_Takeoff_Abort();
     clear_motor_throttle_state();
 }
 
@@ -463,6 +568,8 @@ void PIT_Motor_Task_500us(void)
 
 void PIT_Control_Task_250us(void)
 {
+    uint8 takeoff_active = 0U;
+
     motor_pwm_init_once();
 
     if(icm_calibration_flag)
@@ -480,6 +587,10 @@ void PIT_Control_Task_250us(void)
     {
         return;
     }// 急停触发后不继续执行后续的飞控计算，保持电机输出为0，直到飞行器被重置或重新解锁
+
+    /* 驱动自动起飞状态机：采样阶段靠早期 current_roll/pitch 即可累加，
+     * ramp 阶段会接管 base_throttle 与 target_angle_roll/pitch。 */
+    takeoff_active = Flight_Takeoff_Tick_250us();
 
     if(motor_test_active)
     {
@@ -500,8 +611,12 @@ void PIT_Control_Task_250us(void)
         return;
     }
 
-    throttle_ramp(target_throttle, &current_throttle, THROTTLE_RAMP_RATE, CONTROL_DT_MS);
-    base_throttle = current_throttle;
+    if(!takeoff_active)
+    {
+        throttle_ramp(target_throttle, &current_throttle, THROTTLE_RAMP_RATE, CONTROL_DT_MS);
+        base_throttle = current_throttle;
+    }
+    /* takeoff_active 时 base_throttle / current_throttle / target_throttle 已由 ramp 阶段统一写入。 */
 
     if(control_mode == CONTROL_MODE_MANUAL)
     {
@@ -514,14 +629,29 @@ void PIT_Control_Task_250us(void)
         return;
     }
 
-    target_angle_roll = PID_Calculate(&joystick_pid_roll,
-                                      adc_x_nomalize * JOYSTICK_ROLL_MAX_DEG,
-                                      0.0f,
-                                      CONTROL_DT_S);
-    target_angle_pitch = PID_Calculate(&joystick_pid_pitch,
-                                       adc_y_nomalize * JOYSTICK_PITCH_MAX_DEG,
-                                       0.0f,
-                                       CONTROL_DT_S);
+    if(!takeoff_active)
+    {
+        /* 遥感位置闭环已关闭：不再用 adc_x/adc_y + ToF 融合驱动姿态修正，
+         * 目标姿态直接锁在起飞采样得到的地面基准角上。joystick PID 状态被
+         * 重置以避免再次启用时累计历史发散。观测量清零方便上位机识别"未运行"。 */
+        float captured_roll = 0.0f;
+        float captured_pitch = 0.0f;
+
+        Flight_Takeoff_Get_Captured_Angles(&captured_roll, &captured_pitch);
+
+        target_angle_roll  = captured_roll;
+        target_angle_pitch = captured_pitch;
+
+        PID_Reset(&joystick_pid_roll);
+        PID_Reset(&joystick_pid_pitch);
+
+        pos_fusion_r_adc    = 0.0f;
+        pos_fusion_r_tof    = 0.0f;
+        pos_fusion_r_fused  = 0.0f;
+        pos_fusion_residual = 0.0f;
+        pos_fusion_fault    = 0U;
+    }
+    /* takeoff_active 时 target_angle_roll / target_angle_pitch 已由 ramp 阶段锁定为地面均值。 */
 
     target_roll_rate = PID_Calculate(&angle_pid_roll, target_angle_roll, current_roll, CONTROL_DT_S);
     target_pitch_rate = PID_Calculate(&angle_pid_pitch, target_angle_pitch, current_pitch, CONTROL_DT_S);

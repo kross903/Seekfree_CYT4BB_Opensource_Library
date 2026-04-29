@@ -11,7 +11,7 @@
  */
 
 // ==================== 安全限制参数 ====================
-#define MOTOR_OUTPUT_SCALE_MAX      1800U
+#define MOTOR_OUTPUT_SCALE_MAX      2000U
 #define SAFE_MAX_MOTOR_OUTPUT_LIMIT MOTOR_OUTPUT_SCALE_MAX
 #define SAFE_MAX_THROTTLE           ((float)SAFE_MAX_MOTOR_OUTPUT_LIMIT)
 #define SAFE_MIN_THROTTLE           300.0f
@@ -106,6 +106,13 @@ extern volatile int adc_y_filtered;
 extern volatile float adc_x_nomalize ;
 extern volatile float adc_y_nomalize ;
 extern volatile float car_bat_voltage;  /* 小车通过 core_link 发送的电池电压，单位 V。 */
+
+/* 位置闭环 adc/ToF 双数据校验观测量。 */
+extern volatile float pos_fusion_r_adc;
+extern volatile float pos_fusion_r_tof;
+extern volatile float pos_fusion_r_fused;
+extern volatile float pos_fusion_residual;
+extern volatile uint8 pos_fusion_fault;
 /*
  * [2026-03-10]
  * 修改目的:

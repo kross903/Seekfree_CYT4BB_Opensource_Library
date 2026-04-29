@@ -22,7 +22,7 @@ extern float HeightSpeedPID_output;
 extern float tof_height_true_filt;
 
 void HeightManager_Init(float initial_height_cm);
-void HeightManager_Task_25ms(void);
+void HeightManager_Task_10ms(void);
 
 #ifdef __cplusplus
 }

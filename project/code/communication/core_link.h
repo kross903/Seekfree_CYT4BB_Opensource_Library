@@ -55,6 +55,11 @@ void core_link_send_text        (const char *text);                             
 void core_link_send_param_ascii (uint8 command, uint8 item, float value);       // Send ASCII param payload like "R1=1.234"
 void core_link_send_drone_status(const core_link_drone_status_packet_struct *status);
 
+/* 指定 UART 的版本：帧格式与上面完全一致，仅改变物理通道。
+ * 用于把同一份协议同时下发给非 UART4 的第二块主控板。 */
+void core_link_send_frame_via       (uart_index_enum uart_n, uint8 protocol_id, const uint8 *payload, uint8 length);
+void core_link_send_param_ascii_via (uart_index_enum uart_n, uint8 command, uint8 item, float value);
+
 void core_link_on_frame_received (uint8 protocol_id, const uint8 *payload, uint8 length);       // Optional generic callback for new protocol ids
 void core_link_on_text_received  (const uint8 *text, uint8 length);                              // Optional text callback
 void core_link_on_param_received (const core_link_param_packet_struct *param);                   // Optional param callback

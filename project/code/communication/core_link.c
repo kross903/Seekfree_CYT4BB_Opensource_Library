@@ -287,7 +287,7 @@ void core_link_uart4_rx_handler (void)
     }
 }
 
-void core_link_send_frame (uint8 protocol_id, const uint8 *payload, uint8 length)
+void core_link_send_frame_via (uart_index_enum uart_n, uint8 protocol_id, const uint8 *payload, uint8 length)
 {
     uint8 checksum = 0;
 
@@ -303,17 +303,22 @@ void core_link_send_frame (uint8 protocol_id, const uint8 *payload, uint8 length
 
     checksum = core_link_calc_checksum(protocol_id, length, payload);
 
-    uart_write_byte(CORE_LINK_UART_INDEX, CORE_LINK_SOF1);
-    uart_write_byte(CORE_LINK_UART_INDEX, CORE_LINK_SOF2);
-    uart_write_byte(CORE_LINK_UART_INDEX, protocol_id);
-    uart_write_byte(CORE_LINK_UART_INDEX, length);
+    uart_write_byte(uart_n, CORE_LINK_SOF1);
+    uart_write_byte(uart_n, CORE_LINK_SOF2);
+    uart_write_byte(uart_n, protocol_id);
+    uart_write_byte(uart_n, length);
 
     if(length)
     {
-        uart_write_buffer(CORE_LINK_UART_INDEX, payload, length);
+        uart_write_buffer(uart_n, payload, length);
     }
 
-    uart_write_byte(CORE_LINK_UART_INDEX, checksum);
+    uart_write_byte(uart_n, checksum);
+}
+
+void core_link_send_frame (uint8 protocol_id, const uint8 *payload, uint8 length)
+{
+    core_link_send_frame_via(CORE_LINK_UART_INDEX, protocol_id, payload, length);
 }
 
 void core_link_send_text (const char *text)
@@ -334,12 +339,17 @@ void core_link_send_text (const char *text)
     core_link_send_frame(CORE_LINK_PROTOCOL_TEXT, (const uint8 *)text, (uint8)text_length);
 }
 
-void core_link_send_param_ascii (uint8 command, uint8 item, float value)
+void core_link_send_param_ascii_via (uart_index_enum uart_n, uint8 command, uint8 item, float value)
 {
     char payload[CORE_LINK_PAYLOAD_MAX_LEN];
 
     sprintf(payload, "%c%c=%.*f", command, item, CORE_LINK_PARAM_DECIMAL_NUM, value);
-    core_link_send_frame(CORE_LINK_PROTOCOL_PARAM_ASCII, (const uint8 *)payload, (uint8)strlen(payload));
+    core_link_send_frame_via(uart_n, CORE_LINK_PROTOCOL_PARAM_ASCII, (const uint8 *)payload, (uint8)strlen(payload));
+}
+
+void core_link_send_param_ascii (uint8 command, uint8 item, float value)
+{
+    core_link_send_param_ascii_via(CORE_LINK_UART_INDEX, command, item, value);
 }
 
 void core_link_send_drone_status (const core_link_drone_status_packet_struct *status)

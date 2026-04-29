@@ -70,7 +70,7 @@ void pit0_ch10_isr()                    // 定时器通道 10 周期中断服务
 void pit0_ch11_isr()                    // 定时器通道 11 周期中断服务函数      
 {
     pit_isr_flag_clear(PIT_CH11);
-    HeightManager_Task_25ms();
+    HeightManager_Task_10ms();
 }
 
 void pit0_ch12_isr()                    // 定时器通道 12 周期中断服务函数      
