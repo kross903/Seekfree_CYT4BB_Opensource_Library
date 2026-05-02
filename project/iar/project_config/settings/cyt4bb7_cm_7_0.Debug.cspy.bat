@@ -25,7 +25,7 @@ if not "%~1" == "" goto debugFile
 
 @echo on 
 
-"C:\Program Files\IAR Systems\Embedded Workbench 9.2\common\bin\cspybat" -f "C:\Users\28710\Desktop\code_drone\Seekfree_CYT4BB_Opensource_Library\project\iar\project_config\settings\cyt4bb7_cm_7_0.Debug.general.xcl" --backend -f "C:\Users\28710\Desktop\code_drone\Seekfree_CYT4BB_Opensource_Library\project\iar\project_config\settings\cyt4bb7_cm_7_0.Debug.driver.xcl" 
+"D:\IAR9\common\bin\cspybat" -f "D:\DAS\drone\work\cyt4bb7 case01\Seekfree_CYT4BB_Opensource_Library\project\iar\project_config\settings\cyt4bb7_cm_7_0.Debug.general.xcl" --backend -f "D:\DAS\drone\work\cyt4bb7 case01\Seekfree_CYT4BB_Opensource_Library\project\iar\project_config\settings\cyt4bb7_cm_7_0.Debug.driver.xcl" 
 
 @echo off 
 goto end 
@@ -34,7 +34,7 @@ goto end
 
 @echo on 
 
-"C:\Program Files\IAR Systems\Embedded Workbench 9.2\common\bin\cspybat" -f "C:\Users\28710\Desktop\code_drone\Seekfree_CYT4BB_Opensource_Library\project\iar\project_config\settings\cyt4bb7_cm_7_0.Debug.general.xcl" "--debug_file=%~1" --backend -f "C:\Users\28710\Desktop\code_drone\Seekfree_CYT4BB_Opensource_Library\project\iar\project_config\settings\cyt4bb7_cm_7_0.Debug.driver.xcl" 
+"D:\IAR9\common\bin\cspybat" -f "D:\DAS\drone\work\cyt4bb7 case01\Seekfree_CYT4BB_Opensource_Library\project\iar\project_config\settings\cyt4bb7_cm_7_0.Debug.general.xcl" "--debug_file=%~1" --backend -f "D:\DAS\drone\work\cyt4bb7 case01\Seekfree_CYT4BB_Opensource_Library\project\iar\project_config\settings\cyt4bb7_cm_7_0.Debug.driver.xcl" 
 
 @echo off 
 :end

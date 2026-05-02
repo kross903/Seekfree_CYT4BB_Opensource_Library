@@ -188,6 +188,35 @@ static void set_angle_compensation_value(uint8 item, float value)
     Flight_Control_Set_Angle_Compensation(roll_compensation, pitch_compensation, yaw_compensation);
 }
 
+/*
+ * VOFA 调参：陀螺去旋转增益。
+ *   item = 'x'/'X': 设置 K_X（flow_x_rad 对 gyro_y_delta_rad 的去旋转增益）
+ *   item = 'y'/'Y': 设置 K_Y（flow_y_rad 对 gyro_x_delta_rad 的去旋转增益）
+ * 范围由 PMW_Flow_SetGyroCompGain() 内部夹位，这里负值才表示“不变更”，
+ * 所以已 has_value 的正常调参直接传 value 即可。
+ */
+static void set_pmw_flow_gyro_gain_value(uint8 item, float value)
+{
+    if(value < 0.0f)
+    {
+        return;
+    }
+
+    switch(item)
+    {
+        case 'x':
+        case 'X':
+            PMW_Flow_SetGyroCompGain(value, -1.0f);
+            break;
+        case 'y':
+        case 'Y':
+            PMW_Flow_SetGyroCompGain(-1.0f, value);
+            break;
+        default:
+            break;
+    }
+}
+
     float roll = 0.0f;
     float pitch = 0.0f;
     float yaw = 0.0f;
@@ -259,6 +288,15 @@ static void send_pid_data_back(uint8 command)
                 roll_compensation, pitch_compensation);
 
             return;
+
+        case 'G':
+        {
+            float gx_now = 0.0f;
+            float gy_now = 0.0f;
+            PMW_Flow_GetGyroCompGain(&gx_now, &gy_now);
+            send_four_date(gx_now, gy_now, 0, 0, 0, 0, 0, 0);
+            return;
+        }
 
         default:
             return;
@@ -686,6 +724,14 @@ void USART_PID_Adjust(void)
             send_back_command = 'H';
             break;
 
+        case 'G':
+            if(has_value)
+            {
+                set_pmw_flow_gyro_gain_value(item, data_get);
+            }
+            send_back_command = 'G';
+            break;
+
         default:
             break;
     }
@@ -703,13 +749,13 @@ void send_date_back(void)
             PMW_Flow_GetState(&pmw_flow_state);
 
             send_four_date(pmw_flow_state.flow_x_rad,
-                           pmw_flow_state.gyro_flow_x_delta_rad,
-                           pmw_flow_state.flow_comp_x_rad,
-                           pmw_flow_state.velocity_y_cms,
-                           pmw_flow_state.flow_y_rad,
                            pmw_flow_state.gyro_flow_y_delta_rad,
+                           pmw_flow_state.flow_comp_x_rad,
+                           pmw_flow_state.velocity_y_raw_cms,
+                           pmw_flow_state.flow_y_rad,
+                           pmw_flow_state.gyro_flow_x_delta_rad,
                            pmw_flow_state.flow_comp_y_rad,
-                           pmw_flow_state.velocity_x_cms);
+                           pmw_flow_state.velocity_x_raw_cms);
             break;
         }
 

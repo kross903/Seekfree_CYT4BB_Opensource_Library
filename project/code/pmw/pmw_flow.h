@@ -41,4 +41,8 @@ void PMW_Flow_UpdateSample(int16 flow_delta_x,
 void PMW_Flow_SyncMainLoopBuffer(void);
 void PMW_Flow_GetState(PMWFlowState_t *state);
 
+/* 陀螺去旋转增益（按轴独立）。kx 或 ky 传负值表示该轴保持不变。 */
+void PMW_Flow_SetGyroCompGain(float kx, float ky);
+void PMW_Flow_GetGyroCompGain(float *kx, float *ky);
+
 #endif

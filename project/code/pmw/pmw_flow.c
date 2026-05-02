@@ -19,6 +19,21 @@
 #define PMW_FLOW_COMP_X_FROM_GYRO_Y_SIGN    (-1.0f)
 #define PMW_FLOW_COMP_Y_FROM_GYRO_X_SIGN    (-1.0f)
 #define PMW_FLOW_COMP_Y_FROM_GYRO_Y_SIGN    (0.0f)
+
+/*
+ * 陀螺去旋转增益（按轴独立）。
+ * 来源：F0! 光流数据.csv 上对 flow_x_rad ~ gyro_y_delta_rad、
+ *       flow_y_rad ~ gyro_x_delta_rad 做最小二乘回归，斜率分别 ≈ 1.43 / 1.32，
+ *       说明默认 K=1 时陀螺补偿不足，flow_comp 残留约 30~40% 同向旋转分量。
+ * 这里把 K_X / K_Y 提取为可调增益：
+ *   - 编译期默认值在下方宏；
+ *   - 运行期可通过 PMW_Flow_SetGyroCompGain() 动态拨动（VOFA 调参用）。
+ * 不动 RAD_PER_COUNT，速度尺度保持现状。
+ */
+#define PMW_FLOW_GYRO_COMP_GAIN_X_DEFAULT   (1.43f)
+#define PMW_FLOW_GYRO_COMP_GAIN_Y_DEFAULT   (1.32f)
+#define PMW_FLOW_GYRO_COMP_GAIN_MIN         (0.0f)
+#define PMW_FLOW_GYRO_COMP_GAIN_MAX         (4.0f)
 /*
  * PX4-style body velocity mapping from compensated flow integral.
  * Keep the mapping configurable because the final body-frame sign depends on
@@ -57,30 +72,19 @@
 
 static float g_pmw_flow_gyro_flow_x_delta_rad = 0.0f;
 static float g_pmw_flow_gyro_flow_y_delta_rad = 0.0f;
+static float g_pmw_flow_gyro_comp_gain_x = PMW_FLOW_GYRO_COMP_GAIN_X_DEFAULT;
+static float g_pmw_flow_gyro_comp_gain_y = PMW_FLOW_GYRO_COMP_GAIN_Y_DEFAULT;
 static PMWFlowState_t g_pmw_flow_publish_slots[2] = {0};
 static volatile uint8 g_pmw_flow_publish_index = 0U;
 static volatile uint32 g_pmw_flow_publish_seq = 0U;
 static PMWFlowState_t g_pmw_flow_mainloop_state = {0};
 static uint32 g_pmw_flow_mainloop_seq = 0U;
 
-/* 中值-3 历史窗（kill 单帧光流尖峰），LPF 状态以及惯性侧锁存初始化标志。 */
-static int16 g_pmw_flow_dx_hist[2] = {0, 0};
-static int16 g_pmw_flow_dy_hist[2] = {0, 0};
-static uint8 g_pmw_flow_count_hist_n = 0U;
 static float g_pmw_flow_range_filt_cm = 0.0f;
 static uint8 g_pmw_flow_range_filt_init = 0U;
 static float g_pmw_flow_vel_x_filt_cms = 0.0f;
 static float g_pmw_flow_vel_y_filt_cms = 0.0f;
 static uint8 g_pmw_flow_vel_filt_init = 0U;
-
-static int16 pmw_flow_median3_i16(int16 a, int16 b, int16 c)
-{
-    int16 lo = (a < b) ? a : b;
-    int16 hi = (a > b) ? a : b;
-    if(c < lo) return lo;
-    if(c > hi) return hi;
-    return c;
-}
 
 static uint8 pmw_flow_is_valid_number(float value)
 {
@@ -126,12 +130,6 @@ void PMW_Flow_Reset(void)
     g_pmw_flow_publish_seq = 0U;
     g_pmw_flow_mainloop_state = cleared_state;
     g_pmw_flow_mainloop_seq = 0U;
-
-    g_pmw_flow_dx_hist[0] = 0;
-    g_pmw_flow_dx_hist[1] = 0;
-    g_pmw_flow_dy_hist[0] = 0;
-    g_pmw_flow_dy_hist[1] = 0;
-    g_pmw_flow_count_hist_n = 0U;
     g_pmw_flow_range_filt_cm = 0.0f;
     g_pmw_flow_range_filt_init = 0U;
     g_pmw_flow_vel_x_filt_cms = 0.0f;
@@ -160,36 +158,12 @@ void PMW_Flow_UpdateSample(int16 flow_delta_x,
                            float dt_s)
 {
     PMWFlowState_t new_state = {0};
-    int16 dx_med;
-    int16 dy_med;
     float range_used_cm;
     float vx_raw;
     float vy_raw;
     float tilt_abs_max_deg;
-
-    /* (1) 中值-3 去单帧尖峰：PMW3901 偶尔会蹦出明显偏离邻帧的脉冲（贴地纹理切换、
-     *     强反光），这一级把孤立尖峰整体替换成中值。历史窗永远更新，保证后续两帧
-     *     恢复正常时立刻跟上节拍。 */
-    if(g_pmw_flow_count_hist_n >= 2U)
-    {
-        dx_med = pmw_flow_median3_i16(flow_delta_x, g_pmw_flow_dx_hist[0], g_pmw_flow_dx_hist[1]);
-        dy_med = pmw_flow_median3_i16(flow_delta_y, g_pmw_flow_dy_hist[0], g_pmw_flow_dy_hist[1]);
-    }
-    else
-    {
-        dx_med = flow_delta_x;
-        dy_med = flow_delta_y;
-        g_pmw_flow_count_hist_n++;
-    }
-    g_pmw_flow_dx_hist[1] = g_pmw_flow_dx_hist[0];
-    g_pmw_flow_dx_hist[0] = flow_delta_x;
-    g_pmw_flow_dy_hist[1] = g_pmw_flow_dy_hist[0];
-    g_pmw_flow_dy_hist[0] = flow_delta_y;
-
-    /* 原始计数 / dt / 姿态等基础字段；flow_delta_*_count 暴露中值后的值，
-     * 让 VOFA / 监视页直接看到下游真正使用的输入。 */
-    new_state.flow_delta_x_count = dx_med;
-    new_state.flow_delta_y_count = dy_med;
+    new_state.flow_delta_x_count = flow_delta_x;
+    new_state.flow_delta_y_count = flow_delta_y;
     new_state.dt_s = dt_s;
     new_state.tof_los_cm = tof_los_cm;
     new_state.roll_deg = roll_deg;
@@ -199,8 +173,8 @@ void PMW_Flow_UpdateSample(int16 flow_delta_x,
     g_pmw_flow_gyro_flow_x_delta_rad = 0.0f;
     g_pmw_flow_gyro_flow_y_delta_rad = 0.0f;
 
-    new_state.flow_x_rad = (float)dx_med * PMW_FLOW_RAD_PER_COUNT_X * PMW_FLOW_SENSOR_X_SIGN;
-    new_state.flow_y_rad = (float)dy_med * PMW_FLOW_RAD_PER_COUNT_Y * PMW_FLOW_SENSOR_Y_SIGN;
+    new_state.flow_x_rad = (float)flow_delta_x * PMW_FLOW_RAD_PER_COUNT_X * PMW_FLOW_SENSOR_X_SIGN;
+    new_state.flow_y_rad = (float)flow_delta_y * PMW_FLOW_RAD_PER_COUNT_Y * PMW_FLOW_SENSOR_Y_SIGN;
 
     if(!(dt_s >= PMW_FLOW_MIN_DT_S) ||
        !(dt_s <= PMW_FLOW_MAX_DT_S) ||
@@ -209,8 +183,8 @@ void PMW_Flow_UpdateSample(int16 flow_delta_x,
        !pmw_flow_is_valid_number(pitch_deg) ||
        !pmw_flow_is_valid_number(new_state.gyro_flow_x_delta_rad) ||
        !pmw_flow_is_valid_number(new_state.gyro_flow_y_delta_rad) ||
-       !pmw_flow_is_valid_delta_count(dx_med) ||
-       !pmw_flow_is_valid_delta_count(dy_med) ||
+       !pmw_flow_is_valid_delta_count(flow_delta_x) ||
+       !pmw_flow_is_valid_delta_count(flow_delta_y) ||
        (tof_los_cm < PMW_FLOW_MIN_HEIGHT_CM) ||
        (tof_los_cm > PMW_FLOW_MAX_HEIGHT_CM))
     {
@@ -233,13 +207,19 @@ void PMW_Flow_UpdateSample(int16 flow_delta_x,
     range_used_cm = g_pmw_flow_range_filt_cm;
     new_state.range_cm = range_used_cm;
 
-    /* (3) IMU 去旋转：用 4kHz 累加得到的陀螺角度增量抵消机体姿态变化对光流的污染。 */
-    new_state.flow_comp_x_rad = new_state.flow_x_rad +
-                                PMW_FLOW_COMP_X_FROM_GYRO_X_SIGN * new_state.gyro_flow_x_delta_rad +
-                                PMW_FLOW_COMP_X_FROM_GYRO_Y_SIGN * new_state.gyro_flow_y_delta_rad;
-    new_state.flow_comp_y_rad = new_state.flow_y_rad +
-                                PMW_FLOW_COMP_Y_FROM_GYRO_X_SIGN * new_state.gyro_flow_x_delta_rad +
-                                PMW_FLOW_COMP_Y_FROM_GYRO_Y_SIGN * new_state.gyro_flow_y_delta_rad;
+    /* (3) IMU 去旋转：用 4kHz 累加得到的陀螺角度增量抵消机体姿态变化对光流的污染。
+     *     每个轴乘上独立的标定增益 K_X / K_Y，校准 RAD_PER_COUNT 与陀螺尺度的不匹配。 */
+    {
+        float kx = g_pmw_flow_gyro_comp_gain_x;
+        float ky = g_pmw_flow_gyro_comp_gain_y;
+
+        new_state.flow_comp_x_rad = new_state.flow_x_rad +
+                                    kx * (PMW_FLOW_COMP_X_FROM_GYRO_X_SIGN * new_state.gyro_flow_x_delta_rad +
+                                          PMW_FLOW_COMP_X_FROM_GYRO_Y_SIGN * new_state.gyro_flow_y_delta_rad);
+        new_state.flow_comp_y_rad = new_state.flow_y_rad +
+                                    ky * (PMW_FLOW_COMP_Y_FROM_GYRO_X_SIGN * new_state.gyro_flow_x_delta_rad +
+                                          PMW_FLOW_COMP_Y_FROM_GYRO_Y_SIGN * new_state.gyro_flow_y_delta_rad);
+    }
 
     /* (4) 机体系速度（去旋转后）。
      *
@@ -355,4 +335,31 @@ void PMW_Flow_GetState(PMWFlowState_t *state)
 
     PMW_Flow_SyncMainLoopBuffer();
     *state = g_pmw_flow_mainloop_state;
+}
+
+/*
+ * 设置陀螺去旋转增益。kx / ky < 0 表示该轴不变更。
+ * 范围被夹到 [PMW_FLOW_GYRO_COMP_GAIN_MIN, PMW_FLOW_GYRO_COMP_GAIN_MAX]，避免误调到极端值。
+ * 调参建议：在 VOFA 里观察 flow_comp_x / flow_comp_y，让旋转主导段它们尽量回到 0 附近。
+ */
+void PMW_Flow_SetGyroCompGain(float kx, float ky)
+{
+    if(kx >= 0.0f)
+    {
+        if(kx < PMW_FLOW_GYRO_COMP_GAIN_MIN) kx = PMW_FLOW_GYRO_COMP_GAIN_MIN;
+        if(kx > PMW_FLOW_GYRO_COMP_GAIN_MAX) kx = PMW_FLOW_GYRO_COMP_GAIN_MAX;
+        g_pmw_flow_gyro_comp_gain_x = kx;
+    }
+    if(ky >= 0.0f)
+    {
+        if(ky < PMW_FLOW_GYRO_COMP_GAIN_MIN) ky = PMW_FLOW_GYRO_COMP_GAIN_MIN;
+        if(ky > PMW_FLOW_GYRO_COMP_GAIN_MAX) ky = PMW_FLOW_GYRO_COMP_GAIN_MAX;
+        g_pmw_flow_gyro_comp_gain_y = ky;
+    }
+}
+
+void PMW_Flow_GetGyroCompGain(float *kx, float *ky)
+{
+    if(kx != NULL) *kx = g_pmw_flow_gyro_comp_gain_x;
+    if(ky != NULL) *ky = g_pmw_flow_gyro_comp_gain_y;
 }

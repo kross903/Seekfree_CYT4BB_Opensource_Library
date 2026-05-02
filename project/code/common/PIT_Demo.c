@@ -582,7 +582,7 @@ void PIT_Control_Task_250us(void)
     get_ICM_data();
     Get_Attitude_Angle(&current_roll, &current_pitch, &current_yaw);
     Get_Angular_Rate(&current_gyro_roll, &current_gyro_pitch, &current_gyro_yaw);
-    PMW_Flow_AccumulateGyro(current_gyro_roll, current_gyro_pitch, CONTROL_DT_S);// 更新PMW光流传感器的陀螺仪积分值，用于后续的运动补偿计算
+    PMW_Flow_AccumulateGyro(icm42688_gyro_x, icm42688_gyro_y, CONTROL_DT_S);// 更新PMW光流传感器的陀螺仪积分值，用于后续的运动补偿计算
     if(check_attitude_safety())
     {
         return;
