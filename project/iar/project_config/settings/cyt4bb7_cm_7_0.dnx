@@ -44,8 +44,8 @@
     <SWOManager>
         <SamplingDivider>8192</SamplingDivider>
         <OverrideClock>0</OverrideClock>
-        <CpuClock>1431585108</CpuClock>
-        <SwoClock>1430466131</SwoClock>
+        <CpuClock>0</CpuClock>
+        <SwoClock>0</SwoClock>
         <DataLogMode>0</DataLogMode>
         <ItmPortsEnabled>63</ItmPortsEnabled>
         <ItmTermIOPorts>1</ItmTermIOPorts>
@@ -54,10 +54,6 @@
         <PowerForcePC>1</PowerForcePC>
         <PowerConnectPC>1</PowerConnectPC>
     </SWOManager>
-    <SfrWindow>
-        <Show>1 1</Show>
-        <Sort>4 0</Sort>
-    </SfrWindow>
     <Trace1>
         <Enabled>0</Enabled>
         <ShowSource>1</ShowSource>
@@ -88,6 +84,10 @@
         <EventLSU>0</EventLSU>
         <EventSLEEP>0</EventSLEEP>
     </SWOTraceWindow>
+    <SfrWindow>
+        <Show>1 1</Show>
+        <Sort>4 0</Sort>
+    </SfrWindow>
     <DisassembleMode>
         <mode>0</mode>
     </DisassembleMode>

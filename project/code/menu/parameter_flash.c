@@ -19,7 +19,7 @@ typedef enum
     PARAM_ROOT_GYRO = 0,
     PARAM_ROOT_ANGLE,
     PARAM_ROOT_HEIGHT,
-    PARAM_ROOT_JOYSTICK,
+    PARAM_ROOT_VELOCITY,
     PARAM_ROOT_SAVE,
     PARAM_ROOT_RESET,
     PARAM_ROOT_COUNT
@@ -49,7 +49,7 @@ static const char *s_root_menu_items[PARAM_ROOT_COUNT] = {
     "Gyro PID",
     "Angle PID",
     "Height PID",
-    "Joystick PID",
+    "Velocity PID",
     "Save All To Flash",
     "Reset To Defaults"
 };
@@ -58,14 +58,16 @@ static const char *s_group_titles[PARAM_GROUP_COUNT] = {
     "Gyro PID",
     "Angle PID",
     "Height PID",
-    "Joystick PID"
+    "Velocity PID"
 };
 
 static const char *s_object_labels[PARAM_OBJECT_COUNT] = {
     "Roll",
     "Pitch",
     "Yaw",
-    "Height"
+    "Height",
+    "Vel X",
+    "Vel Y"
 };
 
 static const char *s_item_labels[PARAM_ITEM_COUNT] = {
@@ -87,7 +89,7 @@ static const uint8 s_group_objects[PARAM_GROUP_COUNT][3] = {
     { PARAM_OBJECT_ROLL, PARAM_OBJECT_PITCH, PARAM_OBJECT_YAW },
     { PARAM_OBJECT_ROLL, PARAM_OBJECT_PITCH, PARAM_OBJECT_YAW },
     { PARAM_OBJECT_HEIGHT, PARAM_OBJECT_HEIGHT, PARAM_OBJECT_HEIGHT },
-    { PARAM_OBJECT_ROLL, PARAM_OBJECT_PITCH, PARAM_OBJECT_PITCH }
+    { PARAM_OBJECT_VEL_X, PARAM_OBJECT_VEL_Y, PARAM_OBJECT_VEL_Y }
 };
 
 float parameter[MAX_PARAMETERS];
@@ -138,17 +140,20 @@ ParameterConfig param_config[] = {
     PARAM_CFG("Height Out Limit",       33,  &HeightPID.output_limit,           0.0f,  1000.0f,  10.0f,    PARAM_GROUP_HEIGHT,  PARAM_OBJECT_HEIGHT, PARAM_ITEM_OUTPUT_LIMIT),
     PARAM_CFG("Height Int Limit",       34,  &HeightPID.integral_limit,         0.0f,  1000.0f,   5.0f,    PARAM_GROUP_HEIGHT,  PARAM_OBJECT_HEIGHT, PARAM_ITEM_INTEGRAL_LIMIT),
 
-    PARAM_CFG("Joystick Roll Kp",       35,  &joystick_pid_roll.Kp,           -10.0f,   100.0f,   0.10f,  PARAM_GROUP_JOYSTICK, PARAM_OBJECT_ROLL,   PARAM_ITEM_KP),
-    PARAM_CFG("Joystick Roll Ki",       36,  &joystick_pid_roll.Ki,           -10.0f,   100.0f,   0.01f,  PARAM_GROUP_JOYSTICK, PARAM_OBJECT_ROLL,   PARAM_ITEM_KI),
-    PARAM_CFG("Joystick Roll Kd",       37,  &joystick_pid_roll.Kd,           -10.0f,   100.0f,   0.01f,  PARAM_GROUP_JOYSTICK, PARAM_OBJECT_ROLL,   PARAM_ITEM_KD),
-    PARAM_CFG("Joystick Roll Out",      38,  &joystick_pid_roll.output_limit,   0.0f,   100.0f,   1.0f,    PARAM_GROUP_JOYSTICK, PARAM_OBJECT_ROLL,   PARAM_ITEM_OUTPUT_LIMIT),
-    PARAM_CFG("Joystick Roll Int",      39,  &joystick_pid_roll.integral_limit, 0.0f,   100.0f,   1.0f,    PARAM_GROUP_JOYSTICK, PARAM_OBJECT_ROLL,   PARAM_ITEM_INTEGRAL_LIMIT),
+    /* 速度环 X (vel_pid_x): 前向速度 vx_cms -> pitch 修正
+     * 速度环 Y (vel_pid_y): 右向速度 vy_cms -> roll  修正
+     * Output Limit / Integral Limit 单位: deg, 受 PIT_Demo 二级硬限 ±VEL_LOOP_MAX_TILT_DEG 兜底。 */
+    PARAM_CFG("Vel X Kp",               35,  &vel_pid_x.Kp,                    -10.0f,   10.0f,   0.01f,  PARAM_GROUP_VELOCITY, PARAM_OBJECT_VEL_X,  PARAM_ITEM_KP),
+    PARAM_CFG("Vel X Ki",               36,  &vel_pid_x.Ki,                    -10.0f,   10.0f,   0.001f, PARAM_GROUP_VELOCITY, PARAM_OBJECT_VEL_X,  PARAM_ITEM_KI),
+    PARAM_CFG("Vel X Kd",               37,  &vel_pid_x.Kd,                    -10.0f,   10.0f,   0.001f, PARAM_GROUP_VELOCITY, PARAM_OBJECT_VEL_X,  PARAM_ITEM_KD),
+    PARAM_CFG("Vel X Out Limit",        38,  &vel_pid_x.output_limit,            0.0f,   30.0f,   0.5f,   PARAM_GROUP_VELOCITY, PARAM_OBJECT_VEL_X,  PARAM_ITEM_OUTPUT_LIMIT),
+    PARAM_CFG("Vel X Int Limit",        39,  &vel_pid_x.integral_limit,          0.0f,   30.0f,   0.5f,   PARAM_GROUP_VELOCITY, PARAM_OBJECT_VEL_X,  PARAM_ITEM_INTEGRAL_LIMIT),
 
-    PARAM_CFG("Joystick Pitch Kp",      40,  &joystick_pid_pitch.Kp,          -10.0f,   100.0f,   0.10f,  PARAM_GROUP_JOYSTICK, PARAM_OBJECT_PITCH,  PARAM_ITEM_KP),
-    PARAM_CFG("Joystick Pitch Ki",      41,  &joystick_pid_pitch.Ki,          -10.0f,   100.0f,   0.01f,  PARAM_GROUP_JOYSTICK, PARAM_OBJECT_PITCH,  PARAM_ITEM_KI),
-    PARAM_CFG("Joystick Pitch Kd",      42,  &joystick_pid_pitch.Kd,          -10.0f,   100.0f,   0.01f,  PARAM_GROUP_JOYSTICK, PARAM_OBJECT_PITCH,  PARAM_ITEM_KD),
-    PARAM_CFG("Joystick Pitch Out",     43,  &joystick_pid_pitch.output_limit,  0.0f,   100.0f,   1.0f,    PARAM_GROUP_JOYSTICK, PARAM_OBJECT_PITCH,  PARAM_ITEM_OUTPUT_LIMIT),
-    PARAM_CFG("Joystick Pitch Int",     44,  &joystick_pid_pitch.integral_limit,0.0f,   100.0f,   1.0f,    PARAM_GROUP_JOYSTICK, PARAM_OBJECT_PITCH,  PARAM_ITEM_INTEGRAL_LIMIT)
+    PARAM_CFG("Vel Y Kp",               40,  &vel_pid_y.Kp,                    -10.0f,   10.0f,   0.01f,  PARAM_GROUP_VELOCITY, PARAM_OBJECT_VEL_Y,  PARAM_ITEM_KP),
+    PARAM_CFG("Vel Y Ki",               41,  &vel_pid_y.Ki,                    -10.0f,   10.0f,   0.001f, PARAM_GROUP_VELOCITY, PARAM_OBJECT_VEL_Y,  PARAM_ITEM_KI),
+    PARAM_CFG("Vel Y Kd",               42,  &vel_pid_y.Kd,                    -10.0f,   10.0f,   0.001f, PARAM_GROUP_VELOCITY, PARAM_OBJECT_VEL_Y,  PARAM_ITEM_KD),
+    PARAM_CFG("Vel Y Out Limit",        43,  &vel_pid_y.output_limit,            0.0f,   30.0f,   0.5f,   PARAM_GROUP_VELOCITY, PARAM_OBJECT_VEL_Y,  PARAM_ITEM_OUTPUT_LIMIT),
+    PARAM_CFG("Vel Y Int Limit",        44,  &vel_pid_y.integral_limit,          0.0f,   30.0f,   0.5f,   PARAM_GROUP_VELOCITY, PARAM_OBJECT_VEL_Y,  PARAM_ITEM_INTEGRAL_LIMIT)
 };
 
 uint8 parameter_count = (uint8)(sizeof(param_config) / sizeof(param_config[0]));
@@ -509,8 +514,9 @@ void Parameter_Apply_Config_Value(uint8 config_index, float value)
         case PARAM_GROUP_HEIGHT:
             apply_height_parameter(param_config[config_index].item, value);
             break;
-        case PARAM_GROUP_JOYSTICK:
+        case PARAM_GROUP_VELOCITY:
         default:
+            /* 速度环 PID 没走 Flight_Control_* 包装层, 直接写 PID 字段即可。 */
             if(param_config[config_index].target_var != NULL)
             {
                 *(param_config[config_index].target_var) = value;
@@ -801,7 +807,7 @@ void parameter_menu_entry(void)
                 }
                 else if(key == Button_3)
                 {
-                    if(s_root_selection <= PARAM_ROOT_JOYSTICK)
+                    if(s_root_selection <= PARAM_ROOT_VELOCITY)
                     {
                         s_current_group = s_root_selection;
                         s_object_selection = 0;

@@ -435,8 +435,8 @@ void Flight_Control_Reset_All_PID(void)
     PID_Reset(&angle_pid_roll);
     PID_Reset(&angle_pid_pitch);
     PID_Reset(&angle_pid_yaw);
-    PID_Reset(&joystick_pid_roll);
-    PID_Reset(&joystick_pid_pitch);
+    PID_Reset(&vel_pid_x);
+    PID_Reset(&vel_pid_y);
     PID_Reset(&HeightPID);
 
     sync_runtime_snapshot();

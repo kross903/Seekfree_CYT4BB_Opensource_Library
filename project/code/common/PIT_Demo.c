@@ -29,8 +29,29 @@
 #define MOTOR_HW_COMP_M4_SCALE         1.00f
 #define PMW3901_SAMPLE_DT_S            0.020f
 #define ADC_INPUT_LPF_ALPHA            0.20f
-#define JOYSTICK_ROLL_MAX_DEG          30.0f
-#define JOYSTICK_PITCH_MAX_DEG         30.0f
+
+/*
+ * 光流速度闭环参数。
+ *
+ * 反馈来自 PMW3901 + ToF 解算的机体水平速度 velocity_x/y_cms
+ * （单位 cm/s，约定: +x 机体前进，+y 机体右移；见 pmw_flow.c 注释）。
+ *
+ * 控制器使用独立 PID:
+ *   vel_pid_x → pitch 修正 (前向速度环)
+ *   vel_pid_y → roll  修正 (侧向速度环)
+ * 输出再叠加到起飞采样得到的 captured_roll/pitch 上作为最终 target_angle_*。
+ *
+ * 极性宏用于一键修正机/IMU 安装方向带来的符号问题：
+ *   pitch 正 = 低头（机体加速向前），所以 v_body_x>0 应让 pitch 减小。
+ *   PID 输出本身已经是 -Kp*v_body_x（误差为 0-vx），符号已正确，
+ *   PITCH_SIGN 默认 +1.0 即可；若硬件实际相反，改成 -1.0。
+ *
+ * MAX_TILT_DEG 是叠加到基准角上的最大修正幅度，与原 ATTITUDE_MAX_DEG
+ * 同口径，硬限幅以避免姿态外环吃到失稳指令。
+ */
+#define VEL_LOOP_PITCH_SIGN            (+1.0f)
+#define VEL_LOOP_ROLL_SIGN             (+1.0f)
+#define VEL_LOOP_MAX_TILT_DEG          3.0f
 
 /*
  * 真位置闭环参数。
@@ -78,8 +99,11 @@ PID_Controller gyro_pid_yaw;
 PID_Controller angle_pid_roll;
 PID_Controller angle_pid_pitch;
 PID_Controller angle_pid_yaw;
-PID_Controller joystick_pid_roll;
-PID_Controller joystick_pid_pitch;
+
+/* 光流速度闭环 PID。摇杆 PID 已彻底退出控制链路，这里专门给 PMW3901 + ToF 解算的
+ * 水平速度做闭环：vel_pid_x 作用于 pitch 修正、vel_pid_y 作用于 roll 修正。 */
+PID_Controller vel_pid_x;
+PID_Controller vel_pid_y;
 
 volatile uint8 armed = 0;
 volatile uint8 control_mode = 0;
@@ -140,6 +164,47 @@ volatile float pos_fusion_r_tof    = 0.0f;
 volatile float pos_fusion_r_fused  = 0.0f;
 volatile float pos_fusion_residual = 0.0f;
 volatile uint8 pos_fusion_fault    = 0U;
+
+/* 光流速度闭环：默认关闭。地面调好 PID 后再通过 Velocity_Loop_Set_Enabled(1) 打开。 */
+static volatile uint8 g_velocity_loop_enabled       = 0U;
+static volatile float g_velocity_loop_target_vx_cms = 0.0f;
+static volatile float g_velocity_loop_target_vy_cms = 0.0f;
+
+/* 诊断量：实际叠加到基准角上的修正量与最近一次反馈速度。 */
+static volatile float g_velocity_loop_pitch_corr_deg = 0.0f;
+static volatile float g_velocity_loop_roll_corr_deg  = 0.0f;
+static volatile float g_velocity_loop_fb_vx_cms      = 0.0f;
+static volatile float g_velocity_loop_fb_vy_cms      = 0.0f;
+static volatile uint8 g_velocity_loop_active         = 0U;  /* 上一拍是否真的喂了光流速度 */
+
+/*
+ * 光流 ToF 喂数据的容错状态。
+ *
+ * DL1B (VL53L1X short 模式) 有效量程仅 ~1.3m，飞机超过该高度时 sensor 会持续返回
+ * dl1b_finsh_flag=0 / dl1b_distance_mm=8192。原始链路把这种失败直接当成 tof_los_cm=0,
+ * 触发 PMW_Flow 内部 invalid 早退，整一帧光流速度被丢，表现为"高度 1m 以上没数据"。
+ *
+ * 这里在应用层加 3 段降级:
+ *   1) dl1b_finsh_flag=1 且距离合理 → 直接用本帧 ToF, 同时缓存 last_valid 与重置 stale 计数
+ *   2) 本帧失败但 stale 计数 < 阈值 → 使用 last_valid_los_cm 兜底, 让光流维持运行
+ *   3) stale 超阈值 → tof_los_cm = 0, 让 PMW_Flow 内部 invalid (避免高度估计 stale 过久)
+ *
+ * Source 枚举仅作 VOFA / 监视页诊断:
+ *   0 = NONE    (本帧无任何可信 ToF, 光流将 invalid)
+ *   1 = LIVE    (来自本帧 dl1b)
+ *   2 = HOLD    (兜底用上一帧缓存)
+ */
+#define PMW_FLOW_TOF_MIN_VALID_MM       (50U)        /* 5cm 与 PMW_FLOW_MIN_HEIGHT_CM 对齐 */
+#define PMW_FLOW_TOF_MAX_VALID_MM       (4000U)      /* 与 dl1b_get_distance 内部上限一致 */
+#define PMW_FLOW_TOF_STALE_TIMEOUT_TICK (50U)        /* 50 帧 × 20ms = 1s 后承认 ToF 失效 */
+#define PMW_FLOW_TOF_SRC_NONE           (0U)
+#define PMW_FLOW_TOF_SRC_LIVE           (1U)
+#define PMW_FLOW_TOF_SRC_HOLD           (2U)
+
+static volatile float g_pmw3901_tof_los_used_cm = 0.0f;
+static volatile uint16 g_pmw3901_tof_stale_ticks = 0U;
+static volatile uint8 g_pmw3901_tof_source = PMW_FLOW_TOF_SRC_NONE;
+static float g_pmw3901_tof_last_valid_cm = 0.0f;
 
 static uint8 motor_pwm_initialized = 0U;
 static volatile uint8 motor_test_active = 0U;
@@ -538,20 +603,52 @@ void PIT_PMW3901_Task_20ms(void)
 {
     static uint8 pmw3901_ready = 0;
     float tof_los_cm = 0.0f;
+    uint8 tof_source = PMW_FLOW_TOF_SRC_NONE;
 
     if(!pmw3901_ready)
     {
         PMW_Flow_Reset();
+        g_pmw3901_tof_los_used_cm = 0.0f;
+        g_pmw3901_tof_stale_ticks = 0U;
+        g_pmw3901_tof_source = PMW_FLOW_TOF_SRC_NONE;
+        g_pmw3901_tof_last_valid_cm = 0.0f;
         pmw3901_ready = (0 == pmw3901_init()) ? 1U : 0U;
         return;
     }
 
     pmw3901_get_motion();
 
-    if(dl1b_distance_mm <= 4000U)
+    /* 三段降级: LIVE → HOLD → NONE。详见上方常量与 g_pmw3901_tof_source 注释。 */
+    if(dl1b_finsh_flag &&
+       dl1b_distance_mm >= PMW_FLOW_TOF_MIN_VALID_MM &&
+       dl1b_distance_mm <= PMW_FLOW_TOF_MAX_VALID_MM)
     {
-        tof_los_cm = dl1b_distance_mm * 0.1f;
+        tof_los_cm = (float)dl1b_distance_mm * 0.1f;
+        g_pmw3901_tof_last_valid_cm = tof_los_cm;
+        g_pmw3901_tof_stale_ticks = 0U;
+        tof_source = PMW_FLOW_TOF_SRC_LIVE;
     }
+    else if(g_pmw3901_tof_last_valid_cm > 0.0f &&
+            g_pmw3901_tof_stale_ticks < PMW_FLOW_TOF_STALE_TIMEOUT_TICK)
+    {
+        /* sensor 短暂失效, 用上一拍缓存的 ToF 维持光流运行 (默认 1s 内). */
+        tof_los_cm = g_pmw3901_tof_last_valid_cm;
+        g_pmw3901_tof_stale_ticks++;
+        tof_source = PMW_FLOW_TOF_SRC_HOLD;
+    }
+    else
+    {
+        /* 失效太久或从未取到过 ToF: 喂 0 让 PMW_Flow_UpdateSample 走 invalid 路径. */
+        tof_los_cm = 0.0f;
+        if(g_pmw3901_tof_stale_ticks < 0xFFFFU)
+        {
+            g_pmw3901_tof_stale_ticks++;
+        }
+        tof_source = PMW_FLOW_TOF_SRC_NONE;
+    }
+
+    g_pmw3901_tof_los_used_cm = tof_los_cm;
+    g_pmw3901_tof_source = tof_source;
 
     PMW_Flow_UpdateSample(pmw3901_delta_x,
                           pmw3901_delta_y,
@@ -631,19 +728,79 @@ void PIT_Control_Task_250us(void)
 
     if(!takeoff_active)
     {
-        /* 遥感位置闭环已关闭：不再用 adc_x/adc_y + ToF 融合驱动姿态修正，
-         * 目标姿态直接锁在起飞采样得到的地面基准角上。joystick PID 状态被
-         * 重置以避免再次启用时累计历史发散。观测量清零方便上位机识别"未运行"。 */
+        /* 巡航阶段：原 ADC 位置闭环已废弃，目标姿态默认锁在起飞采样得到的
+         * 地面基准角上。当 g_velocity_loop_enabled = 1 且光流 valid 时，
+         * 用 PMW3901 + ToF 解算的机体水平速度跑速度闭环：
+         *   PID(target=0, fb=v_body_x/y)  -> 角度修正量 (deg)
+         * 修正量再叠加到 captured 基准角上、并硬限到 ±VEL_LOOP_MAX_TILT_DEG，
+         * 最终写入 target_angle_roll/pitch 交给已有姿态外环。 */
         float captured_roll = 0.0f;
         float captured_pitch = 0.0f;
+        uint8 vel_loop_active_now = 0U;
 
         Flight_Takeoff_Get_Captured_Angles(&captured_roll, &captured_pitch);
 
-        target_angle_roll  = captured_roll;
-        target_angle_pitch = captured_pitch;
+        if(g_velocity_loop_enabled)
+        {
+            PMWFlowState_t flow_snap;
+            PMW_Flow_GetState(&flow_snap);
 
-        PID_Reset(&joystick_pid_roll);
-        PID_Reset(&joystick_pid_pitch);
+            if(flow_snap.valid)
+            {
+                float pitch_corr;
+                float roll_corr;
+
+                /* 速度→角 PID。Kp/Ki/Kd/output_limit/integral_limit 由 VOFA V/W 命令
+                 * 或菜单 "Velocity PID" 组调，default 在 init_default_pid_parameters。 */
+                pitch_corr = PID_Calculate(&vel_pid_x,
+                                           g_velocity_loop_target_vx_cms,
+                                           flow_snap.velocity_x_cms,
+                                           CONTROL_DT_S);
+                roll_corr  = PID_Calculate(&vel_pid_y,
+                                           g_velocity_loop_target_vy_cms,
+                                           flow_snap.velocity_y_cms,
+                                           CONTROL_DT_S);
+
+                pitch_corr *= VEL_LOOP_PITCH_SIGN;
+                roll_corr  *= VEL_LOOP_ROLL_SIGN;
+
+                /* 二级硬限幅：与 PID.output_limit 串联，确保叠加量永不越界。 */
+                if(pitch_corr >  VEL_LOOP_MAX_TILT_DEG) pitch_corr =  VEL_LOOP_MAX_TILT_DEG;
+                if(pitch_corr < -VEL_LOOP_MAX_TILT_DEG) pitch_corr = -VEL_LOOP_MAX_TILT_DEG;
+                if(roll_corr  >  VEL_LOOP_MAX_TILT_DEG) roll_corr  =  VEL_LOOP_MAX_TILT_DEG;
+                if(roll_corr  < -VEL_LOOP_MAX_TILT_DEG) roll_corr  = -VEL_LOOP_MAX_TILT_DEG;
+
+                target_angle_pitch = captured_pitch + pitch_corr;
+                target_angle_roll  = captured_roll  + roll_corr;
+
+                g_velocity_loop_pitch_corr_deg = pitch_corr;
+                g_velocity_loop_roll_corr_deg  = roll_corr;
+                g_velocity_loop_fb_vx_cms      = flow_snap.velocity_x_cms;
+                g_velocity_loop_fb_vy_cms      = flow_snap.velocity_y_cms;
+                vel_loop_active_now = 1U;
+            }
+            else
+            {
+                /* 光流暂时无效：退回锁基准角 + reset 速度 PID，下一帧 valid 后从 0 重启。 */
+                target_angle_roll  = captured_roll;
+                target_angle_pitch = captured_pitch;
+                PID_Reset(&vel_pid_x);
+                PID_Reset(&vel_pid_y);
+                g_velocity_loop_pitch_corr_deg = 0.0f;
+                g_velocity_loop_roll_corr_deg  = 0.0f;
+            }
+        }
+        else
+        {
+            target_angle_roll  = captured_roll;
+            target_angle_pitch = captured_pitch;
+            PID_Reset(&vel_pid_x);
+            PID_Reset(&vel_pid_y);
+            g_velocity_loop_pitch_corr_deg = 0.0f;
+            g_velocity_loop_roll_corr_deg  = 0.0f;
+        }
+
+        g_velocity_loop_active = vel_loop_active_now;
 
         pos_fusion_r_adc    = 0.0f;
         pos_fusion_r_tof    = 0.0f;
@@ -662,4 +819,80 @@ void PIT_Control_Task_250us(void)
     yaw_output = -PID_Calculate(&gyro_pid_yaw, target_yaw_rate, current_gyro_yaw, CONTROL_DT_S);
 
     mix_motor_output();
+}
+
+/*********************************************************************************************************************
+ * 光流速度闭环对外接口
+ *
+ * 默认关闭。打开前请确保:
+ *   - 起飞流程已完成（控制权回到 !takeoff_active 分支）
+ *   - 光流 valid（PMW3901 + ToF 都有数据）
+ *   - vel_pid_x / vel_pid_y 的 Kp/Ki/Kd/output_limit 已按速度环口径调过
+ *
+ * 关闭时控制环立即回退到"锁基准角"行为，并 PID_Reset。
+ *********************************************************************************************************************/
+void Velocity_Loop_Set_Enabled(uint8 enabled)
+{
+    if(enabled)
+    {
+        g_velocity_loop_enabled = 1U;
+    }
+    else
+    {
+        g_velocity_loop_enabled = 0U;
+        /* 立即清掉诊断量，避免上位机看到残留值。PID_Reset 留给控制 tick 自己做。 */
+        g_velocity_loop_pitch_corr_deg = 0.0f;
+        g_velocity_loop_roll_corr_deg  = 0.0f;
+        g_velocity_loop_active = 0U;
+    }
+}
+
+uint8 Velocity_Loop_Is_Enabled(void)
+{
+    return g_velocity_loop_enabled;
+}
+
+void Velocity_Loop_Set_Target_Velocity(float vx_cms, float vy_cms)
+{
+    g_velocity_loop_target_vx_cms = vx_cms;
+    g_velocity_loop_target_vy_cms = vy_cms;
+}
+
+void Velocity_Loop_Get_Target_Velocity(float *vx_cms, float *vy_cms)
+{
+    if(vx_cms != NULL)
+    {
+        *vx_cms = g_velocity_loop_target_vx_cms;
+    }
+    if(vy_cms != NULL)
+    {
+        *vy_cms = g_velocity_loop_target_vy_cms;
+    }
+}
+
+void Velocity_Loop_Get_Diag(float *pitch_corr_deg,
+                            float *roll_corr_deg,
+                            float *fb_vx_cms,
+                            float *fb_vy_cms,
+                            uint8 *active)
+{
+    if(pitch_corr_deg != NULL) *pitch_corr_deg = g_velocity_loop_pitch_corr_deg;
+    if(roll_corr_deg  != NULL) *roll_corr_deg  = g_velocity_loop_roll_corr_deg;
+    if(fb_vx_cms      != NULL) *fb_vx_cms      = g_velocity_loop_fb_vx_cms;
+    if(fb_vy_cms      != NULL) *fb_vy_cms      = g_velocity_loop_fb_vy_cms;
+    if(active         != NULL) *active         = g_velocity_loop_active;
+}
+
+/*
+ * 光流 ToF 容错诊断: 让上位机能直接看到当前 ToF 来自 sensor 还是 hold 缓存,
+ * 以及失效连续了多少帧, 用于判断 dl1b 真实量程上限。
+ *   tof_los_cm: 本帧实际喂给 PMW_Flow_UpdateSample 的 LOS (cm), 0 表示失效
+ *   stale_ticks: 连续未拿到新 ToF 的帧数 (20ms / 帧)
+ *   source: PMW_FLOW_TOF_SRC_NONE / LIVE / HOLD
+ */
+void PMW_Flow_Get_TOF_Status(float *tof_los_cm, uint16 *stale_ticks, uint8 *source)
+{
+    if(tof_los_cm   != NULL) *tof_los_cm   = g_pmw3901_tof_los_used_cm;
+    if(stale_ticks  != NULL) *stale_ticks  = g_pmw3901_tof_stale_ticks;
+    if(source       != NULL) *source       = g_pmw3901_tof_source;
 }

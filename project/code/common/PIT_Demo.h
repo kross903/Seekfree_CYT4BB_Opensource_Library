@@ -167,8 +167,36 @@ extern PID_Controller gyro_pid_yaw;
 extern PID_Controller angle_pid_roll;
 extern PID_Controller angle_pid_pitch;
 extern PID_Controller angle_pid_yaw;
-extern PID_Controller joystick_pid_roll;
-extern PID_Controller joystick_pid_pitch;
+
+/* 光流速度闭环独立 PID:
+ *   vel_pid_x: 前向速度 (vx_cms) -> pitch 修正
+ *   vel_pid_y: 右向速度 (vy_cms) -> roll  修正
+ * 默认参数在 init_default_pid_parameters; VOFA 用 V/W 命令实时调。 */
+extern PID_Controller vel_pid_x;
+extern PID_Controller vel_pid_y;
+
+/*
+ * 光流速度闭环 (Velocity Loop) 对外接口。
+ *
+ * 反馈源: PMW3901 + ToF 解算的机体水平速度 (velocity_x/y_cms, +x 前进, +y 右移)。
+ * 控制器: 独立 PID vel_pid_x / vel_pid_y。
+ * 输出  : 叠加到起飞采样得到的 captured_roll/pitch 上, 写入 target_angle_*。
+ *
+ * 默认关闭, 起飞与降落阶段 PID 保持 reset; 启用后若光流 invalid 自动退回锁基准角。
+ */
+void  Velocity_Loop_Set_Enabled(uint8 enabled);
+uint8 Velocity_Loop_Is_Enabled(void);
+void  Velocity_Loop_Set_Target_Velocity(float vx_cms, float vy_cms);
+void  Velocity_Loop_Get_Target_Velocity(float *vx_cms, float *vy_cms);
+void  Velocity_Loop_Get_Diag(float *pitch_corr_deg,
+                             float *roll_corr_deg,
+                             float *fb_vx_cms,
+                             float *fb_vy_cms,
+                             uint8 *active);
+
+/* 光流 ToF 容错状态诊断 (PIT_PMW3901_Task_20ms 内部维护).
+ * source: 0=NONE 1=LIVE(本帧 dl1b) 2=HOLD(上一帧缓存兜底). */
+void  PMW_Flow_Get_TOF_Status(float *tof_los_cm, uint16 *stale_ticks, uint8 *source);
 
 
 #endif

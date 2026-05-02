@@ -25,7 +25,19 @@ static fifo_struct uart_data_fifo;
 static void send_four_date(float date_1, float date_2, float date_3, float date_4,
                            float date_5, float date_6, float date_7, float date_8);
 
-// 0: 默认飞行状态回传  1: PID 参数回读  2: 定位/高度观察  3: VOFA 无线链路测试
+/*
+ * 回传模式开关 (FX 命令切换):
+ *   F0  光流原始/补偿数据 (case 0)
+ *   F1  PID 参数回读 (case 1, 配合 R/r/P/p/Y/y/H/V/W 命令)
+ *   F2  定位 / 高度观察 (case 2)
+ *   F3  VOFA 无线链路测试 (case 3)
+ *   F4  陀螺原始/校准数据 (case 4)
+ *   F5  加速度原始/校准数据 (case 5)
+ *   F6  Roll/Pitch 角度+角速度环监视 (case 6)
+ *   F7  ADC + 摇杆历史调试 (case 7)
+ *   F8  光流速度闭环综合监视 (case 8): I0~I3 X轴 滤波前/后/目标/pitch修正,
+ *                                       I4~I7 Y轴 滤波前/后/目标/roll 修正
+ */
 static int send_back_flag = 0;
 static uint8 send_back_command = 'R';
 
@@ -141,17 +153,28 @@ static void set_height_pid_value(uint8 item, float value)
     Flight_Control_Set_Height_PID(kp, ki, kd);
 }
 
-static void set_joystick_pid_value(uint8 axis, uint8 item, float value)
+/*
+ * VOFA 调参: 光流速度闭环 PID。
+ *
+ * axis = 0 → vel_pid_x (前向速度 vx_cms 反馈, 输出叠加到 pitch 修正)
+ * axis = 1 → vel_pid_y (右向速度 vy_cms 反馈, 输出叠加到 roll  修正)
+ *
+ * item:
+ *   '1' Kp, '2' Ki, '3' Kd, '4' output_limit (deg), '5' integral_limit
+ *
+ * 上层在 USART_PID_Adjust 已经按命令字符 'V'/'W' 区分轴，避免与角度环 R/P/Y 混淆。
+ */
+static void set_vel_pid_value(uint8 axis, uint8 item, float value)
 {
     PID_Controller *pid = NULL;
 
-    if(axis == AXIS_ROLL)
+    if(axis == 0U)
     {
-        pid = &joystick_pid_roll;
+        pid = &vel_pid_x;
     }
-    else if(axis == AXIS_PITCH)
+    else if(axis == 1U)
     {
-        pid = &joystick_pid_pitch;
+        pid = &vel_pid_y;
     }
     else
     {
@@ -256,23 +279,23 @@ static void send_pid_data_back(uint8 command)
             Flight_Control_Get_Height_PID(&value_1, &value_2, &value_3);
             break;
 
-        case 'J':
-            value_1 = joystick_pid_roll.Kp;
-            value_2 = joystick_pid_roll.Ki;
-            value_3 = joystick_pid_roll.Kd;
+        case 'V':
+            value_1 = vel_pid_x.Kp;
+            value_2 = vel_pid_x.Ki;
+            value_3 = vel_pid_x.Kd;
             send_four_date(value_1, value_2, value_3,
-                           joystick_pid_roll.output_limit,
-                           joystick_pid_roll.integral_limit,
+                           vel_pid_x.output_limit,
+                           vel_pid_x.integral_limit,
                            0, 0, 0);
             return;
 
-        case 'K':
-            value_1 = joystick_pid_pitch.Kp;
-            value_2 = joystick_pid_pitch.Ki;
-            value_3 = joystick_pid_pitch.Kd;
+        case 'W':
+            value_1 = vel_pid_y.Kp;
+            value_2 = vel_pid_y.Ki;
+            value_3 = vel_pid_y.Kd;
             send_four_date(value_1, value_2, value_3,
-                           joystick_pid_pitch.output_limit,
-                           joystick_pid_pitch.integral_limit,
+                           vel_pid_y.output_limit,
+                           vel_pid_y.integral_limit,
                            0, 0, 0);
             return;
 
@@ -677,20 +700,20 @@ void USART_PID_Adjust(void)
             send_back_command = 'T';
             break;
 
-        case 'J':
+        case 'V':
             if(has_value)
             {
-                set_joystick_pid_value(AXIS_ROLL, item, data_get);
+                set_vel_pid_value(0U, item, data_get);
             }
-            send_back_command = 'J';
+            send_back_command = 'V';
             break;
 
-        case 'K':
+        case 'W':
             if(has_value)
             {
-                set_joystick_pid_value(AXIS_PITCH, item, data_get);
+                set_vel_pid_value(1U, item, data_get);
             }
-            send_back_command = 'K';
+            send_back_command = 'W';
             break;
 
         case 'F':
@@ -704,6 +727,7 @@ void USART_PID_Adjust(void)
                 case '5': send_back_flag = 5; break;
                 case '6': send_back_flag = 6; break;
                 case '7': send_back_flag = 7; break;
+                case '8': send_back_flag = 8; break;
                 default: break;
             }
 
@@ -773,8 +797,8 @@ void send_date_back(void)
         case 3:
             send_four_date(build_vofa_test_channel(), current_roll,
                            current_pitch, current_yaw,
-                           g_height_result.height_cm, tof_height_true_filt * 100.0f,
-                           ir_pose_estimate.z, HeightSpeedPID_output);
+                           g_height_result.height_cm, (float)dl1b_distance_mm,
+                           (float)dl1b_finsh_flag, 0);
             break;
 
         case 4:
@@ -804,6 +828,42 @@ void send_date_back(void)
                            adc_x_nomalize, adc_y_nomalize,
                            target_angle_roll, target_angle_pitch);
             break;
+
+        case 8:
+        {
+            /*
+             * F8 - 光流速度闭环综合监视。
+             * 左半 (I0~I3) X 轴: 滤波前 / 滤波后 / 目标 / 输出去 pitch 的修正角；
+             * 右半 (I4~I7) Y 轴: 滤波前 / 滤波后 / 目标 / 输出去 roll  的修正角。
+             *
+             * 滤波前 = velocity_*_raw_cms（已含旋转补偿 + 1/cos 投影，未过 LPF / 倾角门 / 离群剔除）
+             * 滤波后 = velocity_*_cms（控制环实际反馈用的最终值）
+             * 目标   = Velocity_Loop 当前目标速度（默认 0 = 悬停定点）
+             * 修正角 = 速度环 PID 输出在 ±VEL_LOOP_MAX_TILT_DEG 硬限后的实际叠加值
+             */
+            PMWFlowState_t pmw_flow_state = {0};
+            float vx_target_cms = 0.0f;
+            float vy_target_cms = 0.0f;
+            float pitch_corr_deg = 0.0f;
+            float roll_corr_deg = 0.0f;
+            float fb_vx_cms = 0.0f;
+            float fb_vy_cms = 0.0f;
+
+            PMW_Flow_GetState(&pmw_flow_state);
+            Velocity_Loop_Get_Target_Velocity(&vx_target_cms, &vy_target_cms);
+            Velocity_Loop_Get_Diag(&pitch_corr_deg, &roll_corr_deg,
+                                   &fb_vx_cms, &fb_vy_cms, NULL);
+
+            send_four_date(pmw_flow_state.velocity_x_raw_cms,
+                           pmw_flow_state.velocity_x_cms,
+                           vx_target_cms,
+                           pitch_corr_deg,
+                           pmw_flow_state.velocity_y_raw_cms,
+                           pmw_flow_state.velocity_y_cms,
+                           vy_target_cms,
+                           roll_corr_deg);
+            break;
+        }
 
         default:
             break;
