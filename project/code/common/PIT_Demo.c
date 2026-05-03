@@ -46,12 +46,10 @@
  *   PID 输出本身已经是 -Kp*v_body_x（误差为 0-vx），符号已正确，
  *   PITCH_SIGN 默认 +1.0 即可；若硬件实际相反，改成 -1.0。
  *
- * MAX_TILT_DEG 是叠加到基准角上的最大修正幅度，与原 ATTITUDE_MAX_DEG
- * 同口径，硬限幅以避免姿态外环吃到失稳指令。
+ * Velocity correction magnitude is limited only by vel_pid_x/y.output_limit.
  */
 #define VEL_LOOP_PITCH_SIGN            (+1.0f)
 #define VEL_LOOP_ROLL_SIGN             (+1.0f)
-#define VEL_LOOP_MAX_TILT_DEG          3.0f
 
 /*
  * 真位置闭环参数。
@@ -165,7 +163,9 @@ volatile float pos_fusion_r_fused  = 0.0f;
 volatile float pos_fusion_residual = 0.0f;
 volatile uint8 pos_fusion_fault    = 0U;
 
-/* 光流速度闭环：默认关闭。地面调好 PID 后再通过 Velocity_Loop_Set_Enabled(1) 打开。 */
+/* 光流速度闭环：起飞 ramp 完成、首次进入巡航分支时由 PIT_Control_Task_250us
+ * 自动 enable (悬停目标 vx=vy=0)。Disarm / Emergency_Stop 会自动 disable,
+ * 下次起飞重新走自动 enable 路径。手动 VOFA / 调试也可调用 Velocity_Loop_Set_Enabled。 */
 static volatile uint8 g_velocity_loop_enabled       = 0U;
 static volatile float g_velocity_loop_target_vx_cms = 0.0f;
 static volatile float g_velocity_loop_target_vy_cms = 0.0f;
@@ -426,6 +426,8 @@ void Flight_Runtime_Emergency_Stop(uint8 reason)
     current_throttle = 0.0f;
     base_throttle = 0.0f;
     Flight_Takeoff_Abort();
+    /* 急停立刻断开速度环, 下次起飞 ramp 完成后会再次自动 enable。 */
+    Velocity_Loop_Set_Enabled(0U);
     clear_motor_throttle_state();
 }
 
@@ -732,13 +734,25 @@ void PIT_Control_Task_250us(void)
          * 地面基准角上。当 g_velocity_loop_enabled = 1 且光流 valid 时，
          * 用 PMW3901 + ToF 解算的机体水平速度跑速度闭环：
          *   PID(target=0, fb=v_body_x/y)  -> 角度修正量 (deg)
-         * 修正量再叠加到 captured 基准角上、并硬限到 ±VEL_LOOP_MAX_TILT_DEG，
+         * 修正量再叠加到 captured 基准角上，限幅只由 vel_pid_x/y.output_limit 决定，
          * 最终写入 target_angle_roll/pitch 交给已有姿态外环。 */
         float captured_roll = 0.0f;
         float captured_pitch = 0.0f;
         uint8 vel_loop_active_now = 0U;
 
         Flight_Takeoff_Get_Captured_Angles(&captured_roll, &captured_pitch);
+
+        /* 起飞 ramp 完成、控制权回到巡航分支时自动接管速度环 (悬停目标)。
+         * Disarm / Emergency_Stop 会把 g_velocity_loop_enabled 清 0,
+         * 下次起飞会再次走到这里重新自动 enable。 */
+        if(!g_velocity_loop_enabled)
+        {
+            g_velocity_loop_target_vx_cms = 0.0f;
+            g_velocity_loop_target_vy_cms = 0.0f;
+            g_velocity_loop_enabled       = 1U;
+            PID_Reset(&vel_pid_x);
+            PID_Reset(&vel_pid_y);
+        }
 
         if(g_velocity_loop_enabled)
         {
@@ -763,12 +777,6 @@ void PIT_Control_Task_250us(void)
 
                 pitch_corr *= VEL_LOOP_PITCH_SIGN;
                 roll_corr  *= VEL_LOOP_ROLL_SIGN;
-
-                /* 二级硬限幅：与 PID.output_limit 串联，确保叠加量永不越界。 */
-                if(pitch_corr >  VEL_LOOP_MAX_TILT_DEG) pitch_corr =  VEL_LOOP_MAX_TILT_DEG;
-                if(pitch_corr < -VEL_LOOP_MAX_TILT_DEG) pitch_corr = -VEL_LOOP_MAX_TILT_DEG;
-                if(roll_corr  >  VEL_LOOP_MAX_TILT_DEG) roll_corr  =  VEL_LOOP_MAX_TILT_DEG;
-                if(roll_corr  < -VEL_LOOP_MAX_TILT_DEG) roll_corr  = -VEL_LOOP_MAX_TILT_DEG;
 
                 target_angle_pitch = captured_pitch + pitch_corr;
                 target_angle_roll  = captured_roll  + roll_corr;

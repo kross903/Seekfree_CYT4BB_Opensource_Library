@@ -60,6 +60,7 @@
  */
 #define PMW_FLOW_RANGE_LPF_ALPHA            (0.40f)
 #define PMW_FLOW_VEL_LPF_ALPHA              (0.30f)
+#define PMW_FLOW_VEL_OUTPUT_LPF_ALPHA       (0.20f)
 #define PMW_FLOW_TILT_GATE_DEG              (25.0f)
 #define PMW_FLOW_VEL_OUTLIER_LIMIT_CMS      (300.0f)
 
@@ -85,6 +86,9 @@ static uint8 g_pmw_flow_range_filt_init = 0U;
 static float g_pmw_flow_vel_x_filt_cms = 0.0f;
 static float g_pmw_flow_vel_y_filt_cms = 0.0f;
 static uint8 g_pmw_flow_vel_filt_init = 0U;
+static float g_pmw_flow_vel_x_output_cms = 0.0f;
+static float g_pmw_flow_vel_y_output_cms = 0.0f;
+static uint8 g_pmw_flow_vel_output_init = 0U;
 
 static uint8 pmw_flow_is_valid_number(float value)
 {
@@ -135,6 +139,9 @@ void PMW_Flow_Reset(void)
     g_pmw_flow_vel_x_filt_cms = 0.0f;
     g_pmw_flow_vel_y_filt_cms = 0.0f;
     g_pmw_flow_vel_filt_init = 0U;
+    g_pmw_flow_vel_x_output_cms = 0.0f;
+    g_pmw_flow_vel_y_output_cms = 0.0f;
+    g_pmw_flow_vel_output_init = 0U;
 }
 
 void PMW_Flow_AccumulateGyro(float gyro_x_rate_dps, float gyro_y_rate_dps, float dt_s)
@@ -265,8 +272,8 @@ void PMW_Flow_UpdateSample(int16 flow_delta_x,
 
     if(tilt_abs_max_deg > PMW_FLOW_TILT_GATE_DEG)
     {
-        new_state.velocity_x_cms = g_pmw_flow_vel_filt_init ? g_pmw_flow_vel_x_filt_cms : 0.0f;
-        new_state.velocity_y_cms = g_pmw_flow_vel_filt_init ? g_pmw_flow_vel_y_filt_cms : 0.0f;
+        new_state.velocity_x_cms = g_pmw_flow_vel_output_init ? g_pmw_flow_vel_x_output_cms : 0.0f;
+        new_state.velocity_y_cms = g_pmw_flow_vel_output_init ? g_pmw_flow_vel_y_output_cms : 0.0f;
     }
     else
     {
@@ -291,8 +298,23 @@ void PMW_Flow_UpdateSample(int16 flow_delta_x,
             g_pmw_flow_vel_y_filt_cms = vy_raw;
             g_pmw_flow_vel_filt_init = 1U;
         }
-        new_state.velocity_x_cms = g_pmw_flow_vel_x_filt_cms;
-        new_state.velocity_y_cms = g_pmw_flow_vel_y_filt_cms;
+
+        if(g_pmw_flow_vel_output_init)
+        {
+            g_pmw_flow_vel_x_output_cms += PMW_FLOW_VEL_OUTPUT_LPF_ALPHA *
+                                           (g_pmw_flow_vel_x_filt_cms - g_pmw_flow_vel_x_output_cms);
+            g_pmw_flow_vel_y_output_cms += PMW_FLOW_VEL_OUTPUT_LPF_ALPHA *
+                                           (g_pmw_flow_vel_y_filt_cms - g_pmw_flow_vel_y_output_cms);
+        }
+        else
+        {
+            g_pmw_flow_vel_x_output_cms = g_pmw_flow_vel_x_filt_cms;
+            g_pmw_flow_vel_y_output_cms = g_pmw_flow_vel_y_filt_cms;
+            g_pmw_flow_vel_output_init = 1U;
+        }
+
+        new_state.velocity_x_cms = g_pmw_flow_vel_x_output_cms;
+        new_state.velocity_y_cms = g_pmw_flow_vel_y_output_cms;
     }
 
     new_state.speed_cms = sqrtf(new_state.velocity_x_cms * new_state.velocity_x_cms +

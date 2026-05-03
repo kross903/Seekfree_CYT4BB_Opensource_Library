@@ -52,8 +52,8 @@
 //====================================================硬件 SPI 驱动====================================================
 #define PMW3901_SPI_SPEED            (2 * 1000 * 1000 )                         // 硬件 SPI 速率
 #define PMW3901_SPI                  (SPI_0           )                         // 硬件 SPI 号
-#define PMW3901_SCLK_PIN             (SPI0_MOSI_P02_1  )                         // 硬件 SPI SCK 引脚
-#define PMW3901_MOSI_PIN             (SPI0_CLK_P02_2)                         // 硬件 SPI MOSI 引脚
+#define PMW3901_SCLK_PIN             (SPI0_CLK_P02_2)                        // 硬件 SPI SCK 引脚
+#define PMW3901_MOSI_PIN             (SPI0_MOSI_P02_1  )                          // 硬件 SPI MOSI 引脚
 #define PMW3901_MISO_PIN             (SPI0_MISO_P02_0 )                         // 硬件 SPI MISO 引脚
 #define PMW3901_CS_PIN               (P02_3)                                    // CS 片选引脚
 #define PMW3901_CS(x)                ((x) ? (gpio_high(PMW3901_CS_PIN)) : (gpio_low(PMW3901_CS_PIN)))

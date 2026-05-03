@@ -142,7 +142,7 @@ ParameterConfig param_config[] = {
 
     /* 速度环 X (vel_pid_x): 前向速度 vx_cms -> pitch 修正
      * 速度环 Y (vel_pid_y): 右向速度 vy_cms -> roll  修正
-     * Output Limit / Integral Limit 单位: deg, 受 PIT_Demo 二级硬限 ±VEL_LOOP_MAX_TILT_DEG 兜底。 */
+     * Output Limit / Integral Limit 单位: deg，速度环输出限幅只由 PID 内部 output_limit 决定。 */
     PARAM_CFG("Vel X Kp",               35,  &vel_pid_x.Kp,                    -10.0f,   10.0f,   0.01f,  PARAM_GROUP_VELOCITY, PARAM_OBJECT_VEL_X,  PARAM_ITEM_KP),
     PARAM_CFG("Vel X Ki",               36,  &vel_pid_x.Ki,                    -10.0f,   10.0f,   0.001f, PARAM_GROUP_VELOCITY, PARAM_OBJECT_VEL_X,  PARAM_ITEM_KI),
     PARAM_CFG("Vel X Kd",               37,  &vel_pid_x.Kd,                    -10.0f,   10.0f,   0.001f, PARAM_GROUP_VELOCITY, PARAM_OBJECT_VEL_X,  PARAM_ITEM_KD),

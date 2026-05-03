@@ -839,7 +839,7 @@ void send_date_back(void)
              * 滤波前 = velocity_*_raw_cms（已含旋转补偿 + 1/cos 投影，未过 LPF / 倾角门 / 离群剔除）
              * 滤波后 = velocity_*_cms（控制环实际反馈用的最终值）
              * 目标   = Velocity_Loop 当前目标速度（默认 0 = 悬停定点）
-             * 修正角 = 速度环 PID 输出在 ±VEL_LOOP_MAX_TILT_DEG 硬限后的实际叠加值
+             * 修正角 = 速度环 PID 输出乘符号后的实际叠加值
              */
             PMWFlowState_t pmw_flow_state = {0};
             float vx_target_cms = 0.0f;

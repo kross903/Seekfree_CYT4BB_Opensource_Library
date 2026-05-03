@@ -367,6 +367,8 @@ void Flight_Control_Disarm(void)
     /* 若 disarm 发生在自动起飞流程中（采样或爬坡阶段），必须同步中断状态机，
      * 否则采样结束会再次 Arm，出现意外解锁。 */
     Flight_Takeoff_Abort();
+    /* Disarm 同时关掉速度环, 下次起飞会在巡航分支首拍自动重新 enable。 */
+    Velocity_Loop_Set_Enabled(0U);
 
     clear_motor_throttle_buffer();
     gpio_set_level(LED3, GPIO_LOW);
