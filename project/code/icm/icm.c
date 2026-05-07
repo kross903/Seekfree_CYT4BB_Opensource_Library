@@ -2,6 +2,16 @@
 #include "common/project_headfile.h"
 #include <math.h>
 
+#define ACC_MG_TO_MPS2              (9.81f / 1000.0f)
+#define ACC_VEL_MPS_TO_CMS          (100.0f)
+#define ACC_VEL_LEAK                (1.0f)
+#define ACC_LEVEL_BIAS_FLASH_SECTOR (0U)
+#define ACC_LEVEL_BIAS_FLASH_PAGE   (12U)
+#define ACC_LEVEL_BIAS_FLASH_WORDS  (3U)
+#define ACC_LEVEL_BIAS_LIMIT_MG     (200.0f)
+#define ACC_LEVEL_BIAS_SAMPLE_HZ    (4000U)
+#define ACC_LEVEL_BIAS_SETTLE_MS    (1000U)
+
 // ==================== 全局变量定义 ====================
 #define sampleFreq  4000.0f         // 采样频率(赫兹)
 #define twoKpDef    (2.0f * 0.5f)   // Mahony比例增益
@@ -44,6 +54,8 @@ float Yaw_angle, Yaw_gyro;                 // 用于外部调用
 float Pitch_acc, Roll_acc, Yaw_acc;        // 加速度计数据
 float Pitch_acc_F, Roll_acc_F, Yaw_acc_F;  // 滤波后加速度
 float Pitch_angular_acc, Yaw_angular_acc;  // 角加速度
+float acc_level_x_bias_mg = 0.0f;          // Roll/pitch leveled X acceleration bias
+float acc_level_y_bias_mg = 0.0f;          // Roll/pitch leveled Y acceleration bias
 
 // 线速度变量
 float X_V, Y_V;                            // 估计的线速度
@@ -88,6 +100,13 @@ static uint8 icm_is_valid_gyro_bias(float value)
 {
     return (value == value) && (fabsf(value) < 200.0f);
 }
+
+static uint8 icm_is_valid_acc_level_bias(float value)
+{
+    return (value == value) && (fabsf(value) < ACC_LEVEL_BIAS_LIMIT_MG);
+}
+
+static void icm_acc_level_bias_load_or_calibrate(uint8 force_calibration);
 
 static void origin_sample_live_attitude(float history_sum[ORIGIN_AXIS_COUNT])
 {
@@ -172,6 +191,8 @@ void calculate_origin_point(void)
  */
 void ICM_Calculate_Init(void)
 {
+    uint8 force_acc_level_calibration = 0U;
+
     icm_calibration_flag = 1;
 
     // 1. 硬件初始化
@@ -191,6 +212,7 @@ void ICM_Calculate_Init(void)
     if(IMU_calibrate_flag == 0) {
         IMU_calibration();  // 自动校准
         icm_calibration_over_flag = 1;
+        force_acc_level_calibration = 1U;
     } else {
         flash_read_page_to_buffer(0, 11, 4); 
 
@@ -211,6 +233,7 @@ void ICM_Calculate_Init(void)
             ips200_show_string(0, 16*2, "Gyro Bias Invalid ");
             IMU_calibration();
             icm_calibration_over_flag = 1;
+            force_acc_level_calibration = 1U;
         }
     }      
     
@@ -221,6 +244,8 @@ void ICM_Calculate_Init(void)
         get_ICM_data();
         system_delay_ms(5);
     }
+
+    icm_acc_level_bias_load_or_calibrate(force_acc_level_calibration);
 
     // 6. 记录初始姿态
     Yaw_A0 = Yaw_a_Pi;
@@ -445,8 +470,8 @@ void get_ICM_data(void)
     // 10. 计算角加速度(用于前馈控制)
     Calculate_Angular_Acceleration();
 
-    // 11. 更新速度估计(可选)
-    // Update_Velocity_Estimate();
+    // 11. 更新只经 roll / pitch 水平化后的机体系水平速度估计
+    Update_Velocity_Estimate();
 
     // 12. 姿态角限幅
     Angle_Limit_Process();
@@ -687,25 +712,81 @@ void Angle_Limit_Process(void)
  */
 void Update_Velocity_Estimate(void)
 {
-    // 坐标系转换(机体系 -> 世界系)
-    float ax_world, ay_world, az_world;
-    Body_To_World_Frame(icm42688_acc_x_use, icm42688_acc_y_use, icm42688_acc_z_use,
-                        &ax_world, &ay_world, &az_world);
+    float ax_level_mg;
+    float ay_level_mg;
+    float az_level_mg;
 
-    // 去除重力(mg)
-    az_world -= 1000.0f;
+    /*
+     * Remove yaw from the attitude quaternion and only apply roll / pitch
+     * leveling. X_V / Y_V stay in heading-rotating horizontal axes.
+     */
+    Body_To_RollPitch_Level_Frame(Roll_acc_F, Pitch_acc_F, Yaw_acc_F,
+                                  &ax_level_mg, &ay_level_mg, &az_level_mg);
+    (void)az_level_mg;
 
-    // 速度积分
-    X_V += ax_world * DT;
-    Y_V += ay_world * DT;
+    ax_level_mg -= acc_level_x_bias_mg;
+    ay_level_mg -= acc_level_y_bias_mg;
 
-    // 滤波
+    // Acc input is mg. Convert to m/s^2, then integrate to cm/s.
+    X_V += ax_level_mg * ACC_MG_TO_MPS2 * ACC_VEL_MPS_TO_CMS * DT;
+    Y_V += ay_level_mg * ACC_MG_TO_MPS2 * ACC_VEL_MPS_TO_CMS * DT;
+
     X_V_F = biquad(&X_V_biquad, X_V);
     Y_V_F = biquad(&Y_V_biquad, Y_V);
 
-    // 防漂移衰减
-    X_V *= 0.999f;
-    Y_V *= 0.999f;
+    X_V *= ACC_VEL_LEAK;
+    Y_V *= ACC_VEL_LEAK;
+}
+
+/*
+ * Quaternion-based roll/pitch leveling helper. Yaw is removed deliberately so
+ * the output x/y axes remain tied to the aircraft heading.
+ */
+void Body_To_RollPitch_Level_Frame(float bx, float by, float bz,
+                                   float *lx, float *ly, float *lz)
+{
+    float qw = q0;
+    float qx = q1;
+    float qy = q2;
+    float qz = q3;
+    float yaw_rad = atan2f(2.0f * (qw * qz + qx * qy),
+                           1.0f - 2.0f * (qy * qy + qz * qz));
+    float half_yaw = 0.5f * yaw_rad;
+    float cy = cosf(half_yaw);
+    float sy = sinf(half_yaw);
+    float rw;
+    float rx;
+    float ry;
+    float rz;
+    float norm_inv;
+    float rw2;
+    float rx2;
+    float ry2;
+    float rz2;
+
+    // q_rp = q_yaw_conj * q_full, q_yaw_conj = [cy, 0, 0, -sy].
+    rw = cy * qw + sy * qz;
+    rx = cy * qx + sy * qy;
+    ry = cy * qy - sy * qx;
+    rz = cy * qz - sy * qw;
+
+    norm_inv = invSqrt(rw * rw + rx * rx + ry * ry + rz * rz);
+    rw *= norm_inv;
+    rx *= norm_inv;
+    ry *= norm_inv;
+    rz *= norm_inv;
+
+    rw2 = rw * rw;
+    rx2 = rx * rx;
+    ry2 = ry * ry;
+    rz2 = rz * rz;
+
+    *lx = (rw2 + rx2 - ry2 - rz2) * bx + 2.0f * (rx * ry - rw * rz) * by
+        + 2.0f * (rx * rz + rw * ry) * bz;
+    *ly = 2.0f * (rx * ry + rw * rz) * bx + (rw2 - rx2 + ry2 - rz2) * by
+        + 2.0f * (ry * rz - rw * rx) * bz;
+    *lz = 2.0f * (rx * rz - rw * ry) * bx + 2.0f * (ry * rz + rw * rx) * by
+        + (rw2 - rx2 - ry2 + rz2) * bz;
 }
 
 /**
@@ -730,6 +811,116 @@ void Body_To_World_Frame(float bx, float by, float bz,
  * @brief IMU零飘校准
  * @note 设备必须保持静止3秒
  */
+static uint8 icm_acc_level_bias_load_from_flash(void)
+{
+    flash_read_page_to_buffer(ACC_LEVEL_BIAS_FLASH_SECTOR,
+                              ACC_LEVEL_BIAS_FLASH_PAGE,
+                              ACC_LEVEL_BIAS_FLASH_WORDS);
+
+    acc_level_x_bias_mg = flash_union_buffer[1].float_type;
+    acc_level_y_bias_mg = flash_union_buffer[2].float_type;
+
+    return (uint8)(icm_is_valid_acc_level_bias(acc_level_x_bias_mg) &&
+                   icm_is_valid_acc_level_bias(acc_level_y_bias_mg));
+}
+
+static void icm_acc_level_bias_save_to_flash(void)
+{
+    flash_buffer_clear();
+    flash_union_buffer[1].float_type = acc_level_x_bias_mg;
+    flash_union_buffer[2].float_type = acc_level_y_bias_mg;
+    flash_write_page_from_buffer(ACC_LEVEL_BIAS_FLASH_SECTOR,
+                                 ACC_LEVEL_BIAS_FLASH_PAGE,
+                                 ACC_LEVEL_BIAS_FLASH_WORDS);
+}
+
+static void icm_acc_level_bias_reset_velocity(void)
+{
+    X_V = 0.0f;
+    Y_V = 0.0f;
+    X_V_F = 0.0f;
+    Y_V_F = 0.0f;
+    X_V_biquad.x1 = 0.0f;
+    X_V_biquad.x2 = 0.0f;
+    X_V_biquad.y1 = 0.0f;
+    X_V_biquad.y2 = 0.0f;
+    Y_V_biquad.x1 = 0.0f;
+    Y_V_biquad.x2 = 0.0f;
+    Y_V_biquad.y1 = 0.0f;
+    Y_V_biquad.y2 = 0.0f;
+}
+
+static void icm_acc_level_bias_settle_attitude(void)
+{
+    uint32 settle_count = (ACC_LEVEL_BIAS_SETTLE_MS * ACC_LEVEL_BIAS_SAMPLE_HZ) / 1000U;
+    uint32 i;
+
+    ips200_show_string(0, 16*3, "Acc bias settle  ");
+
+    for(i = 0U; i < settle_count; i++)
+    {
+        get_ICM_data();
+        system_delay_us(1000000U / ACC_LEVEL_BIAS_SAMPLE_HZ);
+    }
+
+    icm_acc_level_bias_reset_velocity();
+}
+
+void Acc_Level_Calibration(void)
+{
+    uint32 sample_count = (uint32)IMU_calibration_seconds * ACC_LEVEL_BIAS_SAMPLE_HZ;
+    uint32 i;
+    float ax_level_mg;
+    float ay_level_mg;
+    float az_level_mg;
+    float sum_x_mg = 0.0f;
+    float sum_y_mg = 0.0f;
+
+    ips200_show_string(0, 16*3, "Acc bias calib... ");
+    icm_acc_level_bias_settle_attitude();
+    ips200_show_string(0, 16*3, "Acc bias calib... ");
+
+    for(i = 0U; i < sample_count; i++)
+    {
+        get_ICM_data();
+        Body_To_RollPitch_Level_Frame(Roll_acc_F, Pitch_acc_F, Yaw_acc_F,
+                                      &ax_level_mg, &ay_level_mg, &az_level_mg);
+        (void)az_level_mg;
+
+        sum_x_mg += ax_level_mg;
+        sum_y_mg += ay_level_mg;
+        system_delay_us(1000000U / ACC_LEVEL_BIAS_SAMPLE_HZ);
+    }
+
+    acc_level_x_bias_mg = sum_x_mg / (float)sample_count;
+    acc_level_y_bias_mg = sum_y_mg / (float)sample_count;
+
+    icm_acc_level_bias_save_to_flash();
+    icm_acc_level_bias_reset_velocity();
+
+    ips200_show_string(0, 16*3, "Acc bias saved   ");
+    ips200_show_float(96, 80, acc_level_x_bias_mg, 3, 3);
+    ips200_show_float(96, 104, acc_level_y_bias_mg, 3, 3);
+    system_delay_ms(500);
+}
+
+static void icm_acc_level_bias_load_or_calibrate(uint8 force_calibration)
+{
+    if(force_calibration || !icm_acc_level_bias_load_from_flash())
+    {
+        acc_level_x_bias_mg = 0.0f;
+        acc_level_y_bias_mg = 0.0f;
+        Acc_Level_Calibration();
+        return;
+    }
+
+    ips200_show_string(0, 16*3, "Using Acc Bias   ");
+    ips200_show_float(96, 80, acc_level_x_bias_mg, 3, 3);
+    ips200_show_float(96, 104, acc_level_y_bias_mg, 3, 3);
+    icm_acc_level_bias_reset_velocity();
+    system_delay_ms(300);
+}
+
 void IMU_calibration(void)
 {
     uint32 s_cnt = 0, g_cnt = 0;

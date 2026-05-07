@@ -60,7 +60,6 @@ static void init_default_pid_parameters(void)
 static void init_runtime_modules(void)
 {
     my_key_init();
-    Parameter_System_Init();
     menu_open_init();
 
     IMU_calibrate_flag = 1;

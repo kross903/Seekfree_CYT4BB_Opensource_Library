@@ -10,17 +10,6 @@ static Menu testMenu;
  * 1. ??????????????????????????????????
  * 2. ???????????????????????
  */
-static void show_parameter_conflict_warning(void)
-{
-    if (!check_parameter_index_conflicts())
-    {
-        return;
-    }
-
-    ui_menu_show_parameter_conflict_warning();
-    system_delay_ms(800);
-}
-
 /* ????????? */
 static uint8 select_control_mode(void)
 {
@@ -244,7 +233,6 @@ void init_test_menu(void)
     testMenu.parentMenu = NULL;
     
     // 注册主菜单项
-    menu_create_item(&mainMenu, "Parameters", parameter_menu_entry, NULL);
     menu_create_item(&mainMenu, "Test", NULL, &testMenu);
     menu_create_item(&mainMenu, "ICM Init", icm_init_menu, NULL);
     menu_create_item(&mainMenu, "Flight View", exit_menu_system, NULL);
@@ -269,7 +257,6 @@ void menu_open_init()
      */
     menu_reset_exit_flag();
     menu_enter_main_menu_view();
-    show_parameter_conflict_warning();
 }
 
 /*

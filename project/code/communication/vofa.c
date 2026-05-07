@@ -728,6 +728,7 @@ void USART_PID_Adjust(void)
                 case '6': send_back_flag = 6; break;
                 case '7': send_back_flag = 7; break;
                 case '8': send_back_flag = 8; break;
+                case '9': send_back_flag = 9; break;
                 default: break;
             }
 
@@ -862,6 +863,22 @@ void send_date_back(void)
                            pmw_flow_state.velocity_y_cms,
                            vy_target_cms,
                            roll_corr_deg);
+            break;
+        }
+
+        case 9:
+        {
+            PMWFlowState_t pmw_flow_state = {0};
+            PMW_Flow_GetState(&pmw_flow_state);
+
+            send_four_date(X_V,
+                           X_V_F,
+                           pmw_flow_state.velocity_x_raw_cms,
+                           pmw_flow_state.velocity_x_cms,
+                           Y_V,
+                           Y_V_F,
+                           pmw_flow_state.velocity_y_raw_cms,
+                           pmw_flow_state.velocity_y_cms);
             break;
         }
 

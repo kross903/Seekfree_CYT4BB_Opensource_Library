@@ -173,6 +173,8 @@ S1=450!
 | `F5=0!` 或 `F5!` | 加速度原始值与补偿观察 |
 | `F6=0!` 或 `F6!` | Roll/Pitch 角度与角速度对比 |
 | `F7=0!` 或 `F7!` | ADC 原始值、滤波值与目标角 |
+| `F8=0!` 或 `F8!` | 光流速度闭环综合监视 |
+| `F9=0!` 或 `F9!` | 加速度积分速度与光流速度对比 |
 
 说明：
 
@@ -257,9 +259,9 @@ S1=450!
 3. `current_pitch`
 4. `current_yaw`
 5. `g_height_result.height_cm`
-6. `tof_height_true_filt * 100.0f`
-7. `ir_pose_estimate.z`
-8. `HeightSpeedPID_output`
+6. `dl1b_distance_mm`
+7. `dl1b_finsh_flag`
+8. `0`
 
 ### `F4`：陀螺仪调试
 
@@ -312,6 +314,32 @@ S1=450!
 6. `adc_y_nomalize`
 7. `target_angle_roll`
 8. `target_angle_pitch`
+
+### `F8`：光流速度闭环综合监视
+
+返回顺序：
+
+1. `pmw_flow_state.velocity_x_raw_cms`
+2. `pmw_flow_state.velocity_x_cms`
+3. `vx_target_cms`
+4. `pitch_corr_deg`
+5. `pmw_flow_state.velocity_y_raw_cms`
+6. `pmw_flow_state.velocity_y_cms`
+7. `vy_target_cms`
+8. `roll_corr_deg`
+
+### `F9`：加速度积分速度与光流速度对比
+
+返回顺序：
+
+1. `X_V`
+2. `X_V_F`
+3. `pmw_flow_state.velocity_x_raw_cms`
+4. `pmw_flow_state.velocity_x_cms`
+5. `Y_V`
+6. `Y_V_F`
+7. `pmw_flow_state.velocity_y_raw_cms`
+8. `pmw_flow_state.velocity_y_cms`
 
 ## 上位机常用发送示例
 
@@ -385,6 +413,8 @@ F4!
 F5!
 F6!
 F7!
+F8!
+F9!
 ```
 
 ### 强制失锁

@@ -122,6 +122,7 @@ extern float Pitch_angular_acc, Yaw_angular_acc;
 // 加速度(mg)
 extern float Pitch_acc, Roll_acc, Yaw_acc;        // 原始加速度
 extern float Pitch_acc_F, Roll_acc_F, Yaw_acc_F;  // 滤波后加速度
+extern float acc_level_x_bias_mg, acc_level_y_bias_mg;
 
 // 线速度变量
 extern float X_V, Y_V;                            // 估计线速度
@@ -160,6 +161,7 @@ void ICM_Calculate_Init(void);
 void Filter_Init(void);
 void biquad_filter_init(biquad_state *state, biquad_type type, int fs, float fc, float q_value);
 void IMU_calibration(void);
+void Acc_Level_Calibration(void);
 void calculate_origin_point(void);
 
 // ========== 数据处理接口 ==========
@@ -176,6 +178,8 @@ void updateMadgwickEulerIMU(float gx, float gy, float gz,
 void Calculate_Angular_Acceleration(void);
 void Angle_Limit_Process(void);
 void Update_Velocity_Estimate(void);
+void Body_To_RollPitch_Level_Frame(float bx, float by, float bz,
+                                   float *lx, float *ly, float *lz);
 void Body_To_World_Frame(float bx, float by, float bz,
                          float *wx, float *wy, float *wz);
 float invSqrt(float x);
