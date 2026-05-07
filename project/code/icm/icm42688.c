@@ -183,17 +183,6 @@ void Get_Gyro_ICM42688(void)
     short int raw_x_r;
     short int raw_y_r;
     short int raw_z_r;
-    float raw_x;
-    float raw_y;
-    float raw_z;
-    float roll_rad;
-    float pitch_rad;
-    float sin_roll;
-    float cos_roll;
-    float sin_pitch;
-    float cos_pitch;
-    float roll_y;
-    float roll_z;
 
     Read_Datas_ICM42688(ICM42688_GYRO_DATA_X1, data, 6);
     raw_x_r = (short int)(((short int)data[0] << 8) | data[1]);
@@ -203,23 +192,9 @@ void Get_Gyro_ICM42688(void)
     icm42688_gyro_y_r = raw_y_r;
     icm42688_gyro_z_r = raw_z_r;
 
-    raw_x = icm42688_gyro_inv * raw_x_r - gyro_x_correction;
-    raw_y = icm42688_gyro_inv * raw_y_r - gyro_y_correction;
-    raw_z = icm42688_gyro_inv * raw_z_r - gyro_z_correction;
-
-    roll_rad = angle_roll_compensation * DEG2RAD;
-    pitch_rad = angle_pitch_compensation * DEG2RAD;
-    sin_roll = sinf(roll_rad);
-    cos_roll = cosf(roll_rad);
-    sin_pitch = sinf(pitch_rad);
-    cos_pitch = cosf(pitch_rad);
-
-    roll_y = cos_roll * raw_y - sin_roll * raw_z;
-    roll_z = sin_roll * raw_y + cos_roll * raw_z;
-
-    icm42688_gyro_x = cos_pitch * raw_x + sin_pitch * roll_z;
-    icm42688_gyro_y = roll_y;
-    icm42688_gyro_z = -sin_pitch * raw_x + cos_pitch * roll_z;
+    icm42688_gyro_x = icm42688_gyro_inv * raw_x_r - gyro_x_correction;
+    icm42688_gyro_y = icm42688_gyro_inv * raw_y_r - gyro_y_correction;
+    icm42688_gyro_z = icm42688_gyro_inv * raw_z_r - gyro_z_correction;
 }
 void Get_RAW_Gyro_ICM42688(void)
 {

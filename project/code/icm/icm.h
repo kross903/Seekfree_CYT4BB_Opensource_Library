@@ -123,6 +123,7 @@ extern float Pitch_angular_acc, Yaw_angular_acc;
 extern float Pitch_acc, Roll_acc, Yaw_acc;        // 原始加速度
 extern float Pitch_acc_F, Roll_acc_F, Yaw_acc_F;  // 滤波后加速度
 extern float acc_level_x_bias_mg, acc_level_y_bias_mg;
+extern float acc_level_x_scale, acc_level_y_scale, acc_level_z_scale;
 
 // 线速度变量
 extern float X_V, Y_V;                            // 估计线速度

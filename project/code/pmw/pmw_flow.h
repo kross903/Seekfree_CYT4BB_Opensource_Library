@@ -6,9 +6,9 @@
 typedef struct
 {
     uint8 valid;
+    uint8 flow_used;
+    uint8 acc_used;
     uint8 reserved0;
-    uint8 reserved1;
-    uint8 reserved2;
     int16 flow_delta_x_count;
     int16 flow_delta_y_count;
     float dt_s;
@@ -26,6 +26,15 @@ typedef struct
     float velocity_y_raw_cms;
     float velocity_x_cms;
     float velocity_y_cms;
+    float velocity_x_fused_cms;
+    float velocity_y_fused_cms;
+    float velocity_x_fused_residual_cms;
+    float velocity_y_fused_residual_cms;
+    float velocity_x_world_cms;
+    float velocity_y_world_cms;
+    float position_x_world_cm;
+    float position_y_world_cm;
+    float yaw_deg;
     float speed_cms;
 } PMWFlowState_t;
 
@@ -40,6 +49,7 @@ void PMW_Flow_UpdateSample(int16 flow_delta_x,
                            float dt_s);
 void PMW_Flow_SyncMainLoopBuffer(void);
 void PMW_Flow_GetState(PMWFlowState_t *state);
+void PMW_Flow_ResetWorldPosition(void);
 
 /* 陀螺去旋转增益（按轴独立）。kx 或 ky 传负值表示该轴保持不变。 */
 void PMW_Flow_SetGyroCompGain(float kx, float ky);

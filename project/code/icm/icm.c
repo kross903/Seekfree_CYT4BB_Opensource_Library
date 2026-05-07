@@ -5,6 +5,10 @@
 #define ACC_MG_TO_MPS2              (9.81f / 1000.0f)
 #define ACC_VEL_MPS_TO_CMS          (100.0f)
 #define ACC_VEL_LEAK                (1.0f)
+#define ACC_VEL_DEADBAND_MG         (1.0f)
+#define ACC_VEL_GYRO_GATE_DPS       (100.0f)
+#define ACC_VEL_NORM_GATE_MG        (80.0f)
+#define ACC_VEL_MAX_INTEGRATE_MG    (30.0f)
 #define ACC_LEVEL_BIAS_FLASH_SECTOR (0U)
 #define ACC_LEVEL_BIAS_FLASH_PAGE   (12U)
 #define ACC_LEVEL_BIAS_FLASH_WORDS  (3U)
@@ -56,6 +60,10 @@ float Pitch_acc_F, Roll_acc_F, Yaw_acc_F;  // 滤波后加速度
 float Pitch_angular_acc, Yaw_angular_acc;  // 角加速度
 float acc_level_x_bias_mg = 0.0f;          // Roll/pitch leveled X acceleration bias
 float acc_level_y_bias_mg = 0.0f;          // Roll/pitch leveled Y acceleration bias
+float acc_level_x_scale = 0.9940f;
+float acc_level_y_scale = 0.9940f;
+float acc_level_z_scale = 1.0000f;
+
 
 // 线速度变量
 float X_V, Y_V;                            // 估计的线速度
@@ -715,6 +723,7 @@ void Update_Velocity_Estimate(void)
     float ax_level_mg;
     float ay_level_mg;
     float az_level_mg;
+    float acc_norm_mg;
 
     /*
      * Remove yaw from the attitude quaternion and only apply roll / pitch
@@ -726,6 +735,49 @@ void Update_Velocity_Estimate(void)
 
     ax_level_mg -= acc_level_x_bias_mg;
     ay_level_mg -= acc_level_y_bias_mg;
+
+    if(fabsf(Roll_g_F) > ACC_VEL_GYRO_GATE_DPS ||
+       fabsf(Pitch_g_F) > ACC_VEL_GYRO_GATE_DPS ||
+       fabsf(Yaw_g_F) > ACC_VEL_GYRO_GATE_DPS)
+    {
+        return;
+    }
+
+    acc_norm_mg = sqrtf(Roll_acc_F * Roll_acc_F +
+                        Pitch_acc_F * Pitch_acc_F +
+                        Yaw_acc_F * Yaw_acc_F);
+    if(fabsf(acc_norm_mg - 1000.0f) > ACC_VEL_NORM_GATE_MG)
+    {
+        return;
+    }
+
+    if(fabsf(ax_level_mg) < ACC_VEL_DEADBAND_MG)
+    {
+        ax_level_mg = 0.0f;
+    }
+
+    if(fabsf(ay_level_mg) < ACC_VEL_DEADBAND_MG)
+    {
+        ay_level_mg = 0.0f;
+    }
+
+    if(ax_level_mg > ACC_VEL_MAX_INTEGRATE_MG)
+    {
+        ax_level_mg = ACC_VEL_MAX_INTEGRATE_MG;
+    }
+    else if(ax_level_mg < -ACC_VEL_MAX_INTEGRATE_MG)
+    {
+        ax_level_mg = -ACC_VEL_MAX_INTEGRATE_MG;
+    }
+
+    if(ay_level_mg > ACC_VEL_MAX_INTEGRATE_MG)
+    {
+        ay_level_mg = ACC_VEL_MAX_INTEGRATE_MG;
+    }
+    else if(ay_level_mg < -ACC_VEL_MAX_INTEGRATE_MG)
+    {
+        ay_level_mg = -ACC_VEL_MAX_INTEGRATE_MG;
+    }
 
     // Acc input is mg. Convert to m/s^2, then integrate to cm/s.
     X_V += ax_level_mg * ACC_MG_TO_MPS2 * ACC_VEL_MPS_TO_CMS * DT;
@@ -745,6 +797,9 @@ void Update_Velocity_Estimate(void)
 void Body_To_RollPitch_Level_Frame(float bx, float by, float bz,
                                    float *lx, float *ly, float *lz)
 {
+    float bx_scaled = bx * acc_level_x_scale;
+    float by_scaled = by * acc_level_y_scale;
+    float bz_scaled = bz * acc_level_z_scale;
     float qw = q0;
     float qx = q1;
     float qy = q2;
@@ -781,12 +836,12 @@ void Body_To_RollPitch_Level_Frame(float bx, float by, float bz,
     ry2 = ry * ry;
     rz2 = rz * rz;
 
-    *lx = (rw2 + rx2 - ry2 - rz2) * bx + 2.0f * (rx * ry - rw * rz) * by
-        + 2.0f * (rx * rz + rw * ry) * bz;
-    *ly = 2.0f * (rx * ry + rw * rz) * bx + (rw2 - rx2 + ry2 - rz2) * by
-        + 2.0f * (ry * rz - rw * rx) * bz;
-    *lz = 2.0f * (rx * rz - rw * ry) * bx + 2.0f * (ry * rz + rw * rx) * by
-        + (rw2 - rx2 - ry2 + rz2) * bz;
+    *lx = (rw2 + rx2 - ry2 - rz2) * bx_scaled + 2.0f * (rx * ry - rw * rz) * by_scaled
+        + 2.0f * (rx * rz + rw * ry) * bz_scaled;
+    *ly = 2.0f * (rx * ry + rw * rz) * bx_scaled + (rw2 - rx2 + ry2 - rz2) * by_scaled
+        + 2.0f * (ry * rz - rw * rx) * bz_scaled;
+    *lz = 2.0f * (rx * rz - rw * ry) * bx_scaled + 2.0f * (ry * rz + rw * rx) * by_scaled
+        + (rw2 - rx2 - ry2 + rz2) * bz_scaled;
 }
 
 /**

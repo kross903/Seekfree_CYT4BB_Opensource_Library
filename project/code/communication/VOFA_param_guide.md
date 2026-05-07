@@ -175,6 +175,8 @@ S1=450!
 | `F7=0!` 或 `F7!` | ADC 原始值、滤波值与目标角 |
 | `F8=0!` 或 `F8!` | 光流速度闭环综合监视 |
 | `F9=0!` 或 `F9!` | 加速度积分速度与光流速度对比 |
+| `FA=0!` 或 `FA!` | 加速度水平化残差诊断 |
+| `FB=0!` 或 `FB!` | 融合速度旋转到世界系后的速度与积分位置 |
 
 说明：
 
@@ -333,13 +335,15 @@ S1=450!
 返回顺序：
 
 1. `X_V`
-2. `X_V_F`
-3. `pmw_flow_state.velocity_x_raw_cms`
-4. `pmw_flow_state.velocity_x_cms`
+2. `pmw_flow_state.velocity_x_cms`
+3. `pmw_flow_state.velocity_x_fused_cms`
+4. `pmw_flow_state.velocity_x_fused_residual_cms`
 5. `Y_V`
-6. `Y_V_F`
-7. `pmw_flow_state.velocity_y_raw_cms`
-8. `pmw_flow_state.velocity_y_cms`
+6. `pmw_flow_state.velocity_y_cms`
+7. `pmw_flow_state.velocity_y_fused_cms`
+8. `pmw_flow_state.velocity_y_fused_residual_cms`
+
+F9 当前用于观察速度融合效果：`X_V` / `Y_V` 是加速度积分速度，`velocity_*_cms` 是光流滤波速度，`velocity_*_fused_cms` 是融合速度，`velocity_*_fused_residual_cms = 光流速度 - 融合速度`。融合速度目前只用于观察，未接入速度环 PID。
 
 ## 上位机常用发送示例
 
@@ -429,3 +433,47 @@ F9!
 - 建议连续命令之间留出少量时间，避免无线串口链路堆积
 - 如果需要看某类参数回读，先发送对应设置命令，再切到 `F1`
 - 如果需要观察实时状态，优先使用 `F0 / F2 / F3 / F4 / F5`
+
+## 附加诊断回传
+
+### `FA`：加速度水平化残差诊断
+
+发送：
+
+```text
+FA!
+```
+
+返回顺序：
+
+1. `current_roll`
+2. `current_pitch`
+3. `ax_level_raw_mg`
+4. `ay_level_raw_mg`
+5. `acc_level_x_bias_mg`
+6. `acc_level_y_bias_mg`
+7. `ax_level_after_bias_mg`
+8. `ay_level_after_bias_mg`
+
+用途：固定不同 roll / pitch 倾角时，观察 `ax_level_after_bias_mg`、`ay_level_after_bias_mg` 是否随倾角线性变化，用于判断重力污染来自姿态误差、安装角误差或加速度比例误差。
+
+### `FB`：世界系速度与位置积分诊断
+
+发送：
+
+```text
+FB!
+```
+
+返回顺序：
+
+1. `pmw_flow_state.velocity_x_fused_cms`
+2. `pmw_flow_state.velocity_y_fused_cms`
+3. `pmw_flow_state.yaw_deg`
+4. `pmw_flow_state.velocity_x_world_cms`
+5. `pmw_flow_state.velocity_y_world_cms`
+6. `pmw_flow_state.position_x_world_cm`
+7. `pmw_flow_state.position_y_world_cm`
+8. `world_position_valid`
+
+说明：世界系速度由融合速度按当前 yaw 旋转得到，世界系位置由世界系速度积分得到。当前只作为相对里程计观察量，未接入控制。

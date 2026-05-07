@@ -729,6 +729,10 @@ void USART_PID_Adjust(void)
                 case '7': send_back_flag = 7; break;
                 case '8': send_back_flag = 8; break;
                 case '9': send_back_flag = 9; break;
+                case 'A':
+                case 'a': send_back_flag = 10; break;
+                case 'B':
+                case 'b': send_back_flag = 11; break;
                 default: break;
             }
 
@@ -872,13 +876,50 @@ void send_date_back(void)
             PMW_Flow_GetState(&pmw_flow_state);
 
             send_four_date(X_V,
-                           X_V_F,
-                           pmw_flow_state.velocity_x_raw_cms,
                            pmw_flow_state.velocity_x_cms,
+                           pmw_flow_state.velocity_x_fused_cms,
+                           pmw_flow_state.velocity_x_fused_residual_cms,
                            Y_V,
-                           Y_V_F,
-                           pmw_flow_state.velocity_y_raw_cms,
-                           pmw_flow_state.velocity_y_cms);
+                           pmw_flow_state.velocity_y_cms,
+                           pmw_flow_state.velocity_y_fused_cms,
+                           pmw_flow_state.velocity_y_fused_residual_cms);
+            break;
+        }
+
+        case 10:
+        {
+            float ax_level_mg = 0.0f;
+            float ay_level_mg = 0.0f;
+            float az_level_mg = 0.0f;
+
+            Body_To_RollPitch_Level_Frame(Roll_acc_F, Pitch_acc_F, Yaw_acc_F,
+                                          &ax_level_mg, &ay_level_mg, &az_level_mg);
+            (void)az_level_mg;
+
+            send_four_date(current_roll,
+                           current_pitch,
+                           ax_level_mg,
+                           ay_level_mg,
+                           acc_level_x_bias_mg,
+                           acc_level_y_bias_mg,
+                           ax_level_mg - acc_level_x_bias_mg,
+                           ay_level_mg - acc_level_y_bias_mg);
+            break;
+        }
+
+        case 11:
+        {
+            PMWFlowState_t pmw_flow_state = {0};
+            PMW_Flow_GetState(&pmw_flow_state);
+
+            send_four_date(pmw_flow_state.velocity_x_fused_cms,
+                           pmw_flow_state.velocity_y_fused_cms,
+                           pmw_flow_state.yaw_deg,
+                           pmw_flow_state.velocity_x_world_cms,
+                           pmw_flow_state.velocity_y_world_cms,
+                           pmw_flow_state.position_x_world_cm,
+                           pmw_flow_state.position_y_world_cm,
+                           (float)pmw_flow_state.reserved0);
             break;
         }
 
