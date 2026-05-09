@@ -733,6 +733,8 @@ void USART_PID_Adjust(void)
                 case 'a': send_back_flag = 10; break;
                 case 'B':
                 case 'b': send_back_flag = 11; break;
+                case 'C':
+                case 'c': send_back_flag = 12; break;
                 default: break;
             }
 
@@ -780,11 +782,11 @@ void send_date_back(void)
             send_four_date(pmw_flow_state.flow_x_rad,
                            pmw_flow_state.gyro_flow_y_delta_rad,
                            pmw_flow_state.flow_comp_x_rad,
-                           pmw_flow_state.velocity_y_raw_cms,
+                           pmw_flow_state.velocity_x_raw_cms,
                            pmw_flow_state.flow_y_rad,
                            pmw_flow_state.gyro_flow_x_delta_rad,
                            pmw_flow_state.flow_comp_y_rad,
-                           pmw_flow_state.velocity_x_raw_cms);
+                           pmw_flow_state.velocity_y_raw_cms);
             break;
         }
 
@@ -920,6 +922,22 @@ void send_date_back(void)
                            pmw_flow_state.position_x_world_cm,
                            pmw_flow_state.position_y_world_cm,
                            (float)pmw_flow_state.reserved0);
+            break;
+        }
+
+        case 12:
+        {
+            PMWFlowState_t pmw_flow_state = {0};
+            PMW_Flow_GetState(&pmw_flow_state);
+
+            send_four_date(pmw_flow_state.position_x_world_cm,
+                           pmw_flow_state.position_y_world_cm,
+                           pmw_flow_state.flow_position_x_world_cm,
+                           pmw_flow_state.flow_position_y_world_cm,
+                           pmw_flow_state.flow_delta_x_world_cm,
+                           pmw_flow_state.flow_delta_y_world_cm,
+                           pmw_flow_state.yaw_deg,
+                           (float)pmw_flow_state.flow_position_valid);
             break;
         }
 

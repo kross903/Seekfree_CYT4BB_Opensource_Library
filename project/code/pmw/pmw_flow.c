@@ -35,12 +35,11 @@
 #define PMW_FLOW_GYRO_COMP_GAIN_MIN         (0.0f)
 #define PMW_FLOW_GYRO_COMP_GAIN_MAX         (4.0f)
 /*
- * PX4-style body velocity mapping from compensated flow integral.
- * Keep the mapping configurable because the final body-frame sign depends on
- * camera installation and the project's body-axis convention.
+ * Body velocity mapping from compensated optical-flow integrals.
+ * After axis verification, flow_comp_x maps to body X and flow_comp_y maps to body Y.
  */
-#define PMW_FLOW_BODY_VX_FROM_FLOW_Y_SIGN   (-1.0f)
-#define PMW_FLOW_BODY_VY_FROM_FLOW_X_SIGN   (1.0f)
+#define PMW_FLOW_BODY_VX_FROM_FLOW_X_SIGN   (1.0f)
+#define PMW_FLOW_BODY_VY_FROM_FLOW_Y_SIGN   (-1.0f)
 #define PMW_FLOW_MIN_HEIGHT_CM              (5.0f)
 #define PMW_FLOW_MAX_HEIGHT_CM              (400.0f)
 #define PMW_FLOW_MIN_DT_S                   (0.001f)
@@ -105,6 +104,10 @@ static float g_pmw_flow_world_vx_cms = 0.0f;
 static float g_pmw_flow_world_vy_cms = 0.0f;
 static float g_pmw_flow_world_x_cm = 0.0f;
 static float g_pmw_flow_world_y_cm = 0.0f;
+static float g_pmw_flow_delta_world_x_cm = 0.0f;
+static float g_pmw_flow_delta_world_y_cm = 0.0f;
+static float g_pmw_flow_direct_world_x_cm = 0.0f;
+static float g_pmw_flow_direct_world_y_cm = 0.0f;
 static uint8 g_pmw_flow_world_valid = 0U;
 
 void PMW_Flow_ResetWorldPosition(void);
@@ -219,6 +222,11 @@ static void pmw_flow_update_world_odometry(PMWFlowState_t *state)
     float cos_yaw;
     float sin_yaw;
     float tilt_abs_max_deg;
+    float cos_pitch;
+    float cos_roll;
+    float delta_body_x_cm;
+    float delta_body_y_cm;
+    uint8 direct_world_valid = 0U;
 
     if(state == NULL)
     {
@@ -253,20 +261,86 @@ static void pmw_flow_update_world_odometry(PMWFlowState_t *state)
 
         g_pmw_flow_world_x_cm += g_pmw_flow_world_vx_cms * state->dt_s;
         g_pmw_flow_world_y_cm += g_pmw_flow_world_vy_cms * state->dt_s;
+
+        cos_pitch = cosf(state->pitch_deg * PMW_FLOW_DEG2RAD);
+        cos_roll = cosf(state->roll_deg * PMW_FLOW_DEG2RAD);
+        if(cos_pitch < PMW_FLOW_TILT_COS_FLOOR)
+        {
+            cos_pitch = PMW_FLOW_TILT_COS_FLOOR;
+        }
+        if(cos_roll < PMW_FLOW_TILT_COS_FLOOR)
+        {
+            cos_roll = PMW_FLOW_TILT_COS_FLOOR;
+        }
+
+        delta_body_x_cm = PMW_FLOW_BODY_VX_FROM_FLOW_X_SIGN *
+                          (state->range_cm * state->flow_comp_x_rad / cos_pitch);
+        delta_body_y_cm = PMW_FLOW_BODY_VY_FROM_FLOW_Y_SIGN *
+                          (state->range_cm * state->flow_comp_y_rad / cos_roll);
+
+        g_pmw_flow_delta_world_x_cm = cos_yaw * delta_body_x_cm -
+                                      sin_yaw * delta_body_y_cm;
+        g_pmw_flow_delta_world_y_cm = sin_yaw * delta_body_x_cm +
+                                      cos_yaw * delta_body_y_cm;
+        g_pmw_flow_direct_world_x_cm += g_pmw_flow_delta_world_x_cm;
+        g_pmw_flow_direct_world_y_cm += g_pmw_flow_delta_world_y_cm;
         g_pmw_flow_world_valid = 1U;
     }
     else
     {
         g_pmw_flow_world_vx_cms = 0.0f;
         g_pmw_flow_world_vy_cms = 0.0f;
+        g_pmw_flow_delta_world_x_cm = 0.0f;
+        g_pmw_flow_delta_world_y_cm = 0.0f;
         g_pmw_flow_world_valid = 0U;
+    }
+
+    if(pmw_flow_is_valid_number(state->range_cm) &&
+       pmw_flow_is_valid_number(state->flow_comp_x_rad) &&
+       pmw_flow_is_valid_number(state->flow_comp_y_rad) &&
+       pmw_flow_is_valid_number(state->yaw_deg))
+    {
+        yaw_rad = state->yaw_deg * PMW_FLOW_DEG2RAD;
+        cos_yaw = cosf(yaw_rad);
+        sin_yaw = sinf(yaw_rad);
+
+        cos_pitch = cosf(state->pitch_deg * PMW_FLOW_DEG2RAD);
+        cos_roll = cosf(state->roll_deg * PMW_FLOW_DEG2RAD);
+        if(cos_pitch < PMW_FLOW_TILT_COS_FLOOR)
+        {
+            cos_pitch = PMW_FLOW_TILT_COS_FLOOR;
+        }
+        if(cos_roll < PMW_FLOW_TILT_COS_FLOOR)
+        {
+            cos_roll = PMW_FLOW_TILT_COS_FLOOR;
+        }
+
+        delta_body_x_cm = PMW_FLOW_BODY_VX_FROM_FLOW_X_SIGN *
+                          (state->range_cm * state->flow_comp_x_rad / cos_pitch);
+        delta_body_y_cm = PMW_FLOW_BODY_VY_FROM_FLOW_Y_SIGN *
+                          (state->range_cm * state->flow_comp_y_rad / cos_roll);
+
+        g_pmw_flow_direct_world_x_cm += cos_yaw * delta_body_x_cm -
+                                        sin_yaw * delta_body_y_cm;
+        g_pmw_flow_direct_world_y_cm += sin_yaw * delta_body_x_cm +
+                                        cos_yaw * delta_body_y_cm;
+        direct_world_valid = 1U;
+    }
+    else
+    {
+        direct_world_valid = 0U;
     }
 
     state->velocity_x_world_cms = g_pmw_flow_world_vx_cms;
     state->velocity_y_world_cms = g_pmw_flow_world_vy_cms;
     state->position_x_world_cm = g_pmw_flow_world_x_cm;
     state->position_y_world_cm = g_pmw_flow_world_y_cm;
+    state->flow_delta_x_world_cm = g_pmw_flow_delta_world_x_cm;
+    state->flow_delta_y_world_cm = g_pmw_flow_delta_world_y_cm;
+    state->flow_position_x_world_cm = g_pmw_flow_direct_world_x_cm;
+    state->flow_position_y_world_cm = g_pmw_flow_direct_world_y_cm;
     state->reserved0 = g_pmw_flow_world_valid;
+    state->flow_position_valid = direct_world_valid;
 }
 
 static void pmw_flow_publish_state(const PMWFlowState_t *state)
@@ -338,6 +412,10 @@ void PMW_Flow_ResetWorldPosition(void)
     g_pmw_flow_world_vy_cms = 0.0f;
     g_pmw_flow_world_x_cm = 0.0f;
     g_pmw_flow_world_y_cm = 0.0f;
+    g_pmw_flow_delta_world_x_cm = 0.0f;
+    g_pmw_flow_delta_world_y_cm = 0.0f;
+    g_pmw_flow_direct_world_x_cm = 0.0f;
+    g_pmw_flow_direct_world_y_cm = 0.0f;
     g_pmw_flow_world_valid = 0U;
 }
 
@@ -418,8 +496,8 @@ void PMW_Flow_UpdateSample(int16 flow_delta_x,
      *
      * 约定：v_body_x 正 → 机体前进；v_body_y 正 → 机体右移。 */
     {
-        float v_body_x = PMW_FLOW_BODY_VX_FROM_FLOW_Y_SIGN * (range_used_cm * new_state.flow_comp_y_rad / dt_s);
-        float v_body_y = PMW_FLOW_BODY_VY_FROM_FLOW_X_SIGN * (range_used_cm * new_state.flow_comp_x_rad / dt_s);
+        float v_body_x = PMW_FLOW_BODY_VX_FROM_FLOW_X_SIGN * (range_used_cm * new_state.flow_comp_x_rad / dt_s);
+        float v_body_y = PMW_FLOW_BODY_VY_FROM_FLOW_Y_SIGN * (range_used_cm * new_state.flow_comp_y_rad / dt_s);
 
         /* (4.1) 机体 → 水平面投影。
          *

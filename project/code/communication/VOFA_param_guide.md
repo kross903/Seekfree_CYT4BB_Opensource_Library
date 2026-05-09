@@ -177,6 +177,7 @@ S1=450!
 | `F9=0!` 或 `F9!` | 加速度积分速度与光流速度对比 |
 | `FA=0!` 或 `FA!` | 加速度水平化残差诊断 |
 | `FB=0!` 或 `FB!` | 融合速度旋转到世界系后的速度与积分位置 |
+| `FC=0!` 或 `FC!` | 速度积分位置与光流单帧位移积分位置对比 |
 
 说明：
 
@@ -203,11 +204,11 @@ S1=450!
 1. `optical_flow_x_rad`
 2. `optical_flow_gyro_y_delta_rad`
 3. `optical_flow_comp_x_rad`
-4. `optical_flow_velocity_y_raw_cms`
+4. `optical_flow_velocity_x_raw_cms`
 5. `optical_flow_y_rad`
 6. `optical_flow_gyro_x_delta_rad`
 7. `optical_flow_comp_y_rad`
-8. `optical_flow_velocity_x_raw_cms`
+8. `optical_flow_velocity_y_raw_cms`
 
 ### `F1`：PID 参数回读
 
@@ -477,3 +478,24 @@ FB!
 8. `world_position_valid`
 
 说明：世界系速度由融合速度按当前 yaw 旋转得到，世界系位置由世界系速度积分得到。当前只作为相对里程计观察量，未接入控制。
+
+### `FC`：两种世界系位置积分路径对比
+
+发送：
+
+```text
+FC!
+```
+
+返回顺序：
+
+1. `pmw_flow_state.position_x_world_cm`
+2. `pmw_flow_state.position_y_world_cm`
+3. `pmw_flow_state.flow_position_x_world_cm`
+4. `pmw_flow_state.flow_position_y_world_cm`
+5. `pmw_flow_state.flow_delta_x_world_cm`
+6. `pmw_flow_state.flow_delta_y_world_cm`
+7. `pmw_flow_state.yaw_deg`
+8. `flow_position_valid`
+
+说明：`position_*_world_cm` 是原有“融合速度旋转到世界系后再积分”的位置；`flow_position_*_world_cm` 是新增“光流补偿后角位移 -> 单帧机体系位移 -> yaw 旋转 -> 世界系位移累加”的位置。两条路径并行存在，互不覆盖。

@@ -2,19 +2,19 @@
 #include "common/project_headfile.h"
 #include <math.h>
 
-#define ACC_MG_TO_MPS2              (9.81f / 1000.0f)
-#define ACC_VEL_MPS_TO_CMS          (100.0f)
-#define ACC_VEL_LEAK                (1.0f)
-#define ACC_VEL_DEADBAND_MG         (1.0f)
-#define ACC_VEL_GYRO_GATE_DPS       (100.0f)
-#define ACC_VEL_NORM_GATE_MG        (80.0f)
-#define ACC_VEL_MAX_INTEGRATE_MG    (30.0f)
-#define ACC_LEVEL_BIAS_FLASH_SECTOR (0U)
-#define ACC_LEVEL_BIAS_FLASH_PAGE   (12U)
-#define ACC_LEVEL_BIAS_FLASH_WORDS  (3U)
-#define ACC_LEVEL_BIAS_LIMIT_MG     (200.0f)
-#define ACC_LEVEL_BIAS_SAMPLE_HZ    (4000U)
-#define ACC_LEVEL_BIAS_SETTLE_MS    (1000U)
+#define ACC_MG_TO_MPS2              (9.81f / 1000.0f)  // mg -> m/s^2, 1000mg = 1g = 9.81m/s^2
+#define ACC_VEL_MPS_TO_CMS          (100.0f)           // m/s -> cm/s, velocity output X_V/Y_V uses cm/s
+#define ACC_VEL_LEAK                (0.99995f)         // velocity leak per 4kHz update, suppresses long-term drift but also attenuates real low speed
+#define ACC_VEL_DEADBAND_MG         (0.0f)             // horizontal acceleration deadband, |acc| below this value is treated as 0mg
+#define ACC_VEL_GYRO_GATE_DPS       (100.0f)           // skip velocity integration when any filtered gyro axis exceeds this rate
+#define ACC_VEL_NORM_GATE_MG        (1000.0f)          // skip integration when |acc_norm - 1000mg| exceeds this value
+#define ACC_VEL_MAX_INTEGRATE_MG    (300.0f)           // clamp horizontal acceleration before integration to limit velocity spikes
+#define ACC_LEVEL_BIAS_FLASH_SECTOR (0U)               // flash sector used to store leveled horizontal acceleration bias
+#define ACC_LEVEL_BIAS_FLASH_PAGE   (12U)              // flash page used to store leveled horizontal acceleration bias
+#define ACC_LEVEL_BIAS_FLASH_WORDS  (3U)               // stored words: magic + x bias + y bias
+#define ACC_LEVEL_BIAS_LIMIT_MG     (200.0f)           // reject stored/calibrated horizontal bias if magnitude is larger than this
+#define ACC_LEVEL_BIAS_SAMPLE_HZ    (4000U)            // acceleration bias calibration sample rate
+#define ACC_LEVEL_BIAS_SETTLE_MS    (1000U)            // wait time before sampling bias, lets attitude quaternion settle after reset
 
 // ==================== 全局变量定义 ====================
 #define sampleFreq  4000.0f         // 采样频率(赫兹)
@@ -726,10 +726,10 @@ void Update_Velocity_Estimate(void)
     float acc_norm_mg;
 
     /*
-     * Remove yaw from the attitude quaternion and only apply roll / pitch
-     * leveling. X_V / Y_V stay in heading-rotating horizontal axes.
+     * Velocity integration uses the raw accelerometer path here.
+     * Keep the filtered accelerometer only for attitude estimation.
      */
-    Body_To_RollPitch_Level_Frame(Roll_acc_F, Pitch_acc_F, Yaw_acc_F,
+    Body_To_RollPitch_Level_Frame(Roll_acc, Pitch_acc, Yaw_acc,
                                   &ax_level_mg, &ay_level_mg, &az_level_mg);
     (void)az_level_mg;
 
@@ -743,9 +743,9 @@ void Update_Velocity_Estimate(void)
         return;
     }
 
-    acc_norm_mg = sqrtf(Roll_acc_F * Roll_acc_F +
-                        Pitch_acc_F * Pitch_acc_F +
-                        Yaw_acc_F * Yaw_acc_F);
+    acc_norm_mg = sqrtf(Roll_acc * Roll_acc +
+                        Pitch_acc * Pitch_acc +
+                        Yaw_acc * Yaw_acc);
     if(fabsf(acc_norm_mg - 1000.0f) > ACC_VEL_NORM_GATE_MG)
     {
         return;

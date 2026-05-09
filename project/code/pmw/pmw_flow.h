@@ -34,6 +34,11 @@ typedef struct
     float velocity_y_world_cms;
     float position_x_world_cm;
     float position_y_world_cm;
+    float flow_delta_x_world_cm;
+    float flow_delta_y_world_cm;
+    float flow_position_x_world_cm;
+    float flow_position_y_world_cm;
+    uint8 flow_position_valid;
     float yaw_deg;
     float speed_cms;
 } PMWFlowState_t;
