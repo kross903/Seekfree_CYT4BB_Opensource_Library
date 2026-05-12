@@ -57,19 +57,19 @@ static inline void dshot_send_bit(gpio_pin_enum pin, uint8 bit)
         gpio_set_level(pin, 1);
         for(i = 0; i < 60; i++)
         {
-            __nop();
-            __nop();
-            __nop();
-            __nop();
+            __asm("NOP");
+            __asm("NOP");
+            __asm("NOP");
+            __asm("NOP");
         }
 
         gpio_set_level(pin, 0);
         for(i = 0; i < 20; i++)
         {
-            __nop();
-            __nop();
-            __nop();
-            __nop();
+            __asm("NOP");
+            __asm("NOP");
+            __asm("NOP");
+            __asm("NOP");
         }
     }
     else
@@ -78,19 +78,19 @@ static inline void dshot_send_bit(gpio_pin_enum pin, uint8 bit)
         gpio_set_level(pin, 1);
         for(i = 0; i < 30; i++)
         {
-            __nop();
-            __nop();
-            __nop();
-            __nop();
+            __asm("NOP");
+            __asm("NOP");
+            __asm("NOP");
+            __asm("NOP");
         }
 
         gpio_set_level(pin, 0);
         for(i = 0; i < 50; i++)
         {
-            __nop();
-            __nop();
-            __nop();
-            __nop();
+            __asm("NOP");
+            __asm("NOP");
+            __asm("NOP");
+            __asm("NOP");
         }
     }
 }
@@ -100,8 +100,8 @@ static inline void dshot_send_bit(gpio_pin_enum pin, uint8 bit)
 //-------------------------------------------------------------------------------------------------------------------
 static void dshot_send_packet(gpio_pin_enum pin, uint16 packet)
 {
-    // 关闭中断，确保时序准确
-    boolean cpu_sr = IfxCpu_disableInterrupts();
+    // 关闭中断，确保时序准确（CYT4BB ARM 接口）
+    uint32 cpu_sr = interrupt_global_disable();
 
     // 发送16位数据，从MSB开始
     for(int8 i = 15; i >= 0; i--)
@@ -110,7 +110,7 @@ static void dshot_send_packet(gpio_pin_enum pin, uint16 packet)
     }
 
     // 恢复中断
-    IfxCpu_restoreInterrupts(cpu_sr);
+    interrupt_global_enable(cpu_sr);
 }
 
 /*
@@ -124,12 +124,6 @@ void dshot_init(void)
     {
         gpio_init(motor_pins[i], GPO, 0, GPO_PUSH_PULL);
     }
-
-    // 初始化LED（可选，如果CPU1不需要可以注释掉）
-    gpio_init(LED1, GPO, GPIO_LOW, GPO_PUSH_PULL);
-    gpio_init(LED2, GPO, GPIO_LOW, GPO_PUSH_PULL);
-    gpio_init(LED3, GPO, GPIO_LOW, GPO_PUSH_PULL);
-    gpio_init(LED4, GPO, GPIO_LOW, GPO_PUSH_PULL);
 
     // 延时等待电调初始化
     system_delay_ms(100);
@@ -241,5 +235,5 @@ void dshot_set_armed(uint8 armed)
     {
         dshot_motor_stop_all();
     }
-    gpio_set_level(LED1, armed);
+    // LED 控制由上层（PIT_Demo / flight_control）统一管理
 }

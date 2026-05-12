@@ -23,8 +23,8 @@
 #define MOTOR_TEST_MAX_THROTTLE     450U
 #define MOTOR_TEST_STEP             50U
 
-#define SAFE_MAX_ANGLE_ROLL     40.0f
-#define SAFE_MAX_ANGLE_PITCH    40.0f
+#define SAFE_MAX_ANGLE_ROLL     30.0f
+#define SAFE_MAX_ANGLE_PITCH    30.0f
 #define SAFE_MAX_ANGLE_YAW      180.0f
 
 /*

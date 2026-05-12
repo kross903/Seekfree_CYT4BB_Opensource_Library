@@ -15,8 +15,10 @@
 #define MOTOR4_PIN              P05_3
 
 
-#define LED1                    P20_9
-#define LED2                    P20_8
+// CYT4BB GPIO 枚举中 P20 仅到 P20_3，P20_9/P20_8 不存在。
+// LED 引脚由上层主代码统一定义，DShot 驱动不再管理 LED。
+// #define LED1                 P20_9   // 无效，CYT4BB 不存在此引脚
+// #define LED2                 P20_8   // 无效，CYT4BB 不存在此引脚
 #define LED3                    P21_5
 #define LED4                    P21_4
 

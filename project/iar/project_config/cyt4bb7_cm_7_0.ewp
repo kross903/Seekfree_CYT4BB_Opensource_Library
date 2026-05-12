@@ -1154,6 +1154,12 @@
             <name>$PROJ_DIR$\..\..\code\vision\drone_ipm_embedded.c</name>
         </file>
         <file>
+            <name>$PROJ_DIR$\..\..\code\communication\dshot600.c</name>
+        </file>
+        <file>
+            <name>$PROJ_DIR$\..\..\code\communication\dshot600.h</name>
+        </file>
+        <file>
             <name>$PROJ_DIR$\..\..\code\control\flight_control.c</name>
         </file>
         <file>

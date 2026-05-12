@@ -801,11 +801,11 @@ void PIT_Control_Task_250us(void)
 
                 /* 速度→角 PID。Kp/Ki/Kd/output_limit/integral_limit 由 VOFA V/W 命令
                  * 或菜单 "Velocity PID" 组调，default 在 init_default_pid_parameters。 */
-                pitch_corr = PID_Calculate(&vel_pid_x,
+                pitch_corr = 0 * PID_Calculate(&vel_pid_x,
                                            g_velocity_loop_target_vx_cms,
                                            flow_snap.velocity_x_cms,
                                            CONTROL_DT_S);
-                roll_corr  = PID_Calculate(&vel_pid_y,
+                roll_corr  = 0 * PID_Calculate(&vel_pid_y,
                                            g_velocity_loop_target_vy_cms,
                                            flow_snap.velocity_y_cms,
                                            CONTROL_DT_S);
