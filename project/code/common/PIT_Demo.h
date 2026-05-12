@@ -10,6 +10,11 @@
  * 2. ??????????????????????
  */
 
+// ==================== 电机输出协议选择 ====================
+// 0 = 标准 PWM（旧电调，200Hz，计数器值 2000~4000）
+// 1 = DShot600（新电调，GPIO 模拟时序，值域 0 / 300~2047）
+#define MOTOR_OUTPUT_PROTOCOL       1
+
 // ==================== 安全限制参数 ====================
 #define MOTOR_OUTPUT_SCALE_MAX      2000U
 #define SAFE_MAX_MOTOR_OUTPUT_LIMIT MOTOR_OUTPUT_SCALE_MAX

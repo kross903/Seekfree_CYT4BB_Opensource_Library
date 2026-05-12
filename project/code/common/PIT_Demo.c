@@ -219,10 +219,14 @@ static void motor_pwm_init_once(void)
         return;
     }
 
+#if MOTOR_OUTPUT_PROTOCOL == 0
     pwm_init(MOTOR_PWM_CH1, MOTOR_PWM_FREQ_HZ, MOTOR_PWM_DUTY_MIN);
     pwm_init(MOTOR_PWM_CH2, MOTOR_PWM_FREQ_HZ, MOTOR_PWM_DUTY_MIN);
     pwm_init(MOTOR_PWM_CH3, MOTOR_PWM_FREQ_HZ, MOTOR_PWM_DUTY_MIN);
     pwm_init(MOTOR_PWM_CH4, MOTOR_PWM_FREQ_HZ, MOTOR_PWM_DUTY_MIN);
+#else
+    dshot_init();
+#endif
     motor_pwm_initialized = 1U;
 }
 
@@ -245,6 +249,24 @@ static uint16 throttle_to_pwm_duty(uint16 throttle)
 
     return (uint16)(MOTOR_PWM_DUTY_MIN + throttle);
 }
+
+#if MOTOR_OUTPUT_PROTOCOL == 1
+/*
+ * DShot600 值域映射
+ * motor_throttle[0, MOTOR_OUTPUT_SCALE_MAX] → DShot[0 / DSHOT_MIN_THROTTLE, DSHOT_MAX_THROTTLE]
+ * throttle == 0 时发送 DISARM(0)，否则线性映射到 300~2047。
+ */
+static uint16 throttle_to_dshot(uint16 throttle)
+{
+    if(throttle == 0U)
+    {
+        return DSHOT_DISARM;
+    }
+    return (uint16)(DSHOT_MIN_THROTTLE +
+                    (uint32)throttle * (DSHOT_MAX_THROTTLE - DSHOT_MIN_THROTTLE)
+                    / MOTOR_OUTPUT_SCALE_MAX);
+}
+#endif
 
 /*
  * 单电机硬件转速补偿钩子：MANUAL 和 ANGLE 两条路径写完 motor_throttle[] 后，
@@ -347,17 +369,30 @@ static void write_motor_pwm_output(void)
 {
     if(!armed && !motor_test_output_enabled)
     {
+#if MOTOR_OUTPUT_PROTOCOL == 0
         pwm_set_duty(MOTOR_PWM_CH1, MOTOR_PWM_DUTY_MIN);
         pwm_set_duty(MOTOR_PWM_CH2, MOTOR_PWM_DUTY_MIN);
         pwm_set_duty(MOTOR_PWM_CH3, MOTOR_PWM_DUTY_MIN);
         pwm_set_duty(MOTOR_PWM_CH4, MOTOR_PWM_DUTY_MIN);
+#else
+        dshot_set_all_throttle(0U, 0U, 0U, 0U);
+#endif
         return;
     }
 
+#if MOTOR_OUTPUT_PROTOCOL == 0
     pwm_set_duty(MOTOR_PWM_CH1, throttle_to_pwm_duty(apply_motor_hw_compensation(0U, motor_throttle[0])));
     pwm_set_duty(MOTOR_PWM_CH2, throttle_to_pwm_duty(apply_motor_hw_compensation(1U, motor_throttle[1])));
     pwm_set_duty(MOTOR_PWM_CH3, throttle_to_pwm_duty(apply_motor_hw_compensation(2U, motor_throttle[2])));
     pwm_set_duty(MOTOR_PWM_CH4, throttle_to_pwm_duty(apply_motor_hw_compensation(3U, motor_throttle[3])));
+#else
+    dshot_set_all_throttle(
+        throttle_to_dshot(apply_motor_hw_compensation(0U, motor_throttle[0])),
+        throttle_to_dshot(apply_motor_hw_compensation(1U, motor_throttle[1])),
+        throttle_to_dshot(apply_motor_hw_compensation(2U, motor_throttle[2])),
+        throttle_to_dshot(apply_motor_hw_compensation(3U, motor_throttle[3]))
+    );
+#endif
 }
 
 static uint8 check_attitude_safety(void)
