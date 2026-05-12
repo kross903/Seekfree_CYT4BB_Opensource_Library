@@ -151,7 +151,7 @@ uint8 Flight_Control_Is_Throttle_Safe(float throttle);
  * 阶段 1（3s）: 以 500Hz 采样 pitch/roll（每 8 次 250us 控制任务采一次），
  *               累加求均值，作为 "原始水平地面" 的目标姿态角。
  * 阶段 2（3s）: 自动解锁，将 target_angle_roll/pitch 保持为阶段 1 得到的均值，
- *               并把 base_throttle 在 3s 内线性从 0 ramp 到 1000。
+ *               并把 base_throttle 在 3s 内线性从 0 ramp 到 770。
  *
  * Start: 在角度模式、且流程未运行时才会接受；其他模式下返回 0 不生效。
  * Tick_250us: 必须每次 PIT_Control_Task_250us 调用一次；返回 1 表示流程激活，
@@ -161,7 +161,7 @@ uint8 Flight_Control_Is_Throttle_Safe(float throttle);
  */
 #define FLIGHT_TAKEOFF_CAPTURE_DURATION_S   3.0f
 #define FLIGHT_TAKEOFF_RAMP_DURATION_S      3.0f
-#define FLIGHT_TAKEOFF_RAMP_TARGET_THROTTLE 600.0f   // 内部范围 [0,2000]，600≈30% 油门；根据悬停实际重量微调
+#define FLIGHT_TAKEOFF_RAMP_TARGET_THROTTLE 770.0f   // 内部范围 [0,2000]，770≈38.5% 油门；根据悬停实际重量微调
 #define FLIGHT_TAKEOFF_SAMPLE_HZ            500U
 
 typedef enum

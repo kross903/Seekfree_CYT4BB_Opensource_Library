@@ -4,6 +4,7 @@
 
 extern float current_roll;
 extern float current_pitch;
+extern volatile uint8 armed;
 
 /* TOF_DT 对应 PIT_CH11 的周期（见 All_Init.c 里 TOF_UPDATE_PIT 的 pit_us_init）。
  * 轮询周期改成 10ms 后同步更新此处的差分步长。
@@ -14,8 +15,10 @@ extern float current_pitch;
 #define TOF_HEIGHT_LPF_ALPHA    0.2f
 #define TOF_VEL_LPF_ALPHA       0.3f
 
-/* 高度闭环目标高度 1.38m，以 cm 为单位用于 HeightPID。 */
-#define HEIGHT_TARGET_CM        138.0f
+/* 高度闭环目标高度，以 cm 为单位用于 HeightPID。 */
+#define HEIGHT_TARGET_CM        100.0f
+/* 高度环使能门限：实际高度与目标高度差值不超过此值才允许激活闭环（cm）。 */
+#define HEIGHT_LOOP_ENABLE_THRESHOLD_CM  50.0f
 #define TOF_VALID_MIN_M         0.05f
 #define TOF_VALID_MAX_M         4.0f
 #define TOF_JUMP_LIMIT_M        0.15f
@@ -27,6 +30,9 @@ PID_Controller HeightPID;
 
 float HeightSpeedPID_output = 0.0f;
 float tof_height_true_filt = 0.0f;
+
+/* 高度环使能锁存：一旦条件满足置1，disarm/复位前不再关闭，避免反复开关振荡。 */
+static uint8 s_height_loop_enabled = 0U;
 
 static float height_m = 0.0f;
 static float tof_height_m = 0.0f;
@@ -84,6 +90,7 @@ void HeightManager_Init(float initial_height_cm)
     tof_valid = 0;
     tof_filter_initialized = 0;
     tof_no_update_ticks = 0U;
+    s_height_loop_enabled = 0U;
 
     HeightSpeedPID_output = 0.0f;
     publish_height_result(initial_height_cm, 0.0f);
@@ -160,7 +167,49 @@ void HeightManager_Task_10ms(void)
         publish_height_result(tof_height_true_filt * 100.0f, 0.0f);
     }
 
-    /* Height loop disabled: keep ToF/height telemetry, but do not add throttle correction. */
-    HeightSpeedPID_output = 0.0f;
-    PID_Reset(&HeightPID);
+    /* 高度环条件门控：
+     * 1. ToF 必须有效（tof_valid）
+     * 2. armed 状态下，实际高度与目标高度差值首次进入 ±HEIGHT_LOOP_ENABLE_THRESHOLD_CM
+     *    时锁存使能，之后保持激活直到 disarm 或复位（HeightManager_Init）。
+     * 3. ToF 临时失效时输出清零、积分重置，但锁存不清除（恢复后继续闭环）。
+     */
+    if(!armed)
+    {
+        /* disarm：复位锁存，等待下次起飞重新触发 */
+        s_height_loop_enabled = 0U;
+        HeightSpeedPID_output = 0.0f;
+        PID_Reset(&HeightPID);
+        return;
+    }
+
+    if(!tof_valid)
+    {
+        /* 传感器失效：清零输出和积分，保留锁存状态 */
+        HeightSpeedPID_output = 0.0f;
+        PID_Reset(&HeightPID);
+        return;
+    }
+
+    {
+        float actual_cm = tof_height_true_filt * 100.0f;
+        float error_cm  = HEIGHT_TARGET_CM - actual_cm;
+        float abs_error = error_cm < 0.0f ? -error_cm : error_cm;
+
+        /* 首次满足条件才解锁（latch），满足后持续闭环 */
+        if(!s_height_loop_enabled)
+        {
+            if(abs_error <= HEIGHT_LOOP_ENABLE_THRESHOLD_CM)
+            {
+                s_height_loop_enabled = 1U;
+                PID_Reset(&HeightPID);   /* 首次激活时清积分，避免历史偏差冲量 */
+            }
+            else
+            {
+                HeightSpeedPID_output = 0.0f;
+                return;
+            }
+        }
+
+        HeightSpeedPID_output = PID_Calculate(&HeightPID, HEIGHT_TARGET_CM, actual_cm, TOF_DT);
+    }
 }

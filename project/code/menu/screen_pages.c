@@ -904,9 +904,9 @@ uint8 screen_monitor_handle_input(monitor_page_enum *page,
 {
     uint8 remote_exit_requested = core_link_user_consume_monitor_exit_request();
 
-    if(throttle_step < 100.0f)
+    if(throttle_step < 50.0f)
     {
-        throttle_step = 100.0f;
+        throttle_step = 50.0f;
     }
 
     if(page == NULL)

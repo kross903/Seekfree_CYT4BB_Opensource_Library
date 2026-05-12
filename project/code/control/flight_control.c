@@ -624,7 +624,7 @@ uint8 Flight_Takeoff_Tick_250us(void)
 
             if(g_takeoff_tick_in_state >= TAKEOFF_RAMP_TICKS)
             {
-                /* ramp 结束：保持飞机 armed，油门停在 1000，交还控制权给摇杆。 */
+                /* ramp 结束：保持飞机 armed，油门停在 720，交还控制权给摇杆。 */
                 takeoff_reset_state();
             }
             return 1U;

@@ -37,6 +37,9 @@ static void send_four_date(float date_1, float date_2, float date_3, float date_
  *   F7  ADC + 摇杆历史调试 (case 7)
  *   F8  光流速度闭环综合监视 (case 8): I0~I3 X轴 滤波前/后/目标/pitch修正,
  *                                       I4~I7 Y轴 滤波前/后/目标/roll 修正
+ * FD  高度环监视 (case 13): I0 实际高度(cm), I1 目标高度(cm),
+ *                                        I2 高度误差(cm), I3 HeightPID输出,
+ *                                        I4 比例项, I5 积分项, I6 微分项, I7 base_throttle
  */
 static int send_back_flag = 0;
 static uint8 send_back_command = 'R';
@@ -735,6 +738,8 @@ void USART_PID_Adjust(void)
                 case 'b': send_back_flag = 11; break;
                 case 'C':
                 case 'c': send_back_flag = 12; break;
+                case 'D':
+                case 'd': send_back_flag = 13; break;
                 default: break;
             }
 
@@ -938,6 +943,36 @@ void send_date_back(void)
                            pmw_flow_state.flow_delta_y_world_cm,
                            pmw_flow_state.yaw_deg,
                            (float)pmw_flow_state.flow_position_valid);
+            break;
+        }
+
+        case 13:
+        {
+            /* 高度环全要素监视。
+             * I0 实际高度 (cm)       - 滤波后高度
+             * I1 目标高度 (cm)       - HEIGHT_TARGET_CM = 100
+             * I2 高度误差 (cm)       - 目标 - 实际
+             * I3 HeightPID 整体输出  - HeightSpeedPID_output
+             * I4 比例项 (Kp * error) - HeightPID.Kp * (target - actual)
+             * I5 积分项              - HeightPID.Ki * HeightPID.integral
+             * I6 微分项              - HeightPID.Kd * HeightPID.derivative
+             * I7 base_throttle       - 当前基础油门，便于观察高度环修正幅度
+             */
+            float actual_cm  = tof_height_true_filt * 100.0f;
+            float target_cm  = 100.0f;   /* 和 HEIGHT_TARGET_CM 保持一致 */
+            float error_cm   = target_cm - actual_cm;
+            float p_term     = HeightPID.Kp * error_cm;
+            float i_term     = HeightPID.Ki * HeightPID.integral;
+            float d_term     = HeightPID.Kd * HeightPID.derivative;
+
+            send_four_date(actual_cm,
+                           target_cm,
+                           error_cm,
+                           HeightSpeedPID_output,
+                           p_term,
+                           i_term,
+                           d_term,
+                           base_throttle);
             break;
         }
 

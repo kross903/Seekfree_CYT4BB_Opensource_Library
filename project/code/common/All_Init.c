@@ -33,11 +33,11 @@ static void init_default_pid_parameters(void)
      *
      * Kp 项：|e|≈2.4cm 就单独顶到 300（125×2.4≈300），更靠近目标高度时即饱和，响应更激进。
      * Ki=0 时积分项不参与，integral_limit 仅作为兜底防止后续打开积分时窜飞。 */
-    PID_Init(&HeightPID, 150.0f, 0.0f, 0.0f, 300.0f, 50.0f, 10000.0f, 0.0f);
+    PID_Init(&HeightPID, 3.0f, 0.0f, 0.1f, 300.0f, 50.0f, 10000.0f, 0.3f);
 
     PID_Init(&angle_pid_roll,  2.67f, 0.0001f, 0.0f, 300.0f, 60000.0f, 10000.0f, 0.0f);
     PID_Init(&angle_pid_pitch, 2.67f, 0.0001f, 0.0f, 300.0f, 60000.0f, 10000.0f, 0.0f);
-    PID_Init(&angle_pid_yaw, 1.0f, 0.0f, 0.0f, 100.0f, 20.0f, 0.0f, 0.0f);
+    PID_Init(&angle_pid_yaw, 2.67f, 0.0f, 0.0f, 100.0f, 20.0f, 0.0f, 0.0f);
 
     /*
      * 光流速度闭环 PID @ 4kHz 控制环。
