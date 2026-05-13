@@ -201,7 +201,7 @@ static volatile uint8 g_velocity_loop_active         = 0U;  /* 上一拍是否�
 #define PMW_FLOW_TOF_SRC_LIVE           (1U)
 #define PMW_FLOW_TOF_SRC_HOLD           (2U)
 
-static volatile float g_pmw3901_tof_los_used_cm = 0.0f;
+static volatile float g_pmw3901_flow_height_used_cm = 0.0f;
 static volatile uint16 g_pmw3901_tof_stale_ticks = 0U;
 static volatile uint8 g_pmw3901_tof_source = PMW_FLOW_TOF_SRC_NONE;
 static float g_pmw3901_tof_last_valid_cm = 0.0f;
@@ -640,12 +640,13 @@ void PIT_PMW3901_Task_20ms(void)
 {
     static uint8 pmw3901_ready = 0;
     float tof_los_cm = 0.0f;
+    float flow_height_cm = 0.0f;
     uint8 tof_source = PMW_FLOW_TOF_SRC_NONE;
 
     if(!pmw3901_ready)
     {
         PMW_Flow_Reset();
-        g_pmw3901_tof_los_used_cm = 0.0f;
+        g_pmw3901_flow_height_used_cm = 0.0f;
         g_pmw3901_tof_stale_ticks = 0U;
         g_pmw3901_tof_source = PMW_FLOW_TOF_SRC_NONE;
         g_pmw3901_tof_last_valid_cm = 0.0f;
@@ -684,14 +685,21 @@ void PIT_PMW3901_Task_20ms(void)
         tof_source = PMW_FLOW_TOF_SRC_NONE;
     }
 
-    g_pmw3901_tof_los_used_cm = tof_los_cm;
+    if(tof_los_cm > 0.0f)
+    {
+        flow_height_cm = HeightManager_GetFlowHeightFromTofCm(tof_los_cm,
+                                                              current_roll,
+                                                              current_pitch);
+    }
+
+    g_pmw3901_flow_height_used_cm = flow_height_cm;
     g_pmw3901_tof_source = tof_source;
 
     PMW_Flow_UpdateSample(pmw3901_delta_x,
                           pmw3901_delta_y,
                           current_roll,
                           current_pitch,
-                          tof_los_cm,
+                          flow_height_cm,
                           PMW3901_SAMPLE_DT_S);
 }
 
@@ -929,13 +937,13 @@ void Velocity_Loop_Get_Diag(float *pitch_corr_deg,
 /*
  * 光流 ToF 容错诊断: 让上位机能直接看到当前 ToF 来自 sensor 还是 hold 缓存,
  * 以及失效连续了多少帧, 用于判断 dl1b 真实量程上限。
- *   tof_los_cm: 本帧实际喂给 PMW_Flow_UpdateSample 的 LOS (cm), 0 表示失效
+ *   tof_los_cm: 本帧实际喂给 PMW_Flow_UpdateSample 的光流安装点竖直高度 (cm), 0 表示失效
  *   stale_ticks: 连续未拿到新 ToF 的帧数 (20ms / 帧)
  *   source: PMW_FLOW_TOF_SRC_NONE / LIVE / HOLD
  */
 void PMW_Flow_Get_TOF_Status(float *tof_los_cm, uint16 *stale_ticks, uint8 *source)
 {
-    if(tof_los_cm   != NULL) *tof_los_cm   = g_pmw3901_tof_los_used_cm;
+    if(tof_los_cm   != NULL) *tof_los_cm   = g_pmw3901_flow_height_used_cm;
     if(stale_ticks  != NULL) *stale_ticks  = g_pmw3901_tof_stale_ticks;
     if(source       != NULL) *source       = g_pmw3901_tof_source;
 }

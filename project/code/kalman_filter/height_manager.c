@@ -24,6 +24,23 @@ extern volatile uint8 armed;
 #define TOF_JUMP_LIMIT_M        0.15f
 #define TOF_NO_UPDATE_TIMEOUT_TICKS  30U   /* 30 * 10ms = 300ms without a fresh sample -> invalid */
 
+/*
+ * ToF / optical-flow install compensation.
+ *
+ * Axis convention used here:
+ *   - Y is the body pitch axis.
+ *   - ToF is mounted at +Y from body center by 7cm.
+ *   - optical flow is mounted at -Y from body center by 7cm.
+ *   - ToF beam is tilted 10deg toward +Y.
+ *
+ * If flight-test shows the correction direction is opposite, change the sign of
+ * TOF_SENSOR_OFFSET_Y_CM / FLOW_SENSOR_OFFSET_Y_CM / TOF_SENSOR_TILT_Y_DEG only.
+ */
+#define TOF_SENSOR_OFFSET_Y_CM       (7.0f)
+#define FLOW_SENSOR_OFFSET_Y_CM      (-7.0f)
+#define TOF_SENSOR_TILT_Y_DEG        (10.0f)
+#define TOF_BEAM_VERTICAL_COS_MIN    (0.20f)
+
 HeightFusionResult_t g_height_result = {0};
 
 PID_Controller HeightPID;
@@ -49,14 +66,72 @@ static void publish_height_result(float height_cm, float velocity_cms)
     g_height_result.velocity_cms = velocity_cms;
 }
 
+static float body_y_down_offset_cm(float offset_y_cm, float roll_deg, float pitch_deg)
+{
+    float roll_rad = roll_deg * DEG2RAD;
+    float pitch_rad = pitch_deg * DEG2RAD;
+
+    return offset_y_cm * sinf(roll_rad) * cosf(pitch_rad);
+}
+
+static float tof_beam_vertical_projection(float roll_deg, float pitch_deg)
+{
+    float roll_rad = roll_deg * DEG2RAD;
+    float pitch_rad = pitch_deg * DEG2RAD;
+    float tilt_rad = TOF_SENSOR_TILT_Y_DEG * DEG2RAD;
+    float projection;
+
+    projection = cosf(pitch_rad) *
+                 (sinf(roll_rad) * sinf(tilt_rad) +
+                  cosf(roll_rad) * cosf(tilt_rad));
+
+    if(projection < TOF_BEAM_VERTICAL_COS_MIN)
+    {
+        projection = TOF_BEAM_VERTICAL_COS_MIN;
+    }
+
+    return projection;
+}
+
+float HeightManager_GetCenterHeightFromTofCm(float tof_los_cm, float roll_deg, float pitch_deg)
+{
+    float tof_vertical_cm;
+    float tof_down_offset_cm;
+    float center_height_cm;
+
+    if(tof_los_cm <= 0.0f)
+    {
+        return 0.0f;
+    }
+
+    tof_vertical_cm = tof_los_cm * tof_beam_vertical_projection(roll_deg, pitch_deg);
+    tof_down_offset_cm = body_y_down_offset_cm(TOF_SENSOR_OFFSET_Y_CM, roll_deg, pitch_deg);
+    center_height_cm = tof_vertical_cm + tof_down_offset_cm;
+
+    return center_height_cm > 0.0f ? center_height_cm : 0.0f;
+}
+
+float HeightManager_GetFlowHeightFromTofCm(float tof_los_cm, float roll_deg, float pitch_deg)
+{
+    float center_height_cm;
+    float flow_down_offset_cm;
+    float flow_height_cm;
+
+    center_height_cm = HeightManager_GetCenterHeightFromTofCm(tof_los_cm, roll_deg, pitch_deg);
+    flow_down_offset_cm = body_y_down_offset_cm(FLOW_SENSOR_OFFSET_Y_CM, roll_deg, pitch_deg);
+    flow_height_cm = center_height_cm - flow_down_offset_cm;
+
+    return flow_height_cm > 0.0f ? flow_height_cm : 0.0f;
+}
+
 static void update_tof_height_filter(void)
 {
-    float roll_rad = current_roll * DEG2RAD;
-    float pitch_rad = current_pitch * DEG2RAD;
-    float tilt_cos = cosf(roll_rad) * cosf(pitch_rad);
     float vel = 0.0f;
+    float tof_los_cm = tof_height_m * 100.0f;
 
-    tof_height_true_m = tof_height_m * tilt_cos;
+    tof_height_true_m = HeightManager_GetCenterHeightFromTofCm(tof_los_cm,
+                                                               current_roll,
+                                                               current_pitch) * 0.01f;
 
     if(!tof_filter_initialized)
     {
