@@ -35,8 +35,8 @@ static void send_four_date(float date_1, float date_2, float date_3, float date_
  *   F5  加速度原始/校准数据 (case 5)
  *   F6  Roll/Pitch 角度+角速度环监视 (case 6)
  *   F7  ADC + 摇杆历史调试 (case 7)
- *   F8  光流速度闭环综合监视 (case 8): I0~I3 X轴 滤波前/后/目标/pitch修正,
- *                                       I4~I7 Y轴 滤波前/后/目标/roll 修正
+ *   F8  光流速度闭环综合监视 (case 8): I0~I3 X轴 实际/目标/积分项/pitch修正,
+ *                                       I4~I7 Y轴 实际/目标/积分项/roll 修正
  * FD  高度环监视 (case 13): I0 实际高度(cm), I1 目标高度(cm),
  *                                        I2 高度误差(cm), I3 HeightPID输出,
  *                                        I4 比例项, I5 积分项, I6 微分项, I7 base_throttle
@@ -159,11 +159,11 @@ static void set_height_pid_value(uint8 item, float value)
 /*
  * VOFA 调参: 光流速度闭环 PID。
  *
- * axis = 0 → vel_pid_x (前向速度 vx_cms 反馈, 输出叠加到 pitch 修正)
- * axis = 1 → vel_pid_y (右向速度 vy_cms 反馈, 输出叠加到 roll  修正)
+ * axis = 0 → vel_pid_x (前向速度 vx_cms 反馈, 输出 ax_cmd_cms2)
+ * axis = 1 → vel_pid_y (右向速度 vy_cms 反馈, 输出 ay_cmd_cms2)
  *
  * item:
- *   '1' Kp, '2' Ki, '3' Kd, '4' output_limit (deg), '5' integral_limit
+ *   '1' Kp, '2' Ki, '3' Kd, '4' output_limit (cm/s^2), '5' integral_limit
  *
  * 上层在 USART_PID_Adjust 已经按命令字符 'V'/'W' 区分轴，避免与角度环 R/P/Y 混淆。
  */

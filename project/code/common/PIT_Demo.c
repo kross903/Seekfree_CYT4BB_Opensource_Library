@@ -435,6 +435,16 @@ static uint16 motor_output_safe_limit(float output)
     return (uint16)output;
 }
 
+static uint16 motor_output_flight_limit(float output, float common_throttle)
+{
+    if((armed != 0U) && (common_throttle >= SAFE_MIN_THROTTLE) && (output < SAFE_MIN_THROTTLE))
+    {
+        output = SAFE_MIN_THROTTLE;
+    }
+
+    return motor_output_safe_limit(output);
+}
+
 static void mix_motor_output(void)
 {
     uint8 i = 0U;
@@ -462,7 +472,7 @@ static void mix_motor_output(void)
 
     for(i = 0U; i < 4U; i++)
     {
-        motor_throttle[i] = motor_output_safe_limit(motor_output[i]);
+        motor_throttle[i] = motor_output_flight_limit(motor_output[i], thrust_base_comp);
     }
 }
 

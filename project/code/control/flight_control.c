@@ -575,6 +575,7 @@ uint8 Flight_Takeoff_Tick_250us(void)
                 /* Hover attitude target is true level, not the startup/ground attitude. */
                 g_takeoff_captured_roll  = 0.0f;
                 g_takeoff_captured_pitch = 0.0f;
+                target_angle_yaw = current_yaw;
 
                 /* 采样完成 -> 自动解锁并进入 ramp 阶段。Arm() 内部会重置所有 PID 与油门状态。 */
                 Flight_Runtime_Clear_Emergency_Stop_Latch();

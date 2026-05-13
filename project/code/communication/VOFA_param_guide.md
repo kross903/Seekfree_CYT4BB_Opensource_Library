@@ -133,29 +133,33 @@ S1=450!
 | `T2` | `T2=0.21!` | Pitch 补偿角 |
 | `T3` | `T3=0.00!` | Yaw 补偿角 |
 
-### 10. Roll 摇杆 PID
+### 10. X 方向速度环 PID
 
-命令前缀：`J`
+命令前缀：`V`
 
-| 参数 | 指令示例 | 含义 |
-|---|---|---|
-| `J1` | `J1=1.00!` | Roll 摇杆 PID `Kp` |
-| `J2` | `J2=0.00!` | Roll 摇杆 PID `Ki` |
-| `J3` | `J3=0.00!` | Roll 摇杆 PID `Kd` |
-| `J4` | `J4=20.0!` | Roll 摇杆 PID 输出限幅 `output_limit` |
-| `J5` | `J5=10.0!` | Roll 摇杆 PID 积分限幅 `integral_limit` |
-
-### 11. Pitch 摇杆 PID
-
-命令前缀：`K`
+`V` 组调 `vel_pid_x`，反馈量是光流解算的 `velocity_x_cms`，PID 输出是前后方向水平加速度指令 `ax_cmd_cms2`，再换算成 `pitch_corr_deg` 送入姿态环。
 
 | 参数 | 指令示例 | 含义 |
 |---|---|---|
-| `K1` | `K1=1.00!` | Pitch 摇杆 PID `Kp` |
-| `K2` | `K2=0.00!` | Pitch 摇杆 PID `Ki` |
-| `K3` | `K3=0.00!` | Pitch 摇杆 PID `Kd` |
-| `K4` | `K4=20.0!` | Pitch 摇杆 PID 输出限幅 `output_limit` |
-| `K5` | `K5=10.0!` | Pitch 摇杆 PID 积分限幅 `integral_limit` |
+| `V1` | `V1=1.70!` | X 速度环 `Kp` |
+| `V2` | `V2=0.00!` | X 速度环 `Ki` |
+| `V3` | `V3=0.00!` | X 速度环 `Kd` |
+| `V4` | `V4=85.0!` | X 速度环加速度指令限幅 `output_limit`，单位 `cm/s^2` |
+| `V5` | `V5=20.0!` | X 速度环积分限幅 `integral_limit` |
+
+### 11. Y 方向速度环 PID
+
+命令前缀：`W`
+
+`W` 组调 `vel_pid_y`，反馈量是光流解算的 `velocity_y_cms`，PID 输出是左右方向水平加速度指令 `ay_cmd_cms2`，再换算成 `roll_corr_deg` 送入姿态环。
+
+| 参数 | 指令示例 | 含义 |
+|---|---|---|
+| `W1` | `W1=1.70!` | Y 速度环 `Kp` |
+| `W2` | `W2=0.00!` | Y 速度环 `Ki` |
+| `W3` | `W3=0.00!` | Y 速度环 `Kd` |
+| `W4` | `W4=85.0!` | Y 速度环加速度指令限幅 `output_limit`，单位 `cm/s^2` |
+| `W5` | `W5=20.0!` | Y 速度环积分限幅 `integral_limit` |
 
 ## 非参数控制指令
 
@@ -224,8 +228,8 @@ S1=450!
 | `Y` | Yaw 姿态环 `Kp Ki Kd` |
 | `y` | Yaw 角速度环 `Kp Ki Kd` |
 | `H` | 高度环 `Kp Ki Kd` |
-| `J` | Roll 摇杆 PID `Kp Ki Kd OutLim IntLim` |
-| `K` | Pitch 摇杆 PID `Kp Ki Kd OutLim IntLim` |
+| `V` | X 方向速度环 `Kp Ki Kd OutLim IntLim` |
+| `W` | Y 方向速度环 `Kp Ki Kd OutLim IntLim` |
 | `S` | 当前目标油门 |
 | `T` | 特殊姿态/补偿调试数据 |
 
@@ -394,24 +398,24 @@ T2=0.21!
 T3=0.00!
 ```
 
-### 设置 Roll 摇杆 PID
+### 设置 X 方向速度环 PID
 
 ```text
-J1=1.00!
-J2=0.00!
-J3=0.00!
-J4=20.0!
-J5=10.0!
+V1=1.70!
+V2=0.00!
+V3=0.00!
+V4=85.0!
+V5=20.0!
 ```
 
-### 设置 Pitch 摇杆 PID
+### 设置 Y 方向速度环 PID
 
 ```text
-K1=1.00!
-K2=0.00!
-K3=0.00!
-K4=20.0!
-K5=10.0!
+W1=1.70!
+W2=0.00!
+W3=0.00!
+W4=85.0!
+W5=20.0!
 ```
 
 ### 切换回传模式

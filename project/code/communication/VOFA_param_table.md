@@ -86,32 +86,32 @@
 | 积分限幅 `integral_limit` | `50.0` | 当前未开放单独指令 |
 | 微分限幅 / 滤波参数 | `10000.0 / 0.0` | 不通过当前 VOFA 指令修改 |
 
-### 1.8 摇杆到姿态的 PID
+### 1.8 光流速度环 PID
 
-这组参数当前已经接入 VOFA 调参，但只覆盖 `Roll / Pitch` 两轴，**不控制 Yaw**。
+这组参数用于光流速度闭环。PID 输出不是角度，而是水平加速度指令，单位为 `cm/s^2`；控制代码再将其换算为 `pitch_corr_deg / roll_corr_deg`。
 
-| 参数 | Roll 默认值 | Pitch 默认值 |
+| 参数 | X 方向默认值 | Y 方向默认值 |
 |---|---:|---:|
-| `Kp` | `1.00` | `1.00` |
+| `Kp` | `1.70` | `1.70` |
 | `Ki` | `0.00` | `0.00` |
 | `Kd` | `0.00` | `0.00` |
-| 输出限幅 `output_limit` | `20.0` | `20.0` |
-| 积分限幅 `integral_limit` | `10.0` | `10.0` |
+| 输出限幅 `output_limit` | `85.0 cm/s^2` | `85.0 cm/s^2` |
+| 积分限幅 `integral_limit` | `20.0` | `20.0` |
 
 对应指令：
 
 | 轴 | 参数 | VOFA 指令 |
 |---|---|---|
-| Roll | `Kp` | `J1=<value>!` |
-| Roll | `Ki` | `J2=<value>!` |
-| Roll | `Kd` | `J3=<value>!` |
-| Roll | `output_limit` | `J4=<value>!` |
-| Roll | `integral_limit` | `J5=<value>!` |
-| Pitch | `Kp` | `K1=<value>!` |
-| Pitch | `Ki` | `K2=<value>!` |
-| Pitch | `Kd` | `K3=<value>!` |
-| Pitch | `output_limit` | `K4=<value>!` |
-| Pitch | `integral_limit` | `K5=<value>!` |
+| X 方向速度环 | `Kp` | `V1=<value>!` |
+| X 方向速度环 | `Ki` | `V2=<value>!` |
+| X 方向速度环 | `Kd` | `V3=<value>!` |
+| X 方向速度环 | `output_limit` | `V4=<value>!` |
+| X 方向速度环 | `integral_limit` | `V5=<value>!` |
+| Y 方向速度环 | `Kp` | `W1=<value>!` |
+| Y 方向速度环 | `Ki` | `W2=<value>!` |
+| Y 方向速度环 | `Kd` | `W3=<value>!` |
+| Y 方向速度环 | `output_limit` | `W4=<value>!` |
+| Y 方向速度环 | `integral_limit` | `W5=<value>!` |
 
 ## 2. 可通过 VOFA 调整的非 PID 参数
 
@@ -228,24 +228,24 @@ T2=0.21!
 T3=0.00!
 ```
 
-### 调 Roll 摇杆 PID
+### 调 X 方向速度环 PID
 
 ```text
-J1=1.00!
-J2=0.00!
-J3=0.00!
-J4=20.0!
-J5=10.0!
+V1=1.70!
+V2=0.00!
+V3=0.00!
+V4=85.0!
+V5=20.0!
 ```
 
-### 调 Pitch 摇杆 PID
+### 调 Y 方向速度环 PID
 
 ```text
-K1=1.00!
-K2=0.00!
-K3=0.00!
-K4=20.0!
-K5=10.0!
+W1=1.70!
+W2=0.00!
+W3=0.00!
+W4=85.0!
+W5=20.0!
 ```
 
 ### 设置油门
