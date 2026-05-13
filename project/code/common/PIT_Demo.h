@@ -185,7 +185,8 @@ extern PID_Controller vel_pid_y;
  *
  * 反馈源: PMW3901 + ToF 解算的机体水平速度 (velocity_x/y_cms, +x 前进, +y 右移)。
  * 控制器: 独立 PID vel_pid_x / vel_pid_y。
- * 输出  : 叠加到起飞采样得到的 captured_roll/pitch 上, 写入 target_angle_*。
+ * 输出  : 叠加到起飞基准 captured_roll/pitch 上, 写入 target_angle_*。
+ * Current takeoff base is fixed at 0deg/0deg.
  *
  * 默认关闭, 起飞与降落阶段 PID 保持 reset; 启用后若光流 invalid 自动退回锁基准角。
  */

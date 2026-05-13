@@ -16,7 +16,7 @@ extern volatile uint8 armed;
 #define TOF_VEL_LPF_ALPHA       0.3f
 
 /* 高度闭环目标高度，以 cm 为单位用于 HeightPID。 */
-#define HEIGHT_TARGET_CM        100.0f
+#define HEIGHT_TARGET_CM        140.0f
 /* 高度环使能门限：实际高度与目标高度差值不超过此值才允许激活闭环（cm）。 */
 #define HEIGHT_LOOP_ENABLE_THRESHOLD_CM  50.0f
 #define TOF_VALID_MIN_M         0.05f

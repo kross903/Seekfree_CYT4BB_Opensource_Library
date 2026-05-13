@@ -53,8 +53,8 @@ static void init_default_pid_parameters(void)
      *   - Ki/Kd 默认关，避免在 4kHz 控制环里 Ki 过快窜飞 (反馈本身只有 50Hz 更新)
      *   - Kp/Ki/Kd/output_limit/integral_limit 后续可由 VOFA V/W 命令或菜单"Velocity PID"组细调
      */
-    PID_Init(&vel_pid_x, 0.05f, 0.0f, 0.0f, 5.0f, 2.0f, 0.0f, 0.0f);
-    PID_Init(&vel_pid_y, 0.05f, 0.0f, 0.0f, 5.0f, 2.0f, 0.0f, 0.0f);
+    PID_Init(&vel_pid_x, 1.7f, 0.0f, 0.0f, 85.0f, 20.0f, 0.0f, 0.0f);
+    PID_Init(&vel_pid_y, 1.7f, 0.0f, 0.0f, 85.0f, 20.0f, 0.0f, 0.0f);
 }
 
 static void init_runtime_modules(void)

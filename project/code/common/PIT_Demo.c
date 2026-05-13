@@ -14,6 +14,8 @@
 #define THROTTLE_RAMP_RATE             2.0f
 #define CONTROL_DT_S                   0.00025f
 #define CONTROL_DT_MS                  0.25f
+#define VEL_LOOP_GRAVITY_CMS2          981.0f
+#define TILT_THRUST_COMP_MAX           1.30f
 
 /*
  * 硬件转速补偿：motor 1 / 3 / 4 实测转速偏弱，在最终 PWM 指令上按各自系数乘以抵消。
@@ -37,16 +39,17 @@
  * （单位 cm/s，约定: +x 机体前进，+y 机体右移；见 pmw_flow.c 注释）。
  *
  * 控制器使用独立 PID:
- *   vel_pid_x → pitch 修正 (前向速度环)
- *   vel_pid_y → roll  修正 (侧向速度环)
- * 输出再叠加到起飞采样得到的 captured_roll/pitch 上作为最终 target_angle_*。
+ *   vel_pid_x → 水平前向加速度指令 ax_cmd (cm/s^2)
+ *   vel_pid_y → 水平右向加速度指令 ay_cmd (cm/s^2)
+ * 再按小角度近似 a≈g*theta 换算成 pitch/roll 修正角后叠加到起飞基准上。
+ * Current takeoff base is fixed at 0deg/0deg and is no longer learned from startup attitude.
  *
  * 极性宏用于一键修正机/IMU 安装方向带来的符号问题：
  *   pitch 正 = 低头（机体加速向前），所以 v_body_x>0 应让 pitch 减小。
  *   PID 输出本身已经是 -Kp*v_body_x（误差为 0-vx），符号已正确，
  *   PITCH_SIGN 默认 +1.0 即可；若硬件实际相反，改成 -1.0。
  *
- * Velocity correction magnitude is limited only by vel_pid_x/y.output_limit.
+ * Velocity acceleration command magnitude is limited only by vel_pid_x/y.output_limit.
  */
 #define VEL_LOOP_PITCH_SIGN            (+1.0f)
 #define VEL_LOOP_ROLL_SIGN             (+1.0f)
@@ -433,11 +436,27 @@ static uint16 motor_output_safe_limit(float output)
 static void mix_motor_output(void)
 {
     uint8 i = 0U;
+    float roll_rad;
+    float pitch_rad;
+    float tilt_cos;
+    float thrust_base;
+    float thrust_base_comp;
 
-    motor_output[3] = HeightSpeedPID_output + base_throttle + roll_output + pitch_output - yaw_output;
-    motor_output[2] = HeightSpeedPID_output + base_throttle + roll_output - pitch_output + yaw_output;
-    motor_output[1] = HeightSpeedPID_output + base_throttle - roll_output + pitch_output + yaw_output;
-    motor_output[0] = HeightSpeedPID_output + base_throttle - roll_output - pitch_output - yaw_output;
+    roll_rad = current_roll * DEG2RAD;
+    pitch_rad = current_pitch * DEG2RAD;
+    tilt_cos = cosf(roll_rad) * cosf(pitch_rad);
+    if(tilt_cos < (1.0f / TILT_THRUST_COMP_MAX))
+    {
+        tilt_cos = (1.0f / TILT_THRUST_COMP_MAX);
+    }
+
+    thrust_base = HeightSpeedPID_output + base_throttle;
+    thrust_base_comp = thrust_base / tilt_cos;
+
+    motor_output[3] = thrust_base_comp + roll_output + pitch_output - yaw_output;
+    motor_output[2] = thrust_base_comp + roll_output - pitch_output + yaw_output;
+    motor_output[1] = thrust_base_comp - roll_output + pitch_output + yaw_output;
+    motor_output[0] = thrust_base_comp - roll_output - pitch_output - yaw_output;
 
     for(i = 0U; i < 4U; i++)
     {
@@ -755,6 +774,7 @@ void PIT_Control_Task_250us(void)
 
     if(!takeoff_active)
     {
+        /* Cruise branch uses a fixed 0deg/0deg takeoff base. */
         throttle_ramp(target_throttle, &current_throttle, THROTTLE_RAMP_RATE, CONTROL_DT_MS);
         base_throttle = current_throttle;
     }
@@ -804,19 +824,27 @@ void PIT_Control_Task_250us(void)
 
             if(flow_snap.valid)
             {
+                float ax_cmd_cms2;
+                float ay_cmd_cms2;
                 float pitch_corr;
                 float roll_corr;
 
-                /* 速度→角 PID。Kp/Ki/Kd/output_limit/integral_limit 由 VOFA V/W 命令
-                 * 或菜单 "Velocity PID" 组调，default 在 init_default_pid_parameters。 */
-                pitch_corr = 0 * PID_Calculate(&vel_pid_x,
-                                           g_velocity_loop_target_vx_cms,
-                                           flow_snap.velocity_x_cms,
-                                           CONTROL_DT_S);
-                roll_corr  = 0 * PID_Calculate(&vel_pid_y,
-                                           g_velocity_loop_target_vy_cms,
-                                           flow_snap.velocity_y_cms,
-                                           CONTROL_DT_S);
+                /* Velocity PID now outputs desired horizontal acceleration in cm/s^2. */
+                ax_cmd_cms2 = PID_Calculate(&vel_pid_x,
+                                            g_velocity_loop_target_vx_cms,
+                                            flow_snap.velocity_x_cms,
+                                            CONTROL_DT_S);
+                ay_cmd_cms2 = PID_Calculate(&vel_pid_y,
+                                            g_velocity_loop_target_vy_cms,
+                                            flow_snap.velocity_y_cms,
+                                            CONTROL_DT_S);
+
+                /* Small-angle approximation near hover:
+                 *   ax ≈ -g * pitch  -> pitch ≈ -ax / g
+                 *   ay ≈  g * roll   -> roll  ≈  ay / g
+                 */
+                pitch_corr = -(ax_cmd_cms2 / VEL_LOOP_GRAVITY_CMS2) * RAD2DEG;
+                roll_corr  =  (ay_cmd_cms2 / VEL_LOOP_GRAVITY_CMS2) * RAD2DEG;
 
                 pitch_corr *= VEL_LOOP_PITCH_SIGN;
                 roll_corr  *= VEL_LOOP_ROLL_SIGN;

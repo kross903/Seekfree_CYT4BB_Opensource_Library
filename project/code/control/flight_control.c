@@ -495,8 +495,6 @@ uint8 Flight_Control_Is_Throttle_Safe(float throttle)
 static volatile flight_takeoff_state_enum g_takeoff_state = FLIGHT_TAKEOFF_IDLE;
 static volatile uint32 g_takeoff_tick_in_state = 0U;
 static volatile uint32 g_takeoff_sample_count = 0U;
-static volatile float  g_takeoff_roll_sum = 0.0f;
-static volatile float  g_takeoff_pitch_sum = 0.0f;
 static volatile float  g_takeoff_captured_roll = 0.0f;
 static volatile float  g_takeoff_captured_pitch = 0.0f;
 
@@ -505,14 +503,16 @@ static void takeoff_reset_state(void)
     g_takeoff_state = FLIGHT_TAKEOFF_IDLE;
     g_takeoff_tick_in_state = 0U;
     g_takeoff_sample_count = 0U;
-    g_takeoff_roll_sum = 0.0f;
-    g_takeoff_pitch_sum = 0.0f;
 }
 
 uint8 Flight_Takeoff_Start(void)
 {
     /* 仅在角度闭环模式、且流程处于 IDLE 时才接受启动。 */
     if(control_mode != CONTROL_MODE_ANGLE)
+    {
+        return 0U;
+    }
+    if(armed)
     {
         return 0U;
     }
@@ -524,8 +524,6 @@ uint8 Flight_Takeoff_Start(void)
     /* 进入采样阶段前保持当前 disarmed 状态，避免电机输出。 */
     g_takeoff_tick_in_state = 0U;
     g_takeoff_sample_count = 0U;
-    g_takeoff_roll_sum = 0.0f;
-    g_takeoff_pitch_sum = 0.0f;
     g_takeoff_captured_roll = 0.0f;
     g_takeoff_captured_pitch = 0.0f;
     g_takeoff_state = FLIGHT_TAKEOFF_CAPTURE;
@@ -565,20 +563,18 @@ uint8 Flight_Takeoff_Tick_250us(void)
     {
         case FLIGHT_TAKEOFF_CAPTURE:
         {
-            /* 500Hz 采样：每 TAKEOFF_SAMPLE_DIVIDER 个 250us tick 取一次样本。 */
+            /* Keep the pre-takeoff wait duration, but do not learn a hover attitude from the ground pose. */
             if((g_takeoff_tick_in_state % TAKEOFF_SAMPLE_DIVIDER) == 0U)
             {
-                g_takeoff_roll_sum  += current_roll;
-                g_takeoff_pitch_sum += current_pitch;
                 g_takeoff_sample_count++;
             }
             g_takeoff_tick_in_state++;
 
             if(g_takeoff_sample_count >= TAKEOFF_CAPTURE_SAMPLES)
             {
-                float n = (float)g_takeoff_sample_count;
-                g_takeoff_captured_roll  = g_takeoff_roll_sum  / n;
-                g_takeoff_captured_pitch = g_takeoff_pitch_sum / n;
+                /* Hover attitude target is true level, not the startup/ground attitude. */
+                g_takeoff_captured_roll  = 0.0f;
+                g_takeoff_captured_pitch = 0.0f;
 
                 /* 采样完成 -> 自动解锁并进入 ramp 阶段。Arm() 内部会重置所有 PID 与油门状态。 */
                 Flight_Runtime_Clear_Emergency_Stop_Latch();
