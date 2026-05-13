@@ -178,6 +178,8 @@ static volatile float g_velocity_loop_pitch_corr_deg = 0.0f;
 static volatile float g_velocity_loop_roll_corr_deg  = 0.0f;
 static volatile float g_velocity_loop_fb_vx_cms      = 0.0f;
 static volatile float g_velocity_loop_fb_vy_cms      = 0.0f;
+static volatile float g_velocity_loop_x_i_out        = 0.0f;
+static volatile float g_velocity_loop_y_i_out        = 0.0f;
 static volatile uint8 g_velocity_loop_active         = 0U;  /* 上一拍是否真的喂了光流速度 */
 
 /*
@@ -852,6 +854,8 @@ void PIT_Control_Task_250us(void)
                 target_angle_pitch = captured_pitch + pitch_corr;
                 target_angle_roll  = captured_roll  + roll_corr;
 
+                g_velocity_loop_x_i_out        = vel_pid_x.Ki * vel_pid_x.integral;
+                g_velocity_loop_y_i_out        = vel_pid_y.Ki * vel_pid_y.integral;
                 g_velocity_loop_pitch_corr_deg = pitch_corr;
                 g_velocity_loop_roll_corr_deg  = roll_corr;
                 g_velocity_loop_fb_vx_cms      = flow_snap.velocity_x_cms;
@@ -865,6 +869,8 @@ void PIT_Control_Task_250us(void)
                 target_angle_pitch = captured_pitch;
                 PID_Reset(&vel_pid_x);
                 PID_Reset(&vel_pid_y);
+                g_velocity_loop_x_i_out        = 0.0f;
+                g_velocity_loop_y_i_out        = 0.0f;
                 g_velocity_loop_pitch_corr_deg = 0.0f;
                 g_velocity_loop_roll_corr_deg  = 0.0f;
             }
@@ -875,6 +881,8 @@ void PIT_Control_Task_250us(void)
             target_angle_pitch = captured_pitch;
             PID_Reset(&vel_pid_x);
             PID_Reset(&vel_pid_y);
+            g_velocity_loop_x_i_out        = 0.0f;
+            g_velocity_loop_y_i_out        = 0.0f;
             g_velocity_loop_pitch_corr_deg = 0.0f;
             g_velocity_loop_roll_corr_deg  = 0.0f;
         }
@@ -920,6 +928,8 @@ void Velocity_Loop_Set_Enabled(uint8 enabled)
     {
         g_velocity_loop_enabled = 0U;
         /* 立即清掉诊断量，避免上位机看到残留值。PID_Reset 留给控制 tick 自己做。 */
+        g_velocity_loop_x_i_out        = 0.0f;
+        g_velocity_loop_y_i_out        = 0.0f;
         g_velocity_loop_pitch_corr_deg = 0.0f;
         g_velocity_loop_roll_corr_deg  = 0.0f;
         g_velocity_loop_active = 0U;
@@ -953,12 +963,16 @@ void Velocity_Loop_Get_Diag(float *pitch_corr_deg,
                             float *roll_corr_deg,
                             float *fb_vx_cms,
                             float *fb_vy_cms,
+                            float *x_i_out,
+                            float *y_i_out,
                             uint8 *active)
 {
     if(pitch_corr_deg != NULL) *pitch_corr_deg = g_velocity_loop_pitch_corr_deg;
     if(roll_corr_deg  != NULL) *roll_corr_deg  = g_velocity_loop_roll_corr_deg;
     if(fb_vx_cms      != NULL) *fb_vx_cms      = g_velocity_loop_fb_vx_cms;
     if(fb_vy_cms      != NULL) *fb_vy_cms      = g_velocity_loop_fb_vy_cms;
+    if(x_i_out        != NULL) *x_i_out        = g_velocity_loop_x_i_out;
+    if(y_i_out        != NULL) *y_i_out        = g_velocity_loop_y_i_out;
     if(active         != NULL) *active         = g_velocity_loop_active;
 }
 

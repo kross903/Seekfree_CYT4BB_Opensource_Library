@@ -198,6 +198,8 @@ void  Velocity_Loop_Get_Diag(float *pitch_corr_deg,
                              float *roll_corr_deg,
                              float *fb_vx_cms,
                              float *fb_vy_cms,
+                             float *x_i_out,
+                             float *y_i_out,
                              uint8 *active);
 
 /* 光流 ToF 容错状态诊断 (PIT_PMW3901_Task_20ms 内部维护).

@@ -844,14 +844,9 @@ void send_date_back(void)
         case 8:
         {
             /*
-             * F8 - 光流速度闭环综合监视。
-             * 左半 (I0~I3) X 轴: 滤波前 / 滤波后 / 目标 / 输出去 pitch 的修正角；
-             * 右半 (I4~I7) Y 轴: 滤波前 / 滤波后 / 目标 / 输出去 roll  的修正角。
-             *
-             * 滤波前 = velocity_*_raw_cms（已含旋转补偿 + 1/cos 投影，未过 LPF / 倾角门 / 离群剔除）
-             * 滤波后 = velocity_*_cms（控制环实际反馈用的最终值）
-             * 目标   = Velocity_Loop 当前目标速度（默认 0 = 悬停定点）
-             * 修正角 = 速度环 PID 输出乘符号后的实际叠加值
+             * F8 - 速度环监视。
+             * 左半 (I0~I3) X 轴: 实际速度 / 目标速度 / 积分输出 / 总输出；
+             * 右半 (I4~I7) Y 轴: 实际速度 / 目标速度 / 积分输出 / 总输出。
              */
             PMWFlowState_t pmw_flow_state = {0};
             float vx_target_cms = 0.0f;
@@ -860,19 +855,22 @@ void send_date_back(void)
             float roll_corr_deg = 0.0f;
             float fb_vx_cms = 0.0f;
             float fb_vy_cms = 0.0f;
+            float x_i_out = 0.0f;
+            float y_i_out = 0.0f;
 
             PMW_Flow_GetState(&pmw_flow_state);
             Velocity_Loop_Get_Target_Velocity(&vx_target_cms, &vy_target_cms);
             Velocity_Loop_Get_Diag(&pitch_corr_deg, &roll_corr_deg,
-                                   &fb_vx_cms, &fb_vy_cms, NULL);
+                                   &fb_vx_cms, &fb_vy_cms,
+                                   &x_i_out, &y_i_out, NULL);
 
-            send_four_date(pmw_flow_state.velocity_x_raw_cms,
-                           pmw_flow_state.velocity_x_cms,
+            send_four_date(fb_vx_cms,
                            vx_target_cms,
+                           x_i_out,
                            pitch_corr_deg,
-                           pmw_flow_state.velocity_y_raw_cms,
-                           pmw_flow_state.velocity_y_cms,
+                           fb_vy_cms,
                            vy_target_cms,
+                           y_i_out,
                            roll_corr_deg);
             break;
         }
@@ -959,8 +957,16 @@ void send_date_back(void)
              * I7 base_throttle       - 当前基础油门，便于观察高度环修正幅度
              */
             float actual_cm  = tof_height_true_filt * 100.0f;
-            float target_cm  = 100.0f;   /* 和 HEIGHT_TARGET_CM 保持一致 */
+            float target_cm  = HeightManager_Get_Active_Target();
             float error_cm   = target_cm - actual_cm;
+            if(error_cm > 40.0f)
+            {
+                error_cm = 40.0f;
+            }
+            else if(error_cm < -40.0f)
+            {
+                error_cm = -40.0f;
+            }
             float p_term     = HeightPID.Kp * error_cm;
             float i_term     = HeightPID.Ki * HeightPID.integral;
             float d_term     = HeightPID.Kd * HeightPID.derivative;

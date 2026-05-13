@@ -16,7 +16,10 @@ extern volatile uint8 armed;
 #define TOF_VEL_LPF_ALPHA       0.3f
 
 /* 高度闭环目标高度，以 cm 为单位用于 HeightPID。 */
-#define HEIGHT_TARGET_CM        140.0f
+#define HEIGHT_TARGET_DEFAULT_CM       140.0f
+#define HEIGHT_TARGET_START_CM         50.0f
+#define HEIGHT_TARGET_ERROR_LIMIT_CM   40.0f
+#define HEIGHT_TARGET_RAMP_DURATION_S  3.0f
 /* 高度环使能门限：实际高度与目标高度差值不超过此值才允许激活闭环（cm）。 */
 #define HEIGHT_LOOP_ENABLE_THRESHOLD_CM  50.0f
 #define TOF_VALID_MIN_M         0.05f
@@ -47,6 +50,7 @@ PID_Controller HeightPID;
 
 float HeightSpeedPID_output = 0.0f;
 float tof_height_true_filt = 0.0f;
+float g_height_target_cm = HEIGHT_TARGET_DEFAULT_CM;
 
 /* 高度环使能锁存：一旦条件满足置1，disarm/复位前不再关闭，避免反复开关振荡。 */
 static uint8 s_height_loop_enabled = 0U;
@@ -59,11 +63,38 @@ static float tof_vel_mps_filt = 0.0f;
 static uint8 tof_valid = 0;
 static uint8 tof_filter_initialized = 0;
 static uint16 tof_no_update_ticks = 0U;
+static uint8 s_height_takeoff_target_active = 0U;
+static float s_height_takeoff_target_cm = HEIGHT_TARGET_START_CM;
+static float s_height_takeoff_target_step_cm = 0.0f;
 
 static void publish_height_result(float height_cm, float velocity_cms)
 {
     g_height_result.height_cm = height_cm;
     g_height_result.velocity_cms = velocity_cms;
+}
+
+void HeightManager_Set_Target(float target_cm)
+{
+    if(target_cm < TOF_VALID_MIN_M * 100.0f)
+    {
+        target_cm = TOF_VALID_MIN_M * 100.0f;
+    }
+    else if(target_cm > TOF_VALID_MAX_M * 100.0f)
+    {
+        target_cm = TOF_VALID_MAX_M * 100.0f;
+    }
+
+    g_height_target_cm = target_cm;
+}
+
+float HeightManager_Get_Target(void)
+{
+    return g_height_target_cm;
+}
+
+float HeightManager_Get_Active_Target(void)
+{
+    return s_height_takeoff_target_active ? s_height_takeoff_target_cm : g_height_target_cm;
 }
 
 static float body_y_down_offset_cm(float offset_y_cm, float roll_deg, float pitch_deg)
@@ -166,8 +197,12 @@ void HeightManager_Init(float initial_height_cm)
     tof_filter_initialized = 0;
     tof_no_update_ticks = 0U;
     s_height_loop_enabled = 0U;
+    s_height_takeoff_target_active = 0U;
+    s_height_takeoff_target_cm = HEIGHT_TARGET_START_CM;
+    s_height_takeoff_target_step_cm = 0.0f;
 
     HeightSpeedPID_output = 0.0f;
+    HeightManager_Set_Target(HEIGHT_TARGET_DEFAULT_CM);
     publish_height_result(initial_height_cm, 0.0f);
 }
 
@@ -252,6 +287,8 @@ void HeightManager_Task_10ms(void)
     {
         /* disarm：复位锁存，等待下次起飞重新触发 */
         s_height_loop_enabled = 0U;
+        s_height_takeoff_target_active = 0U;
+        s_height_takeoff_target_cm = HEIGHT_TARGET_START_CM;
         HeightSpeedPID_output = 0.0f;
         PID_Reset(&HeightPID);
         return;
@@ -267,24 +304,53 @@ void HeightManager_Task_10ms(void)
 
     {
         float actual_cm = tof_height_true_filt * 100.0f;
-        float error_cm  = HEIGHT_TARGET_CM - actual_cm;
-        float abs_error = error_cm < 0.0f ? -error_cm : error_cm;
+        float target_cm = g_height_target_cm;
+        float error_cm = 0.0f;
 
-        /* 首次满足条件才解锁（latch），满足后持续闭环 */
-        if(!s_height_loop_enabled)
+        if(base_throttle < FLIGHT_TAKEOFF_RAMP_TARGET_THROTTLE)
         {
-            if(abs_error <= HEIGHT_LOOP_ENABLE_THRESHOLD_CM)
-            {
-                s_height_loop_enabled = 1U;
-                PID_Reset(&HeightPID);   /* 首次激活时清积分，避免历史偏差冲量 */
-            }
-            else
-            {
-                HeightSpeedPID_output = 0.0f;
-                return;
-            }
+            s_height_loop_enabled = 0U;
+            s_height_takeoff_target_active = 0U;
+            s_height_takeoff_target_cm = HEIGHT_TARGET_START_CM;
+            HeightSpeedPID_output = 0.0f;
+            PID_Reset(&HeightPID);
+            return;
         }
 
-        HeightSpeedPID_output = PID_Calculate(&HeightPID, HEIGHT_TARGET_CM, actual_cm, TOF_DT);
+        if(!s_height_loop_enabled)
+        {
+            s_height_loop_enabled = 1U;
+            s_height_takeoff_target_active = 1U;
+            s_height_takeoff_target_cm = HEIGHT_TARGET_START_CM;
+            s_height_takeoff_target_step_cm = (g_height_target_cm - HEIGHT_TARGET_START_CM) /
+                                              (HEIGHT_TARGET_RAMP_DURATION_S / TOF_DT);
+            PID_Reset(&HeightPID);
+        }
+
+        if(s_height_takeoff_target_active)
+        {
+            s_height_takeoff_target_cm += s_height_takeoff_target_step_cm;
+
+            if((s_height_takeoff_target_step_cm >= 0.0f && s_height_takeoff_target_cm >= g_height_target_cm) ||
+               (s_height_takeoff_target_step_cm < 0.0f && s_height_takeoff_target_cm <= g_height_target_cm))
+            {
+                s_height_takeoff_target_cm = g_height_target_cm;
+                s_height_takeoff_target_active = 0U;
+            }
+
+            target_cm = s_height_takeoff_target_cm;
+        }
+
+        error_cm = target_cm - actual_cm;
+        if(error_cm > HEIGHT_TARGET_ERROR_LIMIT_CM)
+        {
+            error_cm = HEIGHT_TARGET_ERROR_LIMIT_CM;
+        }
+        else if(error_cm < -HEIGHT_TARGET_ERROR_LIMIT_CM)
+        {
+            error_cm = -HEIGHT_TARGET_ERROR_LIMIT_CM;
+        }
+
+        HeightSpeedPID_output = PID_Calculate(&HeightPID, actual_cm + error_cm, actual_cm, TOF_DT);
     }
 }

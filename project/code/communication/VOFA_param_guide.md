@@ -319,17 +319,17 @@ S1=450!
 7. `target_angle_roll`
 8. `target_angle_pitch`
 
-### `F8`：光流速度闭环综合监视
+### `F8`：速度环监视
 
 返回顺序：
 
-1. `pmw_flow_state.velocity_x_raw_cms`
-2. `pmw_flow_state.velocity_x_cms`
-3. `vx_target_cms`
+1. `fb_vx_cms`
+2. `vx_target_cms`
+3. `x_i_out`
 4. `pitch_corr_deg`
-5. `pmw_flow_state.velocity_y_raw_cms`
-6. `pmw_flow_state.velocity_y_cms`
-7. `vy_target_cms`
+5. `fb_vy_cms`
+6. `vy_target_cms`
+7. `y_i_out`
 8. `roll_corr_deg`
 
 ### `F9`：加速度积分速度与光流速度对比
