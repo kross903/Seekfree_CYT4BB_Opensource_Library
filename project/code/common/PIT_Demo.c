@@ -834,21 +834,21 @@ void PIT_Control_Task_250us(void)
             PMWFlowState_t flow_snap;
             PMW_Flow_GetState(&flow_snap);
 
-            if(flow_snap.valid)
+            if(flow_snap.valid && (flow_snap.flow_used || flow_snap.acc_used))
             {
                 float ax_cmd_cms2;
                 float ay_cmd_cms2;
                 float pitch_corr;
                 float roll_corr;
 
-                /* Velocity PID now outputs desired horizontal acceleration in cm/s^2. */
+                /* Velocity PID feedback uses the PMW flow / horizontal-acc fused velocity. */
                 ax_cmd_cms2 = PID_Calculate(&vel_pid_x,
                                             g_velocity_loop_target_vx_cms,
-                                            flow_snap.velocity_x_cms,
+                                            flow_snap.velocity_x_fused_cms,
                                             CONTROL_DT_S);
                 ay_cmd_cms2 = PID_Calculate(&vel_pid_y,
                                             g_velocity_loop_target_vy_cms,
-                                            flow_snap.velocity_y_cms,
+                                            flow_snap.velocity_y_fused_cms,
                                             CONTROL_DT_S);
 
                 /* Small-angle approximation near hover:
@@ -868,8 +868,8 @@ void PIT_Control_Task_250us(void)
                 g_velocity_loop_y_i_out        = vel_pid_y.Ki * vel_pid_y.integral;
                 g_velocity_loop_pitch_corr_deg = pitch_corr;
                 g_velocity_loop_roll_corr_deg  = roll_corr;
-                g_velocity_loop_fb_vx_cms      = flow_snap.velocity_x_cms;
-                g_velocity_loop_fb_vy_cms      = flow_snap.velocity_y_cms;
+                g_velocity_loop_fb_vx_cms      = flow_snap.velocity_x_fused_cms;
+                g_velocity_loop_fb_vy_cms      = flow_snap.velocity_y_fused_cms;
                 vel_loop_active_now = 1U;
             }
             else

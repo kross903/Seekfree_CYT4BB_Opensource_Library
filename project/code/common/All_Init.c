@@ -20,7 +20,7 @@ static void init_display_and_basic_peripherals(void)
 
 static void init_default_pid_parameters(void)
 {
-    PID_Init(&gyro_pid_roll, 7.50f, 0.0f, 0.00f, 2000.0f, 100.0f, 10.0f, 0.8f);
+    PID_Init(&gyro_pid_roll, 6.50f, 0.0f, 0.00f, 2000.0f, 100.0f, 10.0f, 0.8f);
     PID_Init(&gyro_pid_pitch, 6.50f, 0.0f, 0.00f, 2000.0f, 100.0f, 10.0f, 0.8f);
     PID_Init(&gyro_pid_yaw, 5.5f, 0.0f, 0.0f, 400.0f, 10.0f, 0.0f, 0.0f);
 
@@ -41,7 +41,8 @@ static void init_default_pid_parameters(void)
 
     /*
      * 光流速度闭环 PID @ 4kHz 控制环。
-     * 反馈: PMW3901 + ToF 解算的机体水平速度 velocity_x/y_cms (cm/s)。
+     * Feedback: fused body horizontal velocity velocity_x/y_fused_cms (cm/s).
+     * Fusion predicts with leveled acceleration delta and corrects with PMW3901 velocity.
      * 输出: 水平加速度指令 ax/ay_cmd (cm/s^2)，再换算成姿态修正角。
      *
      * - vel_pid_x: 前向速度 (vx) -> ax_cmd -> pitch 修正
@@ -53,8 +54,8 @@ static void init_default_pid_parameters(void)
      *   - Ki/Kd 默认关，避免在 4kHz 控制环里 Ki 过快窜飞 (反馈本身只有 50Hz 更新)
      *   - Kp/Ki/Kd/output_limit/integral_limit 后续可由 VOFA V/W 命令或菜单"Velocity PID"组细调
      */
-    PID_Init(&vel_pid_x, 1.0f, 0.0f, 0.1f, 85.0f, 20.0f, 0.0f, 0.0f);
-    PID_Init(&vel_pid_y, 1.0f, 0.0f, 0.1f, 85.0f, 20.0f, 0.0f, 0.0f);
+    PID_Init(&vel_pid_x, 1.0f, 0.0f, 0.1f, 16.0f, 20.0f, 0.0f, 0.0f);
+    PID_Init(&vel_pid_y, 1.0f, 0.0f, 0.1f, 16.0f, 20.0f, 0.0f, 0.0f);
 }
 
 static void init_runtime_modules(void)

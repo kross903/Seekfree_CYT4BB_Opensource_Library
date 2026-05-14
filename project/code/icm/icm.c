@@ -18,12 +18,13 @@
 
 // ==================== 全局变量定义 ====================
 #define sampleFreq  4000.0f         // 采样频率(赫兹)
+#define ICM_SOFT_SAMPLE_HZ 4000     // 软件滤波实际调用频率，跟 PIT_Control_Task_250us 对齐
 #define twoKpDef    (2.0f * 0.5f)   // Mahony比例增益
 #define twoKiDef    (2.0f * 0.0f)   // Mahony积分增益
 
 // 注意：这里使用 DT_ICM 避免与其他地方的 DT 冲突
 #ifndef DT
-#define DT 0.00025f                 // 采样周期(8000Hz = 0.125ms)
+#define DT 0.00025f                 // 采样周期(4000Hz = 0.25ms)
 #endif
 
 #define G 9.81f                     // 重力加速度(m/s?)
@@ -277,19 +278,19 @@ void ICM_Calculate_Init(void)
  */
 void Filter_Init(void)
 {
-    // 速度滤波器(1000Hz采样, 截止频率根据PID.Kd)
-    biquad_filter_init(&X_V_biquad, BIQUAD_LOWPASS, 1000, PIDK_AC.Kd, 0.7071);
-    biquad_filter_init(&Y_V_biquad, BIQUAD_LOWPASS, 1000, PIDK_BC.Kd, 0.7071);
+    // 速度滤波器(4kHz采样, 截止频率根据PID.Kd)
+    biquad_filter_init(&X_V_biquad, BIQUAD_LOWPASS, ICM_SOFT_SAMPLE_HZ, PIDK_AC.Kd, 0.7071);
+    biquad_filter_init(&Y_V_biquad, BIQUAD_LOWPASS, ICM_SOFT_SAMPLE_HZ, PIDK_BC.Kd, 0.7071);
 
-    // 角速度滤波器(8000Hz采样, 90Hz截止频率)
-    biquad_filter_init(&Pitch_g_biquad, BIQUAD_LOWPASS, 8000, 90, 0.7071);
-    biquad_filter_init(&Roll_g_biquad, BIQUAD_LOWPASS, 8000, 90, 0.7071);
-    biquad_filter_init(&Yaw_g_biquad, BIQUAD_LOWPASS, 8000, 90, 0.7071);
+    // 角速度滤波器(4kHz采样, 60Hz截止频率)
+    biquad_filter_init(&Pitch_g_biquad, BIQUAD_LOWPASS, ICM_SOFT_SAMPLE_HZ, 60, 0.7071);
+    biquad_filter_init(&Roll_g_biquad, BIQUAD_LOWPASS, ICM_SOFT_SAMPLE_HZ, 60, 0.7071);
+    biquad_filter_init(&Yaw_g_biquad, BIQUAD_LOWPASS, ICM_SOFT_SAMPLE_HZ, 60, 0.7071);
 
-    // 【修改1】加速度滤波器 - 提升截止频率到20Hz，平衡响应和抗振
-    biquad_filter_init(&Pitch_acc_biquad, BIQUAD_LOWPASS, 8000, 20, 0.7071);
-    biquad_filter_init(&Roll_acc_biquad, BIQUAD_LOWPASS, 8000, 20, 0.7071);
-    biquad_filter_init(&Yaw_acc_biquad, BIQUAD_LOWPASS, 8000, 20, 0.7071);
+    // 加速度滤波器(4kHz采样, 20Hz截止频率)
+    biquad_filter_init(&Pitch_acc_biquad, BIQUAD_LOWPASS, ICM_SOFT_SAMPLE_HZ, 20, 0.7071);
+    biquad_filter_init(&Roll_acc_biquad, BIQUAD_LOWPASS, ICM_SOFT_SAMPLE_HZ, 20, 0.7071);
+    biquad_filter_init(&Yaw_acc_biquad, BIQUAD_LOWPASS, ICM_SOFT_SAMPLE_HZ, 20, 0.7071);
 }
 
 /**
@@ -546,7 +547,7 @@ void MahonyAHRSupdateIMU(float gx, float gy, float gz,
         // 假设静止时重力约为 1000mg (根据你的传感器量程调整)
         if(fabsf(acc_norm - 1000.0f) < 50.0f) {
             // 静止或微小运动: 高增益，快速收敛
-            twoKp = 40.6f;
+            twoKp = 25.0f;
         }
         else if(fabsf(acc_norm - 1000.0f) < 200.0f) {
             // 中等运动: 中等增益，平衡响应和稳定性

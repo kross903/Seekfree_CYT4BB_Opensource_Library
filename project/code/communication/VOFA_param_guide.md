@@ -137,7 +137,7 @@ S1=450!
 
 命令前缀：`V`
 
-`V` 组调 `vel_pid_x`，反馈量是光流解算的 `velocity_x_cms`，PID 输出是前后方向水平加速度指令 `ax_cmd_cms2`，再换算成 `pitch_corr_deg` 送入姿态环。
+`V` 组调 `vel_pid_x`，反馈量是融合速度 `velocity_x_fused_cms`，PID 输出是前后方向水平加速度指令 `ax_cmd_cms2`，再换算成 `pitch_corr_deg` 送入姿态环。
 
 | 参数 | 指令示例 | 含义 |
 |---|---|---|
@@ -151,7 +151,7 @@ S1=450!
 
 命令前缀：`W`
 
-`W` 组调 `vel_pid_y`，反馈量是光流解算的 `velocity_y_cms`，PID 输出是左右方向水平加速度指令 `ay_cmd_cms2`，再换算成 `roll_corr_deg` 送入姿态环。
+`W` 组调 `vel_pid_y`，反馈量是融合速度 `velocity_y_fused_cms`，PID 输出是左右方向水平加速度指令 `ay_cmd_cms2`，再换算成 `roll_corr_deg` 送入姿态环。
 
 | 参数 | 指令示例 | 含义 |
 |---|---|---|
@@ -349,7 +349,7 @@ S1=450!
 7. `pmw_flow_state.velocity_y_fused_cms`
 8. `pmw_flow_state.velocity_y_fused_residual_cms`
 
-F9 当前用于观察速度融合效果：`X_V` / `Y_V` 是加速度积分速度，`velocity_*_cms` 是光流滤波速度，`velocity_*_fused_cms` 是融合速度，`velocity_*_fused_residual_cms = 光流速度 - 融合速度`。融合速度目前只用于观察，未接入速度环 PID。
+F9 当前用于观察速度融合效果：`X_V` / `Y_V` 是旧的加速度积分速度对比量，`velocity_*_cms` 是光流滤波速度，`velocity_*_fused_cms` 是融合速度，`velocity_*_fused_residual_cms = 光流速度 - 融合速度`。融合器内部直接使用水平化加速度 `ax/ay * dt` 预测速度，再用光流速度修正；速度环 PID 当前使用 `velocity_*_fused_cms` 作为实际速度反馈。
 
 ## 上位机常用发送示例
 
