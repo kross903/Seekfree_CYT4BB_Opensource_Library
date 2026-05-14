@@ -220,7 +220,6 @@ static void initialize_control_core_modules(void)
     core_link_user_init();
     flash_init();
     Device_Init();
-    pmw3901_init();
 
     IR_Localization_Init();
     IPM_Interface_Init();

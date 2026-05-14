@@ -29,7 +29,6 @@
 #define MOTOR_HW_COMP_M1_SCALE         1.00f
 #define MOTOR_HW_COMP_M3_SCALE         1.00f
 #define MOTOR_HW_COMP_M4_SCALE         1.00f
-#define PMW3901_SAMPLE_DT_S            0.020f
 #define ADC_INPUT_LPF_ALPHA            0.20f
 
 /*
@@ -657,13 +656,38 @@ void PIT_Adc_Task_5ms(void)
     adc_y_nomalize = joystick_normalize(adc_y_filtered);
 }
 
+static float flow_sensor_get_sample_dt_s(void)
+{
+    float sample_dt_s = FLOW_SENSOR_NOMINAL_DT_S;
+
+#if FLOW_SENSOR_SELECTED == FLOW_SENSOR_UPFLOW302
+    if(upflow302_receive.upflow302_us > 0)
+    {
+        float frame_dt_s = (float)upflow302_receive.upflow302_us * 0.000001f;
+        if(frame_dt_s >= 0.001f && frame_dt_s <= 0.100f)
+        {
+            sample_dt_s = frame_dt_s;
+        }
+    }
+#endif
+
+    return sample_dt_s;
+}
+
 void PIT_PMW3901_Task_20ms(void)
 {
+#if FLOW_SENSOR_SELECTED == FLOW_SENSOR_PMW3901
     static uint8 pmw3901_ready = 0;
+#endif
     float tof_los_cm = 0.0f;
     float flow_height_cm = 0.0f;
+    float flow_sample_dt_s = flow_sensor_get_sample_dt_s();
+    int16 flow_delta_x = 0;
+    int16 flow_delta_y = 0;
+    uint8 flow_sample_valid = 0U;
     uint8 tof_source = PMW_FLOW_TOF_SRC_NONE;
 
+#if FLOW_SENSOR_SELECTED == FLOW_SENSOR_PMW3901
     if(!pmw3901_ready)
     {
         PMW_Flow_Reset();
@@ -676,6 +700,20 @@ void PIT_PMW3901_Task_20ms(void)
     }
 
     pmw3901_get_motion();
+    flow_delta_x = pmw3901_delta_x;
+    flow_delta_y = pmw3901_delta_y;
+    flow_sample_valid = 1U;
+#elif FLOW_SENSOR_SELECTED == FLOW_SENSOR_UPFLOW302
+    if(upflow302_finsh_flag &&
+       upflow302_state_flag &&
+       (FLOW_SENSOR_UPFLOW302_VALID_VALUE == upflow302_receive.upflow302_valid))
+    {
+        flow_delta_x = upflow302_receive.upflow302_x;
+        flow_delta_y = upflow302_receive.upflow302_y;
+        flow_sample_valid = 1U;
+    }
+    upflow302_finsh_flag = 0U;
+#endif
 
     /* 三段降级: LIVE → HOLD → NONE。详见上方常量与 g_pmw3901_tof_source 注释。 */
     if(dl1b_finsh_flag &&
@@ -713,15 +751,21 @@ void PIT_PMW3901_Task_20ms(void)
                                                               current_pitch);
     }
 
+    if(!flow_sample_valid)
+    {
+        flow_height_cm = 0.0f;
+        tof_source = PMW_FLOW_TOF_SRC_NONE;
+    }
+
     g_pmw3901_flow_height_used_cm = flow_height_cm;
     g_pmw3901_tof_source = tof_source;
 
-    PMW_Flow_UpdateSample(pmw3901_delta_x,
-                          pmw3901_delta_y,
+    PMW_Flow_UpdateSample(flow_delta_x,
+                          flow_delta_y,
                           current_roll,
                           current_pitch,
                           flow_height_cm,
-                          PMW3901_SAMPLE_DT_S);
+                          flow_sample_dt_s);
 }
 
 void PIT_Motor_Task_500us(void)

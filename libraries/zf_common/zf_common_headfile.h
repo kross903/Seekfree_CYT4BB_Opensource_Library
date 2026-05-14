@@ -97,6 +97,7 @@
 #include "zf_device_tsl1401.h"
 #include "zf_device_type.h"
 #include "zf_device_uart_receiver.h"
+#include "zf_device_upflow302.h"
 #include "zf_device_wifi_spi.h"
 #include "zf_device_wifi_uart.h"
 #include "zf_device_wireless_uart.h"

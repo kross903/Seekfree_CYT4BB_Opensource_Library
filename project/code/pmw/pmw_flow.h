@@ -2,6 +2,7 @@
 #define _PMW_FLOW_H_
 
 #include "zf_common_headfile.h"
+#include "flow_sensor_config.h"
 
 typedef struct
 {

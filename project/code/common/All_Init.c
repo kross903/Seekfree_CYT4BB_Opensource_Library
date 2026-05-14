@@ -7,7 +7,14 @@ bool Send_state = 0;
 #define CONTROL_LOOP_PIT           PIT_CH1
 #define MOTOR_OUTPUT_PIT           PIT_CH2
 #define TOF_UPDATE_PIT             PIT_CH11
-#define PMW3901_UPDATE_PIT         PIT_CH12
+#define FLOW_UPDATE_PIT            PIT_CH12
+
+static void init_optical_flow_sensor(void)
+{
+#if FLOW_SENSOR_SELECTED == FLOW_SENSOR_UPFLOW302
+    upflow302_receive_init();
+#endif
+}
 
 static void init_display_and_basic_peripherals(void)
 {
@@ -66,6 +73,7 @@ static void init_runtime_modules(void)
     ICM_Calculate_Init();
     HeightManager_Init(100.0f);
     PMW_Flow_Init();
+    init_optical_flow_sensor();
     Flight_Control_Init();
 }
 
@@ -74,7 +82,7 @@ static void init_periodic_interrupts(void)
     pit_us_init(KEY_VOLT_PIT, 5000);      // 5ms
     pit_us_init(CONTROL_LOOP_PIT, 250);   // 4kHz control
     pit_us_init(MOTOR_OUTPUT_PIT, 500);   // 2kHz PWM update
-    pit_us_init(PMW3901_UPDATE_PIT, 20000);  // 20ms PMW3901 update
+    pit_us_init(FLOW_UPDATE_PIT, FLOW_SENSOR_UPDATE_US);
     pit_us_init(TOF_UPDATE_PIT, 10000);   // 100Hz TOF poll (sensor 出数率由 dl1b 内部配置决定；提高轮询率只降低消费延迟)
 }
 

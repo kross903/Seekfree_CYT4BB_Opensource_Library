@@ -40,6 +40,7 @@ static void send_four_date(float date_1, float date_2, float date_3, float date_
  * FD  高度环监视 (case 13): I0 实际高度(cm), I1 目标高度(cm),
  *                                        I2 高度误差(cm), I3 HeightPID输出,
  *                                        I4 比例项, I5 积分项, I6 微分项, I7 base_throttle
+ * FE  光流原始输入诊断 (case 14)
  */
 static int send_back_flag = 0;
 static uint8 send_back_command = 'R';
@@ -740,6 +741,8 @@ void USART_PID_Adjust(void)
                 case 'c': send_back_flag = 12; break;
                 case 'D':
                 case 'd': send_back_flag = 13; break;
+                case 'E':
+                case 'e': send_back_flag = 14; break;
                 default: break;
             }
 
@@ -979,6 +982,33 @@ void send_date_back(void)
                            i_term,
                            d_term,
                            base_throttle);
+            break;
+        }
+
+        case 14:
+        {
+            PMWFlowState_t pmw_flow_state = {0};
+            PMW_Flow_GetState(&pmw_flow_state);
+
+#if FLOW_SENSOR_SELECTED == FLOW_SENSOR_UPFLOW302
+            send_four_date((float)FLOW_SENSOR_SELECTED,
+                           (float)upflow302_receive.upflow302_x,
+                           (float)upflow302_receive.upflow302_y,
+                           (float)upflow302_receive.upflow302_valid,
+                           (float)upflow302_state_flag,
+                           (float)upflow302_finsh_flag,
+                           (float)upflow302_receive.upflow302_us,
+                           pmw_flow_state.dt_s);
+#else
+            send_four_date((float)FLOW_SENSOR_SELECTED,
+                           (float)pmw_flow_state.flow_delta_x_count,
+                           (float)pmw_flow_state.flow_delta_y_count,
+                           (float)pmw_flow_state.valid,
+                           pmw_flow_state.dt_s,
+                           pmw_flow_state.flow_x_rad,
+                           pmw_flow_state.flow_y_rad,
+                           pmw_flow_state.tof_los_cm);
+#endif
             break;
         }
 

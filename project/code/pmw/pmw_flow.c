@@ -3,10 +3,10 @@
 #include <math.h>
 
 #define PMW_FLOW_DEG2RAD                    (0.01745329251994329577f)
-#define PMW_FLOW_RAD_PER_COUNT_X            (1.0f / 385.0f)
-#define PMW_FLOW_RAD_PER_COUNT_Y            (1.0f / 385.0f)
-#define PMW_FLOW_SENSOR_X_SIGN              (1.0f)
-#define PMW_FLOW_SENSOR_Y_SIGN              (1.0f)
+#define PMW_FLOW_RAD_PER_COUNT_X            FLOW_SENSOR_RAD_PER_COUNT_X
+#define PMW_FLOW_RAD_PER_COUNT_Y            FLOW_SENSOR_RAD_PER_COUNT_Y
+#define PMW_FLOW_SENSOR_X_SIGN              FLOW_SENSOR_X_SIGN
+#define PMW_FLOW_SENSOR_Y_SIGN              FLOW_SENSOR_Y_SIGN
 /*
  * Flight-test result for rotational compensation:
  * - flow X follows gyro Y
@@ -442,8 +442,18 @@ void PMW_Flow_UpdateSample(int16 flow_delta_x,
     g_pmw_flow_gyro_flow_x_delta_rad = 0.0f;
     g_pmw_flow_gyro_flow_y_delta_rad = 0.0f;
 
-    new_state.flow_x_rad = (float)flow_delta_x * PMW_FLOW_RAD_PER_COUNT_X * PMW_FLOW_SENSOR_X_SIGN;
-    new_state.flow_y_rad = (float)flow_delta_y * PMW_FLOW_RAD_PER_COUNT_Y * PMW_FLOW_SENSOR_Y_SIGN;
+        {
+        int16 flow_input_x = flow_delta_x;
+        int16 flow_input_y = flow_delta_y;
+
+    #if FLOW_SENSOR_SWAP_XY
+        flow_input_x = flow_delta_y;
+        flow_input_y = flow_delta_x;
+    #endif
+
+        new_state.flow_x_rad = (float)flow_input_x * PMW_FLOW_RAD_PER_COUNT_X * PMW_FLOW_SENSOR_X_SIGN;
+        new_state.flow_y_rad = (float)flow_input_y * PMW_FLOW_RAD_PER_COUNT_Y * PMW_FLOW_SENSOR_Y_SIGN;
+        }
 
     if(!(dt_s >= PMW_FLOW_MIN_DT_S) ||
        !(dt_s <= PMW_FLOW_MAX_DT_S) ||

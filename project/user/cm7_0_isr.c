@@ -40,6 +40,7 @@
 #include "../code/common/PIT_Demo.h"
 #include "../code/communication/core_link.h"
 #include "../code/kalman_filter/height_manager.h"
+#include "../code/pmw/flow_sensor_config.h"
 
 // **************************** PIT中断函数 ****************************
 void pit0_ch0_isr(void)
@@ -175,8 +176,11 @@ void uart2_isr (void)
 {
     if(uart_isr_mask(UART_2))            // 串口2接收中断
     {
-        
+#if FLOW_SENSOR_SELECTED == FLOW_SENSOR_UPFLOW302
+        upflow302_receive_callback();
+#else
         gnss_uart_callback();            // GPS模块回调函数      
+#endif
         
     }
     else                                // 串口2发送中断
