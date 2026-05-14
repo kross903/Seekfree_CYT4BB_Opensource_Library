@@ -48,15 +48,15 @@ static void init_default_pid_parameters(void)
 
     /*
      * 光流速度闭环 PID @ 4kHz 控制环。
-     * 反馈: PMW3901 + ToF 解算的机体水平速度 velocity_x/y_cms (cm/s)。
-     * 输出: 叠加到起飞采样基准角上的姿态修正量 (deg)，限幅只由 vel_pid_x/y.output_limit 决定。
+     * 反馈: 光流 + 水平化加速度融合后的机体水平速度 velocity_x/y_fused_cms (cm/s)。
+     * 输出: 水平加速度指令 ax/ay_cmd (cm/s^2)，再换算成姿态修正角。
      *
-     * - vel_pid_x: 前向速度 (vx) → pitch 修正
-     * - vel_pid_y: 右向速度 (vy) → roll 修正
+     * - vel_pid_x: 前向速度 (vx) -> ax_cmd -> pitch 修正
+     * - vel_pid_y: 右向速度 (vy) -> ay_cmd -> roll 修正
      *
-     * 默认起步参数偏保守: Kp=0.05, Ki=0, Kd=0
-     *   - 速度误差 1 cm/s 单独贡献 0.05deg pitch/roll
-     *   - 速度误差 60 cm/s 才打满 output_limit=10.0deg
+     * 默认起步参数沿用 24c3fd4 "速度环": Kp=1.7, Ki=0, Kd=0
+     *   - 速度误差 1 cm/s 单独贡献 1.7cm/s^2 水平加速度指令
+     *   - output_limit=85cm/s^2, 约等效 5deg 姿态修正
      *   - Ki/Kd 默认关，避免在 4kHz 控制环里 Ki 过快窜飞 (反馈本身只有 50Hz 更新)
      *   - Kp/Ki/Kd/output_limit/integral_limit 后续可由 VOFA V/W 命令或菜单"Velocity PID"组细调
      */

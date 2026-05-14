@@ -7,18 +7,14 @@
 #define PMW_FLOW_RAD_PER_COUNT_Y            FLOW_SENSOR_RAD_PER_COUNT_Y
 #define PMW_FLOW_SENSOR_X_SIGN              FLOW_SENSOR_X_SIGN
 #define PMW_FLOW_SENSOR_Y_SIGN              FLOW_SENSOR_Y_SIGN
-/*
- * Flight-test result for rotational compensation:
- * - flow X follows gyro Y
- * - flow Y follows gyro X
- * Keep the cross-axis mapping explicit so later tuning only needs macro changes.
- */
+/* Rotational compensation mapping is sensor-specific; keep the cross-axis
+ * relationship configurable so PMW3901 and UP-FLOW-302 can use different signs. */
 #define PMW_FLOW_GYRO_X_DELTA_SIGN          (1.0f)
 #define PMW_FLOW_GYRO_Y_DELTA_SIGN          (1.0f)
-#define PMW_FLOW_COMP_X_FROM_GYRO_X_SIGN    (0.0f)
-#define PMW_FLOW_COMP_X_FROM_GYRO_Y_SIGN    (-1.0f)
-#define PMW_FLOW_COMP_Y_FROM_GYRO_X_SIGN    (-1.0f)
-#define PMW_FLOW_COMP_Y_FROM_GYRO_Y_SIGN    (0.0f)
+#define PMW_FLOW_COMP_X_FROM_GYRO_X_SIGN    FLOW_SENSOR_COMP_X_FROM_GYRO_X_SIGN
+#define PMW_FLOW_COMP_X_FROM_GYRO_Y_SIGN    FLOW_SENSOR_COMP_X_FROM_GYRO_Y_SIGN
+#define PMW_FLOW_COMP_Y_FROM_GYRO_X_SIGN    FLOW_SENSOR_COMP_Y_FROM_GYRO_X_SIGN
+#define PMW_FLOW_COMP_Y_FROM_GYRO_Y_SIGN    FLOW_SENSOR_COMP_Y_FROM_GYRO_Y_SIGN
 
 /*
  * 陀螺去旋转增益（按轴独立）。
@@ -30,8 +26,8 @@
  *   - 运行期可通过 PMW_Flow_SetGyroCompGain() 动态拨动（VOFA 调参用）。
  * 不动 RAD_PER_COUNT，速度尺度保持现状。
  */
-#define PMW_FLOW_GYRO_COMP_GAIN_X_DEFAULT   (1.43f)
-#define PMW_FLOW_GYRO_COMP_GAIN_Y_DEFAULT   (1.32f)
+#define PMW_FLOW_GYRO_COMP_GAIN_X_DEFAULT   (0.82f)
+#define PMW_FLOW_GYRO_COMP_GAIN_Y_DEFAULT   (0.94f)
 #define PMW_FLOW_GYRO_COMP_GAIN_MIN         (0.0f)
 #define PMW_FLOW_GYRO_COMP_GAIN_MAX         (4.0f)
 /*
@@ -67,6 +63,8 @@
 #define PMW_FLOW_FUSION_ACC_NORM_GATE_MG    (80.0f)
 #define PMW_FLOW_FUSION_FLOW_GATE_CMS       (80.0f)
 #define PMW_FLOW_FUSION_VEL_LIMIT_CMS       (200.0f)
+#define PMW_FLOW_FUSION_ACC_LIMIT_MG        (300.0f)
+#define PMW_FLOW_ACC_MG_TO_CMS2             (0.981f)
 #define PMW_FLOW_WORLD_RESIDUAL_GATE_CMS    (80.0f)
 #define PMW_FLOW_WORLD_TILT_GATE_DEG        (25.0f)
 
@@ -97,8 +95,6 @@ static float g_pmw_flow_vel_y_output_cms = 0.0f;
 static uint8 g_pmw_flow_vel_output_init = 0U;
 static float g_pmw_flow_fused_vx_cms = 0.0f;
 static float g_pmw_flow_fused_vy_cms = 0.0f;
-static float g_pmw_flow_acc_last_vx_cms = 0.0f;
-static float g_pmw_flow_acc_last_vy_cms = 0.0f;
 static uint8 g_pmw_flow_fusion_init = 0U;
 static float g_pmw_flow_world_vx_cms = 0.0f;
 static float g_pmw_flow_world_vy_cms = 0.0f;
@@ -137,8 +133,9 @@ static uint8 pmw_flow_is_valid_delta_count(int16 value)
 
 static void pmw_flow_update_velocity_fusion(PMWFlowState_t *state)
 {
-    float acc_delta_vx;
-    float acc_delta_vy;
+    float ax_level_mg;
+    float ay_level_mg;
+    float az_level_mg;
     float pred_vx;
     float pred_vy;
     float flow_residual_x;
@@ -156,8 +153,6 @@ static void pmw_flow_update_velocity_fusion(PMWFlowState_t *state)
     {
         g_pmw_flow_fused_vx_cms = state->valid ? state->velocity_x_cms : 0.0f;
         g_pmw_flow_fused_vy_cms = state->valid ? state->velocity_y_cms : 0.0f;
-        g_pmw_flow_acc_last_vx_cms = X_V_F;
-        g_pmw_flow_acc_last_vy_cms = Y_V_F;
         g_pmw_flow_fusion_init = 1U;
     }
 
@@ -172,18 +167,31 @@ static void pmw_flow_update_velocity_fusion(PMWFlowState_t *state)
        fabsf(Pitch_g_F) <= PMW_FLOW_FUSION_GYRO_GATE_DPS &&
        fabsf(Yaw_g_F) <= PMW_FLOW_FUSION_GYRO_GATE_DPS &&
        fabsf(acc_norm_mg - 1000.0f) <= PMW_FLOW_FUSION_ACC_NORM_GATE_MG &&
-       pmw_flow_is_valid_number(X_V_F) &&
-       pmw_flow_is_valid_number(Y_V_F))
+       state->dt_s >= PMW_FLOW_MIN_DT_S &&
+       state->dt_s <= PMW_FLOW_MAX_DT_S)
     {
-        acc_delta_vx = X_V_F - g_pmw_flow_acc_last_vx_cms;
-        acc_delta_vy = Y_V_F - g_pmw_flow_acc_last_vy_cms;
-        pred_vx += acc_delta_vx;
-        pred_vy += acc_delta_vy;
-        acc_used = 1U;
-    }
+        Body_To_RollPitch_Level_Frame(Roll_acc, Pitch_acc, Yaw_acc,
+                                      &ax_level_mg, &ay_level_mg, &az_level_mg);
+        (void)az_level_mg;
 
-    g_pmw_flow_acc_last_vx_cms = X_V_F;
-    g_pmw_flow_acc_last_vy_cms = Y_V_F;
+        ax_level_mg -= acc_level_x_bias_mg;
+        ay_level_mg -= acc_level_y_bias_mg;
+
+        if(pmw_flow_is_valid_number(ax_level_mg) &&
+           pmw_flow_is_valid_number(ay_level_mg))
+        {
+            ax_level_mg = pmw_flow_constrain_float(ax_level_mg,
+                                                   -PMW_FLOW_FUSION_ACC_LIMIT_MG,
+                                                   PMW_FLOW_FUSION_ACC_LIMIT_MG);
+            ay_level_mg = pmw_flow_constrain_float(ay_level_mg,
+                                                   -PMW_FLOW_FUSION_ACC_LIMIT_MG,
+                                                   PMW_FLOW_FUSION_ACC_LIMIT_MG);
+
+            pred_vx += ax_level_mg * PMW_FLOW_ACC_MG_TO_CMS2 * state->dt_s;
+            pred_vy += ay_level_mg * PMW_FLOW_ACC_MG_TO_CMS2 * state->dt_s;
+            acc_used = 1U;
+        }
+    }
 
     if(state->valid &&
        pmw_flow_is_valid_number(state->velocity_x_cms) &&
@@ -387,8 +395,6 @@ void PMW_Flow_Reset(void)
     g_pmw_flow_vel_output_init = 0U;
     g_pmw_flow_fused_vx_cms = 0.0f;
     g_pmw_flow_fused_vy_cms = 0.0f;
-    g_pmw_flow_acc_last_vx_cms = X_V_F;
-    g_pmw_flow_acc_last_vy_cms = Y_V_F;
     g_pmw_flow_fusion_init = 0U;
     PMW_Flow_ResetWorldPosition();
 }
@@ -442,18 +448,18 @@ void PMW_Flow_UpdateSample(int16 flow_delta_x,
     g_pmw_flow_gyro_flow_x_delta_rad = 0.0f;
     g_pmw_flow_gyro_flow_y_delta_rad = 0.0f;
 
-        {
+    {
         int16 flow_input_x = flow_delta_x;
         int16 flow_input_y = flow_delta_y;
 
-    #if FLOW_SENSOR_SWAP_XY
+#if FLOW_SENSOR_SWAP_XY
         flow_input_x = flow_delta_y;
         flow_input_y = flow_delta_x;
-    #endif
+#endif
 
         new_state.flow_x_rad = (float)flow_input_x * PMW_FLOW_RAD_PER_COUNT_X * PMW_FLOW_SENSOR_X_SIGN;
         new_state.flow_y_rad = (float)flow_input_y * PMW_FLOW_RAD_PER_COUNT_Y * PMW_FLOW_SENSOR_Y_SIGN;
-        }
+    }
 
     if(!(dt_s >= PMW_FLOW_MIN_DT_S) ||
        !(dt_s <= PMW_FLOW_MAX_DT_S) ||

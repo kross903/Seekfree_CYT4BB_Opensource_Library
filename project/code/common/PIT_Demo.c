@@ -434,6 +434,16 @@ static uint16 motor_output_safe_limit(float output)
     return (uint16)output;
 }
 
+static uint16 motor_output_flight_limit(float output, float common_throttle)
+{
+    if((armed != 0U) && (common_throttle >= SAFE_MIN_THROTTLE) && (output < SAFE_MIN_THROTTLE))
+    {
+        output = SAFE_MIN_THROTTLE;
+    }
+
+    return motor_output_safe_limit(output);
+}
+
 static void mix_motor_output(void)
 {
     uint8 i = 0U;
@@ -461,7 +471,7 @@ static void mix_motor_output(void)
 
     for(i = 0U; i < 4U; i++)
     {
-        motor_throttle[i] = motor_output_safe_limit(motor_output[i]);
+        motor_throttle[i] = motor_output_flight_limit(motor_output[i], thrust_base_comp);
     }
 }
 
@@ -841,7 +851,7 @@ void PIT_Control_Task_250us(void)
     {
         /* 巡航阶段：原 ADC 位置闭环已废弃，目标姿态默认锁在起飞采样得到的
          * 地面基准角上。当 g_velocity_loop_enabled = 1 且光流 valid 时，
-         * 用 PMW3901 + ToF 解算的机体水平速度跑速度闭环：
+         * 用光流 + 水平化加速度融合后的机体水平速度跑速度闭环：
          *   PID(target=0, fb=v_body_x/y)  -> 角度修正量 (deg)
          * 修正量再叠加到 captured 基准角上，限幅只由 vel_pid_x/y.output_limit 决定，
          * 最终写入 target_angle_roll/pitch 交给已有姿态外环。 */
@@ -868,21 +878,21 @@ void PIT_Control_Task_250us(void)
             PMWFlowState_t flow_snap;
             PMW_Flow_GetState(&flow_snap);
 
-            if(flow_snap.valid)
+            if(flow_snap.valid && (flow_snap.flow_used || flow_snap.acc_used))
             {
                 float ax_cmd_cms2;
                 float ay_cmd_cms2;
                 float pitch_corr;
                 float roll_corr;
 
-                /* Velocity PID now outputs desired horizontal acceleration in cm/s^2. */
+                /* Velocity PID feedback uses optical-flow / horizontal-acc fused velocity. */
                 ax_cmd_cms2 = PID_Calculate(&vel_pid_x,
                                             g_velocity_loop_target_vx_cms,
-                                            flow_snap.velocity_x_cms,
+                                            flow_snap.velocity_x_fused_cms,
                                             CONTROL_DT_S);
                 ay_cmd_cms2 = PID_Calculate(&vel_pid_y,
                                             g_velocity_loop_target_vy_cms,
-                                            flow_snap.velocity_y_cms,
+                                            flow_snap.velocity_y_fused_cms,
                                             CONTROL_DT_S);
 
                 /* Small-angle approximation near hover:
@@ -902,8 +912,8 @@ void PIT_Control_Task_250us(void)
                 g_velocity_loop_y_i_out        = vel_pid_y.Ki * vel_pid_y.integral;
                 g_velocity_loop_pitch_corr_deg = pitch_corr;
                 g_velocity_loop_roll_corr_deg  = roll_corr;
-                g_velocity_loop_fb_vx_cms      = flow_snap.velocity_x_cms;
-                g_velocity_loop_fb_vy_cms      = flow_snap.velocity_y_cms;
+                g_velocity_loop_fb_vx_cms      = flow_snap.velocity_x_fused_cms;
+                g_velocity_loop_fb_vy_cms      = flow_snap.velocity_y_fused_cms;
                 vel_loop_active_now = 1U;
             }
             else

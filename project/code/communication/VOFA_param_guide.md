@@ -133,29 +133,33 @@ S1=450!
 | `T2` | `T2=0.21!` | Pitch 补偿角 |
 | `T3` | `T3=0.00!` | Yaw 补偿角 |
 
-### 10. Roll 摇杆 PID
+### 10. X 方向速度环 PID
 
-命令前缀：`J`
+命令前缀：`V`
 
-| 参数 | 指令示例 | 含义 |
-|---|---|---|
-| `J1` | `J1=1.00!` | Roll 摇杆 PID `Kp` |
-| `J2` | `J2=0.00!` | Roll 摇杆 PID `Ki` |
-| `J3` | `J3=0.00!` | Roll 摇杆 PID `Kd` |
-| `J4` | `J4=20.0!` | Roll 摇杆 PID 输出限幅 `output_limit` |
-| `J5` | `J5=10.0!` | Roll 摇杆 PID 积分限幅 `integral_limit` |
-
-### 11. Pitch 摇杆 PID
-
-命令前缀：`K`
+`V` 组调 `vel_pid_x`，反馈量是融合后的 `velocity_x_fused_cms`，PID 输出是前后方向水平加速度指令 `ax_cmd_cms2`，再换算成 `pitch_corr_deg` 送入姿态环。
 
 | 参数 | 指令示例 | 含义 |
 |---|---|---|
-| `K1` | `K1=1.00!` | Pitch 摇杆 PID `Kp` |
-| `K2` | `K2=0.00!` | Pitch 摇杆 PID `Ki` |
-| `K3` | `K3=0.00!` | Pitch 摇杆 PID `Kd` |
-| `K4` | `K4=20.0!` | Pitch 摇杆 PID 输出限幅 `output_limit` |
-| `K5` | `K5=10.0!` | Pitch 摇杆 PID 积分限幅 `integral_limit` |
+| `V1` | `V1=1.70!` | X 速度环 `Kp` |
+| `V2` | `V2=0.00!` | X 速度环 `Ki` |
+| `V3` | `V3=0.00!` | X 速度环 `Kd` |
+| `V4` | `V4=85.0!` | X 速度环加速度指令限幅 `output_limit`，单位 `cm/s^2` |
+| `V5` | `V5=20.0!` | X 速度环积分限幅 `integral_limit` |
+
+### 11. Y 方向速度环 PID
+
+命令前缀：`W`
+
+`W` 组调 `vel_pid_y`，反馈量是融合后的 `velocity_y_fused_cms`，PID 输出是左右方向水平加速度指令 `ay_cmd_cms2`，再换算成 `roll_corr_deg` 送入姿态环。
+
+| 参数 | 指令示例 | 含义 |
+|---|---|---|
+| `W1` | `W1=1.70!` | Y 速度环 `Kp` |
+| `W2` | `W2=0.00!` | Y 速度环 `Ki` |
+| `W3` | `W3=0.00!` | Y 速度环 `Kd` |
+| `W4` | `W4=85.0!` | Y 速度环加速度指令限幅 `output_limit`，单位 `cm/s^2` |
+| `W5` | `W5=20.0!` | Y 速度环积分限幅 `integral_limit` |
 
 ## 非参数控制指令
 
@@ -212,6 +216,14 @@ S1=450!
 7. `optical_flow_comp_y_rad`
 8. `optical_flow_velocity_y_raw_cms`
 
+旋转补偿路径说明：
+
+- `optical_flow_x_rad` / `optical_flow_y_rad` 是光流原始积分值经过传感器选通配置后的后端角位移。UP-FLOW-302 当前先交换 X/Y；`X_SIGN` / `Y_SIGN` 作用在交换后的机体 / 后端轴上。
+- `optical_flow_gyro_y_delta_rad` / `optical_flow_gyro_x_delta_rad` 来自 250us 控制环中对 `icm42688_gyro_y` / `icm42688_gyro_x` 的累计，到光流更新周期时一次性消费。
+- 去旋转补偿公式为 `flow_comp_x = flow_x + Kx * sign_xy * gyro_y_delta`，`flow_comp_y = flow_y + Ky * sign_yx * gyro_x_delta`。
+- PMW3901 旧光流中 `flow_y_rad` 与 `gyro_x_delta_rad` 同号，因此 `sign_yx = -1`。
+- UP-FLOW-302 当前配置中，机体 Y 轴光流使用 `Y_SIGN = +1` 修正后，`flow_y_rad` 应与 `gyro_x_delta_rad` 同号；若再次观察到二者反号，优先检查 Y 轴光流方向配置，而不是先改补偿符号。
+
 ### `F1`：PID 参数回读
 
 会根据最近一次设置命令的类别来决定回读哪一组参数：
@@ -225,8 +237,8 @@ S1=450!
 | `Y` | Yaw 姿态环 `Kp Ki Kd` |
 | `y` | Yaw 角速度环 `Kp Ki Kd` |
 | `H` | 高度环 `Kp Ki Kd` |
-| `J` | Roll 摇杆 PID `Kp Ki Kd OutLim IntLim` |
-| `K` | Pitch 摇杆 PID `Kp Ki Kd OutLim IntLim` |
+| `V` | X 方向速度环 `Kp Ki Kd OutLim IntLim` |
+| `W` | Y 方向速度环 `Kp Ki Kd OutLim IntLim` |
 | `S` | 当前目标油门 |
 | `T` | 特殊姿态/补偿调试数据 |
 
@@ -324,11 +336,11 @@ S1=450!
 
 返回顺序：
 
-1. `fb_vx_cms`
+1. `fb_vx_cms`——速度环当前反馈，来自光流 + 水平化加速度融合速度
 2. `vx_target_cms`
 3. `x_i_out`
 4. `pitch_corr_deg`
-5. `fb_vy_cms`
+5. `fb_vy_cms`——速度环当前反馈，来自光流 + 水平化加速度融合速度
 6. `vy_target_cms`
 7. `y_i_out`
 8. `roll_corr_deg`
@@ -346,7 +358,7 @@ S1=450!
 7. `pmw_flow_state.velocity_y_fused_cms`
 8. `pmw_flow_state.velocity_y_fused_residual_cms`
 
-F9 当前用于观察速度融合效果：`X_V` / `Y_V` 是加速度积分速度，`velocity_*_cms` 是光流滤波速度，`velocity_*_fused_cms` 是融合速度，`velocity_*_fused_residual_cms = 光流速度 - 融合速度`。融合速度目前只用于观察，未接入速度环 PID。
+F9 当前用于观察速度融合效果：`X_V` / `Y_V` 是原 IMU 加速度积分速度，`velocity_*_cms` 是光流滤波速度，`velocity_*_fused_cms` 是融合速度，`velocity_*_fused_residual_cms = 光流速度 - 融合速度`。当前速度环 PID 已使用 `velocity_*_fused_cms` 作为反馈。
 
 ## 上位机常用发送示例
 
@@ -395,24 +407,24 @@ T2=0.21!
 T3=0.00!
 ```
 
-### 设置 Roll 摇杆 PID
+### 设置 X 方向速度环 PID
 
 ```text
-J1=1.00!
-J2=0.00!
-J3=0.00!
-J4=20.0!
-J5=10.0!
+V1=1.70!
+V2=0.00!
+V3=0.00!
+V4=85.0!
+V5=20.0!
 ```
 
-### 设置 Pitch 摇杆 PID
+### 设置 Y 方向速度环 PID
 
 ```text
-K1=1.00!
-K2=0.00!
-K3=0.00!
-K4=20.0!
-K5=10.0!
+W1=1.70!
+W2=0.00!
+W3=0.00!
+W4=85.0!
+W5=20.0!
 ```
 
 ### 切换回传模式
@@ -549,10 +561,30 @@ FE!
 UP-FLOW-302 模式返回顺序：
 
 1. `FLOW_SENSOR_SELECTED`——当前光流源，`1` 表示 UP-FLOW-302
-2. `upflow302_x`——原始 X 光流积分值
-3. `upflow302_y`——原始 Y 光流积分值
+2. `upflow302_x`——UP-FLOW-302 原始 X 通道；当前配置中映射到机体 / 后端 Y 轴，`Y_SIGN = +1`，不取反
+3. `upflow302_y`——UP-FLOW-302 原始 Y 通道；当前配置中映射到机体 / 后端 X 轴，且符号取反
 4. `upflow302_valid`——模块有效标志，正常应为 `245`
 5. `upflow302_state_flag`——最近一帧校验通过标志
 6. `upflow302_finsh_flag`——最近是否收到新帧，PIT 消费后会清零
 7. `upflow302_us`——模块回传的帧间隔，单位按模块协议为 us
 8. `PMWFlowState.dt_s`——当前后端实际使用的 dt
+
+当前光流方向配置：
+
+- PMW3901：原始 `delta_x` 对应后端 X，原始 `delta_y` 对应后端 Y，不交换轴，不取反。
+- UP-FLOW-302：原始 `upflow302_x` 对应机体 / 后端 Y，原始 `upflow302_y` 对应机体 / 后端 X；代码中 `FLOW_SENSOR_UPFLOW302_SWAP_XY = 1`。符号作用在交换后的机体 / 后端轴上：`X_SIGN = -1` 作用于机体 X，也就是原始 `upflow302_y`；`Y_SIGN = +1` 作用于机体 Y，也就是原始 `upflow302_x`。
+
+## 当前方向关系速查
+
+工程中涉及方向的传感器和坐标关系如下：
+
+| 模块 | 当前方向关系 | 代码位置 |
+|---|---|---|
+| 通用机体 / 世界系约定 | X 向前，Y 向右，Z 向下。下视视觉和光流世界系位置都按这个约定解释。 | `vision/drone_ipm.c`, `vision/ipm_interface.h`, `pmw/pmw_flow.c` |
+| ICM42688 IMU | 原始 X/Y/Z 经过固定安装补偿后进入姿态解算；当前未启用额外 X/Y/Z 取反。`icm42688_acc_x -> Roll_acc`，`icm42688_acc_y -> Pitch_acc`，`icm42688_acc_z -> Yaw_acc`；`icm42688_gyro_x -> Roll_g`，`icm42688_gyro_y -> Pitch_g`，`icm42688_gyro_z -> Yaw_g`。 | `icm/icm42688.c`, `icm/icm.c` |
+| PMW3901 光流 | 原始 `pmw3901_delta_x -> 后端 X`，原始 `pmw3901_delta_y -> 后端 Y`，不交换轴，X/Y 符号均为 `+1`。这是旧光流已验证正确的方向约定。 | `libraries/zf_device/zf_device_pmw3901.c`, `pmw/flow_sensor_config.h` |
+| UP-FLOW-302 光流 | 原始 `upflow302_x -> 机体 / 后端 Y`，原始 `upflow302_y -> 机体 / 后端 X`，因此 `FLOW_SENSOR_UPFLOW302_SWAP_XY = 1`；符号作用在交换后的机体 / 后端轴上，当前 `X_SIGN = -1`、`Y_SIGN = +1`。 | `libraries/zf_device/zf_device_upflow302.c`, `pmw/flow_sensor_config.h`, `pmw/pmw_flow.c` |
+| 光流速度 / 位置后端 | `flow_comp_x` 解释为机体 X 向光流角位移，`flow_comp_y` 解释为机体 Y 向光流角位移；速度映射中 X 符号为 `+1`，Y 符号为 `-1`。世界系速度 / 位置再由当前 yaw 旋转得到。 | `pmw/pmw_flow.c` |
+| DL1B ToF | 标量视线距离，不提供 X/Y 方向；代码按下向高度使用，并补偿安装关系：ToF 位于机体 `+Y` 约 7cm，光流位于机体 `-Y` 约 7cm，ToF 光束朝 `+Y` 倾斜约 10 度。 | `kalman_filter/height_manager.c` |
+| 下视摄像头 / IPM | 图像 `u` 向右，对应机体 / 世界 Y 向右；图像 `v` 向下，对应机体 / 世界 X 向前；图像中心对应正下方地面点。 | `vision/drone_ipm.c`, `vision/drone_ipm_embedded.c`, `vision/ipm_interface.h` |
+| 红外定位 | 使用 IPM 输出的地面坐标，因此 `ir_pose_estimate.x` 为前向坐标，`ir_pose_estimate.y` 为右向坐标，`ir_pose_estimate.z` 为估计高度 / 尺度相关量。 | `vision/ir_localization.c`, `vision/ir_localization.h` |

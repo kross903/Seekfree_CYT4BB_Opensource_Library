@@ -174,8 +174,8 @@ extern PID_Controller angle_pid_pitch;
 extern PID_Controller angle_pid_yaw;
 
 /* 光流速度闭环独立 PID:
- *   vel_pid_x: 前向速度 (vx_cms) -> pitch 修正
- *   vel_pid_y: 右向速度 (vy_cms) -> roll  修正
+ *   vel_pid_x: 前向速度 (vx_cms) -> ax_cmd_cms2 -> pitch 修正
+ *   vel_pid_y: 右向速度 (vy_cms) -> ay_cmd_cms2 -> roll  修正
  * 默认参数在 init_default_pid_parameters; VOFA 用 V/W 命令实时调。 */
 extern PID_Controller vel_pid_x;
 extern PID_Controller vel_pid_y;
@@ -183,9 +183,9 @@ extern PID_Controller vel_pid_y;
 /*
  * 光流速度闭环 (Velocity Loop) 对外接口。
  *
- * 反馈源: PMW3901 + ToF 解算的机体水平速度 (velocity_x/y_cms, +x 前进, +y 右移)。
+ * 反馈源: 光流 + 水平化加速度融合后的机体水平速度 (velocity_x/y_fused_cms, +x 前进, +y 右移)。
  * 控制器: 独立 PID vel_pid_x / vel_pid_y。
- * 输出  : 叠加到起飞基准 captured_roll/pitch 上, 写入 target_angle_*。
+ * 输出  : 先生成水平加速度指令, 再换算成姿态修正角并写入 target_angle_*。
  * Current takeoff base is fixed at 0deg/0deg.
  *
  * 默认关闭, 起飞与降落阶段 PID 保持 reset; 启用后若光流 invalid 自动退回锁基准角。
