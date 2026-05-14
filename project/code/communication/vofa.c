@@ -743,6 +743,8 @@ void USART_PID_Adjust(void)
                 case 'd': send_back_flag = 13; break;
                 case 'E':
                 case 'e': send_back_flag = 14; break;
+                case 'F':
+                case 'f': send_back_flag = 15; break;
                 default: break;
             }
 
@@ -827,7 +829,7 @@ void send_date_back(void)
             send_four_date((float)icm42688_acc_x_r, (float)icm42688_acc_y_r,
                            (float)icm42688_acc_z_r, icm42688_acc_x,
                            icm42688_acc_y, icm42688_acc_z,
-                           angle_roll_compensation, angle_pitch_compensation);
+                           acc, acc_norm_filtered);
             break;
 
         case 6:
@@ -920,8 +922,8 @@ void send_date_back(void)
             PMWFlowState_t pmw_flow_state = {0};
             PMW_Flow_GetState(&pmw_flow_state);
 
-            send_four_date(pmw_flow_state.velocity_x_fused_cms,
-                           pmw_flow_state.velocity_y_fused_cms,
+            send_four_date(pmw_flow_state.velocity_x_cms,
+                           pmw_flow_state.velocity_y_cms,
                            pmw_flow_state.yaw_deg,
                            pmw_flow_state.velocity_x_world_cms,
                            pmw_flow_state.velocity_y_world_cms,
@@ -1009,6 +1011,22 @@ void send_date_back(void)
                            pmw_flow_state.flow_y_rad,
                            pmw_flow_state.tof_los_cm);
 #endif
+            break;
+        }
+
+        case 15:
+        {
+            float roll_i_out = angle_pid_roll.Ki * angle_pid_roll.integral;
+            float pitch_i_out = angle_pid_pitch.Ki * angle_pid_pitch.integral;
+
+            send_four_date(target_angle_roll,
+                           current_roll,
+                           roll_i_out,
+                           target_roll_rate,
+                           target_angle_pitch,
+                           current_pitch,
+                           pitch_i_out,
+                           target_pitch_rate);
             break;
         }
 

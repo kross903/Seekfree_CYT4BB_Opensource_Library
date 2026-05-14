@@ -122,6 +122,7 @@ extern float Pitch_angular_acc, Yaw_angular_acc;
 // 加速度(mg)
 extern float Pitch_acc, Roll_acc, Yaw_acc;        // 原始加速度
 extern float Pitch_acc_F, Roll_acc_F, Yaw_acc_F;  // 滤波后加速度
+extern float acc_norm_filtered;                   // 姿态解算实际使用的滤波后加速度模值
 extern float acc_level_x_bias_mg, acc_level_y_bias_mg;
 extern float acc_level_x_scale, acc_level_y_scale, acc_level_z_scale;
 

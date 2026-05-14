@@ -57,6 +57,7 @@ float Yaw_angle, Yaw_gyro;                 // 用于外部调用
 // 角加速度变量
 float Pitch_acc, Roll_acc, Yaw_acc;        // 加速度计数据
 float Pitch_acc_F, Roll_acc_F, Yaw_acc_F;  // 滤波后加速度
+float acc_norm_filtered = 0.0f;            // 姿态解算实际使用的滤波后加速度模值
 float Pitch_angular_acc, Yaw_angular_acc;  // 角加速度
 float acc_level_x_bias_mg = 0.0f;          // Roll/pitch leveled X acceleration bias
 float acc_level_y_bias_mg = 0.0f;          // Roll/pitch leveled Y acceleration bias
@@ -422,9 +423,9 @@ void get_ICM_data(void)
     Yaw_acc_F   = biquad(&Yaw_acc_biquad, Yaw_acc);
 
     // 【修改3】使用滤波后的加速度计算模值，避免振动导致模值乱跳
-    float acc_filtered = sqrtf(Roll_acc_F * Roll_acc_F +
-                               Pitch_acc_F * Pitch_acc_F +
-                               Yaw_acc_F * Yaw_acc_F);
+    acc_norm_filtered = sqrtf(Roll_acc_F * Roll_acc_F +
+                              Pitch_acc_F * Pitch_acc_F +
+                              Yaw_acc_F * Yaw_acc_F);
 
     // 保留原始模值用于对比调试
     acc = sqrtf(icm42688_acc_x * icm42688_acc_x +
@@ -452,7 +453,7 @@ void get_ICM_data(void)
 
     // 【修改4】Mahony姿态解算 - 传入滤波后的加速度和模值
     MahonyAHRSupdateIMU(icm42688_gyro_x, icm42688_gyro_y, icm42688_gyro_z,
-                        Roll_acc_F, Pitch_acc_F, Yaw_acc_F, acc_filtered);
+                        Roll_acc_F, Pitch_acc_F, Yaw_acc_F, acc_norm_filtered);
 
     // 6. 转换为欧拉角(度)
     Pitch_a = Rad2Ang * Pitch_a_Pi;
@@ -546,11 +547,11 @@ void MahonyAHRSupdateIMU(float gx, float gy, float gz,
         // 假设静止时重力约为 1000mg (根据你的传感器量程调整)
         if(fabsf(acc_norm - 1000.0f) < 50.0f) {
             // 静止或微小运动: 高增益，快速收敛
-            twoKp = 40.6f;
+            twoKp = 8.6f;
         }
         else if(fabsf(acc_norm - 1000.0f) < 200.0f) {
             // 中等运动: 中等增益，平衡响应和稳定性
-            twoKp = 0.2f;
+            twoKp = 4.0f;
         }
         else {
             // 【关键修改】剧烈运动: 保留极小增益，防止长时间漂移

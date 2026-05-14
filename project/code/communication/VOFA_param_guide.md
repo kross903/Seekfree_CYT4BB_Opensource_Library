@@ -137,7 +137,7 @@ S1=450!
 
 命令前缀：`V`
 
-`V` 组调 `vel_pid_x`，反馈量是融合后的 `velocity_x_fused_cms`，PID 输出是前后方向水平加速度指令 `ax_cmd_cms2`，再换算成 `pitch_corr_deg` 送入姿态环。
+`V` 组调 `vel_pid_x`，反馈量是光流滤波后的 `velocity_x_cms`，PID 输出是前后方向水平加速度指令 `ax_cmd_cms2`，再换算成 `pitch_corr_deg` 送入姿态环。
 
 | 参数 | 指令示例 | 含义 |
 |---|---|---|
@@ -151,7 +151,7 @@ S1=450!
 
 命令前缀：`W`
 
-`W` 组调 `vel_pid_y`，反馈量是融合后的 `velocity_y_fused_cms`，PID 输出是左右方向水平加速度指令 `ay_cmd_cms2`，再换算成 `roll_corr_deg` 送入姿态环。
+`W` 组调 `vel_pid_y`，反馈量是光流滤波后的 `velocity_y_cms`，PID 输出是左右方向水平加速度指令 `ay_cmd_cms2`，再换算成 `roll_corr_deg` 送入姿态环。
 
 | 参数 | 指令示例 | 含义 |
 |---|---|---|
@@ -180,10 +180,11 @@ S1=450!
 | `F8=0!` 或 `F8!` | 光流速度闭环综合监视 |
 | `F9=0!` 或 `F9!` | 加速度积分速度与光流速度对比 |
 | `FA=0!` 或 `FA!` | 加速度水平化残差诊断 |
-| `FB=0!` 或 `FB!` | 融合速度旋转到世界系后的速度与积分位置 |
+| `FB=0!` 或 `FB!` | 光流速度旋转到世界系后的速度与积分位置 |
 | `FC=0!` 或 `FC!` | 速度积分位置与光流单帧位移积分位置对比 |
 | `FD=0!` 或 `FD!` | 高度环监视：I0 实际高度, I1 目标高度, I2 误差, I3 PID输出, I4 P项, I5 I项, I6 D项, I7 base_throttle |
 | `FE=0!` 或 `FE!` | 光流原始输入诊断：UP-FLOW-302 模式下回传原始 x/y、valid、状态、新帧标志、帧间隔 |
+| `FF=0!` 或 `FF!` | Roll/Pitch 角度环监视：目标角、实际角、I项输出、低通后的总输出 |
 
 说明：
 
@@ -303,8 +304,13 @@ S1=450!
 4. `icm42688_acc_x`
 5. `icm42688_acc_y`
 6. `icm42688_acc_z`
-7. `angle_roll_compensation`
-8. `angle_pitch_compensation`
+7. `acc_raw_norm`
+8. `acc_filtered_norm`
+
+说明：
+
+- `acc_raw_norm` 是原始三轴加速度模值
+- `acc_filtered_norm` 是 Roll / Pitch / Yaw 三轴 Biquad 滤波后的模值，也是当前 Mahony 姿态解算传入的 `acc_norm`
 
 ### `F6`：Roll / Pitch 角度与角速度对比
 
@@ -313,11 +319,26 @@ S1=450!
 1. `current_roll`
 2. `target_angle_roll`
 3. `current_gyro_roll`
-4. `target_roll_rate`
+4. `target_roll_rate`（角度环输出低通后的目标 Roll 角速度）
 5. `current_pitch`
 6. `target_angle_pitch`
 7. `current_gyro_pitch`
-8. `target_pitch_rate`
+8. `target_pitch_rate`（角度环输出低通后的目标 Pitch 角速度）
+
+### `FF`：Roll / Pitch 角度环监视
+
+返回顺序：
+
+1. `target_angle_roll`
+2. `current_roll`
+3. `angle_pid_roll.Ki * angle_pid_roll.integral`
+4. `target_roll_rate`（角度环总输出，已低通后送入 Roll 角速度环）
+5. `target_angle_pitch`
+6. `current_pitch`
+7. `angle_pid_pitch.Ki * angle_pid_pitch.integral`
+8. `target_pitch_rate`（角度环总输出，已低通后送入 Pitch 角速度环）
+
+Roll/Pitch 角度环输出经过 `ANGLE_RATE_CMD_LPF_ALPHA = 0.04` 的一阶低通后再送入角速度环。FF 用于观察角度目标、实际追踪、积分项贡献和最终喂给角速度环的目标角速度。
 
 ### `F7`：ADC 原始值、滤波值与目标角
 
@@ -336,11 +357,11 @@ S1=450!
 
 返回顺序：
 
-1. `fb_vx_cms`——速度环当前反馈，来自光流 + 水平化加速度融合速度
+1. `fb_vx_cms`——速度环当前反馈，来自光流滤波速度
 2. `vx_target_cms`
 3. `x_i_out`
 4. `pitch_corr_deg`
-5. `fb_vy_cms`——速度环当前反馈，来自光流 + 水平化加速度融合速度
+5. `fb_vy_cms`——速度环当前反馈，来自光流滤波速度
 6. `vy_target_cms`
 7. `y_i_out`
 8. `roll_corr_deg`
@@ -351,14 +372,14 @@ S1=450!
 
 1. `X_V`
 2. `pmw_flow_state.velocity_x_cms`
-3. `pmw_flow_state.velocity_x_fused_cms`
-4. `pmw_flow_state.velocity_x_fused_residual_cms`
+3. `pmw_flow_state.velocity_x_fused_cms`（当前等于 `velocity_x_cms`）
+4. `pmw_flow_state.velocity_x_fused_residual_cms`（关闭融合后应为 0）
 5. `Y_V`
 6. `pmw_flow_state.velocity_y_cms`
-7. `pmw_flow_state.velocity_y_fused_cms`
-8. `pmw_flow_state.velocity_y_fused_residual_cms`
+7. `pmw_flow_state.velocity_y_fused_cms`（当前等于 `velocity_y_cms`）
+8. `pmw_flow_state.velocity_y_fused_residual_cms`（关闭融合后应为 0）
 
-F9 当前用于观察速度融合效果：`X_V` / `Y_V` 是原 IMU 加速度积分速度，`velocity_*_cms` 是光流滤波速度，`velocity_*_fused_cms` 是融合速度，`velocity_*_fused_residual_cms = 光流速度 - 融合速度`。当前速度环 PID 已使用 `velocity_*_fused_cms` 作为反馈。
+F9 当前用于观察加速度积分速度与光流速度差异：`X_V` / `Y_V` 是原 IMU 加速度积分速度，`velocity_*_cms` 是光流滤波速度。加速度融合已关闭，`velocity_*_fused_cms` 仅作为兼容字段保留并等于 `velocity_*_cms`，速度环 PID 使用 `velocity_*_cms` 作为反馈。
 
 ## 上位机常用发送示例
 
@@ -444,6 +465,8 @@ FA!
 FB!
 FC!
 FD!
+FE!
+FF!
 ```
 
 ### 强制失锁
@@ -457,7 +480,7 @@ FD!
 - 一次发送一条完整命令，必须以 `!` 结尾
 - 建议连续命令之间留出少量时间，避免无线串口链路堆积
 - 如果需要看某类参数回读，先发送对应设置命令，再切到 `F1`
-- 如果需要观察实时状态，优先使用 `F0 / F2 / F3 / F4 / F5`
+- 如果需要观察实时状态，优先使用 `F0 / F2 / F3 / F4 / F5 / F6 / FF`
 - 高度环调参建议先开 `FD!` 观察 I0/I1/I2/I3，只调 Kp（H1）直到高度收敛稳定再考虑加 Kd
 
 ## 附加诊断回传
@@ -493,8 +516,8 @@ FB!
 
 返回顺序：
 
-1. `pmw_flow_state.velocity_x_fused_cms`
-2. `pmw_flow_state.velocity_y_fused_cms`
+1. `pmw_flow_state.velocity_x_cms`
+2. `pmw_flow_state.velocity_y_cms`
 3. `pmw_flow_state.yaw_deg`
 4. `pmw_flow_state.velocity_x_world_cms`
 5. `pmw_flow_state.velocity_y_world_cms`
@@ -502,7 +525,7 @@ FB!
 7. `pmw_flow_state.position_y_world_cm`
 8. `world_position_valid`
 
-说明：世界系速度由融合速度按当前 yaw 旋转得到，世界系位置由世界系速度积分得到。当前只作为相对里程计观察量，未接入控制。
+说明：世界系速度由光流速度按当前 yaw 旋转得到，世界系位置由世界系速度积分得到。当前只作为相对里程计观察量，未接入控制。
 
 ### `FC`：两种世界系位置积分路径对比
 

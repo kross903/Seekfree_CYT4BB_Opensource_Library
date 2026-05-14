@@ -14,6 +14,7 @@
 #define THROTTLE_RAMP_RATE             2.0f
 #define CONTROL_DT_S                   0.00025f
 #define CONTROL_DT_MS                  0.25f
+#define ANGLE_RATE_CMD_LPF_ALPHA       0.04f
 #define VEL_LOOP_GRAVITY_CMS2          981.0f
 #define TILT_THRUST_COMP_MAX           1.30f
 
@@ -142,6 +143,10 @@ float target_roll_rate = 0.0f;
 float target_pitch_rate = 0.0f;
 float target_yaw_rate = 0.0f;
 
+static uint8 g_angle_rate_cmd_lpf_init = 0U;
+static float g_target_roll_rate_lpf = 0.0f;
+static float g_target_pitch_rate_lpf = 0.0f;
+
 float roll_output = 0.0f;
 float pitch_output = 0.0f;
 static float yaw_output = 0.0f;
@@ -215,6 +220,33 @@ static volatile uint8 motor_test_active = 0U;
 static volatile uint8 motor_test_selected = 0U;
 static volatile uint16 motor_test_throttle = 0U;
 static volatile uint8 motor_test_output_enabled = 0U;
+
+static void reset_angle_rate_cmd_lpf(void)
+{
+    g_angle_rate_cmd_lpf_init = 0U;
+    g_target_roll_rate_lpf = 0.0f;
+    g_target_pitch_rate_lpf = 0.0f;
+    target_roll_rate = 0.0f;
+    target_pitch_rate = 0.0f;
+}
+
+static void update_angle_rate_cmd_lpf(float roll_rate_raw, float pitch_rate_raw)
+{
+    if(!g_angle_rate_cmd_lpf_init)
+    {
+        g_target_roll_rate_lpf = roll_rate_raw;
+        g_target_pitch_rate_lpf = pitch_rate_raw;
+        g_angle_rate_cmd_lpf_init = 1U;
+    }
+    else
+    {
+        g_target_roll_rate_lpf += ANGLE_RATE_CMD_LPF_ALPHA * (roll_rate_raw - g_target_roll_rate_lpf);
+        g_target_pitch_rate_lpf += ANGLE_RATE_CMD_LPF_ALPHA * (pitch_rate_raw - g_target_pitch_rate_lpf);
+    }
+
+    target_roll_rate = g_target_roll_rate_lpf;
+    target_pitch_rate = g_target_pitch_rate_lpf;
+}
 
 static void motor_pwm_init_once(void)
 {
@@ -493,6 +525,7 @@ void Flight_Runtime_Emergency_Stop(uint8 reason)
     Flight_Takeoff_Abort();
     /* 急停立刻断开速度环, 下次起飞 ramp 完成后会再次自动 enable。 */
     Velocity_Loop_Set_Enabled(0U);
+    reset_angle_rate_cmd_lpf();
     clear_motor_throttle_state();
 }
 
@@ -509,6 +542,7 @@ void Flight_Runtime_Reset_All_Throttle_States(void)
     base_throttle = 0.0f;
     motor_test_output_enabled = 0U;
     motor_test_throttle = 0U;
+    reset_angle_rate_cmd_lpf();
     clear_motor_throttle_state();
 }
 
@@ -792,6 +826,7 @@ void PIT_Control_Task_250us(void)
     if(icm_calibration_flag)
     {
         motor_test_output_enabled = 0U;
+        reset_angle_rate_cmd_lpf();
         clear_motor_throttle_state();
         return;
     }
@@ -802,6 +837,7 @@ void PIT_Control_Task_250us(void)
     PMW_Flow_AccumulateGyro(icm42688_gyro_x, icm42688_gyro_y, CONTROL_DT_S);// 更新PMW光流传感器的陀螺仪积分值，用于后续的运动补偿计算
     if(check_attitude_safety())
     {
+        reset_angle_rate_cmd_lpf();
         return;
     }// 急停触发后不继续执行后续的飞控计算，保持电机输出为0，直到飞行器被重置或重新解锁
 
@@ -814,16 +850,19 @@ void PIT_Control_Task_250us(void)
         if(emergency_stop_triggered)
         {
             motor_test_output_enabled = 0U;
+            reset_angle_rate_cmd_lpf();
             clear_motor_throttle_state();
             return;
         }
 
+        reset_angle_rate_cmd_lpf();
         apply_motor_test_output();
         return;
     }
 
     if(!armed)
     {
+        reset_angle_rate_cmd_lpf();
         clear_motor_throttle_state();
         return;
     }
@@ -840,6 +879,7 @@ void PIT_Control_Task_250us(void)
     {
         uint16 manual_output = motor_output_safe_limit(base_throttle);
 
+        reset_angle_rate_cmd_lpf();
         motor_throttle[0] = manual_output;
         motor_throttle[1] = manual_output;
         motor_throttle[2] = manual_output;
@@ -851,7 +891,7 @@ void PIT_Control_Task_250us(void)
     {
         /* 巡航阶段：原 ADC 位置闭环已废弃，目标姿态默认锁在起飞采样得到的
          * 地面基准角上。当 g_velocity_loop_enabled = 1 且光流 valid 时，
-         * 用光流 + 水平化加速度融合后的机体水平速度跑速度闭环：
+         * 用光流滤波后的机体水平速度跑速度闭环：
          *   PID(target=0, fb=v_body_x/y)  -> 角度修正量 (deg)
          * 修正量再叠加到 captured 基准角上，限幅只由 vel_pid_x/y.output_limit 决定，
          * 最终写入 target_angle_roll/pitch 交给已有姿态外环。 */
@@ -878,21 +918,21 @@ void PIT_Control_Task_250us(void)
             PMWFlowState_t flow_snap;
             PMW_Flow_GetState(&flow_snap);
 
-            if(flow_snap.valid && (flow_snap.flow_used || flow_snap.acc_used))
+            if(flow_snap.valid && flow_snap.flow_used)
             {
                 float ax_cmd_cms2;
                 float ay_cmd_cms2;
                 float pitch_corr;
                 float roll_corr;
 
-                /* Velocity PID feedback uses optical-flow / horizontal-acc fused velocity. */
+                /* Velocity PID feedback uses filtered optical-flow velocity. */
                 ax_cmd_cms2 = PID_Calculate(&vel_pid_x,
                                             g_velocity_loop_target_vx_cms,
-                                            flow_snap.velocity_x_fused_cms,
+                                            flow_snap.velocity_x_cms,
                                             CONTROL_DT_S);
                 ay_cmd_cms2 = PID_Calculate(&vel_pid_y,
                                             g_velocity_loop_target_vy_cms,
-                                            flow_snap.velocity_y_fused_cms,
+                                            flow_snap.velocity_y_cms,
                                             CONTROL_DT_S);
 
                 /* Small-angle approximation near hover:
@@ -900,7 +940,7 @@ void PIT_Control_Task_250us(void)
                  *   ay ≈  g * roll   -> roll  ≈  ay / g
                  */
                 pitch_corr = -(ax_cmd_cms2 / VEL_LOOP_GRAVITY_CMS2) * RAD2DEG;
-                roll_corr  =  (ay_cmd_cms2 / VEL_LOOP_GRAVITY_CMS2) * RAD2DEG;
+                roll_corr  = (ay_cmd_cms2 / VEL_LOOP_GRAVITY_CMS2) * RAD2DEG;
 
                 pitch_corr *= VEL_LOOP_PITCH_SIGN;
                 roll_corr  *= VEL_LOOP_ROLL_SIGN;
@@ -912,8 +952,8 @@ void PIT_Control_Task_250us(void)
                 g_velocity_loop_y_i_out        = vel_pid_y.Ki * vel_pid_y.integral;
                 g_velocity_loop_pitch_corr_deg = pitch_corr;
                 g_velocity_loop_roll_corr_deg  = roll_corr;
-                g_velocity_loop_fb_vx_cms      = flow_snap.velocity_x_fused_cms;
-                g_velocity_loop_fb_vy_cms      = flow_snap.velocity_y_fused_cms;
+                g_velocity_loop_fb_vx_cms      = flow_snap.velocity_x_cms;
+                g_velocity_loop_fb_vy_cms      = flow_snap.velocity_y_cms;
                 vel_loop_active_now = 1U;
             }
             else
@@ -951,8 +991,12 @@ void PIT_Control_Task_250us(void)
     }
     /* takeoff_active 时 target_angle_roll / target_angle_pitch 已由 ramp 阶段锁定为地面均值。 */
 
-    target_roll_rate = PID_Calculate(&angle_pid_roll, target_angle_roll, current_roll, CONTROL_DT_S);
-    target_pitch_rate = PID_Calculate(&angle_pid_pitch, target_angle_pitch, current_pitch, CONTROL_DT_S);
+    {
+        float target_roll_rate_raw = PID_Calculate(&angle_pid_roll, target_angle_roll, current_roll, CONTROL_DT_S);
+        float target_pitch_rate_raw = PID_Calculate(&angle_pid_pitch, target_angle_pitch, current_pitch, CONTROL_DT_S);
+
+        update_angle_rate_cmd_lpf(target_roll_rate_raw, target_pitch_rate_raw);
+    }
     target_yaw_rate = PID_Calculate(&angle_pid_yaw, target_angle_yaw, current_yaw, CONTROL_DT_S);
 
     roll_output = PID_Calculate(&gyro_pid_roll, target_roll_rate, current_gyro_roll, CONTROL_DT_S);

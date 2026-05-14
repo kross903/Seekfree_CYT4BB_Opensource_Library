@@ -27,6 +27,7 @@ typedef struct
     float velocity_y_raw_cms;
     float velocity_x_cms;
     float velocity_y_cms;
+    /* Compatibility aliases while acceleration fusion is disabled. */
     float velocity_x_fused_cms;
     float velocity_y_fused_cms;
     float velocity_x_fused_residual_cms;
