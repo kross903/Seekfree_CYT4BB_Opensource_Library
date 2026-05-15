@@ -180,6 +180,25 @@ extern PID_Controller angle_pid_yaw;
 extern PID_Controller vel_pid_x;
 extern PID_Controller vel_pid_y;
 
+extern PID_Controller pos_pid_x;
+extern PID_Controller pos_pid_y;
+
+typedef struct
+{
+    float target_x_cm;
+    float target_y_cm;
+    float fb_x_cm;
+    float fb_y_cm;
+    float vx_cmd_cms;
+    float vy_cmd_cms;
+    float x_i_out;
+    float y_i_out;
+    uint8 enabled;
+    uint8 active;
+    uint8 ir_track_valid;
+    uint8 velocity_ready;
+} PositionLoopDiag_t;
+
 /*
  * 光流速度闭环 (Velocity Loop) 对外接口。
  *
@@ -201,6 +220,10 @@ void  Velocity_Loop_Get_Diag(float *pitch_corr_deg,
                              float *x_i_out,
                              float *y_i_out,
                              uint8 *active);
+
+void  Position_Loop_Set_Enabled(uint8 enabled);
+uint8 Position_Loop_Is_Enabled(void);
+void  Position_Loop_Get_Diag(PositionLoopDiag_t *diag);
 
 /* 光流 ToF 容错状态诊断 (PIT_PMW3901_Task_20ms 内部维护).
  * source: 0=NONE 1=LIVE(本帧 dl1b) 2=HOLD(上一帧缓存兜底). */

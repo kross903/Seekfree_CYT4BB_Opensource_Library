@@ -40,10 +40,10 @@ static void init_default_pid_parameters(void)
      *
      * Kp 项：|e|≈2.4cm 就单独顶到 300（125×2.4≈300），更靠近目标高度时即饱和，响应更激进。
      * Ki=0 时积分项不参与，integral_limit 仅作为兜底防止后续打开积分时窜飞。 */
-    PID_Init(&HeightPID, 4.0f, 0.0001f, 0.1f, 80.0f, 30.0f, 10000.0f, 0.3f);
+    PID_Init(&HeightPID, 2.0f, 0.0001f, 0.1f, 80.0f, 30.0f, 10000.0f, 0.3f);
 
-    PID_Init(&angle_pid_roll,  5.5f, 0.0001f, 0.0f, 300.0f, 60000.0f, 10000.0f, 0.0f);
-    PID_Init(&angle_pid_pitch, 5.5f, 0.0001f, 0.0f, 300.0f, 60000.0f, 10000.0f, 0.0f);
+    PID_Init(&angle_pid_roll,  14.0f, 0.0001f, 0.0f, 300.0f, 60000.0f, 10000.0f, 0.0f);
+    PID_Init(&angle_pid_pitch, 9.0f, 0.0001f, 0.0f, 300.0f, 60000.0f, 10000.0f, 0.0f);
     PID_Init(&angle_pid_yaw, 3.0f, 0.0f, 0.0f, 100.0f, 20.0f, 0.0f, 0.0f);
 
     /*
@@ -60,8 +60,11 @@ static void init_default_pid_parameters(void)
      *   - Ki/Kd 默认关，避免在 4kHz 控制环里 Ki 过快窜飞 (反馈本身只有 50Hz 更新)
      *   - Kp/Ki/Kd/output_limit/integral_limit 后续可由 VOFA V/W 命令或菜单"Velocity PID"组细调
      */
-    PID_Init(&vel_pid_x, 3.0f, 0.0f, 0.0f, 40.0f, 20.0f, 0.0f, 0.0f);
-    PID_Init(&vel_pid_y, 3.0f, 0.0f, 0.0f, 40.0f, 20.0f, 0.0f, 0.0f);
+    PID_Init(&vel_pid_x, 0.40f, 0.0f, 0.1f, 40.0f, 20.0f, 0.0f, 0.0f);
+    PID_Init(&vel_pid_y, 0.40f, 0.0f, 0.1f, 40.0f, 20.0f, 0.0f, 0.0f);
+
+    PID_Init(&pos_pid_x, 0.60f, 0.0f, 0.0f, 35.0f, 50.0f, 10000.0f, 0.0f);
+    PID_Init(&pos_pid_y, 0.60f, 0.0f, 0.0f, 35.0f, 50.0f, 10000.0f, 0.0f);
 }
 
 static void init_runtime_modules(void)

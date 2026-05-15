@@ -54,6 +54,11 @@
 #define VEL_LOOP_PITCH_SIGN            (+1.0f)
 #define VEL_LOOP_ROLL_SIGN             (+1.0f)
 
+#define POSITION_LOOP_TARGET_X_CM      (0.0f)
+#define POSITION_LOOP_TARGET_Y_CM      (0.0f)
+#define POSITION_LOOP_VX_SIGN          (-1.0f)
+#define POSITION_LOOP_VY_SIGN          (-1.0f)
+
 /*
  * 真位置闭环参数。
  *
@@ -105,6 +110,8 @@ PID_Controller angle_pid_yaw;
  * 水平速度做闭环：vel_pid_x 作用于 pitch 修正、vel_pid_y 作用于 roll 修正。 */
 PID_Controller vel_pid_x;
 PID_Controller vel_pid_y;
+PID_Controller pos_pid_x;
+PID_Controller pos_pid_y;
 
 volatile uint8 armed = 0;
 volatile uint8 control_mode = 0;
@@ -171,7 +178,7 @@ volatile float pos_fusion_residual = 0.0f;
 volatile uint8 pos_fusion_fault    = 0U;
 
 /* 光流速度闭环：起飞 ramp 完成、首次进入巡航分支时由 PIT_Control_Task_250us
- * 自动 enable (悬停目标 vx=vy=0)。Disarm / Emergency_Stop 会自动 disable,
+ * 自动 enable，并同步接入红外位置环。Disarm / Emergency_Stop 会自动 disable,
  * 下次起飞重新走自动 enable 路径。手动 VOFA / 调试也可调用 Velocity_Loop_Set_Enabled。 */
 static volatile uint8 g_velocity_loop_enabled       = 0U;
 static volatile float g_velocity_loop_target_vx_cms = 0.0f;
@@ -185,6 +192,17 @@ static volatile float g_velocity_loop_fb_vy_cms      = 0.0f;
 static volatile float g_velocity_loop_x_i_out        = 0.0f;
 static volatile float g_velocity_loop_y_i_out        = 0.0f;
 static volatile uint8 g_velocity_loop_active         = 0U;  /* 上一拍是否真的喂了光流速度 */
+
+static volatile uint8 g_position_loop_enabled        = 0U;
+static volatile uint8 g_position_loop_active         = 0U;
+static volatile uint8 g_position_loop_ir_track_valid = 0U;
+static volatile uint8 g_position_loop_velocity_ready = 0U;
+static volatile float g_position_loop_fb_x_cm        = 0.0f;
+static volatile float g_position_loop_fb_y_cm        = 0.0f;
+static volatile float g_position_loop_vx_cmd_cms     = 0.0f;
+static volatile float g_position_loop_vy_cmd_cms     = 0.0f;
+static volatile float g_position_loop_x_i_out        = 0.0f;
+static volatile float g_position_loop_y_i_out        = 0.0f;
 
 /*
  * 光流 ToF 喂数据的容错状态。
@@ -525,6 +543,7 @@ void Flight_Runtime_Emergency_Stop(uint8 reason)
     Flight_Takeoff_Abort();
     /* 急停立刻断开速度环, 下次起飞 ramp 完成后会再次自动 enable。 */
     Velocity_Loop_Set_Enabled(0U);
+    Position_Loop_Set_Enabled(0U);
     reset_angle_rate_cmd_lpf();
     clear_motor_throttle_state();
 }
@@ -818,6 +837,52 @@ void PIT_Motor_Task_500us(void)
     write_motor_pwm_output();
 }
 
+static void position_loop_reset_runtime(void)
+{
+    PID_Reset(&pos_pid_x);
+    PID_Reset(&pos_pid_y);
+    g_position_loop_active = 0U;
+    g_position_loop_vx_cmd_cms = 0.0f;
+    g_position_loop_vy_cmd_cms = 0.0f;
+    g_position_loop_x_i_out = 0.0f;
+    g_position_loop_y_i_out = 0.0f;
+}
+
+static void position_loop_update_velocity_target(uint8 velocity_ready)
+{
+    uint8 ir_track_valid = (uint8)((ir_pose_estimate.valid && !ir_position_lost_flag) ? 1U : 0U);
+
+    g_position_loop_ir_track_valid = ir_track_valid;
+    g_position_loop_velocity_ready = velocity_ready;
+    g_position_loop_fb_x_cm = ir_pose_estimate.x;
+    g_position_loop_fb_y_cm = ir_pose_estimate.y;
+
+    if(!g_position_loop_enabled || !velocity_ready || !ir_track_valid)
+    {
+        g_velocity_loop_target_vx_cms = 0.0f;
+        g_velocity_loop_target_vy_cms = 0.0f;
+        position_loop_reset_runtime();
+        return;
+    }
+
+    g_position_loop_vx_cmd_cms = POSITION_LOOP_VX_SIGN *
+                                 PID_Calculate(&pos_pid_x,
+                                               POSITION_LOOP_TARGET_X_CM,
+                                               ir_pose_estimate.x,
+                                               CONTROL_DT_S);
+    g_position_loop_vy_cmd_cms = POSITION_LOOP_VY_SIGN *
+                                 PID_Calculate(&pos_pid_y,
+                                               POSITION_LOOP_TARGET_Y_CM,
+                                               ir_pose_estimate.y,
+                                               CONTROL_DT_S);
+
+    g_velocity_loop_target_vx_cms = g_position_loop_vx_cmd_cms;
+    g_velocity_loop_target_vy_cms = g_position_loop_vy_cmd_cms;
+    g_position_loop_x_i_out = pos_pid_x.Ki * pos_pid_x.integral;
+    g_position_loop_y_i_out = pos_pid_y.Ki * pos_pid_y.integral;
+    g_position_loop_active = 1U;
+}
+
 void PIT_Control_Task_250us(void)
 {
     uint8 takeoff_active = 0U;
@@ -880,6 +945,7 @@ void PIT_Control_Task_250us(void)
     {
         uint16 manual_output = motor_output_safe_limit(base_throttle);
 
+        position_loop_update_velocity_target(0U);
         reset_angle_rate_cmd_lpf();
         motor_throttle[0] = manual_output;
         motor_throttle[1] = manual_output;
@@ -902,7 +968,7 @@ void PIT_Control_Task_250us(void)
 
         Flight_Takeoff_Get_Captured_Angles(&captured_roll, &captured_pitch);
 
-        /* 起飞 ramp 完成、控制权回到巡航分支时自动接管速度环 (悬停目标)。
+        /* 起飞 ramp 完成、控制权回到巡航分支时自动接管速度环和红外位置环。
          * Disarm / Emergency_Stop 会把 g_velocity_loop_enabled 清 0,
          * 下次起飞会再次走到这里重新自动 enable。 */
         if(!g_velocity_loop_enabled)
@@ -912,12 +978,14 @@ void PIT_Control_Task_250us(void)
             g_velocity_loop_enabled       = 1U;
             PID_Reset(&vel_pid_x);
             PID_Reset(&vel_pid_y);
+            Position_Loop_Set_Enabled(1U);
         }
 
         if(g_velocity_loop_enabled)
         {
             PMWFlowState_t flow_snap;
             PMW_Flow_GetState(&flow_snap);
+            position_loop_update_velocity_target((uint8)((flow_snap.valid && flow_snap.flow_used) ? 1U : 0U));
 
             if(flow_snap.valid && flow_snap.flow_used)
             {
@@ -972,6 +1040,7 @@ void PIT_Control_Task_250us(void)
         }
         else
         {
+            position_loop_update_velocity_target(0U);
             target_angle_roll  = captured_roll;
             target_angle_pitch = captured_pitch;
             PID_Reset(&vel_pid_x);
@@ -1073,6 +1142,52 @@ void Velocity_Loop_Get_Diag(float *pitch_corr_deg,
     if(x_i_out        != NULL) *x_i_out        = g_velocity_loop_x_i_out;
     if(y_i_out        != NULL) *y_i_out        = g_velocity_loop_y_i_out;
     if(active         != NULL) *active         = g_velocity_loop_active;
+}
+
+void Position_Loop_Set_Enabled(uint8 enabled)
+{
+    if(enabled)
+    {
+        g_position_loop_enabled = 1U;
+        position_loop_reset_runtime();
+    }
+    else
+    {
+        g_position_loop_enabled = 0U;
+        g_position_loop_ir_track_valid = 0U;
+        g_position_loop_velocity_ready = 0U;
+        g_position_loop_fb_x_cm = 0.0f;
+        g_position_loop_fb_y_cm = 0.0f;
+        g_velocity_loop_target_vx_cms = 0.0f;
+        g_velocity_loop_target_vy_cms = 0.0f;
+        position_loop_reset_runtime();
+    }
+}
+
+uint8 Position_Loop_Is_Enabled(void)
+{
+    return g_position_loop_enabled;
+}
+
+void Position_Loop_Get_Diag(PositionLoopDiag_t *diag)
+{
+    if(diag == NULL)
+    {
+        return;
+    }
+
+    diag->target_x_cm = POSITION_LOOP_TARGET_X_CM;
+    diag->target_y_cm = POSITION_LOOP_TARGET_Y_CM;
+    diag->fb_x_cm = g_position_loop_fb_x_cm;
+    diag->fb_y_cm = g_position_loop_fb_y_cm;
+    diag->vx_cmd_cms = g_position_loop_vx_cmd_cms;
+    diag->vy_cmd_cms = g_position_loop_vy_cmd_cms;
+    diag->x_i_out = g_position_loop_x_i_out;
+    diag->y_i_out = g_position_loop_y_i_out;
+    diag->enabled = g_position_loop_enabled;
+    diag->active = g_position_loop_active;
+    diag->ir_track_valid = g_position_loop_ir_track_valid;
+    diag->velocity_ready = g_position_loop_velocity_ready;
 }
 
 /*

@@ -11,9 +11,10 @@
 *********************************************************************************************************************/
 
 #define FLIGHT_CONTROL_MIN_THROTTLE  0.0f
-#define FLIGHT_TAKEOFF_DEFAULT_HOVER_ROLL_COMP_DEG   (-2.1f)
-#define FLIGHT_TAKEOFF_DEFAULT_HOVER_PITCH_COMP_DEG  (0.65f)
-
+// #define FLIGHT_TAKEOFF_DEFAULT_HOVER_ROLL_COMP_DEG   (-2.0f)
+// #define FLIGHT_TAKEOFF_DEFAULT_HOVER_PITCH_COMP_DEG  (0.0f)
+#define FLIGHT_TAKEOFF_DEFAULT_HOVER_ROLL_COMP_DEG   (1.25f)
+#define FLIGHT_TAKEOFF_DEFAULT_HOVER_PITCH_COMP_DEG  (0.0f)
 extern volatile uint16 motor_throttle[4];
 
 FlightController g_flight_ctrl;
@@ -374,6 +375,7 @@ void Flight_Control_Disarm(void)
     Flight_Takeoff_Abort();
     /* Disarm 同时关掉速度环, 下次起飞会在巡航分支首拍自动重新 enable。 */
     Velocity_Loop_Set_Enabled(0U);
+    Position_Loop_Set_Enabled(0U);
 
     clear_motor_throttle_buffer();
     gpio_set_level(LED3, GPIO_LOW);
@@ -444,6 +446,8 @@ void Flight_Control_Reset_All_PID(void)
     PID_Reset(&angle_pid_yaw);
     PID_Reset(&vel_pid_x);
     PID_Reset(&vel_pid_y);
+    PID_Reset(&pos_pid_x);
+    PID_Reset(&pos_pid_y);
     PID_Reset(&HeightPID);
 
     sync_runtime_snapshot();

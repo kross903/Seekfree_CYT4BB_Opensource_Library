@@ -35,7 +35,7 @@ static void send_four_date(float date_1, float date_2, float date_3, float date_
  *   F5  加速度原始/校准数据 (case 5)
  *   F6  Roll/Pitch 角度+角速度环监视 (case 6)
  *   F7  ADC + 摇杆历史调试 (case 7)
- *   F8  光流速度闭环综合监视 (case 8): I0~I3 X轴 实际/目标/积分项/pitch修正,
+ *   F8  光流速度闭环综合监视 (case 8): I0~I3 X轴 光流实际/目标/积分项/pitch修正,
  *                                       I4~I7 Y轴 实际/目标/积分项/roll 修正
  * FD  高度环监视 (case 13): I0 实际高度(cm), I1 目标高度(cm),
  *                                        I2 高度误差(cm), I3 HeightPID输出,
@@ -43,6 +43,8 @@ static void send_four_date(float date_1, float date_2, float date_3, float date_
  * FE  光流原始输入诊断 (case 14)
  * FG  四灯正方形红外中心点与丢失保护诊断 (case 16)
  * FH  红外丢失保护状态机诊断 (case 17)
+ * FI  红外位置闭环诊断 (case 18)
+ * FJ  速度环/光流门控诊断 (case 19)
  */
 static int send_back_flag = 0;
 static uint8 send_back_command = 'R';
@@ -198,6 +200,40 @@ static void set_vel_pid_value(uint8 axis, uint8 item, float value)
     }
 }
 
+static void set_pos_pid_value(uint8 axis, uint8 item, float value)
+{
+    PID_Controller *pid = NULL;
+
+    if(item == '0')
+    {
+        Position_Loop_Set_Enabled((value > 0.5f) ? 1U : 0U);
+        return;
+    }
+
+    if(axis == 0U)
+    {
+        pid = &pos_pid_x;
+    }
+    else if(axis == 1U)
+    {
+        pid = &pos_pid_y;
+    }
+    else
+    {
+        return;
+    }
+
+    switch(item)
+    {
+        case '1': pid->Kp = value; break;
+        case '2': pid->Ki = value; break;
+        case '3': pid->Kd = value; break;
+        case '4': pid->output_limit = value; break;
+        case '5': pid->integral_limit = value; break;
+        default:  return;
+    }
+}
+
 static void set_hover_angle_compensation_value(uint8 item, float value)
 {
     float hover_roll = 0.0f;
@@ -321,6 +357,26 @@ static void send_pid_data_back(uint8 command)
                            vel_pid_y.output_limit,
                            vel_pid_y.integral_limit,
                            0, 0, 0);
+            return;
+
+        case 'I':
+            value_1 = pos_pid_x.Kp;
+            value_2 = pos_pid_x.Ki;
+            value_3 = pos_pid_x.Kd;
+            send_four_date(value_1, value_2, value_3,
+                           pos_pid_x.output_limit,
+                           pos_pid_x.integral_limit,
+                           (float)Position_Loop_Is_Enabled(), 0, 0);
+            return;
+
+        case 'J':
+            value_1 = pos_pid_y.Kp;
+            value_2 = pos_pid_y.Ki;
+            value_3 = pos_pid_y.Kd;
+            send_four_date(value_1, value_2, value_3,
+                           pos_pid_y.output_limit,
+                           pos_pid_y.integral_limit,
+                           (float)Position_Loop_Is_Enabled(), 0, 0);
             return;
 
         case 'S':
@@ -764,6 +820,22 @@ void USART_PID_Adjust(void)
             send_back_command = 'W';
             break;
 
+        case 'I':
+            if(has_value)
+            {
+                set_pos_pid_value(0U, item, data_get);
+            }
+            send_back_command = 'I';
+            break;
+
+        case 'J':
+            if(has_value)
+            {
+                set_pos_pid_value(1U, item, data_get);
+            }
+            send_back_command = 'J';
+            break;
+
         case 'F':
             switch(item)
             {
@@ -793,6 +865,10 @@ void USART_PID_Adjust(void)
                 case 'g': send_back_flag = 16; break;
                 case 'H':
                 case 'h': send_back_flag = 17; break;
+                case 'I':
+                case 'i': send_back_flag = 18; break;
+                case 'J':
+                case 'j': send_back_flag = 19; break;
                 default: break;
             }
 
@@ -903,8 +979,8 @@ void send_date_back(void)
         {
             /*
              * F8 - 速度环监视。
-             * 左半 (I0~I3) X 轴: 实际速度 / 目标速度 / 积分输出 / 总输出；
-             * 右半 (I4~I7) Y 轴: 实际速度 / 目标速度 / 积分输出 / 总输出。
+             * 左半 (I0~I3) X 轴: 光流实际速度 / 目标速度 / 积分输出 / 总输出；
+             * 右半 (I4~I7) Y 轴: 光流实际速度 / 目标速度 / 积分输出 / 总输出。
              */
             PMWFlowState_t pmw_flow_state = {0};
             float vx_target_cms = 0.0f;
@@ -917,9 +993,11 @@ void send_date_back(void)
             float y_i_out = 0.0f;
 
             PMW_Flow_GetState(&pmw_flow_state);
+            fb_vx_cms = pmw_flow_state.velocity_x_cms;
+            fb_vy_cms = pmw_flow_state.velocity_y_cms;
             Velocity_Loop_Get_Target_Velocity(&vx_target_cms, &vy_target_cms);
             Velocity_Loop_Get_Diag(&pitch_corr_deg, &roll_corr_deg,
-                                   &fb_vx_cms, &fb_vy_cms,
+                                   NULL, NULL,
                                    &x_i_out, &y_i_out, NULL);
 
             send_four_date(fb_vx_cms,
@@ -1107,6 +1185,45 @@ void send_date_back(void)
                            (float)ir_loss_debug.has_trackable_pose,
                            (float)ir_loss_debug.task_5ms_count,
                            (float)ir_loss_debug.timeout_count);
+            break;
+        }
+
+        case 18:
+        {
+            PositionLoopDiag_t pos_diag = {0};
+            Position_Loop_Get_Diag(&pos_diag);
+
+            send_four_date(pos_diag.fb_x_cm,
+                           pos_diag.fb_y_cm,
+                           pos_diag.vx_cmd_cms,
+                           pos_diag.vy_cmd_cms,
+                           (float)pos_diag.enabled,
+                           (float)pos_diag.active,
+                           (float)pos_diag.ir_track_valid,
+                           (float)pos_diag.velocity_ready);
+            break;
+        }
+
+        case 19:
+        {
+            PMWFlowState_t pmw_flow_state = {0};
+            float tof_los_cm = 0.0f;
+            uint16 tof_stale_ticks = 0U;
+            uint8 tof_source = 0U;
+            uint8 vel_loop_active = 0U;
+
+            PMW_Flow_GetState(&pmw_flow_state);
+            PMW_Flow_Get_TOF_Status(&tof_los_cm, &tof_stale_ticks, &tof_source);
+            Velocity_Loop_Get_Diag(NULL, NULL, NULL, NULL, NULL, NULL, &vel_loop_active);
+
+            send_four_date((float)Velocity_Loop_Is_Enabled(),
+                           (float)vel_loop_active,
+                           (float)pmw_flow_state.valid,
+                           (float)pmw_flow_state.flow_used,
+                           tof_los_cm,
+                           (float)tof_source,
+                           (float)tof_stale_ticks,
+                           pmw_flow_state.dt_s);
             break;
         }
 
