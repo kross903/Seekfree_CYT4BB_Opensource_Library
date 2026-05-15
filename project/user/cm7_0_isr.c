@@ -47,7 +47,7 @@ void pit0_ch0_isr(void)
 {
     pit_isr_flag_clear(PIT_CH0);
     PIT_KeyVoltage_Task_5ms();
-    PIT_Adc_Task_5ms();
+    // PIT_Adc_Task_5ms();
 }
 
 void pit0_ch1_isr(void)

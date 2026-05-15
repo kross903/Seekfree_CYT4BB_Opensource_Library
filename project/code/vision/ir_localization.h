@@ -22,6 +22,8 @@ extern "C" {
 #define IR_MAX_CANDIDATES      (20)
 #define IR_MIN_POINT_DIST_PX   (4.0f)
 #define IR_CENTROID_RADIUS     (3)
+#define IR_POSITION_LOST_HOLD_MS        (2000U)
+#define IR_POSITION_LOST_TASK_PERIOD_MS (5U)
 
 // ==================== 数据结构 ====================
 typedef struct
@@ -45,11 +47,32 @@ typedef struct
     float square_side_cm;
     IR_Point2D_t img_pts[IR_SQUARE_POINT_COUNT];
     IR_WorldPoint_t world_pts[IR_SQUARE_POINT_COUNT];
-    uint8 valid;
+    uint8 valid;       /* 1=当前中心可用于追踪，包含 2s 丢失保持期 */
 } IR_Pose_t;
+
+typedef struct
+{
+    uint8 raw_detect_valid;
+    uint8 has_trackable_pose;
+    uint8 lost_flag;
+    uint8 pose_valid;
+    uint16 lost_elapsed_ms;
+    uint32 task_5ms_count;
+    uint32 process_count;
+    uint32 process_success_count;
+    uint32 process_fail_count;
+    uint32 mark_lost_count;
+    uint32 timeout_count;
+} IR_LossDebug_t;
 
 // ==================== 对外接口 ====================
 void IR_Localization_Init(void);
+
+void IR_Localization_Task_5ms(void);
+
+void IR_Localization_ServiceLostProtection(void);
+
+void IR_Localization_GetLossDebug(IR_LossDebug_t *debug);
 
 uint8 IR_Localization_Process(const uint8 image[MT9V03X_H][MT9V03X_W],
                               IR_Pose_t *out_pose);
@@ -61,6 +84,8 @@ const uint8* IR_GetBinaryImage(void);
 
 // ==================== 全局输出 ====================
 extern IR_Pose_t ir_pose_estimate;
+extern volatile uint8 ir_position_lost_flag;
+extern volatile uint16 ir_position_lost_elapsed_ms;
 
 /*
  * [2026-03-10]

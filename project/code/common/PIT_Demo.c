@@ -656,6 +656,7 @@ uint16 Flight_Motor_Test_Get_Output_Limit(void)
 
 void PIT_KeyVoltage_Task_5ms(void)
 {
+    IR_Localization_Task_5ms();
     key_scanner();
     key_scan();
     adc_value = adc_mean_filter_convert(BATTERY_ADC_CHANNEL, 10);

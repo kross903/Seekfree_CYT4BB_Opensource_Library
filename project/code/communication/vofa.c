@@ -41,6 +41,8 @@ static void send_four_date(float date_1, float date_2, float date_3, float date_
  *                                        I2 高度误差(cm), I3 HeightPID输出,
  *                                        I4 比例项, I5 积分项, I6 微分项, I7 base_throttle
  * FE  光流原始输入诊断 (case 14)
+ * FG  四灯正方形红外中心点与丢失保护诊断 (case 16)
+ * FH  红外丢失保护状态机诊断 (case 17)
  */
 static int send_back_flag = 0;
 static uint8 send_back_command = 'R';
@@ -787,6 +789,10 @@ void USART_PID_Adjust(void)
                 case 'e': send_back_flag = 14; break;
                 case 'F':
                 case 'f': send_back_flag = 15; break;
+                case 'G':
+                case 'g': send_back_flag = 16; break;
+                case 'H':
+                case 'h': send_back_flag = 17; break;
                 default: break;
             }
 
@@ -824,6 +830,11 @@ void USART_PID_Adjust(void)
 
 void send_date_back(void)
 {
+    uint8 ir_track_valid = 0U;
+
+    IR_Localization_ServiceLostProtection();
+    ir_track_valid = (uint8)((ir_pose_estimate.valid && !ir_position_lost_flag) ? 1U : 0U);
+
     switch(send_back_flag)
     {
         case 0:
@@ -1069,6 +1080,33 @@ void send_date_back(void)
                            current_pitch,
                            pitch_i_out,
                            target_pitch_rate);
+            break;
+        }
+
+        case 16:
+            send_four_date(ir_pose_estimate.x,
+                           ir_pose_estimate.y,
+                           ir_pose_estimate.z,
+                           ir_pose_estimate.square_side_cm,
+                           (float)ir_track_valid,
+                           (float)ir_position_lost_flag,
+                           (float)ir_position_lost_elapsed_ms,
+                           (float)IR_SQUARE_POINT_COUNT);
+            break;
+
+        case 17:
+        {
+            IR_LossDebug_t ir_loss_debug = {0};
+            IR_Localization_GetLossDebug(&ir_loss_debug);
+
+            send_four_date(ir_pose_estimate.x,
+                           ir_pose_estimate.y,
+                           (float)ir_loss_debug.raw_detect_valid,
+                           (float)ir_loss_debug.lost_flag,
+                           (float)ir_loss_debug.lost_elapsed_ms,
+                           (float)ir_loss_debug.has_trackable_pose,
+                           (float)ir_loss_debug.task_5ms_count,
+                           (float)ir_loss_debug.timeout_count);
             break;
         }
 

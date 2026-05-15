@@ -49,27 +49,30 @@ static monitor_page_enum g_monitor_page = MONITOR_PAGE_DATA;
 static void build_monitor_runtime_snapshot(MonitorRuntimeSnapshot *snapshot)
 {
     PMWFlowState_t pmw_flow_state = {0};
+    uint8 ir_track_valid = 0U;
     if(snapshot == NULL)
     {
         return;
     }
 
     PMW_Flow_GetState(&pmw_flow_state);
+    IR_Localization_ServiceLostProtection();
+    ir_track_valid = (uint8)((ir_pose_estimate.valid && !ir_position_lost_flag) ? 1U : 0U);
 
     snapshot->image_buffer = mt9v03x_image[0];
     snapshot->control_mode = control_mode;
     snapshot->armed = (uint8)(armed ? 1U : 0U);
     snapshot->low_voltage = (uint8)(low_voltage_protect_flag ? 1U : 0U);
-    snapshot->has_nearest = (uint8)(ir_pose_estimate.valid ? 1U : 0U);
+    snapshot->has_nearest = ir_track_valid;
     snapshot->voltage = car_bat_voltage;  /* 小车与飞机共用电池，直接显示小车上的实测电压。 */
     snapshot->target_throttle = (int32)Flight_Control_Get_Target_Throttle();
     snapshot->base_throttle = (int32)base_throttle;
     snapshot->roll = current_roll;
     snapshot->pitch = current_pitch;
     snapshot->yaw = current_yaw;
-    snapshot->beacon_count = ir_pose_estimate.valid ? IR_SQUARE_POINT_COUNT : 0;
-    snapshot->nearest_x = ir_pose_estimate.valid ? ir_pose_estimate.x : 0.0f;
-    snapshot->nearest_y = ir_pose_estimate.valid ? ir_pose_estimate.y : 0.0f;
+    snapshot->beacon_count = ir_track_valid ? IR_SQUARE_POINT_COUNT : 0;
+    snapshot->nearest_x = ir_track_valid ? ir_pose_estimate.x : 0.0f;
+    snapshot->nearest_y = ir_track_valid ? ir_pose_estimate.y : 0.0f;
     snapshot->tof_raw_cm = dl1b_distance_mm * 0.1f;
     snapshot->tof_height_cm = tof_height_true_filt * 100.0f;
     snapshot->fused_height_cm = g_height_result.height_cm;
@@ -99,6 +102,8 @@ static void build_monitor_runtime_snapshot(MonitorRuntimeSnapshot *snapshot)
 
 static void update_monitor_vision_state(void)
 {
+    IR_Localization_ServiceLostProtection();
+
     if(!mt9v03x_finish_flag)
     {
         return;

@@ -15,6 +15,20 @@ IR_Pose_t ir_pose_estimate = {0};
  */
 volatile uint32 ir_pose_update_seq = 0;
 
+volatile uint8 ir_position_lost_flag = 1U;
+volatile uint16 ir_position_lost_elapsed_ms = IR_POSITION_LOST_HOLD_MS;
+
+static uint8 s_ir_has_trackable_pose = 0U;
+static uint16 s_ir_lost_elapsed_ms = IR_POSITION_LOST_HOLD_MS;
+
+static volatile uint8 s_ir_debug_raw_detect_valid = 0U;
+static volatile uint32 s_ir_debug_task_5ms_count = 0U;
+static volatile uint32 s_ir_debug_process_count = 0U;
+static volatile uint32 s_ir_debug_process_success_count = 0U;
+static volatile uint32 s_ir_debug_process_fail_count = 0U;
+static volatile uint32 s_ir_debug_mark_lost_count = 0U;
+static volatile uint32 s_ir_debug_timeout_count = 0U;
+
 // Binary image buffer used by the IR point detector.
 static uint8 g_binary_image[MT9V03X_H * MT9V03X_W];
 
@@ -249,14 +263,116 @@ static void calculate_square_center(const IR_WorldPoint_t pts[IR_SQUARE_POINT_CO
     *center_y /= (float)IR_SQUARE_POINT_COUNT;
 }
 
-void IR_Localization_Init(void)
+static void IR_Localization_ClearPose(void)
+{
+    memset(&ir_pose_estimate, 0, sizeof(ir_pose_estimate));
+}
+
+static void IR_Localization_ClearTrackedCenter(void)
 {
     ir_pose_estimate.x = 0.0f;
     ir_pose_estimate.y = 0.0f;
-    ir_pose_estimate.z = 0.0f;
-    ir_pose_estimate.square_side_cm = 0.0f;
-    ir_pose_estimate.valid = 0;
+    ir_pose_estimate.valid = 0U;
+}
+
+static void IR_Localization_MarkPositionLost(void)
+{
+    s_ir_debug_mark_lost_count++;
+    s_ir_has_trackable_pose = 0U;
+    s_ir_lost_elapsed_ms = IR_POSITION_LOST_HOLD_MS;
+    ir_position_lost_elapsed_ms = s_ir_lost_elapsed_ms;
+    ir_position_lost_flag = 1U;
+    IR_Localization_ClearTrackedCenter();
+}
+
+static void IR_Localization_SetPositionLost(void)
+{
+    IR_Localization_MarkPositionLost();
+    IR_Localization_ClearPose();
+}
+
+static void IR_Localization_CopyPose(IR_Pose_t *out_pose)
+{
+    if(out_pose)
+    {
+        *out_pose = ir_pose_estimate;
+    }
+}
+
+static void IR_Localization_ResetLossDebug(void)
+{
+    s_ir_debug_raw_detect_valid = 0U;
+    s_ir_debug_task_5ms_count = 0U;
+    s_ir_debug_process_count = 0U;
+    s_ir_debug_process_success_count = 0U;
+    s_ir_debug_process_fail_count = 0U;
+    s_ir_debug_mark_lost_count = 0U;
+    s_ir_debug_timeout_count = 0U;
+}
+
+void IR_Localization_GetLossDebug(IR_LossDebug_t *debug)
+{
+    if(!debug)
+    {
+        return;
+    }
+
+    debug->raw_detect_valid = s_ir_debug_raw_detect_valid;
+    debug->has_trackable_pose = s_ir_has_trackable_pose;
+    debug->lost_flag = ir_position_lost_flag;
+    debug->pose_valid = ir_pose_estimate.valid;
+    debug->lost_elapsed_ms = ir_position_lost_elapsed_ms;
+    debug->task_5ms_count = s_ir_debug_task_5ms_count;
+    debug->process_count = s_ir_debug_process_count;
+    debug->process_success_count = s_ir_debug_process_success_count;
+    debug->process_fail_count = s_ir_debug_process_fail_count;
+    debug->mark_lost_count = s_ir_debug_mark_lost_count;
+    debug->timeout_count = s_ir_debug_timeout_count;
+}
+
+void IR_Localization_Init(void)
+{
+    IR_Localization_SetPositionLost();
     ir_pose_update_seq = 0;
+    IR_Localization_ResetLossDebug();
+}
+
+void IR_Localization_Task_5ms(void)
+{
+    uint32 next_elapsed_ms = 0U;
+
+    s_ir_debug_task_5ms_count++;
+
+    if(!s_ir_has_trackable_pose)
+    {
+        if(!ir_position_lost_flag)
+        {
+            IR_Localization_SetPositionLost();
+        }
+        return;
+    }
+
+    next_elapsed_ms = (uint32)s_ir_lost_elapsed_ms + IR_POSITION_LOST_TASK_PERIOD_MS;
+
+    if(next_elapsed_ms >= IR_POSITION_LOST_HOLD_MS)
+    {
+        s_ir_debug_timeout_count++;
+        IR_Localization_MarkPositionLost();
+        return;
+    }
+
+    s_ir_lost_elapsed_ms = (uint16)next_elapsed_ms;
+    ir_position_lost_elapsed_ms = s_ir_lost_elapsed_ms;
+    ir_position_lost_flag = 0U;
+    ir_pose_estimate.valid = 1U;
+}
+
+void IR_Localization_ServiceLostProtection(void)
+{
+    if(ir_position_lost_flag)
+    {
+        IR_Localization_ClearTrackedCenter();
+    }
 }
 
 uint8 IR_FindPoints(const uint8 image[MT9V03X_H][MT9V03X_W],
@@ -264,15 +380,6 @@ uint8 IR_FindPoints(const uint8 image[MT9V03X_H][MT9V03X_W],
 {
     binarize_image((const uint8 *)image, g_binary_image, MT9V03X_W, MT9V03X_H, IR_THRESHOLD);
     return find_ir_points_internal(g_binary_image, MT9V03X_W, MT9V03X_H, out_pts);
-}
-
-static void IR_Localization_CopyOldPose(IR_Pose_t *out_pose)
-{
-    if(out_pose)
-    {
-        *out_pose = ir_pose_estimate;
-        out_pose->valid = 0;
-    }
 }
 
 uint8 IR_Localization_Process(const uint8 image[MT9V03X_H][MT9V03X_W],
@@ -288,12 +395,27 @@ uint8 IR_Localization_Process(const uint8 image[MT9V03X_H][MT9V03X_W],
     float estimated_z = 0.0f;
     int i = 0;
 
+    s_ir_debug_process_count++;
+
     if(!IR_FindPoints(image, img_pts))
     {
-        ir_pose_estimate.valid = 0;
-        IR_Localization_CopyOldPose(out_pose);
+        s_ir_debug_raw_detect_valid = 0U;
+        s_ir_debug_process_fail_count++;
+
+        if(s_ir_has_trackable_pose && !ir_position_lost_flag)
+        {
+            ir_pose_estimate.valid = 1U;
+        }
+        else
+        {
+            IR_Localization_SetPositionLost();
+        }
+        IR_Localization_CopyPose(out_pose);
         return 0;
     }
+
+    s_ir_debug_raw_detect_valid = 1U;
+    s_ir_debug_process_success_count++;
 
     for(i = 0; i < IR_SQUARE_POINT_COUNT; i++)
     {
@@ -339,12 +461,13 @@ uint8 IR_Localization_Process(const uint8 image[MT9V03X_H][MT9V03X_W],
     ir_pose_estimate.z = estimated_z;
     ir_pose_estimate.square_side_cm = square_side_cm;
     ir_pose_estimate.valid = 1;
+    s_ir_has_trackable_pose = 1U;
+    s_ir_lost_elapsed_ms = 0U;
+    ir_position_lost_elapsed_ms = 0U;
+    ir_position_lost_flag = 0U;
     ir_pose_update_seq++;
 
-    if(out_pose)
-    {
-        *out_pose = ir_pose_estimate;
-    }
+    IR_Localization_CopyPose(out_pose);
 
     return 1;
 }
