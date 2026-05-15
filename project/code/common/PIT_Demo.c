@@ -41,8 +41,8 @@
  * 控制器使用独立 PID:
  *   vel_pid_x → 水平前向加速度指令 ax_cmd (cm/s^2)
  *   vel_pid_y → 水平右向加速度指令 ay_cmd (cm/s^2)
- * 再按小角度近似 a≈g*theta 换算成 pitch/roll 修正角后叠加到起飞基准上。
- * Current takeoff base is fixed at 0deg/0deg and is no longer learned from startup attitude.
+ * 再按小角度近似 a≈g*theta 换算成 pitch/roll 修正角后叠加到悬停基准上。
+ * Current takeoff base is fixed at 0deg/0deg plus the wireless-tuned hover angle compensation.
  *
  * 极性宏用于一键修正机/IMU 安装方向带来的符号问题：
  *   pitch 正 = 低头（机体加速向前），所以 v_body_x>0 应让 pitch 减小。
@@ -889,11 +889,11 @@ void PIT_Control_Task_250us(void)
 
     if(!takeoff_active)
     {
-        /* 巡航阶段：原 ADC 位置闭环已废弃，目标姿态默认锁在起飞采样得到的
-         * 地面基准角上。当 g_velocity_loop_enabled = 1 且光流 valid 时，
+        /* 巡航阶段：原 ADC 位置闭环已废弃，目标姿态默认锁在悬停基准角上。
+         * 当 g_velocity_loop_enabled = 1 且光流 valid 时，
          * 用光流滤波后的机体水平速度跑速度闭环：
          *   PID(target=0, fb=v_body_x/y)  -> 角度修正量 (deg)
-         * 修正量再叠加到 captured 基准角上，限幅只由 vel_pid_x/y.output_limit 决定，
+         * 修正量再叠加到 captured / hover 基准角上，限幅只由 vel_pid_x/y.output_limit 决定，
          * 最终写入 target_angle_roll/pitch 交给已有姿态外环。 */
         float captured_roll = 0.0f;
         float captured_pitch = 0.0f;

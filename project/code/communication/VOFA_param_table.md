@@ -121,13 +121,22 @@
 |---|---:|---|
 | 目标油门 `target_throttle` | `0.0` | `S1=<value>!` |
 
-### 2.2 姿态补偿角
+### 2.2 IMU 安装补偿角
 
 | 参数 | 默认值 | VOFA 指令 |
 |---|---:|---|
-| Roll 补偿角 `angle_roll_compensation` | `0.0` | `T1=<value>!` |
-| Pitch 补偿角 `angle_pitch_compensation` | `0.0` | `T2=<value>!` |
-| Yaw 补偿角 `angle_yaw_compensation` | `0.0` | `T3=<value>!` |
+| IMU 加速度 Roll 安装补偿 `angle_roll_compensation` | `0.0` | `T1=<value>!` |
+| IMU 加速度 Pitch 安装补偿 `angle_pitch_compensation` | `0.0` | `T2=<value>!` |
+| 预留 Yaw 补偿 `angle_yaw_compensation` | `0.0` | `T3=<value>!` |
+
+### 2.3 悬停基准角补偿
+
+当前起飞采样基准为 `0deg / 0deg`，下面两个补偿量会叠加到 `Flight_Takeoff_Get_Captured_Angles()` 的返回值，并作为速度环叠加前的悬停姿态基准。内部限幅为 `±10deg`。
+
+| 参数 | 默认值 | VOFA 指令 |
+|---|---:|---|
+| Roll 悬停基准角补偿 | `-2.1` | `B1=<value>!` |
+| Pitch 悬停基准角补偿 | `0.65` | `B2=<value>!` |
 
 ## 3. 重要限幅与安全参数
 
@@ -161,7 +170,16 @@
 | `THROTTLE_RAMP_RATE` | `2.0` | 油门爬坡速率 |
 | `ANGLE_RATE_CMD_LPF_ALPHA` | `0.04` | Roll/Pitch 角度环输出目标角速度一阶低通系数 |
 
-### 3.4 PWM 输出
+### 3.4 光流速度反馈滤波
+
+这些参数当前不通过 VOFA 单独调。X 方向对应 Pitch 速度环，Y 方向对应 Roll 速度环。
+
+| 参数 | 当前值 | 说明 |
+|---|---:|---|
+| `PMW_FLOW_VEL_X_LPF_ALPHA` | `0.30` | X 方向光流速度反馈低通，保留 Pitch 速度环响应 |
+| `PMW_FLOW_VEL_Y_LPF_ALPHA` | `0.18` | Y 方向光流速度反馈低通，抑制 Roll 目标角抖动 |
+
+### 3.5 PWM 输出
 
 | 参数 | 当前值 | 说明 |
 |---|---:|---|

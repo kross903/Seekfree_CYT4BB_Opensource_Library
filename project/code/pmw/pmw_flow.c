@@ -46,15 +46,16 @@
  * 滤波参数（采样率约 50Hz / dt=20ms）：
  *   - RANGE_LPF_ALPHA:   ToF 距离一阶 LPF, alpha=0.40 → 截止 ≈ 5Hz，
  *                        把单帧 ToF 抖动平滑掉，避免直接乘到速度上。
- *   - VEL_LPF_ALPHA:     机体系速度 LPF, alpha=0.30 → 截止 ≈ 3Hz，
- *                        给上层（控制 / VOFA）提供稳定的速度量。
+ *   - VEL_X_LPF_ALPHA:   X 方向机体系速度 LPF, alpha=0.30，保留 Pitch 速度环响应。
+ *   - VEL_Y_LPF_ALPHA:   Y 方向机体系速度 LPF, alpha=0.18，压低 Roll 目标角抖动。
  *   - TILT_GATE_DEG:     |roll|/|pitch| 超过此值时认为光流姿态补偿残差不可信，
  *                        冻结速度 LPF 状态，输出保持上一次的滤波值。
  *   - VEL_OUTLIER_LIMIT: 单帧速度跳变超过该阈值视为离群（多半是 ToF 跳变 +
  *                        光流大瞬变叠加），用上一次滤波值替代喂进 LPF。
  */
 #define PMW_FLOW_RANGE_LPF_ALPHA            (0.40f)
-#define PMW_FLOW_VEL_LPF_ALPHA              (0.30f)
+#define PMW_FLOW_VEL_X_LPF_ALPHA            (0.30f)
+#define PMW_FLOW_VEL_Y_LPF_ALPHA            (0.18f)
 #define PMW_FLOW_TILT_GATE_DEG              (25.0f)
 #define PMW_FLOW_VEL_OUTLIER_LIMIT_CMS      (300.0f)
 #define PMW_FLOW_WORLD_TILT_GATE_DEG        (25.0f)
@@ -469,8 +470,8 @@ void PMW_Flow_UpdateSample(int16 flow_delta_x,
             {
                 vy_raw = g_pmw_flow_vel_y_filt_cms;
             }
-            g_pmw_flow_vel_x_filt_cms += PMW_FLOW_VEL_LPF_ALPHA * (vx_raw - g_pmw_flow_vel_x_filt_cms);
-            g_pmw_flow_vel_y_filt_cms += PMW_FLOW_VEL_LPF_ALPHA * (vy_raw - g_pmw_flow_vel_y_filt_cms);
+            g_pmw_flow_vel_x_filt_cms += PMW_FLOW_VEL_X_LPF_ALPHA * (vx_raw - g_pmw_flow_vel_x_filt_cms);
+            g_pmw_flow_vel_y_filt_cms += PMW_FLOW_VEL_Y_LPF_ALPHA * (vy_raw - g_pmw_flow_vel_y_filt_cms);
         }
         else
         {

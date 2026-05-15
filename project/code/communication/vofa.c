@@ -195,6 +195,24 @@ static void set_vel_pid_value(uint8 axis, uint8 item, float value)
         default:  return;
     }
 }
+
+static void set_hover_angle_compensation_value(uint8 item, float value)
+{
+    float hover_roll = 0.0f;
+    float hover_pitch = 0.0f;
+
+    Flight_Takeoff_Get_Hover_Angle_Compensation(&hover_roll, &hover_pitch);
+
+    switch(item)
+    {
+        case '1': hover_roll = value; break;
+        case '2': hover_pitch = value; break;
+        default:  return;
+    }
+
+    Flight_Takeoff_Set_Hover_Angle_Compensation(hover_roll, hover_pitch);
+}
+
     float roll_compensation = 0.0f;
     float pitch_compensation = 0.0f;
     float yaw_compensation = 0.0f;
@@ -306,6 +324,22 @@ static void send_pid_data_back(uint8 command)
         case 'S':
             value_1 = Flight_Control_Get_Target_Throttle();
             break;
+
+        case 'B':
+        {
+            float hover_roll = 0.0f;
+            float hover_pitch = 0.0f;
+            float base_roll = 0.0f;
+            float base_pitch = 0.0f;
+
+            Flight_Takeoff_Get_Hover_Angle_Compensation(&hover_roll, &hover_pitch);
+            Flight_Takeoff_Get_Captured_Angles(&base_roll, &base_pitch);
+            send_four_date(hover_roll, hover_pitch,
+                           base_roll, base_pitch,
+                           target_angle_roll, target_angle_pitch,
+                           current_roll, current_pitch);
+            return;
+        }
 
         case 'T':
             Flight_Control_Get_Target_Angle(&roll, &pitch, &yaw);
@@ -702,6 +736,14 @@ void USART_PID_Adjust(void)
                 set_angle_compensation_value(item, data_get);
             }
             send_back_command = 'T';
+            break;
+
+        case 'B':
+            if(has_value)
+            {
+                set_hover_angle_compensation_value(item, data_get);
+            }
+            send_back_command = 'B';
             break;
 
         case 'V':

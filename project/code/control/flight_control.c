@@ -11,6 +11,8 @@
 *********************************************************************************************************************/
 
 #define FLIGHT_CONTROL_MIN_THROTTLE  0.0f
+#define FLIGHT_TAKEOFF_DEFAULT_HOVER_ROLL_COMP_DEG   (-2.1f)
+#define FLIGHT_TAKEOFF_DEFAULT_HOVER_PITCH_COMP_DEG  (0.65f)
 
 extern volatile uint16 motor_throttle[4];
 
@@ -109,6 +111,9 @@ void Flight_Control_Init(void)
     g_flight_ctrl.target_gyro_roll = 0.0f;
     g_flight_ctrl.target_gyro_pitch = 0.0f;
     g_flight_ctrl.target_gyro_yaw = 0.0f;
+
+    Flight_Takeoff_Set_Hover_Angle_Compensation(FLIGHT_TAKEOFF_DEFAULT_HOVER_ROLL_COMP_DEG,
+                                                FLIGHT_TAKEOFF_DEFAULT_HOVER_PITCH_COMP_DEG);
 
     sync_runtime_snapshot();
 }
@@ -491,12 +496,29 @@ uint8 Flight_Control_Is_Throttle_Safe(float throttle)
 #define TAKEOFF_SAMPLE_DIVIDER      (TAKEOFF_CTRL_TICK_HZ / FLIGHT_TAKEOFF_SAMPLE_HZ)
 #define TAKEOFF_CAPTURE_SAMPLES     ((uint32)(FLIGHT_TAKEOFF_SAMPLE_HZ * FLIGHT_TAKEOFF_CAPTURE_DURATION_S))
 #define TAKEOFF_RAMP_TICKS          ((uint32)(TAKEOFF_CTRL_TICK_HZ * FLIGHT_TAKEOFF_RAMP_DURATION_S))
+#define TAKEOFF_HOVER_ANGLE_COMP_LIMIT_DEG (10.0f)
 
 static volatile flight_takeoff_state_enum g_takeoff_state = FLIGHT_TAKEOFF_IDLE;
 static volatile uint32 g_takeoff_tick_in_state = 0U;
 static volatile uint32 g_takeoff_sample_count = 0U;
 static volatile float  g_takeoff_captured_roll = 0.0f;
 static volatile float  g_takeoff_captured_pitch = 0.0f;
+static volatile float  g_takeoff_hover_roll_comp_deg = 0.0f;
+static volatile float  g_takeoff_hover_pitch_comp_deg = 0.0f;
+
+static float takeoff_limit_hover_angle_comp(float value)
+{
+    if(value > TAKEOFF_HOVER_ANGLE_COMP_LIMIT_DEG)
+    {
+        value = TAKEOFF_HOVER_ANGLE_COMP_LIMIT_DEG;
+    }
+    else if(value < -TAKEOFF_HOVER_ANGLE_COMP_LIMIT_DEG)
+    {
+        value = -TAKEOFF_HOVER_ANGLE_COMP_LIMIT_DEG;
+    }
+
+    return value;
+}
 
 static void takeoff_reset_state(void)
 {
@@ -549,11 +571,29 @@ void Flight_Takeoff_Get_Captured_Angles(float *roll, float *pitch)
 {
     if(roll != NULL)
     {
-        *roll = g_takeoff_captured_roll;
+        *roll = g_takeoff_captured_roll + g_takeoff_hover_roll_comp_deg;
     }
     if(pitch != NULL)
     {
-        *pitch = g_takeoff_captured_pitch;
+        *pitch = g_takeoff_captured_pitch + g_takeoff_hover_pitch_comp_deg;
+    }
+}
+
+void Flight_Takeoff_Set_Hover_Angle_Compensation(float roll_deg, float pitch_deg)
+{
+    g_takeoff_hover_roll_comp_deg = takeoff_limit_hover_angle_comp(roll_deg);
+    g_takeoff_hover_pitch_comp_deg = takeoff_limit_hover_angle_comp(pitch_deg);
+}
+
+void Flight_Takeoff_Get_Hover_Angle_Compensation(float *roll_deg, float *pitch_deg)
+{
+    if(roll_deg != NULL)
+    {
+        *roll_deg = g_takeoff_hover_roll_comp_deg;
+    }
+    if(pitch_deg != NULL)
+    {
+        *pitch_deg = g_takeoff_hover_pitch_comp_deg;
     }
 }
 
@@ -593,6 +633,8 @@ uint8 Flight_Takeoff_Tick_250us(void)
         {
             float progress;
             float ramped;
+            float hover_roll;
+            float hover_pitch;
 
             if(!armed)
             {
@@ -615,13 +657,14 @@ uint8 Flight_Takeoff_Tick_250us(void)
             current_throttle = ramped;
             base_throttle = ramped;
 
-            /* 接管目标角度：锁定到采样均值，覆盖摇杆 PID 的输出。 */
-            target_angle_roll  = g_takeoff_captured_roll;
-            target_angle_pitch = g_takeoff_captured_pitch;
+            /* 接管目标角度：锁定到悬停基准角，覆盖摇杆 PID 的输出。 */
+            Flight_Takeoff_Get_Captured_Angles(&hover_roll, &hover_pitch);
+            target_angle_roll  = hover_roll;
+            target_angle_pitch = hover_pitch;
 
             if(g_takeoff_tick_in_state >= TAKEOFF_RAMP_TICKS)
             {
-                /* ramp 结束：保持飞机 armed，油门停在 720，交还控制权给摇杆。 */
+                /* ramp 结束：保持飞机 armed，油门停在当前 ramp 目标值，交还控制权给巡航分支。 */
                 takeoff_reset_state();
             }
             return 1U;

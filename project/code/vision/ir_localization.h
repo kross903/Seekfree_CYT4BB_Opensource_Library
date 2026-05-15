@@ -1,9 +1,9 @@
 /**
  * @file ir_localization.h
- * @brief 三点红外定位模块接口
+ * @brief 四点红外正方形定位模块接口
  *
  * 主流程:
- * 原始图像 -> 二值化 -> 三个亮点质心 -> IPM -> 三角形中心/边长 -> 高度估计
+ * 原始图像 -> 二值化 -> 四个亮点质心 -> IPM -> 正方形中心/边长 -> 高度估计
  */
 
 #ifndef IR_LOCALIZATION_H_
@@ -16,7 +16,8 @@ extern "C" {
 #endif
 
 // ==================== 配置参数 ====================
-#define IR_TRIANGLE_SIDE_M     (0.095f)
+#define IR_SQUARE_POINT_COUNT  (4)
+#define IR_SQUARE_SIDE_M       (0.10f)
 #define IR_THRESHOLD           (150)
 #define IR_MAX_CANDIDATES      (20)
 #define IR_MIN_POINT_DIST_PX   (4.0f)
@@ -41,9 +42,9 @@ typedef struct
     float x;
     float y;
     float z;
-    float triangle_side_cm;
-    IR_Point2D_t img_pts[3];
-    IR_WorldPoint_t world_pts[3];
+    float square_side_cm;
+    IR_Point2D_t img_pts[IR_SQUARE_POINT_COUNT];
+    IR_WorldPoint_t world_pts[IR_SQUARE_POINT_COUNT];
     uint8 valid;
 } IR_Pose_t;
 
@@ -54,7 +55,7 @@ uint8 IR_Localization_Process(const uint8 image[MT9V03X_H][MT9V03X_W],
                               IR_Pose_t *out_pose);
 
 uint8 IR_FindPoints(const uint8 image[MT9V03X_H][MT9V03X_W],
-                    IR_Point2D_t out_pts[3]);
+                    IR_Point2D_t out_pts[IR_SQUARE_POINT_COUNT]);
 
 const uint8* IR_GetBinaryImage(void);
 

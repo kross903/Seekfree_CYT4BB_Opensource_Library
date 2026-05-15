@@ -178,10 +178,11 @@ flight_takeoff_state_enum Flight_Takeoff_Get_State(void);
 uint8                     Flight_Takeoff_Tick_250us(void);
 
 /*
- * 读取起飞采样阶段得到的"地面均值"角度。
- * 未运行过起飞流程时两者均为 0；位置闭环以此为基准，配合 ±3° 限幅
- * 锁定遥感单元只能在该基准附近驱动小幅姿态修正。
+ * 读取起飞流程使用的悬停基准角。
+ * 当前采样基准为 0deg/0deg，返回值会叠加无线调参设置的悬停角补偿。
  */
 void                      Flight_Takeoff_Get_Captured_Angles(float *roll, float *pitch);
+void                      Flight_Takeoff_Set_Hover_Angle_Compensation(float roll_deg, float pitch_deg);
+void                      Flight_Takeoff_Get_Hover_Angle_Compensation(float *roll_deg, float *pitch_deg);
 
 #endif /* FLIGHT_CONTROL_H_ */

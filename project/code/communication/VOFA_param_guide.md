@@ -22,6 +22,7 @@
 ```text
 R1=3.50!
 T2=0.21!
+B1=-2.10!
 S1=450!
 ```
 
@@ -123,21 +124,34 @@ S1=450!
 
 - 当前代码只检查第 1 个字符是 `S`，项目位不会单独分支，因此通常约定发 `S1=...!`
 
-### 9. 姿态补偿角
+### 9. IMU 安装补偿角
 
 命令前缀：`T`
 
 | 参数 | 指令示例 | 含义 |
 |---|---|---|
-| `T1` | `T1=-0.60!` | Roll 补偿角 |
-| `T2` | `T2=0.21!` | Pitch 补偿角 |
-| `T3` | `T3=0.00!` | Yaw 补偿角 |
+| `T1` | `T1=-0.60!` | IMU 加速度 Roll 安装补偿角 |
+| `T2` | `T2=0.21!` | IMU 加速度 Pitch 安装补偿角 |
+| `T3` | `T3=0.00!` | 预留 Yaw 补偿角 |
 
-### 10. X 方向速度环 PID
+注意：`T1/T2` 会参与 ICM42688 加速度安装补偿，不用于调悬停姿态目标。
+
+### 10. 悬停基准角补偿
+
+命令前缀：`B`
+
+`B` 组调 `Flight_Takeoff_Get_Captured_Angles()` 返回的悬停基准角。当前起飞采样基准为 `0deg / 0deg`，因此 `B1/B2` 会直接成为速度环叠加前的 Roll / Pitch 基准角。内部限幅为 `±10deg`。
+
+| 参数 | 指令示例 | 含义 |
+|---|---|---|
+| `B1` | `B1=-2.10!` | Roll 悬停基准角补偿，叠加到 `target_angle_roll` |
+| `B2` | `B2=0.65!` | Pitch 悬停基准角补偿，叠加到 `target_angle_pitch` |
+
+### 11. X 方向速度环 PID
 
 命令前缀：`V`
 
-`V` 组调 `vel_pid_x`，反馈量是光流滤波后的 `velocity_x_cms`，PID 输出是前后方向水平加速度指令 `ax_cmd_cms2`，再换算成 `pitch_corr_deg` 送入姿态环。
+`V` 组调 `vel_pid_x`，反馈量是光流滤波后的 `velocity_x_cms`，PID 输出是前后方向水平加速度指令 `ax_cmd_cms2`，再换算成 `pitch_corr_deg` 送入姿态环。当前 X 方向速度反馈使用 `PMW_FLOW_VEL_X_LPF_ALPHA = 0.30`。
 
 | 参数 | 指令示例 | 含义 |
 |---|---|---|
@@ -147,11 +161,11 @@ S1=450!
 | `V4` | `V4=85.0!` | X 速度环加速度指令限幅 `output_limit`，单位 `cm/s^2` |
 | `V5` | `V5=20.0!` | X 速度环积分限幅 `integral_limit` |
 
-### 11. Y 方向速度环 PID
+### 12. Y 方向速度环 PID
 
 命令前缀：`W`
 
-`W` 组调 `vel_pid_y`，反馈量是光流滤波后的 `velocity_y_cms`，PID 输出是左右方向水平加速度指令 `ay_cmd_cms2`，再换算成 `roll_corr_deg` 送入姿态环。
+`W` 组调 `vel_pid_y`，反馈量是光流滤波后的 `velocity_y_cms`，PID 输出是左右方向水平加速度指令 `ay_cmd_cms2`，再换算成 `roll_corr_deg` 送入姿态环。当前 Y 方向速度反馈使用 `PMW_FLOW_VEL_Y_LPF_ALPHA = 0.18`，比 X 方向更重滤波，用于抑制 `target_angle_roll` 抖动。
 
 | 参数 | 指令示例 | 含义 |
 |---|---|---|
@@ -241,6 +255,7 @@ S1=450!
 | `V` | X 方向速度环 `Kp Ki Kd OutLim IntLim` |
 | `W` | Y 方向速度环 `Kp Ki Kd OutLim IntLim` |
 | `S` | 当前目标油门 |
+| `B` | 悬停基准角补偿与当前最终基准角 |
 | `T` | 特殊姿态/补偿调试数据 |
 
 其中：
@@ -254,6 +269,16 @@ S1=450!
   6. `icm42688_acc_z`
   7. `roll_compensation`
   8. `pitch_compensation`
+
+- `B` 回读：
+  1. `hover_roll_comp_deg`
+  2. `hover_pitch_comp_deg`
+  3. `hover_base_roll_deg`（当前等于 `0 + B1`）
+  4. `hover_base_pitch_deg`（当前等于 `0 + B2`）
+  5. `target_angle_roll`
+  6. `target_angle_pitch`
+  7. `current_roll`
+  8. `current_pitch`
 
 ### `F2`：定位 / 高度观察
 
@@ -325,6 +350,8 @@ S1=450!
 7. `current_gyro_pitch`
 8. `target_pitch_rate`（角度环输出低通后的目标 Pitch 角速度）
 
+当前巡航阶段 `target_angle_roll = hover_base_roll_deg + roll_corr_deg`，其中 `hover_base_roll_deg` 由 `B1` 调节，`roll_corr_deg` 来自 Y 方向速度环。`target_angle_pitch` 同理由 `B2` 与 X 方向速度环共同决定。
+
 ### `FF`：Roll / Pitch 角度环监视
 
 返回顺序：
@@ -357,11 +384,11 @@ Roll/Pitch 角度环输出经过 `ANGLE_RATE_CMD_LPF_ALPHA = 0.04` 的一阶低�
 
 返回顺序：
 
-1. `fb_vx_cms`——速度环当前反馈，来自光流滤波速度
+1. `fb_vx_cms`——速度环当前反馈，来自 X 方向光流滤波速度，`PMW_FLOW_VEL_X_LPF_ALPHA = 0.30`
 2. `vx_target_cms`
 3. `x_i_out`
 4. `pitch_corr_deg`
-5. `fb_vy_cms`——速度环当前反馈，来自光流滤波速度
+5. `fb_vy_cms`——速度环当前反馈，来自 Y 方向光流滤波速度，`PMW_FLOW_VEL_Y_LPF_ALPHA = 0.18`
 6. `vy_target_cms`
 7. `y_i_out`
 8. `roll_corr_deg`
@@ -420,12 +447,19 @@ H3=0.00!
 S1=450!
 ```
 
-### 设置姿态补偿角
+### 设置 IMU 安装补偿角
 
 ```text
 T1=-0.60!
 T2=0.21!
 T3=0.00!
+```
+
+### 设置悬停基准角补偿
+
+```text
+B1=-2.10!
+B2=0.65!
 ```
 
 ### 设置 X 方向速度环 PID

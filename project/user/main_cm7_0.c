@@ -45,9 +45,6 @@
 
 // **************************** 代码区域 ****************************
 static monitor_page_enum g_monitor_page = MONITOR_PAGE_DATA;
-static BeaconResult_t g_beacon_results[BEACON_MAX_DETECTIONS];
-static int g_beacon_count = 0;
-static int g_nearest_idx = -1;
 
 static void build_monitor_runtime_snapshot(MonitorRuntimeSnapshot *snapshot)
 {
@@ -63,16 +60,16 @@ static void build_monitor_runtime_snapshot(MonitorRuntimeSnapshot *snapshot)
     snapshot->control_mode = control_mode;
     snapshot->armed = (uint8)(armed ? 1U : 0U);
     snapshot->low_voltage = (uint8)(low_voltage_protect_flag ? 1U : 0U);
-    snapshot->has_nearest = (uint8)((g_nearest_idx >= 0) ? 1U : 0U);
+    snapshot->has_nearest = (uint8)(ir_pose_estimate.valid ? 1U : 0U);
     snapshot->voltage = car_bat_voltage;  /* 小车与飞机共用电池，直接显示小车上的实测电压。 */
     snapshot->target_throttle = (int32)Flight_Control_Get_Target_Throttle();
     snapshot->base_throttle = (int32)base_throttle;
     snapshot->roll = current_roll;
     snapshot->pitch = current_pitch;
     snapshot->yaw = current_yaw;
-    snapshot->beacon_count = g_beacon_count;
-    snapshot->nearest_x = snapshot->has_nearest ? g_beacon_results[g_nearest_idx].world_x : 0.0f;
-    snapshot->nearest_y = snapshot->has_nearest ? g_beacon_results[g_nearest_idx].world_y : 0.0f;
+    snapshot->beacon_count = ir_pose_estimate.valid ? IR_SQUARE_POINT_COUNT : 0;
+    snapshot->nearest_x = ir_pose_estimate.valid ? ir_pose_estimate.x : 0.0f;
+    snapshot->nearest_y = ir_pose_estimate.valid ? ir_pose_estimate.y : 0.0f;
     snapshot->tof_raw_cm = dl1b_distance_mm * 0.1f;
     snapshot->tof_height_cm = tof_height_true_filt * 100.0f;
     snapshot->fused_height_cm = g_height_result.height_cm;
@@ -110,9 +107,6 @@ static void update_monitor_vision_state(void)
     mt9v03x_finish_flag = 0;
     IPM_Interface_UpdateFromIMU(tof_height_true_filt * 100.0f);
     IR_Localization_Process(mt9v03x_image, &ir_pose_estimate);
-
-    g_beacon_count = BeaconDetect_Process(mt9v03x_image, g_beacon_results, BEACON_MAX_DETECTIONS);
-    g_nearest_idx = BeaconDetect_GetNearestIndex(g_beacon_results, g_beacon_count);
 }
 
 static void service_monitor_telemetry(void)
@@ -223,7 +217,6 @@ static void initialize_control_core_modules(void)
 
     IR_Localization_Init();
     IPM_Interface_Init();
-    BeaconDetect_Init();
     HeightManager_Init(100.0f);
 }
 

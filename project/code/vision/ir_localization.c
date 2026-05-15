@@ -29,7 +29,7 @@ static void binarize_image(const uint8 *src, uint8 *dst, int width, int height, 
 }
 
 static uint8 find_ir_points_internal(const uint8 *binary_img, int img_w, int img_h,
-                                     IR_Point2D_t out_pts[3])
+                                     IR_Point2D_t out_pts[IR_SQUARE_POINT_COUNT])
 {
     typedef struct
     {
@@ -151,7 +151,7 @@ static uint8 find_ir_points_internal(const uint8 *binary_img, int img_w, int img
         }
     }
 
-    if(region_count < 3)
+    if(region_count < IR_SQUARE_POINT_COUNT)
     {
         return 0;
     }
@@ -169,7 +169,7 @@ static uint8 find_ir_points_internal(const uint8 *binary_img, int img_w, int img
         }
     }
 
-    for(i = 0; i < 3; i++)
+    for(i = 0; i < IR_SQUARE_POINT_COUNT; i++)
     {
         out_pts[i].u = regions[i].sum_x / (float)regions[i].count;
         out_pts[i].v = regions[i].sum_y / (float)regions[i].count;
@@ -179,23 +179,74 @@ static uint8 find_ir_points_internal(const uint8 *binary_img, int img_w, int img
     return 1;
 }
 
-static float calculate_triangle_side(const IR_WorldPoint_t pts[3])
+static float world_point_distance_cm(const IR_WorldPoint_t *a, const IR_WorldPoint_t *b)
 {
-    float d01 = sqrtf((pts[1].x - pts[0].x) * (pts[1].x - pts[0].x) +
-                      (pts[1].y - pts[0].y) * (pts[1].y - pts[0].y));
-    float d12 = sqrtf((pts[2].x - pts[1].x) * (pts[2].x - pts[1].x) +
-                      (pts[2].y - pts[1].y) * (pts[2].y - pts[1].y));
-    float d20 = sqrtf((pts[0].x - pts[2].x) * (pts[0].x - pts[2].x) +
-                      (pts[0].y - pts[2].y) * (pts[0].y - pts[2].y));
-
-    return (d01 + d12 + d20) / 3.0f;
+    return sqrtf((b->x - a->x) * (b->x - a->x) +
+                 (b->y - a->y) * (b->y - a->y));
 }
 
-static void calculate_triangle_center(const IR_WorldPoint_t pts[3],
-                                      float *center_x, float *center_y)
+static void sort_float_ascending(float *values, int count)
 {
-    *center_x = (pts[0].x + pts[1].x + pts[2].x) / 3.0f;
-    *center_y = (pts[0].y + pts[1].y + pts[2].y) / 3.0f;
+    int i = 0;
+    int j = 0;
+
+    for(i = 0; i < count - 1; i++)
+    {
+        for(j = i + 1; j < count; j++)
+        {
+            if(values[j] < values[i])
+            {
+                float tmp = values[i];
+                values[i] = values[j];
+                values[j] = tmp;
+            }
+        }
+    }
+}
+
+static float calculate_square_side(const IR_WorldPoint_t pts[IR_SQUARE_POINT_COUNT])
+{
+    float distances[6];
+    float side_sum = 0.0f;
+    int dist_count = 0;
+    int i = 0;
+    int j = 0;
+
+    for(i = 0; i < IR_SQUARE_POINT_COUNT - 1; i++)
+    {
+        for(j = i + 1; j < IR_SQUARE_POINT_COUNT; j++)
+        {
+            distances[dist_count] = world_point_distance_cm(&pts[i], &pts[j]);
+            dist_count++;
+        }
+    }
+
+    sort_float_ascending(distances, dist_count);
+
+    for(i = 0; i < 4; i++)
+    {
+        side_sum += distances[i];
+    }
+
+    return side_sum / 4.0f;
+}
+
+static void calculate_square_center(const IR_WorldPoint_t pts[IR_SQUARE_POINT_COUNT],
+                                    float *center_x, float *center_y)
+{
+    int i = 0;
+
+    *center_x = 0.0f;
+    *center_y = 0.0f;
+
+    for(i = 0; i < IR_SQUARE_POINT_COUNT; i++)
+    {
+        *center_x += pts[i].x;
+        *center_y += pts[i].y;
+    }
+
+    *center_x /= (float)IR_SQUARE_POINT_COUNT;
+    *center_y /= (float)IR_SQUARE_POINT_COUNT;
 }
 
 void IR_Localization_Init(void)
@@ -203,13 +254,13 @@ void IR_Localization_Init(void)
     ir_pose_estimate.x = 0.0f;
     ir_pose_estimate.y = 0.0f;
     ir_pose_estimate.z = 0.0f;
-    ir_pose_estimate.triangle_side_cm = 0.0f;
+    ir_pose_estimate.square_side_cm = 0.0f;
     ir_pose_estimate.valid = 0;
     ir_pose_update_seq = 0;
 }
 
 uint8 IR_FindPoints(const uint8 image[MT9V03X_H][MT9V03X_W],
-                    IR_Point2D_t out_pts[3])
+                    IR_Point2D_t out_pts[IR_SQUARE_POINT_COUNT])
 {
     binarize_image((const uint8 *)image, g_binary_image, MT9V03X_W, MT9V03X_H, IR_THRESHOLD);
     return find_ir_points_internal(g_binary_image, MT9V03X_W, MT9V03X_H, out_pts);
@@ -227,12 +278,12 @@ static void IR_Localization_CopyOldPose(IR_Pose_t *out_pose)
 uint8 IR_Localization_Process(const uint8 image[MT9V03X_H][MT9V03X_W],
                               IR_Pose_t *out_pose)
 {
-    IR_Point2D_t img_pts[3];
-    IR_WorldPoint_t world_pts[3];
+    IR_Point2D_t img_pts[IR_SQUARE_POINT_COUNT];
+    IR_WorldPoint_t world_pts[IR_SQUARE_POINT_COUNT];
     float center_x = 0.0f;
     float center_y = 0.0f;
-    float triangle_side_cm = 0.0f;
-    float real_side_cm = IR_TRIANGLE_SIDE_M * 100.0f;
+    float square_side_cm = 0.0f;
+    float real_side_cm = IR_SQUARE_SIDE_M * 100.0f;
     float current_height = g_ipm.height;
     float estimated_z = 0.0f;
     int i = 0;
@@ -244,7 +295,7 @@ uint8 IR_Localization_Process(const uint8 image[MT9V03X_H][MT9V03X_W],
         return 0;
     }
 
-    for(i = 0; i < 3; i++)
+    for(i = 0; i < IR_SQUARE_POINT_COUNT; i++)
     {
         float world_x = 0.0f;
         float world_y = 0.0f;
@@ -258,12 +309,12 @@ uint8 IR_Localization_Process(const uint8 image[MT9V03X_H][MT9V03X_W],
         ir_pose_estimate.world_pts[i] = world_pts[i];
     }
 
-    calculate_triangle_center(world_pts, &center_x, &center_y);
-    triangle_side_cm = calculate_triangle_side(world_pts);
+    calculate_square_center(world_pts, &center_x, &center_y);
+    square_side_cm = calculate_square_side(world_pts);
 
-    if(triangle_side_cm > 0.5f && current_height > 1.0f)
+    if(square_side_cm > 0.5f && current_height > 1.0f)
     {
-        estimated_z = current_height * (real_side_cm / triangle_side_cm);
+        estimated_z = current_height * (real_side_cm / square_side_cm);
 
         if(estimated_z < 5.0f)
         {
@@ -286,7 +337,7 @@ uint8 IR_Localization_Process(const uint8 image[MT9V03X_H][MT9V03X_W],
     ir_pose_estimate.x = center_x;
     ir_pose_estimate.y = center_y;
     ir_pose_estimate.z = estimated_z;
-    ir_pose_estimate.triangle_side_cm = triangle_side_cm;
+    ir_pose_estimate.square_side_cm = square_side_cm;
     ir_pose_estimate.valid = 1;
     ir_pose_update_seq++;
 
