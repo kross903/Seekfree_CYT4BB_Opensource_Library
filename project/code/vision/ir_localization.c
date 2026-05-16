@@ -18,8 +18,27 @@ volatile uint32 ir_pose_update_seq = 0;
 volatile uint8 ir_position_lost_flag = 1U;
 volatile uint16 ir_position_lost_elapsed_ms = IR_POSITION_LOST_HOLD_MS;
 
+#define IR_THREE_POINT_MIN_SIDE_CM          (2.0f)
+#define IR_THREE_POINT_SIDE_RATIO_MAX       (0.45f)
+#define IR_THREE_POINT_DIAG_RATIO_MAX       (0.45f)
+#define IR_CENTER_KALMAN_Q                  (0.20f)
+#define IR_CENTER_KALMAN_R                  (4.0f)
+#define IR_CENTER_KALMAN_INITIAL_P          (10.0f)
+
+typedef struct
+{
+    float x;
+    float p;
+    float q;
+    float r;
+    float k;
+    uint8 initialized;
+} IR_Kalman1D_t;
+
 static uint8 s_ir_has_trackable_pose = 0U;
 static uint16 s_ir_lost_elapsed_ms = IR_POSITION_LOST_HOLD_MS;
+static IR_Kalman1D_t s_ir_center_kalman_x = {0};
+static IR_Kalman1D_t s_ir_center_kalman_y = {0};
 
 static volatile uint8 s_ir_debug_raw_detect_valid = 0U;
 static volatile uint32 s_ir_debug_task_5ms_count = 0U;
@@ -32,6 +51,65 @@ static volatile uint32 s_ir_debug_timeout_count = 0U;
 // Binary image buffer used by the IR point detector.
 static uint8 g_binary_image[MT9V03X_H * MT9V03X_W];
 
+static void ir_center_kalman_reset_axis(IR_Kalman1D_t *kf)
+{
+    if(kf == NULL)
+    {
+        return;
+    }
+
+    kf->x = 0.0f;
+    kf->p = IR_CENTER_KALMAN_INITIAL_P;
+    kf->q = IR_CENTER_KALMAN_Q;
+    kf->r = IR_CENTER_KALMAN_R;
+    kf->k = 0.0f;
+    kf->initialized = 0U;
+}
+
+static void ir_center_kalman_reset(void)
+{
+    ir_center_kalman_reset_axis(&s_ir_center_kalman_x);
+    ir_center_kalman_reset_axis(&s_ir_center_kalman_y);
+}
+
+static float ir_center_kalman_update_axis(IR_Kalman1D_t *kf, float measurement)
+{
+    if(kf == NULL)
+    {
+        return measurement;
+    }
+
+    if(!kf->initialized)
+    {
+        kf->x = measurement;
+        kf->p = IR_CENTER_KALMAN_INITIAL_P;
+        kf->q = IR_CENTER_KALMAN_Q;
+        kf->r = IR_CENTER_KALMAN_R;
+        kf->k = 0.0f;
+        kf->initialized = 1U;
+        return kf->x;
+    }
+
+    kf->p += kf->q;
+    kf->k = kf->p / (kf->p + kf->r);
+    kf->x += kf->k * (measurement - kf->x);
+    kf->p = (1.0f - kf->k) * kf->p;
+
+    return kf->x;
+}
+
+static void ir_center_kalman_update(float raw_x, float raw_y, float *filtered_x, float *filtered_y)
+{
+    if(filtered_x != NULL)
+    {
+        *filtered_x = ir_center_kalman_update_axis(&s_ir_center_kalman_x, raw_x);
+    }
+    if(filtered_y != NULL)
+    {
+        *filtered_y = ir_center_kalman_update_axis(&s_ir_center_kalman_y, raw_y);
+    }
+}
+
 static void binarize_image(const uint8 *src, uint8 *dst, int width, int height, uint8 threshold)
 {
     int i = 0;
@@ -43,7 +121,8 @@ static void binarize_image(const uint8 *src, uint8 *dst, int width, int height, 
 }
 
 static uint8 find_ir_points_internal(const uint8 *binary_img, int img_w, int img_h,
-                                     IR_Point2D_t out_pts[IR_SQUARE_POINT_COUNT])
+                                     IR_Point2D_t out_pts[IR_SQUARE_POINT_COUNT],
+                                     uint8 *out_point_count)
 {
     typedef struct
     {
@@ -63,8 +142,14 @@ static uint8 find_ir_points_internal(const uint8 *binary_img, int img_w, int img
     int x = 0;
     int i = 0;
     int j = 0;
+    int selected_count = 0;
 
     memset(visited, 0, (size_t)(img_w * img_h));
+    memset(out_pts, 0, sizeof(IR_Point2D_t) * IR_SQUARE_POINT_COUNT);
+    if(out_point_count != NULL)
+    {
+        *out_point_count = 0U;
+    }
 
     for(y = 0; y < img_h; y++)
     {
@@ -165,7 +250,7 @@ static uint8 find_ir_points_internal(const uint8 *binary_img, int img_w, int img
         }
     }
 
-    if(region_count < IR_SQUARE_POINT_COUNT)
+    if(region_count < IR_SQUARE_MIN_DETECT_POINTS)
     {
         return 0;
     }
@@ -183,14 +268,33 @@ static uint8 find_ir_points_internal(const uint8 *binary_img, int img_w, int img
         }
     }
 
-    for(i = 0; i < IR_SQUARE_POINT_COUNT; i++)
+    selected_count = region_count;
+    if(selected_count > IR_SQUARE_POINT_COUNT)
+    {
+        selected_count = IR_SQUARE_POINT_COUNT;
+    }
+
+    for(i = 0; i < selected_count; i++)
     {
         out_pts[i].u = regions[i].sum_x / (float)regions[i].count;
         out_pts[i].v = regions[i].sum_y / (float)regions[i].count;
         out_pts[i].intensity = (float)regions[i].count;
     }
 
+    if(out_point_count != NULL)
+    {
+        *out_point_count = (uint8)selected_count;
+    }
+
     return 1;
+}
+
+static uint8 IR_FindPointsWithCount(const uint8 image[MT9V03X_H][MT9V03X_W],
+                                    IR_Point2D_t out_pts[IR_SQUARE_POINT_COUNT],
+                                    uint8 *out_point_count)
+{
+    binarize_image((const uint8 *)image, g_binary_image, MT9V03X_W, MT9V03X_H, IR_THRESHOLD);
+    return find_ir_points_internal(g_binary_image, MT9V03X_W, MT9V03X_H, out_pts, out_point_count);
 }
 
 static float world_point_distance_cm(const IR_WorldPoint_t *a, const IR_WorldPoint_t *b)
@@ -263,6 +367,71 @@ static void calculate_square_center(const IR_WorldPoint_t pts[IR_SQUARE_POINT_CO
     *center_y /= (float)IR_SQUARE_POINT_COUNT;
 }
 
+static uint8 reconstruct_square_from_three_points(IR_WorldPoint_t world_pts[IR_SQUARE_POINT_COUNT],
+                                                  IR_Point2D_t img_pts[IR_SQUARE_POINT_COUNT])
+{
+    float d01 = world_point_distance_cm(&world_pts[0], &world_pts[1]);
+    float d02 = world_point_distance_cm(&world_pts[0], &world_pts[2]);
+    float d12 = world_point_distance_cm(&world_pts[1], &world_pts[2]);
+    float diag = d01;
+    int diag_a = 0;
+    int diag_b = 1;
+    int right = 2;
+    float side_a = 0.0f;
+    float side_b = 0.0f;
+    float side_avg = 0.0f;
+    float diag_expected = 0.0f;
+    float side_ratio = 0.0f;
+    float diag_ratio = 0.0f;
+
+    if(d02 > diag)
+    {
+        diag = d02;
+        diag_a = 0;
+        diag_b = 2;
+        right = 1;
+    }
+    if(d12 > diag)
+    {
+        diag = d12;
+        diag_a = 1;
+        diag_b = 2;
+        right = 0;
+    }
+
+    side_a = world_point_distance_cm(&world_pts[right], &world_pts[diag_a]);
+    side_b = world_point_distance_cm(&world_pts[right], &world_pts[diag_b]);
+    side_avg = 0.5f * (side_a + side_b);
+
+    if(side_avg < IR_THREE_POINT_MIN_SIDE_CM)
+    {
+        return 0U;
+    }
+
+    diag_expected = sqrtf(side_a * side_a + side_b * side_b);
+    if(diag_expected < IR_THREE_POINT_MIN_SIDE_CM)
+    {
+        return 0U;
+    }
+
+    side_ratio = fabsf(side_a - side_b) / side_avg;
+    diag_ratio = fabsf(diag - diag_expected) / diag_expected;
+
+    if(side_ratio > IR_THREE_POINT_SIDE_RATIO_MAX || diag_ratio > IR_THREE_POINT_DIAG_RATIO_MAX)
+    {
+        return 0U;
+    }
+
+    world_pts[3].x = world_pts[diag_a].x + world_pts[diag_b].x - world_pts[right].x;
+    world_pts[3].y = world_pts[diag_a].y + world_pts[diag_b].y - world_pts[right].y;
+
+    img_pts[3].u = img_pts[diag_a].u + img_pts[diag_b].u - img_pts[right].u;
+    img_pts[3].v = img_pts[diag_a].v + img_pts[diag_b].v - img_pts[right].v;
+    img_pts[3].intensity = 0.0f;
+
+    return 1U;
+}
+
 static void IR_Localization_ClearPose(void)
 {
     memset(&ir_pose_estimate, 0, sizeof(ir_pose_estimate));
@@ -272,6 +441,10 @@ static void IR_Localization_ClearTrackedCenter(void)
 {
     ir_pose_estimate.x = 0.0f;
     ir_pose_estimate.y = 0.0f;
+    ir_pose_estimate.raw_x = 0.0f;
+    ir_pose_estimate.raw_y = 0.0f;
+    ir_pose_estimate.detected_point_count = 0U;
+    ir_pose_estimate.reconstructed_point = 0U;
     ir_pose_estimate.valid = 0U;
 }
 
@@ -282,6 +455,7 @@ static void IR_Localization_MarkPositionLost(void)
     s_ir_lost_elapsed_ms = IR_POSITION_LOST_HOLD_MS;
     ir_position_lost_elapsed_ms = s_ir_lost_elapsed_ms;
     ir_position_lost_flag = 1U;
+    ir_center_kalman_reset();
     IR_Localization_ClearTrackedCenter();
 }
 
@@ -297,6 +471,24 @@ static void IR_Localization_CopyPose(IR_Pose_t *out_pose)
     {
         *out_pose = ir_pose_estimate;
     }
+}
+
+static uint8 IR_Localization_ProcessFail(IR_Pose_t *out_pose)
+{
+    s_ir_debug_raw_detect_valid = 0U;
+    s_ir_debug_process_fail_count++;
+
+    if(s_ir_has_trackable_pose && !ir_position_lost_flag)
+    {
+        ir_pose_estimate.valid = 1U;
+    }
+    else
+    {
+        IR_Localization_SetPositionLost();
+    }
+
+    IR_Localization_CopyPose(out_pose);
+    return 0U;
 }
 
 static void IR_Localization_ResetLossDebug(void)
@@ -378,8 +570,9 @@ void IR_Localization_ServiceLostProtection(void)
 uint8 IR_FindPoints(const uint8 image[MT9V03X_H][MT9V03X_W],
                     IR_Point2D_t out_pts[IR_SQUARE_POINT_COUNT])
 {
-    binarize_image((const uint8 *)image, g_binary_image, MT9V03X_W, MT9V03X_H, IR_THRESHOLD);
-    return find_ir_points_internal(g_binary_image, MT9V03X_W, MT9V03X_H, out_pts);
+    uint8 point_count = 0U;
+
+    return IR_FindPointsWithCount(image, out_pts, &point_count);
 }
 
 uint8 IR_Localization_Process(const uint8 image[MT9V03X_H][MT9V03X_W],
@@ -389,50 +582,56 @@ uint8 IR_Localization_Process(const uint8 image[MT9V03X_H][MT9V03X_W],
     IR_WorldPoint_t world_pts[IR_SQUARE_POINT_COUNT];
     float center_x = 0.0f;
     float center_y = 0.0f;
+    float filtered_center_x = 0.0f;
+    float filtered_center_y = 0.0f;
     float square_side_cm = 0.0f;
     float real_side_cm = IR_SQUARE_SIDE_M * 100.0f;
     float current_height = g_ipm.height;
     float estimated_z = 0.0f;
+    uint8 detected_point_count = 0U;
+    uint8 reconstructed_point = 0U;
     int i = 0;
 
     s_ir_debug_process_count++;
 
-    if(!IR_FindPoints(image, img_pts))
+    if(!IR_FindPointsWithCount(image, img_pts, &detected_point_count))
     {
-        s_ir_debug_raw_detect_valid = 0U;
-        s_ir_debug_process_fail_count++;
-
-        if(s_ir_has_trackable_pose && !ir_position_lost_flag)
-        {
-            ir_pose_estimate.valid = 1U;
-        }
-        else
-        {
-            IR_Localization_SetPositionLost();
-        }
-        IR_Localization_CopyPose(out_pose);
-        return 0;
+        return IR_Localization_ProcessFail(out_pose);
     }
 
     s_ir_debug_raw_detect_valid = 1U;
-    s_ir_debug_process_success_count++;
 
-    for(i = 0; i < IR_SQUARE_POINT_COUNT; i++)
+    for(i = 0; i < detected_point_count; i++)
     {
         float world_x = 0.0f;
         float world_y = 0.0f;
-
-        ir_pose_estimate.img_pts[i] = img_pts[i];
 
         IPM_Image2World((int)img_pts[i].u, (int)img_pts[i].v, &world_x, &world_y);
 
         world_pts[i].x = world_x;
         world_pts[i].y = world_y;
+    }
+
+    if(detected_point_count == IR_SQUARE_MIN_DETECT_POINTS)
+    {
+        if(!reconstruct_square_from_three_points(world_pts, img_pts))
+        {
+            return IR_Localization_ProcessFail(out_pose);
+        }
+        reconstructed_point = 1U;
+    }
+
+    s_ir_debug_process_success_count++;
+
+    for(i = 0; i < IR_SQUARE_POINT_COUNT; i++)
+    {
+        ir_pose_estimate.img_pts[i] = img_pts[i];
         ir_pose_estimate.world_pts[i] = world_pts[i];
     }
 
     calculate_square_center(world_pts, &center_x, &center_y);
     square_side_cm = calculate_square_side(world_pts);
+    ir_center_kalman_update(center_x, center_y, &filtered_center_x, &filtered_center_y);
 
     if(square_side_cm > 0.5f && current_height > 1.0f)
     {
@@ -456,10 +655,14 @@ uint8 IR_Localization_Process(const uint8 image[MT9V03X_H][MT9V03X_W],
         }
     }
 
-    ir_pose_estimate.x = center_x;
-    ir_pose_estimate.y = center_y;
+    ir_pose_estimate.raw_x = center_x;
+    ir_pose_estimate.raw_y = center_y;
+    ir_pose_estimate.x = filtered_center_x;
+    ir_pose_estimate.y = filtered_center_y;
     ir_pose_estimate.z = estimated_z;
     ir_pose_estimate.square_side_cm = square_side_cm;
+    ir_pose_estimate.detected_point_count = detected_point_count;
+    ir_pose_estimate.reconstructed_point = reconstructed_point;
     ir_pose_estimate.valid = 1;
     s_ir_has_trackable_pose = 1U;
     s_ir_lost_elapsed_ms = 0U;

@@ -36,12 +36,12 @@ static void send_four_date(float date_1, float date_2, float date_3, float date_
  *   F6  Roll/Pitch 角度+角速度环监视 (case 6)
  *   F7  ADC + 摇杆历史调试 (case 7)
  *   F8  光流速度闭环综合监视 (case 8): I0~I3 X轴 光流实际/目标/积分项/pitch修正,
- *                                       I4~I7 Y轴 实际/目标/积分项/roll 修正
+ *                                       I4~I7 Y轴 光流实际/目标/积分项/roll 修正
  * FD  高度环监视 (case 13): I0 实际高度(cm), I1 目标高度(cm),
  *                                        I2 高度误差(cm), I3 HeightPID输出,
  *                                        I4 比例项, I5 积分项, I6 微分项, I7 base_throttle
  * FE  光流原始输入诊断 (case 14)
- * FG  四灯正方形红外中心点与丢失保护诊断 (case 16)
+ * FG  红外正方形中心点与丢失保护诊断 (case 16)
  * FH  红外丢失保护状态机诊断 (case 17)
  * FI  红外位置闭环诊断 (case 18)
  * FJ  速度环/光流门控诊断 (case 19)
@@ -1169,7 +1169,7 @@ void send_date_back(void)
                            (float)ir_track_valid,
                            (float)ir_position_lost_flag,
                            (float)ir_position_lost_elapsed_ms,
-                           (float)IR_SQUARE_POINT_COUNT);
+                           (float)ir_pose_estimate.detected_point_count);
             break;
 
         case 17:

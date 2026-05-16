@@ -151,7 +151,7 @@ S1=450!
 
 命令前缀：`V`
 
-`V` 组调 `vel_pid_x`，反馈量是光流滤波后的 `velocity_x_cms`，PID 输出是前后方向水平加速度指令 `ax_cmd_cms2`，再换算成 `pitch_corr_deg` 送入姿态环。当前 X 方向速度反馈使用 `PMW_FLOW_VEL_X_LPF_ALPHA = 0.30`。
+`V` 组调 `vel_pid_x`，反馈量是光流滤波后的 `velocity_x_cms`，PID 输出是前后方向水平加速度指令 `ax_cmd_cms2`，再换算成 `pitch_corr_deg` 送入姿态环。当前 X 方向速度反馈先经过 `PMW_FLOW_VEL_X_LPF_ALPHA = 0.30`，再经过二级低通 `PMW_FLOW_VEL_X_SECOND_LPF_ALPHA = 0.20`。
 
 | 参数 | 指令示例 | 含义 |
 |---|---|---|
@@ -165,7 +165,7 @@ S1=450!
 
 命令前缀：`W`
 
-`W` 组调 `vel_pid_y`，反馈量是光流滤波后的 `velocity_y_cms`，PID 输出是左右方向水平加速度指令 `ay_cmd_cms2`，再换算成 `roll_corr_deg` 送入姿态环。当前 Y 方向速度反馈使用 `PMW_FLOW_VEL_Y_LPF_ALPHA = 0.18`，比 X 方向更重滤波，用于抑制 `target_angle_roll` 抖动。
+`W` 组调 `vel_pid_y`，反馈量是光流滤波后的 `velocity_y_cms`，PID 输出是左右方向水平加速度指令 `ay_cmd_cms2`，再换算成 `roll_corr_deg` 送入姿态环。当前 Y 方向速度反馈先经过 `PMW_FLOW_VEL_Y_LPF_ALPHA = 0.18`，再经过二级低通 `PMW_FLOW_VEL_Y_SECOND_LPF_ALPHA = 0.12`，比 X 方向更重滤波，用于抑制 `target_angle_roll` 抖动。
 
 | 参数 | 指令示例 | 含义 |
 |---|---|---|
@@ -229,7 +229,7 @@ S1=450!
 | `FD=0!` 或 `FD!` | 高度环监视：I0 实际高度, I1 目标高度, I2 误差, I3 PID输出, I4 P项, I5 I项, I6 D项, I7 base_throttle |
 | `FE=0!` 或 `FE!` | 光流原始输入诊断：UP-FLOW-302 模式下回传原始 x/y、valid、状态、新帧标志、帧间隔 |
 | `FF=0!` 或 `FF!` | Roll/Pitch 角度环监视：目标角、实际角、I项输出、低通后的总输出 |
-| `FG=0!` 或 `FG!` | 四灯正方形红外中心点：I0 中心 X, I1 中心 Y, I2 视觉高度, I3 正方形边长, I4 可追踪, I5 丢失标志 |
+| `FG=0!` 或 `FG!` | 红外正方形中心点：I0 中心 X, I1 中心 Y, I2 视觉高度, I3 正方形边长, I4 可追踪, I5 丢失标志, I7 本帧识别点数 |
 | `FH=0!` 或 `FH!` | 红外丢失保护状态机诊断：I0 中心 X, I1 中心 Y, I2 原始检测成功, I3 丢失标志, I4 丢失计时, I5 有历史位姿, I6 5ms任务计数, I7 2s超时次数 |
 | `FI=0!` 或 `FI!` | 红外位置闭环诊断：I0 位置X, I1 位置Y, I2 目标速度X, I3 目标速度Y, I4 位置环使能, I5 位置环激活, I6 红外可追踪, I7 光流速度可用 |
 | `FJ=0!` 或 `FJ!` | 速度环/光流门控诊断：I0 速度环使能, I1 速度环激活, I2 光流valid, I3 光流used, I4 ToF高度, I5 ToF来源, I6 ToF失效计数, I7 光流dt |
@@ -329,7 +329,7 @@ S1=450!
 7. `current_pitch`
 8. `current_yaw`
 
-### `FG`：四灯正方形红外中心点
+### `FG`：红外正方形中心点
 
 发送：
 
@@ -339,16 +339,16 @@ FG!
 
 返回顺序：
 
-1. `ir_pose_estimate.x`——四灯正方形中心点 X 坐标，单位 cm，正方向为机体 / 世界前方
-2. `ir_pose_estimate.y`——四灯正方形中心点 Y 坐标，单位 cm，正方向为机体 / 世界右方
-3. `ir_pose_estimate.z`——根据四灯尺度估计的视觉高度 / 尺度量，单位 cm
+1. `ir_pose_estimate.x`——Kalman 滤波后的正方形中心点 X 坐标，单位 cm，正方向为机体 / 世界前方
+2. `ir_pose_estimate.y`——Kalman 滤波后的正方形中心点 Y 坐标，单位 cm，正方向为机体 / 世界右方
+3. `ir_pose_estimate.z`——根据正方形尺度估计的视觉高度 / 尺度量，单位 cm
 4. `ir_pose_estimate.square_side_cm`——IPM 后计算出的正方形平均边长，正常应接近 10cm
 5. `ir_track_valid`——中心点可追踪标志，1 表示当前中心可用于追踪；识别丢失后的 2 秒保持期内仍为 1
 6. `ir_position_lost_flag`——位置丢失标志，1 表示超过 2 秒仍未恢复识别，中心 X/Y 已清零，不允许继续追踪
 7. `ir_position_lost_elapsed_ms`——距离最近一次成功识别的时间，单位 ms；达到 2000ms 后触发丢失保护
-8. `IR_SQUARE_POINT_COUNT`——当前算法要求的红外点数量，固定为 4
+8. `ir_pose_estimate.detected_point_count`——本次成功解算实际看到的红外点数，正常为 4；单点遮挡三点补全时为 3
 
-说明：中心点先由四个红外灯点分别做 `IPM_Image2World()` 得到地面坐标，再对四个地面坐标求平均；不要直接把图像上的四点像素均值当作最终地面中心。视觉丢失后会继续保持最后一次中心点最多 2 秒，2 秒内 I4=1 且 `ir_position_lost_flag=0`；超过 2 秒后视觉模块会直接把 `ir_pose_estimate.x/y` 清零，`FG!` 的中心 X/Y 因此回传 0，I4=0 且 `ir_position_lost_flag=1`。如果中心点再次出现，成功识别会立刻清除丢失标志并写入新的 `ir_pose_estimate.x/y`。
+说明：中心点先由红外灯点分别做 `IPM_Image2World()` 得到地面坐标；看到 4 点时直接求正方形中心，看到 3 点时先在世界坐标系里根据正方形几何补出被遮挡的第四角，再求中心。中心坐标写入 `ir_pose_estimate.x/y` 前会经过一维 Kalman 滤波，位置 PID 使用的也是这一路滤波后的坐标。视觉丢失后会继续保持最后一次中心点最多 2 秒，2 秒内 I4=1 且 `ir_position_lost_flag=0`；超过 2 秒后视觉模块会直接把 `ir_pose_estimate.x/y` 清零，`FG!` 的中心 X/Y 因此回传 0，I4=0 且 `ir_position_lost_flag=1`。如果中心点再次出现，成功识别会立刻清除丢失标志并写入新的 `ir_pose_estimate.x/y`。
 
 ### `FH`：红外丢失保护状态机诊断
 
@@ -509,11 +509,11 @@ Roll/Pitch 角度环输出经过 `ANGLE_RATE_CMD_LPF_ALPHA = 0.04` 的一阶低�
 
 返回顺序：
 
-1. `fb_vx_cms`——当前 X 方向光流滤波速度，`PMW_FLOW_VEL_X_LPF_ALPHA = 0.30`
+1. `fb_vx_cms`——当前 X 方向光流滤波速度，已经过一级低通和二级低通
 2. `vx_target_cms`
 3. `x_i_out`
 4. `pitch_corr_deg`
-5. `fb_vy_cms`——当前 Y 方向光流滤波速度，`PMW_FLOW_VEL_Y_LPF_ALPHA = 0.18`
+5. `fb_vy_cms`——当前 Y 方向光流滤波速度，已经过一级低通和二级低通
 
 说明：`fb_vx_cms` / `fb_vy_cms` 直接来自当前光流状态，因此即使速度环尚未 active，也能用 `F8!` 判断光流速度是否已经有数；目标速度、积分项和姿态修正仍来自速度环诊断量。
 6. `vy_target_cms`
@@ -661,7 +661,7 @@ FJ!
 - 一次发送一条完整命令，必须以 `!` 结尾
 - 建议连续命令之间留出少量时间，避免无线串口链路堆积
 - 如果需要看某类参数回读，先发送对应设置命令，再切到 `F1`
-- 如果需要观察实时状态，优先使用 `F0 / F2 / F3 / F4 / F5 / F6 / FF`；观察四灯正方形中心点和丢失保护状态用 `FG!`
+- 如果需要观察实时状态，优先使用 `F0 / F2 / F3 / F4 / F5 / F6 / FF`；观察红外正方形中心点和丢失保护状态用 `FG!`
 - 高度环调参建议先开 `FD!` 观察 I0/I1/I2/I3，只调 Kp（H1）直到高度收敛稳定再考虑加 Kd
 
 ## 附加诊断回传

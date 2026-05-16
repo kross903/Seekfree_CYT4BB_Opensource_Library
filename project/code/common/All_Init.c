@@ -42,8 +42,8 @@ static void init_default_pid_parameters(void)
      * Ki=0 时积分项不参与，integral_limit 仅作为兜底防止后续打开积分时窜飞。 */
     PID_Init(&HeightPID, 2.0f, 0.0001f, 0.1f, 80.0f, 30.0f, 10000.0f, 0.3f);
 
-    PID_Init(&angle_pid_roll,  14.0f, 0.0001f, 0.0f, 300.0f, 60000.0f, 10000.0f, 0.0f);
-    PID_Init(&angle_pid_pitch, 9.0f, 0.0001f, 0.0f, 300.0f, 60000.0f, 10000.0f, 0.0f);
+    PID_Init(&angle_pid_roll,  8.0f, 0.0001f, 0.0f, 300.0f, 60000.0f, 10000.0f, 0.0f);
+    PID_Init(&angle_pid_pitch, 8.0f, 0.0001f, 0.0f, 300.0f, 60000.0f, 10000.0f, 0.0f);
     PID_Init(&angle_pid_yaw, 3.0f, 0.0f, 0.0f, 100.0f, 20.0f, 0.0f, 0.0f);
 
     /*

@@ -1,9 +1,9 @@
 /**
  * @file ir_localization.h
- * @brief 四点红外正方形定位模块接口
+ * @brief 红外正方形定位模块接口，支持四点直接定位和三点补全定位
  *
  * 主流程:
- * 原始图像 -> 二值化 -> 四个亮点质心 -> IPM -> 正方形中心/边长 -> 高度估计
+ * 原始图像 -> 二值化 -> 亮点质心 -> IPM -> 正方形中心/边长 -> 中心滤波 -> 高度估计
  */
 
 #ifndef IR_LOCALIZATION_H_
@@ -17,6 +17,7 @@ extern "C" {
 
 // ==================== 配置参数 ====================
 #define IR_SQUARE_POINT_COUNT  (4)
+#define IR_SQUARE_MIN_DETECT_POINTS (3)
 #define IR_SQUARE_SIDE_M       (0.10f)
 #define IR_THRESHOLD           (150)
 #define IR_MAX_CANDIDATES      (20)
@@ -43,10 +44,14 @@ typedef struct
 {
     float x;
     float y;
+    float raw_x;
+    float raw_y;
     float z;
     float square_side_cm;
     IR_Point2D_t img_pts[IR_SQUARE_POINT_COUNT];
     IR_WorldPoint_t world_pts[IR_SQUARE_POINT_COUNT];
+    uint8 detected_point_count;
+    uint8 reconstructed_point;
     uint8 valid;       /* 1=当前中心可用于追踪，包含 2s 丢失保持期 */
 } IR_Pose_t;
 
