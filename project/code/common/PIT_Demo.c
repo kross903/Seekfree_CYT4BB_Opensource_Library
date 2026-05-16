@@ -1171,6 +1171,8 @@ uint8 Position_Loop_Is_Enabled(void)
 
 void Position_Loop_Get_Diag(PositionLoopDiag_t *diag)
 {
+    uint8 ir_track_valid = (uint8)((ir_pose_estimate.valid && !ir_position_lost_flag) ? 1U : 0U);
+
     if(diag == NULL)
     {
         return;
@@ -1178,15 +1180,15 @@ void Position_Loop_Get_Diag(PositionLoopDiag_t *diag)
 
     diag->target_x_cm = POSITION_LOOP_TARGET_X_CM;
     diag->target_y_cm = POSITION_LOOP_TARGET_Y_CM;
-    diag->fb_x_cm = g_position_loop_fb_x_cm;
-    diag->fb_y_cm = g_position_loop_fb_y_cm;
+    diag->fb_x_cm = ir_pose_estimate.x;
+    diag->fb_y_cm = ir_pose_estimate.y;
     diag->vx_cmd_cms = g_position_loop_vx_cmd_cms;
     diag->vy_cmd_cms = g_position_loop_vy_cmd_cms;
     diag->x_i_out = g_position_loop_x_i_out;
     diag->y_i_out = g_position_loop_y_i_out;
     diag->enabled = g_position_loop_enabled;
     diag->active = g_position_loop_active;
-    diag->ir_track_valid = g_position_loop_ir_track_valid;
+    diag->ir_track_valid = ir_track_valid;
     diag->velocity_ready = g_position_loop_velocity_ready;
 }
 

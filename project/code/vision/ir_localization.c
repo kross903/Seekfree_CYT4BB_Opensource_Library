@@ -24,6 +24,56 @@ volatile uint16 ir_position_lost_elapsed_ms = IR_POSITION_LOST_HOLD_MS;
 #define IR_CENTER_KALMAN_Q                  (0.20f)
 #define IR_CENTER_KALMAN_R                  (4.0f)
 #define IR_CENTER_KALMAN_INITIAL_P          (10.0f)
+#define IR_BLOB_MIN_AREA_PX                 (3)
+#define IR_BLOB_MAX_AREA_PX                 (260)
+#define IR_BLOB_MAX_WIDTH_PX                (32)
+#define IR_BLOB_MAX_HEIGHT_PX               (32)
+#define IR_BLOB_MAX_ASPECT_RATIO            (2.5f)
+#define IR_BLOB_REF_HEIGHT_CM               (100.0f)
+#define IR_BLOB_HEIGHT_MIN_CM               (35.0f)
+#define IR_BLOB_HEIGHT_MAX_CM               (300.0f)
+#define IR_BLOB_MIN_AREA_FLOOR_PX           (1)
+#define IR_BLOB_MAX_AREA_CEILING_PX         (1200)
+#define IR_BLOB_MAX_WIDTH_CEILING_PX        (80)
+#define IR_BLOB_MAX_HEIGHT_CEILING_PX       (80)
+#define IR_SQUARE_SIDE_TARGET_CM            (IR_SQUARE_SIDE_M * 100.0f)
+#define IR_SQUARE_SIDE_MIN_CM               (5.0f)
+#define IR_SQUARE_SIDE_MAX_CM               (18.0f)
+#define IR_SQUARE_SIDE_SPREAD_MAX           (0.50f)
+#define IR_SQUARE_DIAG_SPREAD_MAX           (0.35f)
+#define IR_SQUARE_DIAG_RATIO_MAX            (0.35f)
+#define IR_SQUARE_GEOMETRY_MAX_SCORE        (3.5f)
+#define IR_SQUARE_CENTER_JUMP_SOFT_CM       (40.0f)
+#define IR_SQUARE_CENTER_JUMP_HARD_CM       (100.0f)
+#define IR_THREE_POINT_SCORE_PENALTY        (0.60f)
+#define IR_SQRT2                            (1.41421356f)
+
+typedef struct
+{
+    float sum_x;
+    float sum_y;
+    int count;
+    int min_x;
+    int max_x;
+    int min_y;
+    int max_y;
+} IR_Region_t;
+
+typedef struct
+{
+    int min_area;
+    int max_area;
+    int max_width;
+    int max_height;
+    float expected_area;
+} IR_BlobGate_t;
+
+typedef struct
+{
+    IR_Point2D_t img;
+    IR_WorldPoint_t world;
+    float score;
+} IR_Candidate_t;
 
 typedef struct
 {
@@ -50,6 +100,11 @@ static volatile uint32 s_ir_debug_timeout_count = 0U;
 
 // Binary image buffer used by the IR point detector.
 static uint8 g_binary_image[MT9V03X_H * MT9V03X_W];
+
+static uint8 select_square_points_from_candidates(const IR_Candidate_t candidates[IR_MAX_CANDIDATES],
+                                                  uint8 candidate_count,
+                                                  IR_Point2D_t out_pts[IR_SQUARE_POINT_COUNT],
+                                                  uint8 *out_point_count);
 
 static void ir_center_kalman_reset_axis(IR_Kalman1D_t *kf)
 {
@@ -120,31 +175,183 @@ static void binarize_image(const uint8 *src, uint8 *dst, int width, int height, 
     }
 }
 
+static float ir_clamp_float(float value, float min_value, float max_value)
+{
+    if(value < min_value)
+    {
+        return min_value;
+    }
+    if(value > max_value)
+    {
+        return max_value;
+    }
+    return value;
+}
+
+static int ir_clamp_int(int value, int min_value, int max_value)
+{
+    if(value < min_value)
+    {
+        return min_value;
+    }
+    if(value > max_value)
+    {
+        return max_value;
+    }
+    return value;
+}
+
+static int ir_round_to_int(float value)
+{
+    return (int)(value + 0.5f);
+}
+
+static void ir_get_blob_gate(IR_BlobGate_t *gate)
+{
+    float height_cm = g_ipm.height;
+    float linear_scale = 1.0f;
+    float area_scale = 1.0f;
+    int min_area = IR_BLOB_MIN_AREA_PX;
+    int max_area = IR_BLOB_MAX_AREA_PX;
+    int max_width = IR_BLOB_MAX_WIDTH_PX;
+    int max_height = IR_BLOB_MAX_HEIGHT_PX;
+
+    if(gate == NULL)
+    {
+        return;
+    }
+
+    if(height_cm <= 1.0f)
+    {
+        height_cm = IR_BLOB_REF_HEIGHT_CM;
+    }
+
+    height_cm = ir_clamp_float(height_cm, IR_BLOB_HEIGHT_MIN_CM, IR_BLOB_HEIGHT_MAX_CM);
+    linear_scale = IR_BLOB_REF_HEIGHT_CM / height_cm;
+    area_scale = linear_scale * linear_scale;
+
+    min_area = ir_round_to_int((float)IR_BLOB_MIN_AREA_PX * area_scale);
+    max_area = ir_round_to_int((float)IR_BLOB_MAX_AREA_PX * area_scale);
+    max_width = ir_round_to_int((float)IR_BLOB_MAX_WIDTH_PX * linear_scale);
+    max_height = ir_round_to_int((float)IR_BLOB_MAX_HEIGHT_PX * linear_scale);
+
+    gate->min_area = ir_clamp_int(min_area, IR_BLOB_MIN_AREA_FLOOR_PX, IR_BLOB_MAX_AREA_PX);
+    gate->max_area = ir_clamp_int(max_area, gate->min_area, IR_BLOB_MAX_AREA_CEILING_PX);
+    gate->max_width = ir_clamp_int(max_width, 1, IR_BLOB_MAX_WIDTH_CEILING_PX);
+    gate->max_height = ir_clamp_int(max_height, 1, IR_BLOB_MAX_HEIGHT_CEILING_PX);
+    gate->expected_area = sqrtf((float)gate->min_area * (float)gate->max_area);
+    if(gate->expected_area < 1.0f)
+    {
+        gate->expected_area = 1.0f;
+    }
+}
+
+static float ir_region_aspect_ratio(const IR_Region_t *region)
+{
+    float width = (float)(region->max_x - region->min_x + 1);
+    float height = (float)(region->max_y - region->min_y + 1);
+
+    if(width < 1.0f)
+    {
+        width = 1.0f;
+    }
+    if(height < 1.0f)
+    {
+        height = 1.0f;
+    }
+
+    return (width > height) ? (width / height) : (height / width);
+}
+
+static uint8 ir_region_is_small_light_candidate(const IR_Region_t *region, const IR_BlobGate_t *gate)
+{
+    int width = region->max_x - region->min_x + 1;
+    int height = region->max_y - region->min_y + 1;
+    float aspect_ratio = ir_region_aspect_ratio(region);
+
+    if(gate == NULL)
+    {
+        return 0U;
+    }
+
+    if(region->count < gate->min_area || region->count > gate->max_area)
+    {
+        return 0U;
+    }
+
+    if(width > gate->max_width || height > gate->max_height)
+    {
+        return 0U;
+    }
+
+    if(aspect_ratio > IR_BLOB_MAX_ASPECT_RATIO)
+    {
+        return 0U;
+    }
+
+    return 1U;
+}
+
+static void ir_insert_candidate(IR_Candidate_t candidates[IR_MAX_CANDIDATES],
+                                uint8 *candidate_count,
+                                const IR_Region_t *region,
+                                const IR_BlobGate_t *gate)
+{
+    IR_Candidate_t candidate = {0};
+    float world_x = 0.0f;
+    float world_y = 0.0f;
+    float aspect_ratio = ir_region_aspect_ratio(region);
+    float area_error = 0.0f;
+    int replace_index = -1;
+    float worst_score = -1.0f;
+    int i = 0;
+
+    candidate.img.u = region->sum_x / (float)region->count;
+    candidate.img.v = region->sum_y / (float)region->count;
+    candidate.img.intensity = (float)region->count;
+    area_error = fabsf((float)region->count - gate->expected_area) / gate->expected_area;
+    candidate.score = area_error * 20.0f + (aspect_ratio - 1.0f) * 10.0f;
+
+    IPM_Image2World((int)candidate.img.u, (int)candidate.img.v, &world_x, &world_y);
+    candidate.world.x = world_x;
+    candidate.world.y = world_y;
+
+    if(*candidate_count < IR_MAX_CANDIDATES)
+    {
+        candidates[*candidate_count] = candidate;
+        (*candidate_count)++;
+        return;
+    }
+
+    for(i = 0; i < IR_MAX_CANDIDATES; i++)
+    {
+        if(candidates[i].score > worst_score)
+        {
+            worst_score = candidates[i].score;
+            replace_index = i;
+        }
+    }
+
+    if(replace_index >= 0 && candidate.score < worst_score)
+    {
+        candidates[replace_index] = candidate;
+    }
+}
+
 static uint8 find_ir_points_internal(const uint8 *binary_img, int img_w, int img_h,
                                      IR_Point2D_t out_pts[IR_SQUARE_POINT_COUNT],
                                      uint8 *out_point_count)
 {
-    typedef struct
-    {
-        float sum_x;
-        float sum_y;
-        int count;
-        int min_x;
-        int max_x;
-        int min_y;
-        int max_y;
-    } Region_t;
-
-    Region_t regions[IR_MAX_CANDIDATES];
+    IR_Candidate_t candidates[IR_MAX_CANDIDATES];
+    IR_BlobGate_t blob_gate;
     static uint8 visited[MT9V03X_H * MT9V03X_W];
-    int region_count = 0;
+    uint8 candidate_count = 0U;
     int y = 0;
     int x = 0;
-    int i = 0;
-    int j = 0;
-    int selected_count = 0;
 
+    ir_get_blob_gate(&blob_gate);
     memset(visited, 0, (size_t)(img_w * img_h));
+    memset(candidates, 0, sizeof(candidates));
     memset(out_pts, 0, sizeof(IR_Point2D_t) * IR_SQUARE_POINT_COUNT);
     if(out_point_count != NULL)
     {
@@ -162,24 +369,19 @@ static uint8 find_ir_points_internal(const uint8 *binary_img, int img_w, int img
                 continue;
             }
 
-            if(region_count >= IR_MAX_CANDIDATES)
             {
-                break;
-            }
-
-            {
-                Region_t *r = &regions[region_count];
+                IR_Region_t region = {0};
                 static int stack_x[1000];
                 static int stack_y[1000];
                 int stack_top = 0;
 
-                r->sum_x = 0.0f;
-                r->sum_y = 0.0f;
-                r->count = 0;
-                r->min_x = img_w;
-                r->max_x = 0;
-                r->min_y = img_h;
-                r->max_y = 0;
+                region.sum_x = 0.0f;
+                region.sum_y = 0.0f;
+                region.count = 0;
+                region.min_x = img_w;
+                region.max_x = 0;
+                region.min_y = img_h;
+                region.max_y = 0;
 
                 stack_x[stack_top] = x;
                 stack_y[stack_top] = y;
@@ -197,14 +399,14 @@ static uint8 find_ir_points_internal(const uint8 *binary_img, int img_w, int img
                     cx = stack_x[stack_top];
                     cy = stack_y[stack_top];
 
-                    r->sum_x += (float)cx;
-                    r->sum_y += (float)cy;
-                    r->count++;
+                    region.sum_x += (float)cx;
+                    region.sum_y += (float)cy;
+                    region.count++;
 
-                    if(cx < r->min_x) r->min_x = cx;
-                    if(cx > r->max_x) r->max_x = cx;
-                    if(cy < r->min_y) r->min_y = cy;
-                    if(cy > r->max_y) r->max_y = cy;
+                    if(cx < region.min_x) region.min_x = cx;
+                    if(cx > region.max_x) region.max_x = cx;
+                    if(cy < region.min_y) region.min_y = cy;
+                    if(cy > region.max_y) region.max_y = cy;
 
                     for(dy = -1; dy <= 1; dy++)
                     {
@@ -242,51 +444,20 @@ static uint8 find_ir_points_internal(const uint8 *binary_img, int img_w, int img
                     }
                 }
 
-                if(r->count >= 3)
+                if(ir_region_is_small_light_candidate(&region, &blob_gate))
                 {
-                    region_count++;
+                    ir_insert_candidate(candidates, &candidate_count, &region, &blob_gate);
                 }
             }
         }
     }
 
-    if(region_count < IR_SQUARE_MIN_DETECT_POINTS)
+    if(candidate_count < IR_SQUARE_MIN_DETECT_POINTS)
     {
         return 0;
     }
 
-    for(i = 0; i < region_count - 1; i++)
-    {
-        for(j = i + 1; j < region_count; j++)
-        {
-            if(regions[j].count > regions[i].count)
-            {
-                Region_t tmp = regions[i];
-                regions[i] = regions[j];
-                regions[j] = tmp;
-            }
-        }
-    }
-
-    selected_count = region_count;
-    if(selected_count > IR_SQUARE_POINT_COUNT)
-    {
-        selected_count = IR_SQUARE_POINT_COUNT;
-    }
-
-    for(i = 0; i < selected_count; i++)
-    {
-        out_pts[i].u = regions[i].sum_x / (float)regions[i].count;
-        out_pts[i].v = regions[i].sum_y / (float)regions[i].count;
-        out_pts[i].intensity = (float)regions[i].count;
-    }
-
-    if(out_point_count != NULL)
-    {
-        *out_point_count = (uint8)selected_count;
-    }
-
-    return 1;
+    return select_square_points_from_candidates(candidates, candidate_count, out_pts, out_point_count);
 }
 
 static uint8 IR_FindPointsWithCount(const uint8 image[MT9V03X_H][MT9V03X_W],
@@ -403,7 +574,7 @@ static uint8 reconstruct_square_from_three_points(IR_WorldPoint_t world_pts[IR_S
     side_b = world_point_distance_cm(&world_pts[right], &world_pts[diag_b]);
     side_avg = 0.5f * (side_a + side_b);
 
-    if(side_avg < IR_THREE_POINT_MIN_SIDE_CM)
+    if(side_avg < IR_THREE_POINT_MIN_SIDE_CM || side_avg > IR_SQUARE_SIDE_MAX_CM)
     {
         return 0U;
     }
@@ -428,6 +599,218 @@ static uint8 reconstruct_square_from_three_points(IR_WorldPoint_t world_pts[IR_S
     img_pts[3].u = img_pts[diag_a].u + img_pts[diag_b].u - img_pts[right].u;
     img_pts[3].v = img_pts[diag_a].v + img_pts[diag_b].v - img_pts[right].v;
     img_pts[3].intensity = 0.0f;
+
+    return 1U;
+}
+
+static float square_center_jump_penalty(const IR_WorldPoint_t world_pts[IR_SQUARE_POINT_COUNT])
+{
+    float center_x = 0.0f;
+    float center_y = 0.0f;
+    float dx = 0.0f;
+    float dy = 0.0f;
+    float distance = 0.0f;
+
+    if(!s_ir_has_trackable_pose || ir_position_lost_flag || !ir_pose_estimate.valid)
+    {
+        return 0.0f;
+    }
+
+    calculate_square_center(world_pts, &center_x, &center_y);
+    dx = center_x - ir_pose_estimate.raw_x;
+    dy = center_y - ir_pose_estimate.raw_y;
+    distance = sqrtf(dx * dx + dy * dy);
+
+    if(distance > IR_SQUARE_CENTER_JUMP_HARD_CM)
+    {
+        return IR_SQUARE_GEOMETRY_MAX_SCORE + 1.0f;
+    }
+
+    return distance / IR_SQUARE_CENTER_JUMP_SOFT_CM;
+}
+
+static uint8 evaluate_square_geometry(const IR_WorldPoint_t world_pts[IR_SQUARE_POINT_COUNT],
+                                      float *out_score)
+{
+    float distances[6];
+    float side_sum = 0.0f;
+    float side_avg = 0.0f;
+    float diag_avg = 0.0f;
+    float side_spread = 0.0f;
+    float diag_spread = 0.0f;
+    float diag_expected = 0.0f;
+    float diag_ratio = 0.0f;
+    float target_ratio = 0.0f;
+    int dist_count = 0;
+    int i = 0;
+    int j = 0;
+
+    for(i = 0; i < IR_SQUARE_POINT_COUNT - 1; i++)
+    {
+        for(j = i + 1; j < IR_SQUARE_POINT_COUNT; j++)
+        {
+            distances[dist_count] = world_point_distance_cm(&world_pts[i], &world_pts[j]);
+            dist_count++;
+        }
+    }
+
+    sort_float_ascending(distances, dist_count);
+
+    for(i = 0; i < 4; i++)
+    {
+        side_sum += distances[i];
+    }
+
+    side_avg = side_sum / 4.0f;
+    diag_avg = 0.5f * (distances[4] + distances[5]);
+
+    if(side_avg < IR_SQUARE_SIDE_MIN_CM || side_avg > IR_SQUARE_SIDE_MAX_CM || diag_avg < IR_SQUARE_SIDE_MIN_CM)
+    {
+        return 0U;
+    }
+
+    side_spread = (distances[3] - distances[0]) / side_avg;
+    diag_spread = fabsf(distances[5] - distances[4]) / diag_avg;
+    diag_expected = side_avg * IR_SQRT2;
+    diag_ratio = fabsf(diag_avg - diag_expected) / diag_expected;
+    target_ratio = fabsf(side_avg - IR_SQUARE_SIDE_TARGET_CM) / IR_SQUARE_SIDE_TARGET_CM;
+
+    if(side_spread > IR_SQUARE_SIDE_SPREAD_MAX ||
+       diag_spread > IR_SQUARE_DIAG_SPREAD_MAX ||
+       diag_ratio > IR_SQUARE_DIAG_RATIO_MAX)
+    {
+        return 0U;
+    }
+
+    if(out_score != NULL)
+    {
+        *out_score = target_ratio * 1.5f +
+                     side_spread * 2.5f +
+                     diag_spread * 2.0f +
+                     diag_ratio * 2.0f;
+    }
+
+    return 1U;
+}
+
+static uint8 select_square_points_from_candidates(const IR_Candidate_t candidates[IR_MAX_CANDIDATES],
+                                                  uint8 candidate_count,
+                                                  IR_Point2D_t out_pts[IR_SQUARE_POINT_COUNT],
+                                                  uint8 *out_point_count)
+{
+    IR_Point2D_t best_img_pts[IR_SQUARE_POINT_COUNT];
+    float best_score = IR_SQUARE_GEOMETRY_MAX_SCORE;
+    uint8 best_count = 0U;
+    int a = 0;
+    int b = 0;
+    int c = 0;
+    int d = 0;
+    int i = 0;
+
+    memset(best_img_pts, 0, sizeof(best_img_pts));
+    memset(out_pts, 0, sizeof(IR_Point2D_t) * IR_SQUARE_POINT_COUNT);
+    if(out_point_count != NULL)
+    {
+        *out_point_count = 0U;
+    }
+
+    for(a = 0; a < candidate_count - 3; a++)
+    {
+        for(b = a + 1; b < candidate_count - 2; b++)
+        {
+            for(c = b + 1; c < candidate_count - 1; c++)
+            {
+                for(d = c + 1; d < candidate_count; d++)
+                {
+                    IR_WorldPoint_t world_pts[IR_SQUARE_POINT_COUNT];
+                    float score = 0.0f;
+
+                    world_pts[0] = candidates[a].world;
+                    world_pts[1] = candidates[b].world;
+                    world_pts[2] = candidates[c].world;
+                    world_pts[3] = candidates[d].world;
+
+                    if(!evaluate_square_geometry(world_pts, &score))
+                    {
+                        continue;
+                    }
+
+                    score += square_center_jump_penalty(world_pts);
+
+                    if(score < best_score)
+                    {
+                        best_score = score;
+                        best_count = IR_SQUARE_POINT_COUNT;
+                        best_img_pts[0] = candidates[a].img;
+                        best_img_pts[1] = candidates[b].img;
+                        best_img_pts[2] = candidates[c].img;
+                        best_img_pts[3] = candidates[d].img;
+                    }
+                }
+            }
+        }
+    }
+
+    for(a = 0; a < candidate_count - 2; a++)
+    {
+        for(b = a + 1; b < candidate_count - 1; b++)
+        {
+            for(c = b + 1; c < candidate_count; c++)
+            {
+                IR_WorldPoint_t world_pts[IR_SQUARE_POINT_COUNT];
+                IR_Point2D_t img_pts[IR_SQUARE_POINT_COUNT];
+                float score = 0.0f;
+
+                memset(world_pts, 0, sizeof(world_pts));
+                memset(img_pts, 0, sizeof(img_pts));
+
+                world_pts[0] = candidates[a].world;
+                world_pts[1] = candidates[b].world;
+                world_pts[2] = candidates[c].world;
+                img_pts[0] = candidates[a].img;
+                img_pts[1] = candidates[b].img;
+                img_pts[2] = candidates[c].img;
+
+                if(!reconstruct_square_from_three_points(world_pts, img_pts))
+                {
+                    continue;
+                }
+
+                if(!evaluate_square_geometry(world_pts, &score))
+                {
+                    continue;
+                }
+
+                score += IR_THREE_POINT_SCORE_PENALTY + square_center_jump_penalty(world_pts);
+
+                if(score < best_score)
+                {
+                    best_score = score;
+                    best_count = IR_SQUARE_MIN_DETECT_POINTS;
+                    best_img_pts[0] = candidates[a].img;
+                    best_img_pts[1] = candidates[b].img;
+                    best_img_pts[2] = candidates[c].img;
+                    best_img_pts[3].u = 0.0f;
+                    best_img_pts[3].v = 0.0f;
+                    best_img_pts[3].intensity = 0.0f;
+                }
+            }
+        }
+    }
+
+    if(best_count < IR_SQUARE_MIN_DETECT_POINTS)
+    {
+        return 0U;
+    }
+
+    for(i = 0; i < best_count; i++)
+    {
+        out_pts[i] = best_img_pts[i];
+    }
+    if(out_point_count != NULL)
+    {
+        *out_point_count = best_count;
+    }
 
     return 1U;
 }
