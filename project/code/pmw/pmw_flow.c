@@ -46,18 +46,21 @@
  * 滤波参数（采样率约 50Hz / dt=20ms）：
  *   - RANGE_LPF_ALPHA:   ToF 距离一阶 LPF, alpha=0.40 → 截止 ≈ 5Hz，
  *                        把单帧 ToF 抖动平滑掉，避免直接乘到速度上。
- *   - VEL_X_LPF_ALPHA:   X 方向机体系速度 LPF, alpha=0.30，保留 Pitch 速度环响应。
- *   - VEL_Y_LPF_ALPHA:   Y 方向机体系速度 LPF, alpha=0.18，压低 Roll 目标角抖动。
+ *   - VEL_X_LPF_ALPHA:   X 方向机体系速度 LPF, alpha=0.45，提高 Pitch 速度环响应。
+ *   - VEL_Y_LPF_ALPHA:   Y 方向机体系速度 LPF, alpha=0.35，提高 Roll 速度环响应。
  *   - TILT_GATE_DEG:     |roll|/|pitch| 超过此值时认为光流姿态补偿残差不可信，
  *                        冻结速度 LPF 状态，输出保持上一次的滤波值。
+ *   - VEL_DEADBAND_CMS:  速度绝对值小于该阈值时按 0 处理，抑制悬停小抖动。
  *   - VEL_OUTLIER_LIMIT: 单帧速度跳变超过该阈值视为离群（多半是 ToF 跳变 +
  *                        光流大瞬变叠加），用上一次滤波值替代喂进 LPF。
  */
 #define PMW_FLOW_RANGE_LPF_ALPHA            (0.40f)
-#define PMW_FLOW_VEL_X_LPF_ALPHA            (0.30f)
-#define PMW_FLOW_VEL_Y_LPF_ALPHA            (0.18f)
-#define PMW_FLOW_VEL_X_SECOND_LPF_ALPHA     (0.20f)
-#define PMW_FLOW_VEL_Y_SECOND_LPF_ALPHA     (0.12f)
+#define PMW_FLOW_VEL_X_LPF_ALPHA            (0.45f)
+#define PMW_FLOW_VEL_Y_LPF_ALPHA            (0.35f)
+#define PMW_FLOW_VEL_X_SECOND_LPF_ALPHA     (1.0f)
+#define PMW_FLOW_VEL_Y_SECOND_LPF_ALPHA     (1.0)
+#define PMW_FLOW_VEL_MEDIAN_WINDOW_SIZE     (3U)
+#define PMW_FLOW_VEL_DEADBAND_CMS           (2.0f)
 #define PMW_FLOW_TILT_GATE_DEG              (25.0f)
 #define PMW_FLOW_VEL_OUTLIER_LIMIT_CMS      (300.0f)
 #define PMW_FLOW_WORLD_TILT_GATE_DEG        (25.0f)
@@ -84,6 +87,10 @@ static uint8 g_pmw_flow_range_filt_init = 0U;
 static float g_pmw_flow_vel_x_filt_cms = 0.0f;
 static float g_pmw_flow_vel_y_filt_cms = 0.0f;
 static uint8 g_pmw_flow_vel_filt_init = 0U;
+static float g_pmw_flow_vel_x_median_samples[PMW_FLOW_VEL_MEDIAN_WINDOW_SIZE] = {0.0f};
+static float g_pmw_flow_vel_y_median_samples[PMW_FLOW_VEL_MEDIAN_WINDOW_SIZE] = {0.0f};
+static uint8 g_pmw_flow_vel_median_init = 0U;
+static uint8 g_pmw_flow_vel_median_index = 0U;
 static float g_pmw_flow_vel_x_second_filt_cms = 0.0f;
 static float g_pmw_flow_vel_y_second_filt_cms = 0.0f;
 static uint8 g_pmw_flow_vel_second_filt_init = 0U;
@@ -107,6 +114,80 @@ static uint8 pmw_flow_is_valid_number(float value)
 static uint8 pmw_flow_is_valid_delta_count(int16 value)
 {
     return (uint8)((value > -PMW_FLOW_MAX_ABS_DELTA_COUNT) && (value < PMW_FLOW_MAX_ABS_DELTA_COUNT));
+}
+
+static float pmw_flow_median3(float first_value, float second_value, float third_value)
+{
+    float swap_value;
+
+    if(first_value > second_value)
+    {
+        swap_value = first_value;
+        first_value = second_value;
+        second_value = swap_value;
+    }
+    if(second_value > third_value)
+    {
+        swap_value = second_value;
+        second_value = third_value;
+        third_value = swap_value;
+    }
+    if(first_value > second_value)
+    {
+        swap_value = first_value;
+        first_value = second_value;
+        second_value = swap_value;
+    }
+
+    return second_value;
+}
+
+static float pmw_flow_apply_velocity_deadband(float velocity_cms)
+{
+    if(fabsf(velocity_cms) < PMW_FLOW_VEL_DEADBAND_CMS)
+    {
+        velocity_cms = 0.0f;
+    }
+
+    return velocity_cms;
+}
+
+static void pmw_flow_update_velocity_median(float *velocity_x_cms, float *velocity_y_cms)
+{
+    uint8 sample_index;
+
+    if((velocity_x_cms == NULL) || (velocity_y_cms == NULL))
+    {
+        return;
+    }
+
+    if(!g_pmw_flow_vel_median_init)
+    {
+        for(sample_index = 0U; sample_index < PMW_FLOW_VEL_MEDIAN_WINDOW_SIZE; sample_index++)
+        {
+            g_pmw_flow_vel_x_median_samples[sample_index] = *velocity_x_cms;
+            g_pmw_flow_vel_y_median_samples[sample_index] = *velocity_y_cms;
+        }
+        g_pmw_flow_vel_median_index = 0U;
+        g_pmw_flow_vel_median_init = 1U;
+    }
+    else
+    {
+        g_pmw_flow_vel_x_median_samples[g_pmw_flow_vel_median_index] = *velocity_x_cms;
+        g_pmw_flow_vel_y_median_samples[g_pmw_flow_vel_median_index] = *velocity_y_cms;
+        g_pmw_flow_vel_median_index++;
+        if(g_pmw_flow_vel_median_index >= PMW_FLOW_VEL_MEDIAN_WINDOW_SIZE)
+        {
+            g_pmw_flow_vel_median_index = 0U;
+        }
+    }
+
+    *velocity_x_cms = pmw_flow_median3(g_pmw_flow_vel_x_median_samples[0],
+                                       g_pmw_flow_vel_x_median_samples[1],
+                                       g_pmw_flow_vel_x_median_samples[2]);
+    *velocity_y_cms = pmw_flow_median3(g_pmw_flow_vel_y_median_samples[0],
+                                       g_pmw_flow_vel_y_median_samples[1],
+                                       g_pmw_flow_vel_y_median_samples[2]);
 }
 
 static void pmw_flow_update_velocity_feedback(PMWFlowState_t *state)
@@ -327,6 +408,14 @@ void PMW_Flow_Reset(void)
     g_pmw_flow_vel_x_filt_cms = 0.0f;
     g_pmw_flow_vel_y_filt_cms = 0.0f;
     g_pmw_flow_vel_filt_init = 0U;
+    g_pmw_flow_vel_x_median_samples[0] = 0.0f;
+    g_pmw_flow_vel_x_median_samples[1] = 0.0f;
+    g_pmw_flow_vel_x_median_samples[2] = 0.0f;
+    g_pmw_flow_vel_y_median_samples[0] = 0.0f;
+    g_pmw_flow_vel_y_median_samples[1] = 0.0f;
+    g_pmw_flow_vel_y_median_samples[2] = 0.0f;
+    g_pmw_flow_vel_median_init = 0U;
+    g_pmw_flow_vel_median_index = 0U;
     g_pmw_flow_vel_x_second_filt_cms = 0.0f;
     g_pmw_flow_vel_y_second_filt_cms = 0.0f;
     g_pmw_flow_vel_second_filt_init = 0U;
@@ -491,8 +580,12 @@ void PMW_Flow_UpdateSample(int16 flow_delta_x,
     }
     else
     {
-        /* (6) 离群剔除：单帧速度跳变超过门限的样本，多半是 ToF 抖动 + 大瞬时光流叠加。
-         *     用上一次滤波值替代当前样本喂进 LPF，避免追到尖峰上去。 */
+        /* (6) 速度样本预处理：三点中值去单帧尖峰，小速度死区抑制悬停抖动；
+         *     随后做离群剔除，用上一次滤波值替代明显跳变样本喂进 LPF。 */
+        pmw_flow_update_velocity_median(&vx_raw, &vy_raw);
+        vx_raw = pmw_flow_apply_velocity_deadband(vx_raw);
+        vy_raw = pmw_flow_apply_velocity_deadband(vy_raw);
+
         if(g_pmw_flow_vel_filt_init)
         {
             if(fabsf(vx_raw - g_pmw_flow_vel_x_filt_cms) > PMW_FLOW_VEL_OUTLIER_LIMIT_CMS)

@@ -151,7 +151,7 @@ S1=450!
 
 命令前缀：`V`
 
-`V` 组调 `vel_pid_x`，反馈量是光流滤波后的 `velocity_x_cms`，PID 输出是前后方向水平加速度指令 `ax_cmd_cms2`，再换算成 `pitch_corr_deg` 送入姿态环。当前 X 方向速度反馈先经过 `PMW_FLOW_VEL_X_LPF_ALPHA = 0.30`，再经过二级低通 `PMW_FLOW_VEL_X_SECOND_LPF_ALPHA = 0.20`。
+`V` 组调 `vel_pid_x`，反馈量是光流滤波后的 `velocity_x_cms`，PID 输出是前后方向水平加速度指令 `ax_cmd_cms2`，再换算成 `pitch_corr_deg` 送入姿态环。当前 X 方向速度反馈链路为：三点中值滤波去单帧尖峰，`PMW_FLOW_VEL_DEADBAND_CMS = 2.0` 零速死区压悬停小抖动，然后经过 `PMW_FLOW_VEL_X_LPF_ALPHA = 0.45` 一级低通和 `PMW_FLOW_VEL_X_SECOND_LPF_ALPHA = 0.35` 二级低通。
 
 | 参数 | 指令示例 | 含义 |
 |---|---|---|
@@ -165,7 +165,7 @@ S1=450!
 
 命令前缀：`W`
 
-`W` 组调 `vel_pid_y`，反馈量是光流滤波后的 `velocity_y_cms`，PID 输出是左右方向水平加速度指令 `ay_cmd_cms2`，再换算成 `roll_corr_deg` 送入姿态环。当前 Y 方向速度反馈先经过 `PMW_FLOW_VEL_Y_LPF_ALPHA = 0.18`，再经过二级低通 `PMW_FLOW_VEL_Y_SECOND_LPF_ALPHA = 0.12`，比 X 方向更重滤波，用于抑制 `target_angle_roll` 抖动。
+`W` 组调 `vel_pid_y`，反馈量是光流滤波后的 `velocity_y_cms`，PID 输出是左右方向水平加速度指令 `ay_cmd_cms2`，再换算成 `roll_corr_deg` 送入姿态环。当前 Y 方向速度反馈链路为：三点中值滤波去单帧尖峰，`PMW_FLOW_VEL_DEADBAND_CMS = 2.0` 零速死区压悬停小抖动，然后经过 `PMW_FLOW_VEL_Y_LPF_ALPHA = 0.35` 一级低通和 `PMW_FLOW_VEL_Y_SECOND_LPF_ALPHA = 0.25` 二级低通。
 
 | 参数 | 指令示例 | 含义 |
 |---|---|---|
@@ -179,7 +179,7 @@ S1=450!
 
 命令前缀：`I`
 
-`I` 组调 `pos_pid_x`，反馈量是红外四灯中心 `ir_pose_estimate.x`，目标固定为 `0cm`。PID 输出经过方向适配后成为 X 方向目标速度 `vx_target_cms`，再交给已有光流速度环。起飞 ramp 完成并进入巡航分支后会自动接入位置环；调试时也可发送 `I0=1!` 或 `J0=1!` 手动开启，关闭发送 `I0=0!`。
+`I` 组调 `pos_pid_x`。`FI/FG` 中显示的 `ir_pose_estimate.x` 已经是小车相对无人机的位置，位置环直接把它作为 X 方向追踪误差输入，PID 输出成为 X 方向目标速度 `vx_target_cms`，交给已有光流速度环。起飞 ramp 完成并进入巡航分支后会自动接入位置环；调试时也可发送 `I0=1!` 或 `J0=1!` 手动开启，关闭发送 `I0=0!`。
 
 | 参数 | 指令示例 | 含义 |
 |---|---|---|
@@ -194,7 +194,7 @@ S1=450!
 
 命令前缀：`J`
 
-`J` 组调 `pos_pid_y`，反馈量是红外四灯中心 `ir_pose_estimate.y`，目标固定为 `0cm`。PID 输出经过方向适配后成为 Y 方向目标速度 `vy_target_cms`，再交给已有光流速度环。
+`J` 组调 `pos_pid_y`。`FI/FG` 中显示的 `ir_pose_estimate.y` 已经是小车相对无人机的位置，位置环直接把它作为 Y 方向追踪误差输入，PID 输出成为 Y 方向目标速度 `vy_target_cms`，交给已有光流速度环。
 
 | 参数 | 指令示例 | 含义 |
 |---|---|---|
@@ -241,7 +241,7 @@ S1=450!
 | `FE=0!` 或 `FE!` | 光流原始输入诊断：UP-FLOW-302 模式下回传原始 x/y、valid、状态、新帧标志、帧间隔 |
 | `FF=0!` 或 `FF!` | Roll/Pitch 角度环监视：目标角、实际角、I项输出、低通后的总输出 |
 | `FG=0!` 或 `FG!` | 红外正方形中心点：I0 中心 X, I1 中心 Y, I2 视觉高度, I3 正方形边长, I4 可追踪, I5 丢失标志, I7 本帧识别点数 |
-| `FH=0!` 或 `FH!` | 红外丢失保护状态机诊断：I0 中心 X, I1 中心 Y, I2 原始检测成功, I3 丢失标志, I4 丢失计时, I5 有历史位姿, I6 5ms任务计数, I7 2s超时次数 |
+| `FH=0!` 或 `FH!` | 红外丢失保护状态机诊断：I0 中心 X, I1 中心 Y, I2 原始检测成功, I3 丢失标志, I4 丢失计时, I5 有历史位姿, I6 5ms任务计数, I7 0.5s超时次数 |
 | `FI=0!` 或 `FI!` | 红外位置闭环诊断：I0 位置X, I1 位置Y, I2 目标速度X, I3 目标速度Y, I4 位置环使能, I5 位置环激活, I6 红外可追踪, I7 光流速度可用 |
 | `FJ=0!` 或 `FJ!` | 速度环/光流门控诊断：I0 速度环使能, I1 速度环激活, I2 光流valid, I3 光流used, I4 ToF高度, I5 ToF来源, I6 ToF失效计数, I7 光流dt |
 
@@ -427,11 +427,11 @@ S1=450!
 
 返回顺序：
 
-1. `fb_vx_cms`——当前 X 方向光流滤波速度，已经过一级低通和二级低通
+1. `fb_vx_cms`——当前 X 方向光流滤波速度，已经过三点中值、2cm/s 零速死区、一级低通和二级低通
 2. `vx_target_cms`
 3. `x_i_out`
 4. `pitch_corr_deg`
-5. `fb_vy_cms`——当前 Y 方向光流滤波速度，已经过一级低通和二级低通
+5. `fb_vy_cms`——当前 Y 方向光流滤波速度，已经过三点中值、2cm/s 零速死区、一级低通和二级低通
 6. `vy_target_cms`
 7. `y_i_out`
 8. `roll_corr_deg`
@@ -556,9 +556,9 @@ PMW3901 模式返回顺序：
 2. `ir_pose_estimate.y`——Kalman 滤波后的正方形中心点 Y 坐标，单位 cm，正方向为机体 / 世界右方
 3. `ir_pose_estimate.z`——根据正方形尺度估计的视觉高度 / 尺度量，单位 cm
 4. `ir_pose_estimate.square_side_cm`——IPM 后计算出的正方形平均边长，正常应接近 10cm
-5. `ir_track_valid`——中心点可追踪标志，1 表示当前中心可用于追踪；识别丢失后的 2 秒保持期内仍为 1
-6. `ir_position_lost_flag`——位置丢失标志，1 表示超过 2 秒仍未恢复识别，中心 X/Y 已清零，不允许继续追踪
-7. `ir_position_lost_elapsed_ms`——距离最近一次成功识别的时间，单位 ms；达到 2000ms 后触发丢失保护
+5. `ir_track_valid`——中心点可追踪标志，1 表示当前中心可用于追踪；识别丢失后的 0.5 秒保持期内仍为 1
+6. `ir_position_lost_flag`——位置丢失标志，1 表示超过 0.5 秒仍未恢复识别，中心 X/Y 已清零，不允许继续追踪
+7. `ir_position_lost_elapsed_ms`——距离最近一次成功识别的时间，单位 ms；达到 500ms 后触发丢失保护
 8. `ir_pose_estimate.detected_point_count`——通过几何筛选的小车红外点数，正常四点为 4；单点遮挡三点补全时为 3
 
 说明：识别链路不再按面积取最大的 4 个亮点。原始图像中先提取小圆亮斑候选，候选面积和最大宽高会根据当前 `g_ipm.height` 做高度自适应缩放：高度升高时允许更小的亮点通过，高度降低时允许更大的近距离亮点通过；面积过大的地面信标灯仍会被排除出小车灯候选。随后只把候选质心做 `IPM_Image2World()` 转到地面 / 世界坐标，在世界坐标中枚举组合并按 10cm 正方形边长、对角线、边长一致性和上一帧中心连续性评分。看到 4 点时使用最佳四点组合；看到 3 点且满足“正方形缺一个角”的几何关系时，先在世界坐标系里补出第四角，再求中心。中心坐标写入 `ir_pose_estimate.x/y` 前会经过一维 Kalman 滤波，位置 PID 使用的也是这一路滤波后的坐标。
@@ -582,16 +582,18 @@ PMW3901 模式返回顺序：
 
 返回顺序：
 
-1. `pos_diag.fb_x_cm`——实时红外中心 X，正常应与 `FG` 的 I0 同步
-2. `pos_diag.fb_y_cm`——实时红外中心 Y，正常应与 `FG` 的 I1 同步
-3. `pos_diag.vx_cmd_cms`
-4. `pos_diag.vy_cmd_cms`
+1. `pos_diag.fb_x_cm`——实时红外中心 X，正常应与 `FG` 的 I0 同步；含义是小车相对无人机的 X 坐标
+2. `pos_diag.fb_y_cm`——实时红外中心 Y，正常应与 `FG` 的 I1 同步；含义是小车相对无人机的 Y 坐标
+3. `pos_diag.vx_cmd_cms`——追车位置环输出给速度环的 X 目标速度，误差直接使用 `pos_diag.fb_x_cm`
+4. `pos_diag.vy_cmd_cms`——追车位置环输出给速度环的 Y 目标速度，误差直接使用 `pos_diag.fb_y_cm`
 5. `pos_diag.enabled`
 6. `pos_diag.active`
 7. `pos_diag.ir_track_valid`——实时红外可追踪标志，正常应与 `FG` 的 I4 同步
 8. `pos_diag.velocity_ready`
 
 使用建议：`FI!` 中 I0/I1 有值且 I6=1，说明视觉位置已经能被飞控侧读到；此时若 I4=0，位置环未使能，发送 `I0=1!` 或等待起飞 ramp 完成后的自动接入。I4=1 但 I5=0 时，不要继续加大 PID，先看 I7：I7=0 是光流速度不可用。位置环关闭或任一反馈失效时，代码会把目标速度自动退回 0，并 reset 位置环 PID。
+
+位置环在进入 PID 前对 X/Y 分别加入 `+-3cm` 死区。某一轴的 `FI` 位置绝对值不超过 3cm 时，该轴 PID 输入按 0 处理并复位该轴 PID，`I2/I3` 对应轴目标速度应回到 0。
 
 ### `FJ`：速度环 / 光流门控诊断
 

@@ -24,7 +24,7 @@ extern "C" {
 #define IR_MAX_CANDIDATES      (20)
 #define IR_MIN_POINT_DIST_PX   (4.0f)
 #define IR_CENTROID_RADIUS     (3)
-#define IR_POSITION_LOST_HOLD_MS        (2000U)
+#define IR_POSITION_LOST_HOLD_MS        (500U)
 #define IR_POSITION_LOST_TASK_PERIOD_MS (5U)
 
 // ==================== 数据结构 ====================
@@ -53,7 +53,7 @@ typedef struct
     IR_WorldPoint_t world_pts[IR_SQUARE_POINT_COUNT];
     uint8 detected_point_count;
     uint8 reconstructed_point;
-    uint8 valid;       /* 1=当前中心可用于追踪，包含 2s 丢失保持期 */
+    uint8 valid;       /* 1=当前中心可用于追踪，包含 0.5s 丢失保持期 */
 } IR_Pose_t;
 
 typedef struct

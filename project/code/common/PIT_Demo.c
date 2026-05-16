@@ -56,8 +56,9 @@
 
 #define POSITION_LOOP_TARGET_X_CM      (0.0f)
 #define POSITION_LOOP_TARGET_Y_CM      (0.0f)
-#define POSITION_LOOP_VX_SIGN          (-1.0f)
-#define POSITION_LOOP_VY_SIGN          (-1.0f)
+#define POSITION_LOOP_VX_SIGN          (+1.0f)
+#define POSITION_LOOP_VY_SIGN          (+1.0f)
+#define POSITION_LOOP_DEADZONE_CM      (3.0f)
 
 /*
  * 真位置闭环参数。
@@ -848,9 +849,21 @@ static void position_loop_reset_runtime(void)
     g_position_loop_y_i_out = 0.0f;
 }
 
+static float position_loop_apply_deadzone(float error_cm)
+{
+    if(error_cm >= -POSITION_LOOP_DEADZONE_CM && error_cm <= POSITION_LOOP_DEADZONE_CM)
+    {
+        return 0.0f;
+    }
+
+    return error_cm;
+}
+
 static void position_loop_update_velocity_target(uint8 velocity_ready)
 {
     uint8 ir_track_valid = (uint8)((ir_pose_estimate.valid && !ir_position_lost_flag) ? 1U : 0U);
+    float pos_error_x_cm = position_loop_apply_deadzone(ir_pose_estimate.x);
+    float pos_error_y_cm = position_loop_apply_deadzone(ir_pose_estimate.y);
 
     g_position_loop_ir_track_valid = ir_track_valid;
     g_position_loop_velocity_ready = velocity_ready;
@@ -865,15 +878,24 @@ static void position_loop_update_velocity_target(uint8 velocity_ready)
         return;
     }
 
+    if(pos_error_x_cm == 0.0f)
+    {
+        PID_Reset(&pos_pid_x);
+    }
+    if(pos_error_y_cm == 0.0f)
+    {
+        PID_Reset(&pos_pid_y);
+    }
+
     g_position_loop_vx_cmd_cms = POSITION_LOOP_VX_SIGN *
                                  PID_Calculate(&pos_pid_x,
+                                               pos_error_x_cm,
                                                POSITION_LOOP_TARGET_X_CM,
-                                               ir_pose_estimate.x,
                                                CONTROL_DT_S);
     g_position_loop_vy_cmd_cms = POSITION_LOOP_VY_SIGN *
                                  PID_Calculate(&pos_pid_y,
+                                               pos_error_y_cm,
                                                POSITION_LOOP_TARGET_Y_CM,
-                                               ir_pose_estimate.y,
                                                CONTROL_DT_S);
 
     g_velocity_loop_target_vx_cms = g_position_loop_vx_cmd_cms;

@@ -27,8 +27,8 @@ static void init_display_and_basic_peripherals(void)
 
 static void init_default_pid_parameters(void)
 {
-    PID_Init(&gyro_pid_roll, 2.0f, 0.0f, 0.00f, 2000.0f, 100.0f, 10.0f, 0.8f);
-    PID_Init(&gyro_pid_pitch, 2.5f, 0.0f, 0.00f, 2000.0f, 100.0f, 10.0f, 0.8f);
+    PID_Init(&gyro_pid_roll, 6.0f, 0.0f, 0.2f, 2000.0f, 100.0f, 10.0f, 0.8f);
+    PID_Init(&gyro_pid_pitch, 6.5f, 0.0f, 0.2f, 2000.0f, 100.0f, 10.0f, 0.8f);
     PID_Init(&gyro_pid_yaw, 5.5f, 0.0f, 0.0f, 400.0f, 10.0f, 0.0f, 0.0f);
 
     /* HeightPID @ 100Hz:
@@ -42,8 +42,8 @@ static void init_default_pid_parameters(void)
      * Ki=0 时积分项不参与，integral_limit 仅作为兜底防止后续打开积分时窜飞。 */
     PID_Init(&HeightPID, 2.0f, 0.0001f, 0.1f, 80.0f, 30.0f, 10000.0f, 0.3f);
 
-    PID_Init(&angle_pid_roll,  5.5f, 0.0001f, 0.0f, 300.0f, 60000.0f, 10000.0f, 0.0f);
-    PID_Init(&angle_pid_pitch, 5.5f, 0.0001f, 0.0f, 300.0f, 60000.0f, 10000.0f, 0.0f);
+    PID_Init(&angle_pid_roll,  8.5f, 0.0001f, 1.5f, 300.0f, 60000.0f, 10000.0f, 0.30f);
+    PID_Init(&angle_pid_pitch, 7.5f, 0.0001f, 1.5f, 300.0f, 60000.0f, 10000.0f, 0.30f);
     PID_Init(&angle_pid_yaw, 3.0f, 0.0f, 0.0f, 100.0f, 20.0f, 0.0f, 0.0f);
 
     /*
@@ -60,8 +60,8 @@ static void init_default_pid_parameters(void)
      *   - Ki/Kd 默认关，避免在 4kHz 控制环里 Ki 过快窜飞 (反馈本身只有 50Hz 更新)
      *   - Kp/Ki/Kd/output_limit/integral_limit 后续可由 VOFA V/W 命令或菜单"Velocity PID"组细调
      */
-    PID_Init(&vel_pid_x, 2.40f, 0.0f, 0.1f, 40.0f, 20.0f, 0.0f, 0.0f);
-    PID_Init(&vel_pid_y, 2.40f, 0.0f, 0.1f, 40.0f, 20.0f, 0.0f, 0.0f);
+    PID_Init(&vel_pid_x, 0.3f, 0.0f, 0.0f, 100.0f, 10.0f, 0.0f, 0.3f);
+    PID_Init(&vel_pid_y, 0.3f, 0.0f, 0.0f, 100.0f, 10.0f, 0.0f, 0.3f);
 
     PID_Init(&pos_pid_x, 0.60f, 0.0f, 0.0f, 35.0f, 50.0f, 10000.0f, 0.0f);
     PID_Init(&pos_pid_y, 0.60f, 0.0f, 0.0f, 35.0f, 50.0f, 10000.0f, 0.0f);
