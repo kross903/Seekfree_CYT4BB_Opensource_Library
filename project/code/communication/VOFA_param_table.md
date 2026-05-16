@@ -201,16 +201,21 @@
 
 ### 3.4 光流速度反馈滤波
 
-这些参数当前不通过 VOFA 单独调。X 方向对应 Pitch 速度环，Y 方向对应 Roll 速度环。速度反馈先经过三点中值滤波和零速死区，再进入现有两级低通。
+这些参数当前不通过 VOFA 单独调。X 方向对应 Pitch 速度环，Y 方向对应 Roll 速度环。速度反馈先做 ToF 跳变拒绝、原始速度硬限幅、三点中值、硬跳变拒绝和速度斜率限制，再进入按截止频率计算 alpha 的单级低通，最后经过输出零速死区。
 
 | 参数 | 当前值 | 说明 |
 |---|---:|---|
+| `PMW_FLOW_TOF_JUMP_REJECT_CM` | `15.0` | ToF 单帧跳变拒绝阈值，超过后使用上一帧有效高度 |
+| `PMW_FLOW_VEL_ABS_LIMIT_CMS` | `300.0` | 原始光流速度硬限幅，超过后进入短时保持/衰减 |
 | `PMW_FLOW_VEL_MEDIAN_WINDOW_SIZE` | `3` | 三点中值滤波窗口，用于剔除光流单帧尖峰 |
-| `PMW_FLOW_VEL_DEADBAND_CMS` | `2.0` | 光流速度零速死区，抑制悬停时 `+-2cm/s` 内的小抖动 |
-| `PMW_FLOW_VEL_X_LPF_ALPHA` | `0.45` | X 方向光流速度反馈一级低通，提高 Pitch 速度环响应 |
-| `PMW_FLOW_VEL_Y_LPF_ALPHA` | `0.35` | Y 方向光流速度反馈一级低通，提高 Roll 速度环响应 |
-| `PMW_FLOW_VEL_X_SECOND_LPF_ALPHA` | `0.35` | X 方向光流速度反馈二级低通 |
-| `PMW_FLOW_VEL_Y_SECOND_LPF_ALPHA` | `0.25` | Y 方向光流速度反馈二级低通 |
+| `PMW_FLOW_VEL_HARD_JUMP_CMS` | `100.0` | 单帧速度相对滤波状态跳变超过该值时拒绝该轴样本 |
+| `PMW_FLOW_VEL_SLEW_LIMIT_CMS2` | `800.0` | 速度斜率限制，按物理加速度限制每帧速度变化 |
+| `PMW_FLOW_VEL_SLEW_MIN_STEP_CMS` | `12.0` | 斜率限制最小单帧速度变化窗口，避免 dt 很小时过严 |
+| `PMW_FLOW_VEL_LPF_CUTOFF_HZ` | `3.0` | 光流速度单级低通截止频率，运行时按 dt 计算 alpha |
+| `PMW_FLOW_INVALID_HOLD_FRAMES` | `3` | 光流/高度/倾角异常后保持上一帧速度的帧数 |
+| `PMW_FLOW_INVALID_DECAY_FRAMES` | `8` | 保持结束后速度衰减并仍短时 valid 的帧数 |
+| `PMW_FLOW_INVALID_DECAY_ALPHA` | `0.85` | 无效帧衰减阶段的每帧速度保留比例 |
+| `PMW_FLOW_VEL_DEADBAND_CMS` | `5.0` | 光流速度输出零速死区，单级低通后 `+-5cm/s` 内按 0 回传给速度环 |
 
 ### 3.5 PWM 输出
 
@@ -256,6 +261,7 @@
 | `FH!` | 红外丢失保护状态机诊断 |
 | `FI!` | 红外位置闭环诊断 |
 | `FJ!` | 速度环/光流门控诊断 |
+| `FK!` | 加速度/速度反馈/光流原始值对齐诊断 |
 
 ## 6. 常用发送指令示例
 
@@ -357,6 +363,7 @@ FG!
 FH!
 FI!
 FJ!
+FK!
 ```
 
 ### 强制失锁

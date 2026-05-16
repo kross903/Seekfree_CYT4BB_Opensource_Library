@@ -151,7 +151,7 @@ S1=450!
 
 命令前缀：`V`
 
-`V` 组调 `vel_pid_x`，反馈量是光流滤波后的 `velocity_x_cms`，PID 输出是前后方向水平加速度指令 `ax_cmd_cms2`，再换算成 `pitch_corr_deg` 送入姿态环。当前 X 方向速度反馈链路为：三点中值滤波去单帧尖峰，`PMW_FLOW_VEL_DEADBAND_CMS = 2.0` 零速死区压悬停小抖动，然后经过 `PMW_FLOW_VEL_X_LPF_ALPHA = 0.45` 一级低通和 `PMW_FLOW_VEL_X_SECOND_LPF_ALPHA = 0.35` 二级低通。
+`V` 组调 `vel_pid_x`，反馈量是光流滤波后的 `velocity_x_cms`，PID 输出是前后方向水平加速度指令 `ax_cmd_cms2`，再换算成 `pitch_corr_deg` 送入姿态环。当前 X 方向速度反馈链路为：ToF 跳变拒绝、原始速度硬限幅、三点中值滤波、硬跳变拒绝、速度斜率限制，然后按 `PMW_FLOW_VEL_LPF_CUTOFF_HZ = 3.0` 计算动态 alpha 做单级低通，最后用 `PMW_FLOW_VEL_DEADBAND_CMS = 5.0` 做输出零速死区。
 
 | 参数 | 指令示例 | 含义 |
 |---|---|---|
@@ -165,7 +165,7 @@ S1=450!
 
 命令前缀：`W`
 
-`W` 组调 `vel_pid_y`，反馈量是光流滤波后的 `velocity_y_cms`，PID 输出是左右方向水平加速度指令 `ay_cmd_cms2`，再换算成 `roll_corr_deg` 送入姿态环。当前 Y 方向速度反馈链路为：三点中值滤波去单帧尖峰，`PMW_FLOW_VEL_DEADBAND_CMS = 2.0` 零速死区压悬停小抖动，然后经过 `PMW_FLOW_VEL_Y_LPF_ALPHA = 0.35` 一级低通和 `PMW_FLOW_VEL_Y_SECOND_LPF_ALPHA = 0.25` 二级低通。
+`W` 组调 `vel_pid_y`，反馈量是光流滤波后的 `velocity_y_cms`，PID 输出是左右方向水平加速度指令 `ay_cmd_cms2`，再换算成 `roll_corr_deg` 送入姿态环。当前 Y 方向速度反馈链路为：ToF 跳变拒绝、原始速度硬限幅、三点中值滤波、硬跳变拒绝、速度斜率限制，然后按 `PMW_FLOW_VEL_LPF_CUTOFF_HZ = 3.0` 计算动态 alpha 做单级低通，最后用 `PMW_FLOW_VEL_DEADBAND_CMS = 5.0` 做输出零速死区。
 
 | 参数 | 指令示例 | 含义 |
 |---|---|---|
@@ -244,6 +244,7 @@ S1=450!
 | `FH=0!` 或 `FH!` | 红外丢失保护状态机诊断：I0 中心 X, I1 中心 Y, I2 原始检测成功, I3 丢失标志, I4 丢失计时, I5 有历史位姿, I6 5ms任务计数, I7 0.5s超时次数 |
 | `FI=0!` 或 `FI!` | 红外位置闭环诊断：I0 位置X, I1 位置Y, I2 目标速度X, I3 目标速度Y, I4 位置环使能, I5 位置环激活, I6 红外可追踪, I7 光流速度可用 |
 | `FJ=0!` 或 `FJ!` | 速度环/光流门控诊断：I0 速度环使能, I1 速度环激活, I2 光流valid, I3 光流used, I4 ToF高度, I5 ToF来源, I6 ToF失效计数, I7 光流dt |
+| `FK=0!` 或 `FK!` | 加速度/速度反馈/光流原始值对齐诊断：I0/I1 水平化加速度, I2/I3 进入速度环的测量速度, I4/I5 光流原始水平速度, I6/I7 光流原始 count |
 
 说明：
 
@@ -427,11 +428,11 @@ S1=450!
 
 返回顺序：
 
-1. `fb_vx_cms`——当前 X 方向光流滤波速度，已经过三点中值、2cm/s 零速死区、一级低通和二级低通
+1. `fb_vx_cms`——当前 X 方向光流滤波速度，已经过 ToF 跳变拒绝、速度硬限幅、三点中值、硬跳变拒绝、斜率限制、单级低通和 5cm/s 输出零速死区
 2. `vx_target_cms`
 3. `x_i_out`
 4. `pitch_corr_deg`
-5. `fb_vy_cms`——当前 Y 方向光流滤波速度，已经过三点中值、2cm/s 零速死区、一级低通和二级低通
+5. `fb_vy_cms`——当前 Y 方向光流滤波速度，已经过 ToF 跳变拒绝、速度硬限幅、三点中值、硬跳变拒绝、斜率限制、单级低通和 5cm/s 输出零速死区
 6. `vy_target_cms`
 7. `y_i_out`
 8. `roll_corr_deg`
@@ -610,6 +611,21 @@ PMW3901 模式返回顺序：
 
 排查 `F8!` 全 0 时优先看这一路：I2/I3 为 0 说明光流速度本身不可用；I4 为 0 或 I5 为 0 说明高度链路没有喂给光流；I0 为 0 说明还没有进入速度环接管状态；I0=1 但 I1=0 通常是光流门控没过，或还处在起飞/手动分支。
 
+### `FK`：加速度 / 速度反馈 / 光流原始值对齐诊断
+
+返回顺序：
+
+1. `ax_level_mg`，原始加速度经 Roll/Pitch 水平化并扣除 `acc_level_x_bias_mg` 后的 X 轴水平加速度，单位 mg
+2. `ay_level_mg`，原始加速度经 Roll/Pitch 水平化并扣除 `acc_level_y_bias_mg` 后的 Y 轴水平加速度，单位 mg
+3. `pmw_flow_state.velocity_x_cms`，进入 X 速度环 PID 的测量速度，单位 cm/s
+4. `pmw_flow_state.velocity_y_cms`，进入 Y 速度环 PID 的测量速度，单位 cm/s
+5. `pmw_flow_state.velocity_x_raw_cms`，光流解算出的 X 原始水平速度，未经过中值、跳变拒绝、斜率限制、低通和死区，单位 cm/s
+6. `pmw_flow_state.velocity_y_raw_cms`，光流解算出的 Y 原始水平速度，未经过中值、跳变拒绝、斜率限制、低通和死区，单位 cm/s
+7. `pmw_flow_state.flow_delta_x_count`，本帧光流原始 X count
+8. `pmw_flow_state.flow_delta_y_count`，本帧光流原始 Y count
+
+用途：同屏比较加速度变化、速度环实际测量速度和光流原始输入。如果 I6/I7 已变化但 I4/I5 原始水平速度异常，优先查高度/轴映射/去旋转；如果 I4/I5 已变化但 I2/I3 滞后，优先查光流滤波；如果 I0/I1 先变化而光流迟迟不动，说明机体已受力但光流反馈没及时反映。
+
 ## 上位机常用发送示例
 
 ### 设置 Roll 姿态环
@@ -730,6 +746,7 @@ FG!
 FH!
 FI!
 FJ!
+FK!
 ```
 
 ### 强制失锁

@@ -38,31 +38,28 @@
 #define PMW_FLOW_BODY_VY_FROM_FLOW_Y_SIGN   (-1.0f)
 #define PMW_FLOW_MIN_HEIGHT_CM              (5.0f)
 #define PMW_FLOW_MAX_HEIGHT_CM              (400.0f)
-#define PMW_FLOW_MIN_DT_S                   (0.001f)
-#define PMW_FLOW_MAX_DT_S                   (0.100f)
+#define PMW_FLOW_MIN_DT_S                   (FLOW_SENSOR_NOMINAL_DT_S * 0.5f)
+#define PMW_FLOW_MAX_DT_S                   (FLOW_SENSOR_NOMINAL_DT_S * 2.0f)
 #define PMW_FLOW_MAX_ABS_DELTA_COUNT        (5000)
+#define PMW_FLOW_TWO_PI                     (6.28318530717958647692f)
 
 /*
- * 滤波参数（采样率约 50Hz / dt=20ms）：
- *   - RANGE_LPF_ALPHA:   ToF 距离一阶 LPF, alpha=0.40 → 截止 ≈ 5Hz，
- *                        把单帧 ToF 抖动平滑掉，避免直接乘到速度上。
- *   - VEL_X_LPF_ALPHA:   X 方向机体系速度 LPF, alpha=0.45，提高 Pitch 速度环响应。
- *   - VEL_Y_LPF_ALPHA:   Y 方向机体系速度 LPF, alpha=0.35，提高 Roll 速度环响应。
- *   - TILT_GATE_DEG:     |roll|/|pitch| 超过此值时认为光流姿态补偿残差不可信，
- *                        冻结速度 LPF 状态，输出保持上一次的滤波值。
- *   - VEL_DEADBAND_CMS:  速度绝对值小于该阈值时按 0 处理，抑制悬停小抖动。
- *   - VEL_OUTLIER_LIMIT: 单帧速度跳变超过该阈值视为离群（多半是 ToF 跳变 +
- *                        光流大瞬变叠加），用上一次滤波值替代喂进 LPF。
+ * 光流速度鲁棒化参数：先拒绝坏数据和物理不可能的跳变，再做低通。
+ * UP-FLOW-302 当前约 40Hz / dt=25ms，VEL_LPF_CUTOFF_HZ=3Hz 时 alpha 约 0.38。
  */
 #define PMW_FLOW_RANGE_LPF_ALPHA            (0.40f)
-#define PMW_FLOW_VEL_X_LPF_ALPHA            (0.45f)
-#define PMW_FLOW_VEL_Y_LPF_ALPHA            (0.35f)
-#define PMW_FLOW_VEL_X_SECOND_LPF_ALPHA     (1.0f)
-#define PMW_FLOW_VEL_Y_SECOND_LPF_ALPHA     (1.0)
+#define PMW_FLOW_TOF_JUMP_REJECT_CM         (15.0f)
+#define PMW_FLOW_VEL_LPF_CUTOFF_HZ          (3.0f)
 #define PMW_FLOW_VEL_MEDIAN_WINDOW_SIZE     (3U)
-#define PMW_FLOW_VEL_DEADBAND_CMS           (2.0f)
+#define PMW_FLOW_VEL_DEADBAND_CMS           (5.0f)
 #define PMW_FLOW_TILT_GATE_DEG              (25.0f)
-#define PMW_FLOW_VEL_OUTLIER_LIMIT_CMS      (300.0f)
+#define PMW_FLOW_VEL_ABS_LIMIT_CMS          (300.0f)
+#define PMW_FLOW_VEL_HARD_JUMP_CMS          (100.0f)
+#define PMW_FLOW_VEL_SLEW_LIMIT_CMS2        (800.0f)
+#define PMW_FLOW_VEL_SLEW_MIN_STEP_CMS      (12.0f)
+#define PMW_FLOW_INVALID_HOLD_FRAMES        (3U)
+#define PMW_FLOW_INVALID_DECAY_FRAMES       (8U)
+#define PMW_FLOW_INVALID_DECAY_ALPHA        (0.85f)
 #define PMW_FLOW_WORLD_TILT_GATE_DEG        (25.0f)
 
 /*
@@ -83,17 +80,17 @@ static PMWFlowState_t g_pmw_flow_mainloop_state = {0};
 static uint32 g_pmw_flow_mainloop_seq = 0U;
 
 static float g_pmw_flow_range_filt_cm = 0.0f;
+static float g_pmw_flow_range_last_valid_cm = 0.0f;
 static uint8 g_pmw_flow_range_filt_init = 0U;
+static uint8 g_pmw_flow_range_last_valid_init = 0U;
 static float g_pmw_flow_vel_x_filt_cms = 0.0f;
 static float g_pmw_flow_vel_y_filt_cms = 0.0f;
 static uint8 g_pmw_flow_vel_filt_init = 0U;
+static uint8 g_pmw_flow_invalid_sample_count = 0U;
 static float g_pmw_flow_vel_x_median_samples[PMW_FLOW_VEL_MEDIAN_WINDOW_SIZE] = {0.0f};
 static float g_pmw_flow_vel_y_median_samples[PMW_FLOW_VEL_MEDIAN_WINDOW_SIZE] = {0.0f};
 static uint8 g_pmw_flow_vel_median_init = 0U;
 static uint8 g_pmw_flow_vel_median_index = 0U;
-static float g_pmw_flow_vel_x_second_filt_cms = 0.0f;
-static float g_pmw_flow_vel_y_second_filt_cms = 0.0f;
-static uint8 g_pmw_flow_vel_second_filt_init = 0U;
 static float g_pmw_flow_world_vx_cms = 0.0f;
 static float g_pmw_flow_world_vy_cms = 0.0f;
 static float g_pmw_flow_world_x_cm = 0.0f;
@@ -150,6 +147,96 @@ static float pmw_flow_apply_velocity_deadband(float velocity_cms)
     }
 
     return velocity_cms;
+}
+
+static float pmw_flow_limit_float(float value, float min_value, float max_value)
+{
+    if(value > max_value)
+    {
+        value = max_value;
+    }
+    else if(value < min_value)
+    {
+        value = min_value;
+    }
+
+    return value;
+}
+
+static float pmw_flow_calc_lpf_alpha(float cutoff_hz, float dt_s)
+{
+    float alpha;
+
+    if(!(cutoff_hz > 0.0f) || !(dt_s > 0.0f))
+    {
+        return 1.0f;
+    }
+
+    alpha = 1.0f - expf(-PMW_FLOW_TWO_PI * cutoff_hz * dt_s);
+    return pmw_flow_limit_float(alpha, 0.0f, 1.0f);
+}
+
+static float pmw_flow_limit_velocity_slew(float sample_cms, float previous_cms, float dt_s)
+{
+    float max_step_cms = PMW_FLOW_VEL_SLEW_LIMIT_CMS2 * dt_s;
+    float delta_cms;
+
+    if(max_step_cms < PMW_FLOW_VEL_SLEW_MIN_STEP_CMS)
+    {
+        max_step_cms = PMW_FLOW_VEL_SLEW_MIN_STEP_CMS;
+    }
+
+    delta_cms = sample_cms - previous_cms;
+    delta_cms = pmw_flow_limit_float(delta_cms, -max_step_cms, max_step_cms);
+
+    return previous_cms + delta_cms;
+}
+
+static void pmw_flow_apply_invalid_velocity_hold(PMWFlowState_t *state)
+{
+    uint8 publish_hold_velocity = 0U;
+    uint8 invalid_window_frames = (uint8)(PMW_FLOW_INVALID_HOLD_FRAMES + PMW_FLOW_INVALID_DECAY_FRAMES);
+
+    if(state == NULL)
+    {
+        return;
+    }
+
+    if(g_pmw_flow_vel_filt_init && (g_pmw_flow_invalid_sample_count < invalid_window_frames))
+    {
+        if(g_pmw_flow_invalid_sample_count >= PMW_FLOW_INVALID_HOLD_FRAMES)
+        {
+            g_pmw_flow_vel_x_filt_cms *= PMW_FLOW_INVALID_DECAY_ALPHA;
+            g_pmw_flow_vel_y_filt_cms *= PMW_FLOW_INVALID_DECAY_ALPHA;
+        }
+
+        publish_hold_velocity = 1U;
+    }
+
+    if(g_pmw_flow_invalid_sample_count < 0xFFU)
+    {
+        g_pmw_flow_invalid_sample_count++;
+    }
+
+    if(publish_hold_velocity)
+    {
+        state->velocity_x_cms = pmw_flow_apply_velocity_deadband(g_pmw_flow_vel_x_filt_cms);
+        state->velocity_y_cms = pmw_flow_apply_velocity_deadband(g_pmw_flow_vel_y_filt_cms);
+        state->valid = 1U;
+    }
+    else
+    {
+        state->velocity_x_cms = 0.0f;
+        state->velocity_y_cms = 0.0f;
+        state->valid = 0U;
+        g_pmw_flow_vel_filt_init = 0U;
+        g_pmw_flow_vel_median_init = 0U;
+        g_pmw_flow_range_filt_init = 0U;
+        g_pmw_flow_range_last_valid_init = 0U;
+    }
+
+    state->speed_cms = sqrtf(state->velocity_x_cms * state->velocity_x_cms +
+                             state->velocity_y_cms * state->velocity_y_cms);
 }
 
 static void pmw_flow_update_velocity_median(float *velocity_x_cms, float *velocity_y_cms)
@@ -217,31 +304,6 @@ static void pmw_flow_update_velocity_feedback(PMWFlowState_t *state)
     state->velocity_y_fused_residual_cms = state->velocity_y_cms - state->velocity_y_fused_cms;
     state->flow_used = flow_used;
     state->acc_used = 0U;
-}
-
-static void pmw_flow_update_second_velocity_lpf(PMWFlowState_t *state)
-{
-    if(state == NULL)
-    {
-        return;
-    }
-
-    if(!g_pmw_flow_vel_second_filt_init)
-    {
-        g_pmw_flow_vel_x_second_filt_cms = state->velocity_x_cms;
-        g_pmw_flow_vel_y_second_filt_cms = state->velocity_y_cms;
-        g_pmw_flow_vel_second_filt_init = 1U;
-    }
-    else
-    {
-        g_pmw_flow_vel_x_second_filt_cms += PMW_FLOW_VEL_X_SECOND_LPF_ALPHA *
-                                            (state->velocity_x_cms - g_pmw_flow_vel_x_second_filt_cms);
-        g_pmw_flow_vel_y_second_filt_cms += PMW_FLOW_VEL_Y_SECOND_LPF_ALPHA *
-                                            (state->velocity_y_cms - g_pmw_flow_vel_y_second_filt_cms);
-    }
-
-    state->velocity_x_cms = g_pmw_flow_vel_x_second_filt_cms;
-    state->velocity_y_cms = g_pmw_flow_vel_y_second_filt_cms;
 }
 
 static void pmw_flow_update_world_odometry(PMWFlowState_t *state)
@@ -404,10 +466,13 @@ void PMW_Flow_Reset(void)
     g_pmw_flow_mainloop_state = cleared_state;
     g_pmw_flow_mainloop_seq = 0U;
     g_pmw_flow_range_filt_cm = 0.0f;
+    g_pmw_flow_range_last_valid_cm = 0.0f;
     g_pmw_flow_range_filt_init = 0U;
+    g_pmw_flow_range_last_valid_init = 0U;
     g_pmw_flow_vel_x_filt_cms = 0.0f;
     g_pmw_flow_vel_y_filt_cms = 0.0f;
     g_pmw_flow_vel_filt_init = 0U;
+    g_pmw_flow_invalid_sample_count = 0U;
     g_pmw_flow_vel_x_median_samples[0] = 0.0f;
     g_pmw_flow_vel_x_median_samples[1] = 0.0f;
     g_pmw_flow_vel_x_median_samples[2] = 0.0f;
@@ -416,9 +481,6 @@ void PMW_Flow_Reset(void)
     g_pmw_flow_vel_y_median_samples[2] = 0.0f;
     g_pmw_flow_vel_median_init = 0U;
     g_pmw_flow_vel_median_index = 0U;
-    g_pmw_flow_vel_x_second_filt_cms = 0.0f;
-    g_pmw_flow_vel_y_second_filt_cms = 0.0f;
-    g_pmw_flow_vel_second_filt_init = 0U;
     PMW_Flow_ResetWorldPosition();
 }
 
@@ -457,9 +519,11 @@ void PMW_Flow_UpdateSample(int16 flow_delta_x,
 {
     PMWFlowState_t new_state = {0};
     float range_used_cm;
+    float range_sample_cm;
     float vx_raw;
     float vy_raw;
     float tilt_abs_max_deg;
+    float velocity_lpf_alpha;
     new_state.flow_delta_x_count = flow_delta_x;
     new_state.flow_delta_y_count = flow_delta_y;
     new_state.dt_s = dt_s;
@@ -497,22 +561,40 @@ void PMW_Flow_UpdateSample(int16 flow_delta_x,
        (tof_los_cm > PMW_FLOW_MAX_HEIGHT_CM))
     {
         new_state.range_cm = tof_los_cm;
+        pmw_flow_apply_invalid_velocity_hold(&new_state);
         pmw_flow_update_velocity_feedback(&new_state);
         pmw_flow_update_world_odometry(&new_state);
         pmw_flow_publish_state(&new_state);
         return;
     }
 
-    /* (2) ToF 距离 LPF：v = range × flow_rate，距离单帧抖动会直接放大成速度噪声。
-     *     先把 range 平滑成 ~5Hz 截止的稳定信号再去乘。 */
+    /* (2) ToF 距离去毛刺 + LPF：v = range × flow_rate，距离单帧抖动会直接放大成速度噪声。 */
+    range_sample_cm = tof_los_cm;
+    if(g_pmw_flow_range_last_valid_init)
+    {
+        if(fabsf(range_sample_cm - g_pmw_flow_range_last_valid_cm) > PMW_FLOW_TOF_JUMP_REJECT_CM)
+        {
+            range_sample_cm = g_pmw_flow_range_last_valid_cm;
+        }
+        else
+        {
+            g_pmw_flow_range_last_valid_cm = range_sample_cm;
+        }
+    }
+    else
+    {
+        g_pmw_flow_range_last_valid_cm = range_sample_cm;
+        g_pmw_flow_range_last_valid_init = 1U;
+    }
+
     if(!g_pmw_flow_range_filt_init)
     {
-        g_pmw_flow_range_filt_cm = tof_los_cm;
+        g_pmw_flow_range_filt_cm = range_sample_cm;
         g_pmw_flow_range_filt_init = 1U;
     }
     else
     {
-        g_pmw_flow_range_filt_cm += PMW_FLOW_RANGE_LPF_ALPHA * (tof_los_cm - g_pmw_flow_range_filt_cm);
+        g_pmw_flow_range_filt_cm += PMW_FLOW_RANGE_LPF_ALPHA * (range_sample_cm - g_pmw_flow_range_filt_cm);
     }
     range_used_cm = g_pmw_flow_range_filt_cm;
     new_state.range_cm = range_used_cm;
@@ -565,8 +647,18 @@ void PMW_Flow_UpdateSample(int16 flow_delta_x,
     new_state.velocity_x_raw_cms = vx_raw;
     new_state.velocity_y_raw_cms = vy_raw;
 
+    if((fabsf(vx_raw) > PMW_FLOW_VEL_ABS_LIMIT_CMS) ||
+       (fabsf(vy_raw) > PMW_FLOW_VEL_ABS_LIMIT_CMS))
+    {
+        pmw_flow_apply_invalid_velocity_hold(&new_state);
+        pmw_flow_update_velocity_feedback(&new_state);
+        pmw_flow_update_world_odometry(&new_state);
+        pmw_flow_publish_state(&new_state);
+        return;
+    }
+
     /* (5) 倾角门：roll/pitch 较大时，去旋转残差会放大、ToF LOS 也偏离真高，这种
-     *     时刻 vx/vy 不可信。直接冻结速度 LPF 状态，保持上一次的滤波输出。 */
+     *     时刻 vx/vy 不可信。短时保持上一拍速度，持续无效后衰减并退出 valid。 */
     tilt_abs_max_deg = fabsf(roll_deg);
     if(fabsf(pitch_deg) > tilt_abs_max_deg)
     {
@@ -575,29 +667,36 @@ void PMW_Flow_UpdateSample(int16 flow_delta_x,
 
     if(tilt_abs_max_deg > PMW_FLOW_TILT_GATE_DEG)
     {
-        new_state.velocity_x_cms = g_pmw_flow_vel_filt_init ? g_pmw_flow_vel_x_filt_cms : 0.0f;
-        new_state.velocity_y_cms = g_pmw_flow_vel_filt_init ? g_pmw_flow_vel_y_filt_cms : 0.0f;
+        pmw_flow_apply_invalid_velocity_hold(&new_state);
     }
     else
     {
-        /* (6) 速度样本预处理：三点中值去单帧尖峰，小速度死区抑制悬停抖动；
-         *     随后做离群剔除，用上一次滤波值替代明显跳变样本喂进 LPF。 */
+        /* (6) 速度样本预处理：三点中值去单帧尖峰；硬跳变拒绝；再用物理加速度限制斜率。 */
         pmw_flow_update_velocity_median(&vx_raw, &vy_raw);
-        vx_raw = pmw_flow_apply_velocity_deadband(vx_raw);
-        vy_raw = pmw_flow_apply_velocity_deadband(vy_raw);
 
         if(g_pmw_flow_vel_filt_init)
         {
-            if(fabsf(vx_raw - g_pmw_flow_vel_x_filt_cms) > PMW_FLOW_VEL_OUTLIER_LIMIT_CMS)
+            if(fabsf(vx_raw - g_pmw_flow_vel_x_filt_cms) > PMW_FLOW_VEL_HARD_JUMP_CMS)
             {
                 vx_raw = g_pmw_flow_vel_x_filt_cms;
             }
-            if(fabsf(vy_raw - g_pmw_flow_vel_y_filt_cms) > PMW_FLOW_VEL_OUTLIER_LIMIT_CMS)
+            else
+            {
+                vx_raw = pmw_flow_limit_velocity_slew(vx_raw, g_pmw_flow_vel_x_filt_cms, dt_s);
+            }
+
+            if(fabsf(vy_raw - g_pmw_flow_vel_y_filt_cms) > PMW_FLOW_VEL_HARD_JUMP_CMS)
             {
                 vy_raw = g_pmw_flow_vel_y_filt_cms;
             }
-            g_pmw_flow_vel_x_filt_cms += PMW_FLOW_VEL_X_LPF_ALPHA * (vx_raw - g_pmw_flow_vel_x_filt_cms);
-            g_pmw_flow_vel_y_filt_cms += PMW_FLOW_VEL_Y_LPF_ALPHA * (vy_raw - g_pmw_flow_vel_y_filt_cms);
+            else
+            {
+                vy_raw = pmw_flow_limit_velocity_slew(vy_raw, g_pmw_flow_vel_y_filt_cms, dt_s);
+            }
+
+            velocity_lpf_alpha = pmw_flow_calc_lpf_alpha(PMW_FLOW_VEL_LPF_CUTOFF_HZ, dt_s);
+            g_pmw_flow_vel_x_filt_cms += velocity_lpf_alpha * (vx_raw - g_pmw_flow_vel_x_filt_cms);
+            g_pmw_flow_vel_y_filt_cms += velocity_lpf_alpha * (vy_raw - g_pmw_flow_vel_y_filt_cms);
         }
         else
         {
@@ -606,15 +705,14 @@ void PMW_Flow_UpdateSample(int16 flow_delta_x,
             g_pmw_flow_vel_filt_init = 1U;
         }
 
-        new_state.velocity_x_cms = g_pmw_flow_vel_x_filt_cms;
-        new_state.velocity_y_cms = g_pmw_flow_vel_y_filt_cms;
+        g_pmw_flow_invalid_sample_count = 0U;
+        new_state.velocity_x_cms = pmw_flow_apply_velocity_deadband(g_pmw_flow_vel_x_filt_cms);
+        new_state.velocity_y_cms = pmw_flow_apply_velocity_deadband(g_pmw_flow_vel_y_filt_cms);
+        new_state.valid = 1U;
     }
-
-    pmw_flow_update_second_velocity_lpf(&new_state);
 
     new_state.speed_cms = sqrtf(new_state.velocity_x_cms * new_state.velocity_x_cms +
                                 new_state.velocity_y_cms * new_state.velocity_y_cms);
-    new_state.valid = 1U;
     pmw_flow_update_velocity_feedback(&new_state);
     pmw_flow_update_world_odometry(&new_state);
 
