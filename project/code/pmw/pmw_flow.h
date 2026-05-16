@@ -27,7 +27,7 @@ typedef struct
     float velocity_y_raw_cms;
     float velocity_x_cms;
     float velocity_y_cms;
-    /* Compatibility aliases while acceleration fusion is disabled. */
+    /* ICM-predicted + optical-flow-corrected velocity used by the speed loop. */
     float velocity_x_fused_cms;
     float velocity_y_fused_cms;
     float velocity_x_fused_residual_cms;
@@ -53,7 +53,9 @@ void PMW_Flow_UpdateSample(int16 flow_delta_x,
                            float roll_deg,
                            float pitch_deg,
                            float tof_los_cm,
-                           float dt_s);
+                           float dt_s,
+                           float imu_velocity_x_cms,
+                           float imu_velocity_y_cms);
 void PMW_Flow_SyncMainLoopBuffer(void);
 void PMW_Flow_GetState(PMWFlowState_t *state);
 void PMW_Flow_ResetWorldPosition(void);

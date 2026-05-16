@@ -233,7 +233,7 @@ S1=450!
 | `F6=0!` 或 `F6!` | Roll/Pitch 角度与角速度对比 |
 | `F7=0!` 或 `F7!` | ADC 原始值、滤波值与目标角 |
 | `F8=0!` 或 `F8!` | 光流速度闭环综合监视 |
-| `F9=0!` 或 `F9!` | 加速度积分速度与光流速度对比 |
+| `F9=0!` 或 `F9!` | 加速度积分速度、光流速度与融合速度对比 |
 | `FA=0!` 或 `FA!` | 加速度水平化残差诊断 |
 | `FB=0!` 或 `FB!` | 光流速度旋转到世界系后的速度与积分位置 |
 | `FC=0!` 或 `FC!` | 速度积分位置与光流单帧位移积分位置对比 |
@@ -428,31 +428,31 @@ S1=450!
 
 返回顺序：
 
-1. `fb_vx_cms`——当前 X 方向光流滤波速度，已经过 ToF 跳变拒绝、速度硬限幅、三点中值、硬跳变拒绝、斜率限制、单级低通和 5cm/s 输出零速死区
+1. `fb_vx_cms`——当前 X 方向速度环反馈速度，即 ICM 预测 + 光流校正后的融合速度；其中光流测量已经过 ToF 跳变拒绝、速度硬限幅、三点中值、硬跳变拒绝、斜率限制、单级低通、输出速度变化率限制和 5cm/s 输出零速死区
 2. `vx_target_cms`
 3. `x_i_out`
 4. `pitch_corr_deg`
-5. `fb_vy_cms`——当前 Y 方向光流滤波速度，已经过 ToF 跳变拒绝、速度硬限幅、三点中值、硬跳变拒绝、斜率限制、单级低通和 5cm/s 输出零速死区
+5. `fb_vy_cms`——当前 Y 方向速度环反馈速度，即 ICM 预测 + 光流校正后的融合速度；其中光流测量已经过 ToF 跳变拒绝、速度硬限幅、三点中值、硬跳变拒绝、斜率限制、单级低通、输出速度变化率限制和 5cm/s 输出零速死区
 6. `vy_target_cms`
 7. `y_i_out`
 8. `roll_corr_deg`
 
-说明：`fb_vx_cms` / `fb_vy_cms` 直接来自当前光流状态，因此即使速度环尚未 active，也能用 `F8!` 判断光流速度是否已经有数；目标速度、积分项和姿态修正仍来自速度环诊断量。
+说明：`fb_vx_cms` / `fb_vy_cms` 直接来自当前光流融合状态，因此即使速度环尚未 active，也能用 `F8!` 判断融合反馈速度是否已经有数；目标速度、积分项和姿态修正仍来自速度环诊断量。
 
-### `F9`：加速度积分速度与光流速度对比
+### `F9`：加速度积分速度、光流速度与融合速度对比
 
 返回顺序：
 
 1. `X_V`
 2. `pmw_flow_state.velocity_x_cms`
-3. `pmw_flow_state.velocity_x_fused_cms`（当前等于 `velocity_x_cms`）
-4. `pmw_flow_state.velocity_x_fused_residual_cms`（关闭融合后应为 0）
+3. `pmw_flow_state.velocity_x_fused_cms`
+4. `pmw_flow_state.velocity_x_fused_residual_cms`，光流滤波速度减去融合速度
 5. `Y_V`
 6. `pmw_flow_state.velocity_y_cms`
-7. `pmw_flow_state.velocity_y_fused_cms`（当前等于 `velocity_y_cms`）
-8. `pmw_flow_state.velocity_y_fused_residual_cms`（关闭融合后应为 0）
+7. `pmw_flow_state.velocity_y_fused_cms`
+8. `pmw_flow_state.velocity_y_fused_residual_cms`，光流滤波速度减去融合速度
 
-F9 当前用于观察加速度积分速度与光流速度差异：`X_V` / `Y_V` 是原 IMU 加速度积分速度，`velocity_*_cms` 是光流滤波速度。加速度融合已关闭，`velocity_*_fused_cms` 仅作为兼容字段保留并等于 `velocity_*_cms`，速度环 PID 使用 `velocity_*_cms` 作为反馈。
+F9 当前用于观察 IMU 加速度积分速度、光流滤波速度和融合速度的差异：`X_V` / `Y_V` 是原 IMU 加速度积分速度，`velocity_*_cms` 是光流滤波速度，`velocity_*_fused_cms` 是速度环 PID 使用的反馈速度。
 
 ### `FA`：加速度水平化残差诊断
 
@@ -617,8 +617,8 @@ PMW3901 模式返回顺序：
 
 1. `ax_level_mg`，原始加速度经 Roll/Pitch 水平化并扣除 `acc_level_x_bias_mg` 后的 X 轴水平加速度，单位 mg
 2. `ay_level_mg`，原始加速度经 Roll/Pitch 水平化并扣除 `acc_level_y_bias_mg` 后的 Y 轴水平加速度，单位 mg
-3. `pmw_flow_state.velocity_x_cms`，进入 X 速度环 PID 的测量速度，单位 cm/s
-4. `pmw_flow_state.velocity_y_cms`，进入 Y 速度环 PID 的测量速度，单位 cm/s
+3. `pmw_flow_state.velocity_x_fused_cms`，进入 X 速度环 PID 的融合测量速度，单位 cm/s
+4. `pmw_flow_state.velocity_y_fused_cms`，进入 Y 速度环 PID 的融合测量速度，单位 cm/s
 5. `pmw_flow_state.velocity_x_raw_cms`，光流解算出的 X 原始水平速度，未经过中值、跳变拒绝、斜率限制、低通和死区，单位 cm/s
 6. `pmw_flow_state.velocity_y_raw_cms`，光流解算出的 Y 原始水平速度，未经过中值、跳变拒绝、斜率限制、低通和死区，单位 cm/s
 7. `pmw_flow_state.flow_delta_x_count`，本帧光流原始 X count

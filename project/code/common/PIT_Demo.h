@@ -202,7 +202,7 @@ typedef struct
 /*
  * 光流速度闭环 (Velocity Loop) 对外接口。
  *
- * 反馈源: 光流滤波后的机体水平速度 (velocity_x/y_cms, +x 前进, +y 右移)。
+ * 反馈源: 光流 + ICM 融合后的机体水平速度 (velocity_x/y_fused_cms, +x 前进, +y 右移)。
  * 控制器: 独立 PID vel_pid_x / vel_pid_y。
  * 输出  : 先生成水平加速度指令, 再换算成姿态修正角并写入 target_angle_*。
  * Current takeoff base is fixed at 0deg/0deg.

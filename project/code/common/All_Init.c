@@ -40,7 +40,7 @@ static void init_default_pid_parameters(void)
 
     /*
      * 光流速度闭环 PID @ 4kHz 控制环。
-        * 反馈: 光流滤波后的机体水平速度 velocity_x/y_cms (cm/s)。
+      * 反馈: 光流 + ICM 融合后的机体水平速度 velocity_x/y_fused_cms (cm/s)。
      * 输出: 水平加速度指令 ax/ay_cmd (cm/s^2)，再换算成姿态修正角。
      *
      * - vel_pid_x: 前向速度 (vx) -> ax_cmd -> pitch 修正
@@ -52,8 +52,8 @@ static void init_default_pid_parameters(void)
      *   - Ki/Kd 默认关，避免在 4kHz 控制环里 Ki 过快窜飞 (反馈本身只有 50Hz 更新)
      *   - Kp/Ki/Kd/output_limit/integral_limit 后续可由 VOFA V/W 命令或菜单"Velocity PID"组细调
      */
-    PID_Init(&vel_pid_x, 3.0f, 0.0f, 1.0f, 40.0f, 20.0f, 0.0f, 0.0f);
-    PID_Init(&vel_pid_y, 3.0f, 0.0f, 1.0f, 40.0f, 20.0f, 0.0f, 0.0f);
+    PID_Init(&vel_pid_x, 0.50f, 0.0f, 1.0f, 40.0f, 20.0f, 0.0f, 0.0f);
+    PID_Init(&vel_pid_y, 0.50f, 0.0f, 1.0f, 40.0f, 20.0f, 0.0f, 0.0f);
 
     PID_Init(&pos_pid_x, 0.50f, 0.0001f, 0.0f, 35.0f, 50.0f, 10000.0f, 0.0f);
     PID_Init(&pos_pid_y, 0.50f, 0.0001f, 0.0f, 35.0f, 50.0f, 10000.0f, 0.0f);

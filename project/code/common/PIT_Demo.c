@@ -35,7 +35,7 @@
 /*
  * 光流速度闭环参数。
  *
- * 反馈来自 PMW3901 + ToF 解算的机体水平速度 velocity_x/y_cms
+ * 反馈来自 PMW/UP-FLOW 光流 + ICM 融合后的机体水平速度 velocity_x/y_fused_cms
  * （单位 cm/s，约定: +x 机体前进，+y 机体右移；见 pmw_flow.c 注释）。
  *
  * 控制器使用独立 PID:
@@ -830,7 +830,9 @@ void PIT_PMW3901_Task_20ms(void)
                           current_roll,
                           current_pitch,
                           flow_height_cm,
-                          flow_sample_dt_s);
+                          flow_sample_dt_s,
+                          X_V_F,
+                          Y_V_F);
 }
 
 void PIT_Motor_Task_500us(void)
@@ -1016,14 +1018,14 @@ void PIT_Control_Task_250us(void)
                 float pitch_corr;
                 float roll_corr;
 
-                /* Velocity PID feedback uses filtered optical-flow velocity. */
+                /* Velocity PID feedback uses ICM-predicted + optical-flow-corrected velocity. */
                 ax_cmd_cms2 = PID_Calculate(&vel_pid_x,
                                             g_velocity_loop_target_vx_cms,
-                                            flow_snap.velocity_x_cms,
+                                            flow_snap.velocity_x_fused_cms,
                                             CONTROL_DT_S);
                 ay_cmd_cms2 = PID_Calculate(&vel_pid_y,
                                             g_velocity_loop_target_vy_cms,
-                                            flow_snap.velocity_y_cms,
+                                            flow_snap.velocity_y_fused_cms,
                                             CONTROL_DT_S);
 
                 /* Small-angle approximation near hover:
@@ -1043,8 +1045,8 @@ void PIT_Control_Task_250us(void)
                 g_velocity_loop_y_i_out        = vel_pid_y.Ki * vel_pid_y.integral;
                 g_velocity_loop_pitch_corr_deg = pitch_corr;
                 g_velocity_loop_roll_corr_deg  = roll_corr;
-                g_velocity_loop_fb_vx_cms      = flow_snap.velocity_x_cms;
-                g_velocity_loop_fb_vy_cms      = flow_snap.velocity_y_cms;
+                g_velocity_loop_fb_vx_cms      = flow_snap.velocity_x_fused_cms;
+                g_velocity_loop_fb_vy_cms      = flow_snap.velocity_y_fused_cms;
                 vel_loop_active_now = 1U;
             }
             else

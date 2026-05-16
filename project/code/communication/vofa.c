@@ -982,8 +982,8 @@ void send_date_back(void)
         {
             /*
              * F8 - 速度环监视。
-             * 左半 (I0~I3) X 轴: 光流实际速度 / 目标速度 / 积分输出 / 总输出；
-             * 右半 (I4~I7) Y 轴: 光流实际速度 / 目标速度 / 积分输出 / 总输出。
+             * 左半 (I0~I3) X 轴: 融合反馈速度 / 目标速度 / 积分输出 / 总输出；
+             * 右半 (I4~I7) Y 轴: 融合反馈速度 / 目标速度 / 积分输出 / 总输出。
              */
             PMWFlowState_t pmw_flow_state = {0};
             float vx_target_cms = 0.0f;
@@ -996,8 +996,8 @@ void send_date_back(void)
             float y_i_out = 0.0f;
 
             PMW_Flow_GetState(&pmw_flow_state);
-            fb_vx_cms = pmw_flow_state.velocity_x_cms;
-            fb_vy_cms = pmw_flow_state.velocity_y_cms;
+            fb_vx_cms = pmw_flow_state.velocity_x_fused_cms;
+            fb_vy_cms = pmw_flow_state.velocity_y_fused_cms;
             Velocity_Loop_Get_Target_Velocity(&vx_target_cms, &vy_target_cms);
             Velocity_Loop_Get_Diag(&pitch_corr_deg, &roll_corr_deg,
                                    NULL, NULL,
@@ -1247,8 +1247,8 @@ void send_date_back(void)
 
             send_four_date(ax_level_mg,
                            ay_level_mg,
-                           pmw_flow_state.velocity_x_cms,
-                           pmw_flow_state.velocity_y_cms,
+                           pmw_flow_state.velocity_x_fused_cms,
+                           pmw_flow_state.velocity_y_fused_cms,
                            pmw_flow_state.velocity_x_raw_cms,
                            pmw_flow_state.velocity_y_raw_cms,
                            (float)pmw_flow_state.flow_delta_x_count,
