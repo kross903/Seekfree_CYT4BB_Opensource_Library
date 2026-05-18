@@ -30,12 +30,15 @@ static void init_default_pid_parameters(void)
     // PID_Init(&gyro_pid_roll, 2.0f, 0.0f, 0.00f, 2000.0f, 100.0f, 10.0f, 0.8f);
     // PID_Init(&gyro_pid_pitch, 6.5f, 0.0f, 0.00f, 2000.0f, 100.0f, 10.0f, 0.8f);
     // PID_Init(&gyro_pid_yaw, 5.5f, 0.0f, 0.0f, 400.0f, 10.0f, 0.0f, 0.0f);
-    PID_Init(&gyro_pid_roll, 6.0f, 0.0f, 0.2f, 2000.0f, 100.0f, 10.0f, 0.8f);
-    PID_Init(&gyro_pid_pitch, 6.5f, 0.0f, 0.4'
-        000
-        
-        f, 2000.0f, 100.0f, 10.0f, 0.8f);
-    PID_Init(&gyro_pid_yaw, 5.5f, 0.0f, 0.0f, 400.0f, 10.0f, 0.0f, 0.0f);
+    PID_Init(&gyro_pid_roll,
+             6.0f, 0.0f, 0.2f,
+             2000.0f, 100.0f, 10.0f, 0.8f);
+    PID_Init(&gyro_pid_pitch,
+             6.5f, 0.0f, 0.4f,
+             2000.0f, 100.0f, 10.0f, 0.8f);
+    PID_Init(&gyro_pid_yaw,
+             5.5f, 0.0f, 0.0f,
+             400.0f, 10.0f, 0.0f, 0.0f);
     /* HeightPID @ 100Hz. Parameters restored from commit 4b9a48f "定点飞行参数". */
     // PID_Init(&HeightPID, 1.0f, 0.001f, 0.01f, 80.0f, 30.0f, 10000.0f, 0.3f);
     PID_Init(&HeightPID, 2.0f, 0.0001f, 0.1f, 80.0f, 30.0f, 10000.0f, 0.3f);

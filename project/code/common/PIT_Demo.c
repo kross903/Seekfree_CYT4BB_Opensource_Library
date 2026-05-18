@@ -1,65 +1,21 @@
 #include "common/PIT_Demo.h"
 #include "common/project_headfile.h"
+#include "control/angle_loop.h"
+#include "control/position_loop.h"
+#include "control/rate_loop.h"
+#include "control/velocity_loop.h"
+#include "menu/menu_motor_test.h"
+#include "motor_hardware/motor_hardware.h"
+#include "pmw/optical_flow_feed.h"
 
-// PWM motor output: 200Hz ESC PWM, 2000 = stop, 4000 = full output.
-// We intentionally cap the commanded range to 60%, so the real max duty is 3200.
-#define MOTOR_PWM_FREQ_HZ              200U
-#define MOTOR_PWM_CH1                  TCPWM_CH09_P05_0
-#define MOTOR_PWM_CH2                  TCPWM_CH10_P05_1
-#define MOTOR_PWM_CH3                  TCPWM_CH11_P05_2
-#define MOTOR_PWM_CH4                  TCPWM_CH12_P05_3
-#define MOTOR_PWM_DUTY_MIN             2000U
-#define MOTOR_PWM_DUTY_MAX             3200U
+// ==================== Configuration constants ====================
 
 #define THROTTLE_RAMP_RATE             2.0f
 #define CONTROL_DT_S                   0.00025f
 #define CONTROL_DT_MS                  0.25f
-#define ANGLE_RATE_CMD_LPF_ALPHA       0.04f
-#define VEL_LOOP_GRAVITY_CMS2          981.0f
 #define TILT_THRUST_COMP_MAX           1.30f
 
-/*
- * 硬件转速补偿：motor 1 / 3 / 4 实测转速偏弱，在最终 PWM 指令上按各自系数乘以抵消。
- * motor 2 不补偿。
- *
- * 挂点位置：PWM 出口（write_motor_pwm_output）。这样 MANUAL 直通和 ANGLE 混控两条
- * 路径写入的 motor_throttle[] 都会过这一层，开环/闭环都生效。
- * 越界保护：补偿后如超过 MOTOR_OUTPUT_SCALE_MAX 会被截断，不会击穿 ESC 限幅。
- * 电机测试模式会旁路掉，方便单独测量硬件差异。
- */
-#define MOTOR_HW_COMP_M1_SCALE         1.00f
-#define MOTOR_HW_COMP_M3_SCALE         1.00f
-#define MOTOR_HW_COMP_M4_SCALE         1.00f
 #define ADC_INPUT_LPF_ALPHA            0.20f
-
-/*
- * 光流速度闭环参数。
- *
- * 反馈来自 PMW/UP-FLOW 光流 + ICM 融合后的机体水平速度 velocity_x/y_fused_cms
- * （单位 cm/s，约定: +x 机体前进，+y 机体右移；见 pmw_flow.c 注释）。
- *
- * 控制器使用独立 PID:
- *   vel_pid_x → 水平前向加速度指令 ax_cmd (cm/s^2)
- *   vel_pid_y → 水平右向加速度指令 ay_cmd (cm/s^2)
- * 再按小角度近似 a≈g*theta 换算成 pitch/roll 修正角后叠加到悬停基准上。
- * Current takeoff base is fixed at 0deg/0deg plus the wireless-tuned hover angle compensation.
- *
- * 极性宏用于一键修正机/IMU 安装方向带来的符号问题：
- *   pitch 正 = 低头（机体加速向前），所以 v_body_x>0 应让 pitch 减小。
- *   PID 输出本身已经是 -Kp*v_body_x（误差为 0-vx），符号已正确，
- *   PITCH_SIGN 默认 +1.0 即可；若硬件实际相反，改成 -1.0。
- *
- * Velocity acceleration command magnitude is limited only by vel_pid_x/y.output_limit.
- */
-#define VEL_LOOP_PITCH_SIGN            (+1.0f)
-#define VEL_LOOP_ROLL_SIGN             (+1.0f)
-
-#define POSITION_LOOP_TARGET_X_CM      (0.0f)
-#define POSITION_LOOP_TARGET_Y_CM      (0.0f)
-#define POSITION_LOOP_VX_SIGN          (+1.0f)
-#define POSITION_LOOP_VY_SIGN          (+1.0f)
-#define POSITION_LOOP_DEADZONE_CM      (3.0f)
-#define POSITION_LOOP_PREDICT_RELEASE_EPS_CM (1.0f)
 
 /*
  * 真位置闭环参数。
@@ -101,24 +57,10 @@
 #define FUSION_W_TOF                   (1.0f / (FUSION_SIGMA_TOF_M * FUSION_SIGMA_TOF_M))
 #define BATTERY_NOMINAL_VOLTAGE        12.4f   /* 3S 充满电压，单位 V。 */
 
-PID_Controller gyro_pid_roll;
-PID_Controller gyro_pid_pitch;
-PID_Controller gyro_pid_yaw;
-PID_Controller angle_pid_roll;
-PID_Controller angle_pid_pitch;
-PID_Controller angle_pid_yaw;
-
-/* 光流速度闭环 PID。摇杆 PID 已彻底退出控制链路，这里专门给 PMW3901 + ToF 解算的
- * 水平速度做闭环：vel_pid_x 作用于 pitch 修正、vel_pid_y 作用于 roll 修正。 */
-PID_Controller vel_pid_x;
-PID_Controller vel_pid_y;
-PID_Controller pos_pid_x;
-PID_Controller pos_pid_y;
+// ==================== Public runtime state ====================
 
 volatile uint8 armed = 0;
 volatile uint8 control_mode = 0;
-volatile uint8 emergency_stop_triggered = 0;
-volatile uint8 emergency_stop_reason = EMERGENCY_STOP_REASON_NONE;
 
 volatile float target_throttle = 0.0f;
 volatile float current_throttle = 0.0f;
@@ -137,7 +79,6 @@ volatile float angle_roll_compensation = 0.0;
 volatile float angle_pitch_compensation = 0.0;
 volatile float angle_yaw_compensation = 0.0f;
 
-int low_voltage_protect_flag = 0;
 float voltage = BATTERY_NOMINAL_VOLTAGE;
 uint16 adc_value = 0;
 
@@ -147,18 +88,6 @@ float current_yaw = 0.0f;
 float current_gyro_roll = 0.0f;
 float current_gyro_pitch = 0.0f;
 float current_gyro_yaw = 0.0f;
-
-float target_roll_rate = 0.0f;
-float target_pitch_rate = 0.0f;
-float target_yaw_rate = 0.0f;
-
-static uint8 g_angle_rate_cmd_lpf_init = 0U;
-static float g_target_roll_rate_lpf = 0.0f;
-static float g_target_pitch_rate_lpf = 0.0f;
-
-float roll_output = 0.0f;
-float pitch_output = 0.0f;
-static float yaw_output = 0.0f;
 
 volatile uint16 motor_throttle[4] = {0, 0, 0, 0};
 float motor_output[4] = {0.0f, 0.0f, 0.0f, 0.0f};
@@ -179,123 +108,9 @@ volatile float pos_fusion_r_fused  = 0.0f;
 volatile float pos_fusion_residual = 0.0f;
 volatile uint8 pos_fusion_fault    = 0U;
 
-/* 光流速度闭环：起飞 ramp 完成、首次进入巡航分支时由 PIT_Control_Task_250us
- * 自动 enable，并同步接入红外位置环。Disarm / Emergency_Stop 会自动 disable,
- * 下次起飞重新走自动 enable 路径。手动 VOFA / 调试也可调用 Velocity_Loop_Set_Enabled。 */
-static volatile uint8 g_velocity_loop_enabled       = 0U;
-static volatile float g_velocity_loop_target_vx_cms = 0.0f;
-static volatile float g_velocity_loop_target_vy_cms = 0.0f;
+// ==================== Motor output and motor-test state ====================
 
-/* 诊断量：实际叠加到基准角上的修正量与最近一次反馈速度。 */
-static volatile float g_velocity_loop_pitch_corr_deg = 0.0f;
-static volatile float g_velocity_loop_roll_corr_deg  = 0.0f;
-static volatile float g_velocity_loop_fb_vx_cms      = 0.0f;
-static volatile float g_velocity_loop_fb_vy_cms      = 0.0f;
-static volatile float g_velocity_loop_x_i_out        = 0.0f;
-static volatile float g_velocity_loop_y_i_out        = 0.0f;
-static volatile uint8 g_velocity_loop_active         = 0U;  /* 上一拍是否真的喂了光流速度 */
-
-static volatile uint8 g_position_loop_enabled        = 0U;
-static volatile uint8 g_position_loop_active         = 0U;
-static volatile uint8 g_position_loop_ir_track_valid = 0U;
-static volatile uint8 g_position_loop_velocity_ready = 0U;
-static volatile float g_position_loop_fb_x_cm        = 0.0f;
-static volatile float g_position_loop_fb_y_cm        = 0.0f;
-static volatile float g_position_loop_error_x_cm     = 0.0f;
-static volatile float g_position_loop_error_y_cm     = 0.0f;
-static volatile float g_position_loop_vx_cmd_cms     = 0.0f;
-static volatile float g_position_loop_vy_cmd_cms     = 0.0f;
-static volatile float g_position_loop_x_i_out        = 0.0f;
-static volatile float g_position_loop_y_i_out        = 0.0f;
-static uint8 g_position_loop_last_pose_valid = 0U;
-static uint8 g_position_loop_predict_hold_active = 0U;
-static float g_position_loop_last_x_cm = 0.0f;
-static float g_position_loop_last_y_cm = 0.0f;
-static float g_position_loop_hold_start_x_cm = 0.0f;
-static float g_position_loop_hold_start_y_cm = 0.0f;
-static float g_position_loop_hold_distance_cm = 0.0f;
-static float g_position_loop_hold_dx_cm = 0.0f;
-static float g_position_loop_hold_dy_cm = 0.0f;
-
-/*
- * 光流 ToF 喂数据的容错状态。
- *
- * DL1B (VL53L1X short 模式) 有效量程仅 ~1.3m，飞机超过该高度时 sensor 会持续返回
- * dl1b_finsh_flag=0 / dl1b_distance_mm=8192。原始链路把这种失败直接当成 tof_los_cm=0,
- * 触发 PMW_Flow 内部 invalid 早退，整一帧光流速度被丢，表现为"高度 1m 以上没数据"。
- *
- * 这里在应用层加 3 段降级:
- *   1) dl1b_finsh_flag=1 且距离合理 → 直接用本帧 ToF, 同时缓存 last_valid 与重置 stale 计数
- *   2) 本帧失败但 stale 计数 < 阈值 → 使用 last_valid_los_cm 兜底, 让光流维持运行
- *   3) stale 超阈值 → tof_los_cm = 0, 让 PMW_Flow 内部 invalid (避免高度估计 stale 过久)
- *
- * Source 枚举仅作 VOFA / 监视页诊断:
- *   0 = NONE    (本帧无任何可信 ToF, 光流将 invalid)
- *   1 = LIVE    (来自本帧 dl1b)
- *   2 = HOLD    (兜底用上一帧缓存)
- */
-#define PMW_FLOW_TOF_MIN_VALID_MM       (50U)        /* 5cm 与 PMW_FLOW_MIN_HEIGHT_CM 对齐 */
-#define PMW_FLOW_TOF_MAX_VALID_MM       (4000U)      /* 与 dl1b_get_distance 内部上限一致 */
-#define PMW_FLOW_TOF_STALE_TIMEOUT_TICK (50U)        /* 50 帧 × 20ms = 1s 后承认 ToF 失效 */
-#define PMW_FLOW_TOF_SRC_NONE           (0U)
-#define PMW_FLOW_TOF_SRC_LIVE           (1U)
-#define PMW_FLOW_TOF_SRC_HOLD           (2U)
-
-static volatile float g_pmw3901_flow_height_used_cm = 0.0f;
-static volatile uint16 g_pmw3901_tof_stale_ticks = 0U;
-static volatile uint8 g_pmw3901_tof_source = PMW_FLOW_TOF_SRC_NONE;
-static float g_pmw3901_tof_last_valid_cm = 0.0f;
-
-static uint8 motor_pwm_initialized = 0U;
-static volatile uint8 motor_test_active = 0U;
-static volatile uint8 motor_test_selected = 0U;
-static volatile uint16 motor_test_throttle = 0U;
-static volatile uint8 motor_test_output_enabled = 0U;
-
-static void reset_angle_rate_cmd_lpf(void)
-{
-    g_angle_rate_cmd_lpf_init = 0U;
-    g_target_roll_rate_lpf = 0.0f;
-    g_target_pitch_rate_lpf = 0.0f;
-    target_roll_rate = 0.0f;
-    target_pitch_rate = 0.0f;
-}
-
-static void update_angle_rate_cmd_lpf(float roll_rate_raw, float pitch_rate_raw)
-{
-    if(!g_angle_rate_cmd_lpf_init)
-    {
-        g_target_roll_rate_lpf = roll_rate_raw;
-        g_target_pitch_rate_lpf = pitch_rate_raw;
-        g_angle_rate_cmd_lpf_init = 1U;
-    }
-    else
-    {
-        g_target_roll_rate_lpf += ANGLE_RATE_CMD_LPF_ALPHA * (roll_rate_raw - g_target_roll_rate_lpf);
-        g_target_pitch_rate_lpf += ANGLE_RATE_CMD_LPF_ALPHA * (pitch_rate_raw - g_target_pitch_rate_lpf);
-    }
-
-    target_roll_rate = g_target_roll_rate_lpf;
-    target_pitch_rate = g_target_pitch_rate_lpf;
-}
-
-static void motor_pwm_init_once(void)
-{
-    if(motor_pwm_initialized)
-    {
-        return;
-    }
-
-#if MOTOR_OUTPUT_PROTOCOL == 0
-    pwm_init(MOTOR_PWM_CH1, MOTOR_PWM_FREQ_HZ, MOTOR_PWM_DUTY_MIN);
-    pwm_init(MOTOR_PWM_CH2, MOTOR_PWM_FREQ_HZ, MOTOR_PWM_DUTY_MIN);
-    pwm_init(MOTOR_PWM_CH3, MOTOR_PWM_FREQ_HZ, MOTOR_PWM_DUTY_MIN);
-    pwm_init(MOTOR_PWM_CH4, MOTOR_PWM_FREQ_HZ, MOTOR_PWM_DUTY_MIN);
-#else
-    dshot_init();
-#endif
-    motor_pwm_initialized = 1U;
-}
+// ==================== Motor output helpers ====================
 
 static uint16 motor_output_limit_max(void)
 {
@@ -305,74 +120,6 @@ static uint16 motor_output_limit_max(void)
     }
 
     return SAFE_MAX_MOTOR_OUTPUT_LIMIT;
-}
-
-static uint16 throttle_to_pwm_duty(uint16 throttle)
-{
-    if(throttle > MOTOR_OUTPUT_SCALE_MAX)
-    {
-        throttle = MOTOR_OUTPUT_SCALE_MAX;
-    }
-
-    return (uint16)(MOTOR_PWM_DUTY_MIN + throttle);
-}
-
-#if MOTOR_OUTPUT_PROTOCOL == 1
-/*
- * DShot600 值域映射
- * motor_throttle[0, MOTOR_OUTPUT_SCALE_MAX] → DShot[0 / DSHOT_MIN_THROTTLE, DSHOT_MAX_THROTTLE]
- * throttle == 0 时发送 DISARM(0)，否则线性映射到 300~2047。
- */
-static uint16 throttle_to_dshot(uint16 throttle)
-{
-    if(throttle == 0U)
-    {
-        return DSHOT_DISARM;
-    }
-    return (uint16)(DSHOT_MIN_THROTTLE +
-                    (uint32)throttle * (DSHOT_MAX_THROTTLE - DSHOT_MIN_THROTTLE)
-                    / MOTOR_OUTPUT_SCALE_MAX);
-}
-#endif
-
-/*
- * 单电机硬件转速补偿钩子：MANUAL 和 ANGLE 两条路径写完 motor_throttle[] 后，
- * 都会从 write_motor_pwm_output 过这里乘系数。对 motor 1/3/4 生效，motor 2 不补偿。
- * 电机测试模式返回原值，方便单独对比硬件差异。
- */
-static uint16 apply_motor_hw_compensation(uint8 motor_idx, uint16 throttle)
-{
-    float scale;
-    float scaled;
-
-    if(motor_test_active)
-    {
-        return throttle;
-    }
-
-    if(motor_idx == 0U)
-    {
-        scale = MOTOR_HW_COMP_M1_SCALE;
-    }
-    else if(motor_idx == 2U)
-    {
-        scale = MOTOR_HW_COMP_M3_SCALE;
-    }
-    else if(motor_idx == 3U)
-    {
-        scale = MOTOR_HW_COMP_M4_SCALE;
-    }
-    else
-    {
-        return throttle;
-    }
-
-    scaled = (float)throttle * scale;
-    if(scaled > (float)MOTOR_OUTPUT_SCALE_MAX)
-    {
-        scaled = (float)MOTOR_OUTPUT_SCALE_MAX;
-    }
-    return (uint16)scaled;
 }
 
 static inline float throttle_safe_limit(float throttle)
@@ -417,69 +164,21 @@ static void clear_motor_throttle_state(void)
     motor_throttle[3] = 0U;
 }
 
-static void apply_motor_test_output(void)
+void PIT_Demo_Safety_Reset_Angle_Rate_Cmd_Lpf(void)
+{
+    Angle_Loop_Reset_Rate_Cmd_Lpf();
+}
+
+void PIT_Demo_Safety_Clear_Motor_Throttle_State(void)
 {
     clear_motor_throttle_state();
-
-    if(!motor_test_output_enabled)
-    {
-        return;
-    }
-
-    if(motor_test_selected < 4U)
-    {
-        motor_throttle[motor_test_selected] = motor_test_throttle;
-    }
 }
 
-static void write_motor_pwm_output(void)
-{
-    if(!armed && !motor_test_output_enabled)
-    {
-#if MOTOR_OUTPUT_PROTOCOL == 0
-        pwm_set_duty(MOTOR_PWM_CH1, MOTOR_PWM_DUTY_MIN);
-        pwm_set_duty(MOTOR_PWM_CH2, MOTOR_PWM_DUTY_MIN);
-        pwm_set_duty(MOTOR_PWM_CH3, MOTOR_PWM_DUTY_MIN);
-        pwm_set_duty(MOTOR_PWM_CH4, MOTOR_PWM_DUTY_MIN);
-#else
-        dshot_set_all_throttle(0U, 0U, 0U, 0U);
-#endif
-        return;
-    }
-
-#if MOTOR_OUTPUT_PROTOCOL == 0
-    pwm_set_duty(MOTOR_PWM_CH1, throttle_to_pwm_duty(apply_motor_hw_compensation(0U, motor_throttle[0])));
-    pwm_set_duty(MOTOR_PWM_CH2, throttle_to_pwm_duty(apply_motor_hw_compensation(1U, motor_throttle[1])));
-    pwm_set_duty(MOTOR_PWM_CH3, throttle_to_pwm_duty(apply_motor_hw_compensation(2U, motor_throttle[2])));
-    pwm_set_duty(MOTOR_PWM_CH4, throttle_to_pwm_duty(apply_motor_hw_compensation(3U, motor_throttle[3])));
-#else
-    dshot_set_all_throttle(
-        throttle_to_dshot(apply_motor_hw_compensation(0U, motor_throttle[0])),
-        throttle_to_dshot(apply_motor_hw_compensation(1U, motor_throttle[1])),
-        throttle_to_dshot(apply_motor_hw_compensation(2U, motor_throttle[2])),
-        throttle_to_dshot(apply_motor_hw_compensation(3U, motor_throttle[3]))
-    );
-#endif
-}
+// ==================== Safety and motor mixing helpers ====================
 
 static uint8 check_attitude_safety(void)
 {
-    if(!armed)
-    {
-        return 0U;
-    }//未解锁时不要因为姿态超限去触发急停
-
-    if(current_roll > SAFE_MAX_ANGLE_ROLL || current_roll < -SAFE_MAX_ANGLE_ROLL)
-    {
-        Flight_Runtime_Emergency_Stop(EMERGENCY_STOP_REASON_ATTITUDE_ROLL);
-        return 1U;
-    }
-    if(current_pitch > SAFE_MAX_ANGLE_PITCH || current_pitch < -SAFE_MAX_ANGLE_PITCH)
-    {
-        Flight_Runtime_Emergency_Stop(EMERGENCY_STOP_REASON_ATTITUDE_PITCH);
-        return 1U;
-    }
-    return 0U;
+    return Flight_Safety_Check_Attitude();
 }
 
 static uint16 motor_output_safe_limit(float output)
@@ -538,43 +237,16 @@ static void mix_motor_output(void)
     }
 }
 
-void low_voltage_check(void)
-{
-}
-
-void Flight_Runtime_Emergency_Stop(uint8 reason)
-{
-    armed = 0U;
-    emergency_stop_triggered = 1U;
-    emergency_stop_reason = reason;
-    motor_test_active = 0U;
-    motor_test_output_enabled = 0U;
-    motor_test_throttle = 0U;
-    target_throttle = 0.0f;
-    current_throttle = 0.0f;
-    base_throttle = 0.0f;
-    Flight_Takeoff_Abort();
-    /* 急停立刻断开速度环, 下次起飞 ramp 完成后会再次自动 enable。 */
-    Velocity_Loop_Set_Enabled(0U);
-    Position_Loop_Set_Enabled(0U);
-    reset_angle_rate_cmd_lpf();
-    clear_motor_throttle_state();
-}
-
-void Flight_Runtime_Clear_Emergency_Stop_Latch(void)
-{
-    emergency_stop_triggered = 0U;
-    emergency_stop_reason = EMERGENCY_STOP_REASON_NONE;
-}
+// ==================== Flight runtime public interface ====================
 
 void Flight_Runtime_Reset_All_Throttle_States(void)
 {
     target_throttle = 0.0f;
     current_throttle = 0.0f;
     base_throttle = 0.0f;
-    motor_test_output_enabled = 0U;
-    motor_test_throttle = 0U;
-    reset_angle_rate_cmd_lpf();
+    MenuMotorTest_SetOutputEnable(0U);
+    MenuMotorTest_SetThrottle(0U);
+    Angle_Loop_Reset_Rate_Cmd_Lpf();
     clear_motor_throttle_state();
 }
 
@@ -605,23 +277,13 @@ void Flight_Motor_Test_Start(void)
     target_throttle = 0.0f;
     current_throttle = 0.0f;
     base_throttle = 0.0f;
-
-    if(!motor_test_active)
-    {
-        motor_test_selected = 0U;
-        motor_test_throttle = 0U;
-        motor_test_output_enabled = 0U;
-    }
-
-    motor_test_active = 1U;
+    MenuMotorTest_Start();
     clear_motor_throttle_state();
 }
 
 void Flight_Motor_Test_Stop(void)
 {
-    motor_test_active = 0U;
-    motor_test_output_enabled = 0U;
-    motor_test_throttle = 0U;
+    MenuMotorTest_Stop();
     target_throttle = 0.0f;
     current_throttle = 0.0f;
     base_throttle = 0.0f;
@@ -630,61 +292,45 @@ void Flight_Motor_Test_Stop(void)
 
 uint8 Flight_Motor_Test_Is_Active(void)
 {
-    return motor_test_active;
+    return MenuMotorTest_IsActive();
 }
 
 void Flight_Motor_Test_Set_Selected(uint8 motor_index)
 {
-    if(motor_index >= 4U)
-    {
-        motor_index = 3U;
-    }
-
-    motor_test_selected = motor_index;
+    MenuMotorTest_SetSelected(motor_index);
 }
 
 uint8 Flight_Motor_Test_Get_Selected(void)
 {
-    return motor_test_selected;
+    return MenuMotorTest_GetSelected();
 }
 
 void Flight_Motor_Test_Set_Throttle(uint16 throttle)
 {
-    uint16 output_limit = motor_output_limit_max();
-    uint16 test_limit = MOTOR_TEST_MAX_THROTTLE;
-
-    if(test_limit > output_limit)
-    {
-        test_limit = output_limit;
-    }
-
-    if(throttle > test_limit)
-    {
-        throttle = test_limit;
-    }
-
-    motor_test_throttle = throttle;
+    MenuMotorTest_SetThrottle(throttle);
 }
 
 uint16 Flight_Motor_Test_Get_Throttle(void)
 {
-    return motor_test_throttle;
+    return MenuMotorTest_GetThrottle();
 }
 
 void Flight_Motor_Test_Set_Output_Enable(uint8 enable)
 {
-    motor_test_output_enabled = enable ? 1U : 0U;
+    MenuMotorTest_SetOutputEnable(enable);
 }
 
 uint8 Flight_Motor_Test_Get_Output_Enable(void)
 {
-    return motor_test_output_enabled;
+    return MenuMotorTest_GetOutputEnable();
 }
 
 uint16 Flight_Motor_Test_Get_Output_Limit(void)
 {
-    return motor_output_limit_max();
+    return MenuMotorTest_GetOutputLimit();
 }
+
+// ==================== PIT periodic tasks ====================
 
 void PIT_KeyVoltage_Task_5ms(void)
 {
@@ -694,19 +340,7 @@ void PIT_KeyVoltage_Task_5ms(void)
     adc_value = adc_mean_filter_convert(BATTERY_ADC_CHANNEL, 10);
     voltage = adc_value * BATTERY_ADC_TO_VOLTAGE_SCALE;
 
-    /* 使用小车实测电压做低电保护判断（小车与飞机共用同一块电池）。
-     * car_bat_voltage == 0.0f 表示小车未建立通信，此时不做判断。 */
-    if(car_bat_voltage > 0.0f)
-    {
-        if(car_bat_voltage < BATTERY_LOW_WARN_THRESHOLD)
-        {
-            low_voltage_protect_flag = 1;
-        }
-        else if(car_bat_voltage >= BATTERY_LOW_RECOVER_THRESHOLD)
-        {
-            low_voltage_protect_flag = 0;
-        }
-    }
+    Flight_Safety_Update_Low_Voltage(car_bat_voltage);
 }
 
 void PIT_Adc_Task_5ms(void)
@@ -733,344 +367,38 @@ void PIT_Adc_Task_5ms(void)
     adc_y_nomalize = joystick_normalize(adc_y_filtered);
 }
 
-static float flow_sensor_get_sample_dt_s(void)
+// ==================== Optical-flow feed task ====================
+
+void PIT_OpticalFlow_Task(void)
 {
-    float sample_dt_s = FLOW_SENSOR_NOMINAL_DT_S;
-
-#if FLOW_SENSOR_SELECTED == FLOW_SENSOR_UPFLOW302
-    if(upflow302_receive.upflow302_us > 0)
-    {
-        float frame_dt_s = (float)upflow302_receive.upflow302_us * 0.000001f;
-        if(frame_dt_s >= 0.001f && frame_dt_s <= 0.100f)
-        {
-            sample_dt_s = frame_dt_s;
-        }
-    }
-#endif
-
-    return sample_dt_s;
+    OpticalFlowFeed_Task();
 }
 
 void PIT_PMW3901_Task_20ms(void)
 {
-#if FLOW_SENSOR_SELECTED == FLOW_SENSOR_PMW3901
-    static uint8 pmw3901_ready = 0;
-#endif
-    float tof_los_cm = 0.0f;
-    float flow_height_cm = 0.0f;
-    float flow_sample_dt_s = flow_sensor_get_sample_dt_s();
-    int16 flow_delta_x = 0;
-    int16 flow_delta_y = 0;
-    uint8 flow_sample_valid = 0U;
-    uint8 tof_source = PMW_FLOW_TOF_SRC_NONE;
-
-#if FLOW_SENSOR_SELECTED == FLOW_SENSOR_PMW3901
-    if(!pmw3901_ready)
-    {
-        PMW_Flow_Reset();
-        g_pmw3901_flow_height_used_cm = 0.0f;
-        g_pmw3901_tof_stale_ticks = 0U;
-        g_pmw3901_tof_source = PMW_FLOW_TOF_SRC_NONE;
-        g_pmw3901_tof_last_valid_cm = 0.0f;
-        pmw3901_ready = (0 == pmw3901_init()) ? 1U : 0U;
-        return;
-    }
-
-    pmw3901_get_motion();
-    flow_delta_x = pmw3901_delta_x;
-    flow_delta_y = pmw3901_delta_y;
-    flow_sample_valid = 1U;
-#elif FLOW_SENSOR_SELECTED == FLOW_SENSOR_UPFLOW302
-    if(upflow302_finsh_flag &&
-       upflow302_state_flag &&
-       (FLOW_SENSOR_UPFLOW302_VALID_VALUE == upflow302_receive.upflow302_valid))
-    {
-        flow_delta_x = upflow302_receive.upflow302_x;
-        flow_delta_y = upflow302_receive.upflow302_y;
-        flow_sample_valid = 1U;
-    }
-    upflow302_finsh_flag = 0U;
-#endif
-
-    /* 三段降级: LIVE → HOLD → NONE。详见上方常量与 g_pmw3901_tof_source 注释。 */
-    if(dl1b_finsh_flag &&
-       dl1b_distance_mm >= PMW_FLOW_TOF_MIN_VALID_MM &&
-       dl1b_distance_mm <= PMW_FLOW_TOF_MAX_VALID_MM)
-    {
-        tof_los_cm = (float)dl1b_distance_mm * 0.1f;
-        g_pmw3901_tof_last_valid_cm = tof_los_cm;
-        g_pmw3901_tof_stale_ticks = 0U;
-        tof_source = PMW_FLOW_TOF_SRC_LIVE;
-    }
-    else if(g_pmw3901_tof_last_valid_cm > 0.0f &&
-            g_pmw3901_tof_stale_ticks < PMW_FLOW_TOF_STALE_TIMEOUT_TICK)
-    {
-        /* sensor 短暂失效, 用上一拍缓存的 ToF 维持光流运行 (默认 1s 内). */
-        tof_los_cm = g_pmw3901_tof_last_valid_cm;
-        g_pmw3901_tof_stale_ticks++;
-        tof_source = PMW_FLOW_TOF_SRC_HOLD;
-    }
-    else
-    {
-        /* 失效太久或从未取到过 ToF: 喂 0 让 PMW_Flow_UpdateSample 走 invalid 路径. */
-        tof_los_cm = 0.0f;
-        if(g_pmw3901_tof_stale_ticks < 0xFFFFU)
-        {
-            g_pmw3901_tof_stale_ticks++;
-        }
-        tof_source = PMW_FLOW_TOF_SRC_NONE;
-    }
-
-    if(tof_los_cm > 0.0f)
-    {
-        flow_height_cm = HeightManager_GetFlowHeightFromTofCm(tof_los_cm,
-                                                              current_roll,
-                                                              current_pitch);
-    }
-
-    if(!flow_sample_valid)
-    {
-        flow_height_cm = 0.0f;
-        tof_source = PMW_FLOW_TOF_SRC_NONE;
-    }
-
-    g_pmw3901_flow_height_used_cm = flow_height_cm;
-    g_pmw3901_tof_source = tof_source;
-
-    PMW_Flow_UpdateSample(flow_delta_x,
-                          flow_delta_y,
-                          current_roll,
-                          current_pitch,
-                          flow_height_cm,
-                          flow_sample_dt_s,
-                          X_V_F,
-                          Y_V_F);
+    PIT_OpticalFlow_Task();
 }
 
 void PIT_Motor_Task_500us(void)
 {
-    write_motor_pwm_output();
+    MotorHardware_WriteOutput(motor_throttle,
+                              armed,
+                              MenuMotorTest_GetOutputEnable(),
+                              MenuMotorTest_IsActive());
 }
 
-static void position_loop_reset_runtime(void)
-{
-    PID_Reset(&pos_pid_x);
-    PID_Reset(&pos_pid_y);
-    g_position_loop_active = 0U;
-    g_position_loop_vx_cmd_cms = 0.0f;
-    g_position_loop_vy_cmd_cms = 0.0f;
-    g_position_loop_error_x_cm = 0.0f;
-    g_position_loop_error_y_cm = 0.0f;
-    g_position_loop_x_i_out = 0.0f;
-    g_position_loop_y_i_out = 0.0f;
-    g_position_loop_last_pose_valid = 0U;
-    g_position_loop_predict_hold_active = 0U;
-    g_position_loop_last_x_cm = 0.0f;
-    g_position_loop_last_y_cm = 0.0f;
-    g_position_loop_hold_start_x_cm = 0.0f;
-    g_position_loop_hold_start_y_cm = 0.0f;
-    g_position_loop_hold_distance_cm = 0.0f;
-    g_position_loop_hold_dx_cm = 0.0f;
-    g_position_loop_hold_dy_cm = 0.0f;
-}
-
-static void position_loop_reset_predict_hold(void)
-{
-    g_position_loop_predict_hold_active = 0U;
-    g_position_loop_hold_start_x_cm = 0.0f;
-    g_position_loop_hold_start_y_cm = 0.0f;
-    g_position_loop_hold_distance_cm = 0.0f;
-    g_position_loop_hold_dx_cm = 0.0f;
-    g_position_loop_hold_dy_cm = 0.0f;
-}
-
-static float position_loop_apply_deadzone(float error_cm)
-{
-    if(error_cm >= -POSITION_LOOP_DEADZONE_CM && error_cm <= POSITION_LOOP_DEADZONE_CM)
-    {
-        return 0.0f;
-    }
-
-    return error_cm;
-}
-
-static uint8 position_loop_get_raw_ir_track_valid(void)
-{
-    IR_LossDebug_t ir_loss_debug = {0};
-
-    IR_Localization_GetLossDebug(&ir_loss_debug);
-
-    return (uint8)((ir_loss_debug.raw_detect_valid && ir_pose_estimate.valid && !ir_position_lost_flag) ? 1U : 0U);
-}
-
-static uint8 position_loop_start_predict_hold(void)
-{
-    if(!g_position_loop_last_pose_valid)
-    {
-        return 0U;
-    }
-
-    g_position_loop_hold_start_x_cm = g_position_loop_last_x_cm;
-    g_position_loop_hold_start_y_cm = g_position_loop_last_y_cm;
-    g_position_loop_hold_distance_cm = sqrtf(g_position_loop_hold_start_x_cm * g_position_loop_hold_start_x_cm +
-                                             g_position_loop_hold_start_y_cm * g_position_loop_hold_start_y_cm);
-
-    if(g_position_loop_hold_distance_cm <= (POSITION_LOOP_DEADZONE_CM + POSITION_LOOP_PREDICT_RELEASE_EPS_CM))
-    {
-        position_loop_reset_predict_hold();
-        return 0U;
-    }
-
-    g_position_loop_hold_dx_cm = 0.0f;
-    g_position_loop_hold_dy_cm = 0.0f;
-    g_position_loop_predict_hold_active = 1U;
-
-    return 1U;
-}
-
-static uint8 position_loop_update_predict_hold(float measured_vx_cms,
-                                               float measured_vy_cms,
-                                               float *predict_x_cm,
-                                               float *predict_y_cm)
-{
-    float displacement_distance_cm;
-    float predicted_x_cm;
-    float predicted_y_cm;
-    float predicted_distance_cm;
-
-    if((predict_x_cm == NULL) || (predict_y_cm == NULL))
-    {
-        return 0U;
-    }
-
-    if(!g_position_loop_predict_hold_active)
-    {
-        if(!position_loop_start_predict_hold())
-        {
-            return 0U;
-        }
-    }
-
-    g_position_loop_hold_dx_cm += measured_vx_cms * CONTROL_DT_S;
-    g_position_loop_hold_dy_cm += measured_vy_cms * CONTROL_DT_S;
-    displacement_distance_cm = sqrtf(g_position_loop_hold_dx_cm * g_position_loop_hold_dx_cm +
-                                     g_position_loop_hold_dy_cm * g_position_loop_hold_dy_cm);
-    predicted_x_cm = g_position_loop_hold_start_x_cm - g_position_loop_hold_dx_cm;
-    predicted_y_cm = g_position_loop_hold_start_y_cm - g_position_loop_hold_dy_cm;
-    predicted_distance_cm = sqrtf(predicted_x_cm * predicted_x_cm + predicted_y_cm * predicted_y_cm);
-
-    if((displacement_distance_cm >= (g_position_loop_hold_distance_cm - POSITION_LOOP_PREDICT_RELEASE_EPS_CM)) ||
-       (predicted_distance_cm <= POSITION_LOOP_DEADZONE_CM))
-    {
-        g_position_loop_last_pose_valid = 0U;
-        position_loop_reset_predict_hold();
-        return 0U;
-    }
-
-    *predict_x_cm = predicted_x_cm;
-    *predict_y_cm = predicted_y_cm;
-
-    return 1U;
-}
-
-static void position_loop_update_velocity_target(uint8 velocity_ready,
-                                                 float measured_vx_cms,
-                                                 float measured_vy_cms)
-{
-    uint8 raw_ir_track_valid = position_loop_get_raw_ir_track_valid();
-    uint8 position_input_valid = 0U;
-    float position_input_x_cm = 0.0f;
-    float position_input_y_cm = 0.0f;
-    float pos_error_x_cm;
-    float pos_error_y_cm;
-
-    if(!g_position_loop_enabled || !velocity_ready)
-    {
-        g_position_loop_ir_track_valid = 0U;
-        g_position_loop_velocity_ready = velocity_ready;
-        g_position_loop_fb_x_cm = 0.0f;
-        g_position_loop_fb_y_cm = 0.0f;
-        g_position_loop_error_x_cm = 0.0f;
-        g_position_loop_error_y_cm = 0.0f;
-        g_velocity_loop_target_vx_cms = 0.0f;
-        g_velocity_loop_target_vy_cms = 0.0f;
-        position_loop_reset_runtime();
-        return;
-    }
-
-    if(raw_ir_track_valid)
-    {
-        position_input_valid = 1U;
-        position_input_x_cm = ir_pose_estimate.x;
-        position_input_y_cm = ir_pose_estimate.y;
-        g_position_loop_last_pose_valid = 1U;
-        g_position_loop_last_x_cm = position_input_x_cm;
-        g_position_loop_last_y_cm = position_input_y_cm;
-        position_loop_reset_predict_hold();
-    }
-    else
-    {
-        position_input_valid = position_loop_update_predict_hold(measured_vx_cms,
-                                                                 measured_vy_cms,
-                                                                 &position_input_x_cm,
-                                                                 &position_input_y_cm);
-    }
-
-    pos_error_x_cm = position_loop_apply_deadzone(position_input_x_cm);
-    pos_error_y_cm = position_loop_apply_deadzone(position_input_y_cm);
-
-    g_position_loop_ir_track_valid = position_input_valid;
-    g_position_loop_velocity_ready = velocity_ready;
-    g_position_loop_fb_x_cm = position_input_x_cm;
-    g_position_loop_fb_y_cm = position_input_y_cm;
-    g_position_loop_error_x_cm = pos_error_x_cm;
-    g_position_loop_error_y_cm = pos_error_y_cm;
-
-    if(!position_input_valid)
-    {
-        g_velocity_loop_target_vx_cms = 0.0f;
-        g_velocity_loop_target_vy_cms = 0.0f;
-        position_loop_reset_runtime();
-        return;
-    }
-
-    if(pos_error_x_cm == 0.0f)
-    {
-        PID_Reset(&pos_pid_x);
-    }
-    if(pos_error_y_cm == 0.0f)
-    {
-        PID_Reset(&pos_pid_y);
-    }
-
-    g_position_loop_vx_cmd_cms = POSITION_LOOP_VX_SIGN *
-                                 PID_Calculate(&pos_pid_x,
-                                               pos_error_x_cm,
-                                               POSITION_LOOP_TARGET_X_CM,
-                                               CONTROL_DT_S);
-    g_position_loop_vy_cmd_cms = POSITION_LOOP_VY_SIGN *
-                                 PID_Calculate(&pos_pid_y,
-                                               pos_error_y_cm,
-                                               POSITION_LOOP_TARGET_Y_CM,
-                                               CONTROL_DT_S);
-
-    g_velocity_loop_target_vx_cms = g_position_loop_vx_cmd_cms;
-    g_velocity_loop_target_vy_cms = g_position_loop_vy_cmd_cms;
-    g_position_loop_x_i_out = pos_pid_x.Ki * pos_pid_x.integral;
-    g_position_loop_y_i_out = pos_pid_y.Ki * pos_pid_y.integral;
-    g_position_loop_active = 1U;
-}
+// ==================== 4 kHz control-loop task ====================
 
 void PIT_Control_Task_250us(void)
 {
     uint8 takeoff_active = 0U;
 
-    motor_pwm_init_once();
+    MotorHardware_InitOnce();
 
     if(icm_calibration_flag)
     {
-        motor_test_output_enabled = 0U;
-        reset_angle_rate_cmd_lpf();
+        MenuMotorTest_SetOutputEnable(0U);
+        Angle_Loop_Reset_Rate_Cmd_Lpf();
         clear_motor_throttle_state();
         return;
     }
@@ -1082,7 +410,7 @@ void PIT_Control_Task_250us(void)
     PMW_Flow_PredictVelocity(X_V_F, Y_V_F, CONTROL_DT_S);
     if(check_attitude_safety())
     {
-        reset_angle_rate_cmd_lpf();
+        Angle_Loop_Reset_Rate_Cmd_Lpf();
         return;
     }// 急停触发后不继续执行后续的飞控计算，保持电机输出为0，直到飞行器被重置或重新解锁
 
@@ -1090,24 +418,24 @@ void PIT_Control_Task_250us(void)
      * ramp 阶段会接管 base_throttle 与 target_angle_roll/pitch。 */
     takeoff_active = Flight_Takeoff_Tick_250us();
 
-    if(motor_test_active)
+    if(MenuMotorTest_IsActive())
     {
         if(emergency_stop_triggered)
         {
-            motor_test_output_enabled = 0U;
-            reset_angle_rate_cmd_lpf();
+            MenuMotorTest_SetOutputEnable(0U);
+            Angle_Loop_Reset_Rate_Cmd_Lpf();
             clear_motor_throttle_state();
             return;
         }
 
-        reset_angle_rate_cmd_lpf();
-        apply_motor_test_output();
+        Angle_Loop_Reset_Rate_Cmd_Lpf();
+        MenuMotorTest_ApplyOutput(motor_throttle);
         return;
     }
 
     if(!armed)
     {
-        reset_angle_rate_cmd_lpf();
+        Angle_Loop_Reset_Rate_Cmd_Lpf();
         clear_motor_throttle_state();
         return;
     }
@@ -1123,9 +451,16 @@ void PIT_Control_Task_250us(void)
     if(control_mode == CONTROL_MODE_MANUAL)
     {
         uint16 manual_output = motor_output_safe_limit(base_throttle);
+        float position_target_vx_cms = 0.0f;
+        float position_target_vy_cms = 0.0f;
 
-        position_loop_update_velocity_target(0U, 0.0f, 0.0f);
-        reset_angle_rate_cmd_lpf();
+        Position_Loop_Update_Velocity_Target(0U,
+                                             0.0f,
+                                             0.0f,
+                                             &position_target_vx_cms,
+                                             &position_target_vy_cms);
+        Velocity_Loop_Set_Target_Velocity(position_target_vx_cms, position_target_vy_cms);
+        Angle_Loop_Reset_Rate_Cmd_Lpf();
         motor_throttle[0] = manual_output;
         motor_throttle[1] = manual_output;
         motor_throttle[2] = manual_output;
@@ -1135,104 +470,41 @@ void PIT_Control_Task_250us(void)
 
     if(!takeoff_active)
     {
-        /* 巡航阶段：原 ADC 位置闭环已废弃，目标姿态默认锁在悬停基准角上。
-         * 当 g_velocity_loop_enabled = 1 且光流 valid 时，
-         * 用光流 + ICM 融合后的机体水平速度跑速度闭环：
-         *   PID(target=0, fb=v_body_x/y)  -> 角度修正量 (deg)
-         * 修正量再叠加到 captured / hover 基准角上，限幅只由 vel_pid_x/y.output_limit 决定，
-         * 最终写入 target_angle_roll/pitch 交给已有姿态外环。 */
         float captured_roll = 0.0f;
         float captured_pitch = 0.0f;
-        uint8 vel_loop_active_now = 0U;
+        float position_target_vx_cms = 0.0f;
+        float position_target_vy_cms = 0.0f;
+        float velocity_target_roll = 0.0f;
+        float velocity_target_pitch = 0.0f;
+        PMWFlowState_t flow_snap;
+        uint8 velocity_ready;
 
         Flight_Takeoff_Get_Captured_Angles(&captured_roll, &captured_pitch);
 
-        /* 起飞 ramp 完成、控制权回到巡航分支时自动接管速度环和红外位置环。
-         * Disarm / Emergency_Stop 会把 g_velocity_loop_enabled 清 0,
-         * 下次起飞会再次走到这里重新自动 enable。 */
-        if(!g_velocity_loop_enabled)
+        if(!Velocity_Loop_Is_Enabled())
         {
-            g_velocity_loop_target_vx_cms = 0.0f;
-            g_velocity_loop_target_vy_cms = 0.0f;
-            g_velocity_loop_enabled       = 1U;
-            PID_Reset(&vel_pid_x);
-            PID_Reset(&vel_pid_y);
+            Velocity_Loop_Set_Enabled(1U);
+            Velocity_Loop_Reset_Runtime();
             Position_Loop_Set_Enabled(1U);
         }
 
-        if(g_velocity_loop_enabled)
-        {
-            PMWFlowState_t flow_snap;
-            PMW_Flow_GetState(&flow_snap);
-            position_loop_update_velocity_target((uint8)((flow_snap.valid && flow_snap.flow_used) ? 1U : 0U),
-                                                 flow_snap.velocity_x_fused_cms,
-                                                 flow_snap.velocity_y_fused_cms);
-
-            if(flow_snap.valid && flow_snap.flow_used)
-            {
-                float ax_cmd_cms2;
-                float ay_cmd_cms2;
-                float pitch_corr;
-                float roll_corr;
-
-                /* Velocity PID feedback uses ICM-predicted + optical-flow-corrected velocity. */
-                ax_cmd_cms2 = PID_Calculate(&vel_pid_x,
-                                            g_velocity_loop_target_vx_cms,
-                                            flow_snap.velocity_x_fused_cms,
-                                            CONTROL_DT_S);
-                ay_cmd_cms2 = PID_Calculate(&vel_pid_y,
-                                            g_velocity_loop_target_vy_cms,
-                                            flow_snap.velocity_y_fused_cms,
-                                            CONTROL_DT_S);
-
-                /* Small-angle approximation near hover:
-                 *   ax ≈ -g * pitch  -> pitch ≈ -ax / g
-                 *   ay ≈  g * roll   -> roll  ≈  ay / g
-                 */
-                pitch_corr = -(ax_cmd_cms2 / VEL_LOOP_GRAVITY_CMS2) * RAD2DEG;
-                roll_corr  = (ay_cmd_cms2 / VEL_LOOP_GRAVITY_CMS2) * RAD2DEG;
-
-                pitch_corr *= VEL_LOOP_PITCH_SIGN;
-                roll_corr  *= VEL_LOOP_ROLL_SIGN;
-
-                target_angle_pitch = captured_pitch + pitch_corr;
-                target_angle_roll  = captured_roll  + roll_corr;
-
-                g_velocity_loop_x_i_out        = vel_pid_x.Ki * vel_pid_x.integral;
-                g_velocity_loop_y_i_out        = vel_pid_y.Ki * vel_pid_y.integral;
-                g_velocity_loop_pitch_corr_deg = pitch_corr;
-                g_velocity_loop_roll_corr_deg  = roll_corr;
-                g_velocity_loop_fb_vx_cms      = flow_snap.velocity_x_fused_cms;
-                g_velocity_loop_fb_vy_cms      = flow_snap.velocity_y_fused_cms;
-                vel_loop_active_now = 1U;
-            }
-            else
-            {
-                /* 光流暂时无效：退回锁基准角 + reset 速度 PID，下一帧 valid 后从 0 重启。 */
-                target_angle_roll  = captured_roll;
-                target_angle_pitch = captured_pitch;
-                PID_Reset(&vel_pid_x);
-                PID_Reset(&vel_pid_y);
-                g_velocity_loop_x_i_out        = 0.0f;
-                g_velocity_loop_y_i_out        = 0.0f;
-                g_velocity_loop_pitch_corr_deg = 0.0f;
-                g_velocity_loop_roll_corr_deg  = 0.0f;
-            }
-        }
-        else
-        {
-            position_loop_update_velocity_target(0U, 0.0f, 0.0f);
-            target_angle_roll  = captured_roll;
-            target_angle_pitch = captured_pitch;
-            PID_Reset(&vel_pid_x);
-            PID_Reset(&vel_pid_y);
-            g_velocity_loop_x_i_out        = 0.0f;
-            g_velocity_loop_y_i_out        = 0.0f;
-            g_velocity_loop_pitch_corr_deg = 0.0f;
-            g_velocity_loop_roll_corr_deg  = 0.0f;
-        }
-
-        g_velocity_loop_active = vel_loop_active_now;
+        PMW_Flow_GetState(&flow_snap);
+        velocity_ready = (uint8)((flow_snap.valid && flow_snap.flow_used) ? 1U : 0U);
+        Position_Loop_Update_Velocity_Target(velocity_ready,
+                                             flow_snap.velocity_x_fused_cms,
+                                             flow_snap.velocity_y_fused_cms,
+                                             &position_target_vx_cms,
+                                             &position_target_vy_cms);
+        Velocity_Loop_Set_Target_Velocity(position_target_vx_cms, position_target_vy_cms);
+        Velocity_Loop_Update_Attitude_Target(velocity_ready,
+                                             flow_snap.velocity_x_fused_cms,
+                                             flow_snap.velocity_y_fused_cms,
+                                             captured_roll,
+                                             captured_pitch,
+                                             &velocity_target_roll,
+                                             &velocity_target_pitch);
+        target_angle_roll = velocity_target_roll;
+        target_angle_pitch = velocity_target_pitch;
 
         pos_fusion_r_adc    = 0.0f;
         pos_fusion_r_tof    = 0.0f;
@@ -1242,147 +514,19 @@ void PIT_Control_Task_250us(void)
     }
     /* takeoff_active 时 target_angle_roll / target_angle_pitch 已由 ramp 阶段锁定为地面均值。 */
 
-    {
-        float target_roll_rate_raw = PID_Calculate(&angle_pid_roll, target_angle_roll, current_roll, CONTROL_DT_S);
-        float target_pitch_rate_raw = PID_Calculate(&angle_pid_pitch, target_angle_pitch, current_pitch, CONTROL_DT_S);
+    Angle_Loop_Update(target_angle_roll,
+                      target_angle_pitch,
+                      target_angle_yaw,
+                      current_roll,
+                      current_pitch,
+                      current_yaw);
 
-        update_angle_rate_cmd_lpf(target_roll_rate_raw, target_pitch_rate_raw);
-    }
-    target_yaw_rate = PID_Calculate(&angle_pid_yaw, target_angle_yaw, current_yaw, CONTROL_DT_S);
-
-    roll_output = PID_Calculate(&gyro_pid_roll, target_roll_rate, current_gyro_roll, CONTROL_DT_S);
-    pitch_output = PID_Calculate(&gyro_pid_pitch, target_pitch_rate, current_gyro_pitch, CONTROL_DT_S);
-    yaw_output = -PID_Calculate(&gyro_pid_yaw, target_yaw_rate, current_gyro_yaw, CONTROL_DT_S);
+    Rate_Loop_Update(target_roll_rate,
+                     target_pitch_rate,
+                     target_yaw_rate,
+                     current_gyro_roll,
+                     current_gyro_pitch,
+                     current_gyro_yaw);
 
     mix_motor_output();
-}
-
-/*********************************************************************************************************************
- * 光流速度闭环对外接口
- *
- * 默认关闭。打开前请确保:
- *   - 起飞流程已完成（控制权回到 !takeoff_active 分支）
- *   - 光流 valid（PMW3901 + ToF 都有数据）
- *   - vel_pid_x / vel_pid_y 的 Kp/Ki/Kd/output_limit 已按速度环口径调过
- *
- * 关闭时控制环立即回退到"锁基准角"行为，并 PID_Reset。
- *********************************************************************************************************************/
-void Velocity_Loop_Set_Enabled(uint8 enabled)
-{
-    if(enabled)
-    {
-        g_velocity_loop_enabled = 1U;
-    }
-    else
-    {
-        g_velocity_loop_enabled = 0U;
-        /* 立即清掉诊断量，避免上位机看到残留值。PID_Reset 留给控制 tick 自己做。 */
-        g_velocity_loop_x_i_out        = 0.0f;
-        g_velocity_loop_y_i_out        = 0.0f;
-        g_velocity_loop_pitch_corr_deg = 0.0f;
-        g_velocity_loop_roll_corr_deg  = 0.0f;
-        g_velocity_loop_active = 0U;
-    }
-}
-
-uint8 Velocity_Loop_Is_Enabled(void)
-{
-    return g_velocity_loop_enabled;
-}
-
-void Velocity_Loop_Set_Target_Velocity(float vx_cms, float vy_cms)
-{
-    g_velocity_loop_target_vx_cms = vx_cms;
-    g_velocity_loop_target_vy_cms = vy_cms;
-}
-
-void Velocity_Loop_Get_Target_Velocity(float *vx_cms, float *vy_cms)
-{
-    if(vx_cms != NULL)
-    {
-        *vx_cms = g_velocity_loop_target_vx_cms;
-    }
-    if(vy_cms != NULL)
-    {
-        *vy_cms = g_velocity_loop_target_vy_cms;
-    }
-}
-
-void Velocity_Loop_Get_Diag(float *pitch_corr_deg,
-                            float *roll_corr_deg,
-                            float *fb_vx_cms,
-                            float *fb_vy_cms,
-                            float *x_i_out,
-                            float *y_i_out,
-                            uint8 *active)
-{
-    if(pitch_corr_deg != NULL) *pitch_corr_deg = g_velocity_loop_pitch_corr_deg;
-    if(roll_corr_deg  != NULL) *roll_corr_deg  = g_velocity_loop_roll_corr_deg;
-    if(fb_vx_cms      != NULL) *fb_vx_cms      = g_velocity_loop_fb_vx_cms;
-    if(fb_vy_cms      != NULL) *fb_vy_cms      = g_velocity_loop_fb_vy_cms;
-    if(x_i_out        != NULL) *x_i_out        = g_velocity_loop_x_i_out;
-    if(y_i_out        != NULL) *y_i_out        = g_velocity_loop_y_i_out;
-    if(active         != NULL) *active         = g_velocity_loop_active;
-}
-
-void Position_Loop_Set_Enabled(uint8 enabled)
-{
-    if(enabled)
-    {
-        g_position_loop_enabled = 1U;
-        position_loop_reset_runtime();
-    }
-    else
-    {
-        g_position_loop_enabled = 0U;
-        g_position_loop_ir_track_valid = 0U;
-        g_position_loop_velocity_ready = 0U;
-        g_position_loop_fb_x_cm = 0.0f;
-        g_position_loop_fb_y_cm = 0.0f;
-        g_velocity_loop_target_vx_cms = 0.0f;
-        g_velocity_loop_target_vy_cms = 0.0f;
-        position_loop_reset_runtime();
-    }
-}
-
-uint8 Position_Loop_Is_Enabled(void)
-{
-    return g_position_loop_enabled;
-}
-
-void Position_Loop_Get_Diag(PositionLoopDiag_t *diag)
-{
-    if(diag == NULL)
-    {
-        return;
-    }
-
-    diag->target_x_cm = POSITION_LOOP_TARGET_X_CM;
-    diag->target_y_cm = POSITION_LOOP_TARGET_Y_CM;
-    diag->fb_x_cm = g_position_loop_fb_x_cm;
-    diag->fb_y_cm = g_position_loop_fb_y_cm;
-    diag->error_x_cm = g_position_loop_error_x_cm;
-    diag->error_y_cm = g_position_loop_error_y_cm;
-    diag->vx_cmd_cms = g_position_loop_vx_cmd_cms;
-    diag->vy_cmd_cms = g_position_loop_vy_cmd_cms;
-    diag->x_i_out = g_position_loop_x_i_out;
-    diag->y_i_out = g_position_loop_y_i_out;
-    diag->enabled = g_position_loop_enabled;
-    diag->active = g_position_loop_active;
-    diag->ir_track_valid = g_position_loop_ir_track_valid;
-    diag->velocity_ready = g_position_loop_velocity_ready;
-}
-
-/*
- * 光流 ToF 容错诊断: 让上位机能直接看到当前 ToF 来自 sensor 还是 hold 缓存,
- * 以及失效连续了多少帧, 用于判断 dl1b 真实量程上限。
- *   tof_los_cm: 本帧实际喂给 PMW_Flow_UpdateSample 的光流安装点竖直高度 (cm), 0 表示失效
- *   stale_ticks: 连续未拿到新 ToF 的帧数 (20ms / 帧)
- *   source: PMW_FLOW_TOF_SRC_NONE / LIVE / HOLD
- */
-void PMW_Flow_Get_TOF_Status(float *tof_los_cm, uint16 *stale_ticks, uint8 *source)
-{
-    if(tof_los_cm   != NULL) *tof_los_cm   = g_pmw3901_flow_height_used_cm;
-    if(stale_ticks  != NULL) *stale_ticks  = g_pmw3901_tof_stale_ticks;
-    if(source       != NULL) *source       = g_pmw3901_tof_source;
 }

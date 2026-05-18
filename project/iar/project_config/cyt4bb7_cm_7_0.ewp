@@ -1163,6 +1163,9 @@
             <name>$PROJ_DIR$\..\..\code\control\flight_control.c</name>
         </file>
         <file>
+            <name>$PROJ_DIR$\..\..\code\common\flight_safety.c</name>
+        </file>
+        <file>
             <name>$PROJ_DIR$\..\..\code\kalman_filter\gyro_kalman.c</name>
         </file>
         <file>
@@ -1196,13 +1199,34 @@
             <name>$PROJ_DIR$\..\..\code\menu\menu_list.c</name>
         </file>
         <file>
+            <name>$PROJ_DIR$\..\..\code\menu\menu_motor_test.c</name>
+        </file>
+        <file>
+            <name>$PROJ_DIR$\..\..\code\motor_hardware\motor_hardware.c</name>
+        </file>
+        <file>
             <name>$PROJ_DIR$\..\..\code\menu\parameter_flash.c</name>
+        </file>
+        <file>
+            <name>$PROJ_DIR$\..\..\code\control\angle_loop.c</name>
         </file>
         <file>
             <name>$PROJ_DIR$\..\..\code\control\pid_controller.c</name>
         </file>
         <file>
+            <name>$PROJ_DIR$\..\..\code\control\position_loop.c</name>
+        </file>
+        <file>
+            <name>$PROJ_DIR$\..\..\code\control\rate_loop.c</name>
+        </file>
+        <file>
+            <name>$PROJ_DIR$\..\..\code\control\velocity_loop.c</name>
+        </file>
+        <file>
             <name>$PROJ_DIR$\..\..\code\common\PIT_Demo.c</name>
+        </file>
+        <file>
+            <name>$PROJ_DIR$\..\..\code\pmw\optical_flow_feed.c</name>
         </file>
         <file>
             <name>$PROJ_DIR$\..\..\code\pmw\pmw_flow.c</name>
