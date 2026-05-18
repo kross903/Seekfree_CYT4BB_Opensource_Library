@@ -1,6 +1,8 @@
 #include "common/PIT_Demo.h"
+#include "common/battery_monitor.h"
 #include "common/project_headfile.h"
 #include "control/angle_loop.h"
+#include "control/ground_remote_input.h"
 #include "control/motor_mixer.h"
 #include "control/position_loop.h"
 #include "control/rate_loop.h"
@@ -56,7 +58,6 @@
 #define FUSION_TOF_MAX_M               ROPE_LENGTH_M
 #define FUSION_W_ADC                   (1.0f / (FUSION_SIGMA_ADC_M * FUSION_SIGMA_ADC_M))
 #define FUSION_W_TOF                   (1.0f / (FUSION_SIGMA_TOF_M * FUSION_SIGMA_TOF_M))
-#define BATTERY_NOMINAL_VOLTAGE        12.4f   /* 3S 充满电压，单位 V。 */
 
 // ==================== Public runtime state ====================
 
@@ -76,9 +77,6 @@ volatile float angle_roll_compensation = 0.0;
 volatile float angle_pitch_compensation = 0.0;
 volatile float angle_yaw_compensation = 0.0f;
 
-float voltage = BATTERY_NOMINAL_VOLTAGE;
-uint16 adc_value = 0;
-
 float current_roll = 0.0f;
 float current_pitch = 0.0f;
 float current_yaw = 0.0f;
@@ -88,14 +86,6 @@ float current_gyro_yaw = 0.0f;
 
 volatile uint16 motor_throttle[4] = {0, 0, 0, 0};
 uint16 throttle_buffer[4] = {0, 0, 0, 0};
-
-volatile int adc_x = 0;
-volatile int adc_y = 0;
-volatile int adc_x_filtered = 0.0f;
-volatile int adc_y_filtered = 0.0f;
-volatile float adc_x_nomalize = 0.0f;
-volatile float adc_y_nomalize = 0.0f;
-volatile float car_bat_voltage = 0.0f;  /* 小车通过 core_link 发送的电池电压，单位 V。 */
 
 /* 位置闭环 adc/ToF 双数据校验观测量（VOFA / 监视页可读）。 */
 volatile float pos_fusion_r_adc    = 0.0f;
@@ -205,34 +195,12 @@ void PIT_KeyVoltage_Task_5ms(void)
     IR_Localization_Task_5ms();
     key_scanner();
     key_scan();
-    adc_value = adc_mean_filter_convert(BATTERY_ADC_CHANNEL, 10);
-    voltage = adc_value * BATTERY_ADC_TO_VOLTAGE_SCALE;
-
-    Flight_Safety_Update_Low_Voltage(car_bat_voltage);
+    BatteryMonitor_Task_5ms();
 }
 
 void PIT_Adc_Task_5ms(void)
 {
-    static uint8 adc_lpf_initialized = 0U;
-    static float adc_x_lpf_state = 0.0f;
-    static float adc_y_lpf_state = 0.0f;
-
-    if(!adc_lpf_initialized)
-    {
-        adc_x_lpf_state = (float)adc_x;
-        adc_y_lpf_state = (float)adc_y;
-        adc_lpf_initialized = 1U;
-    }
-    else
-    {
-        adc_x_lpf_state += ((float)adc_x - adc_x_lpf_state) * ADC_INPUT_LPF_ALPHA;
-        adc_y_lpf_state += ((float)adc_y - adc_y_lpf_state) * ADC_INPUT_LPF_ALPHA;
-    }
-
-    adc_x_filtered = (int)adc_x_lpf_state;
-    adc_y_filtered = (int)adc_y_lpf_state;
-    adc_x_nomalize = joystick_normalize(adc_x_filtered);
-    adc_y_nomalize = joystick_normalize(adc_y_filtered);
+    GroundRemoteInput_Task_5ms();
 }
 
 // ==================== Optical-flow feed task ====================
@@ -257,131 +225,158 @@ void PIT_Motor_Task_500us(void)
 
 // ==================== 4 kHz control-loop task ====================
 
-void PIT_Control_Task_250us(void)
+static uint8 control_task_handle_imu_calibration(void)
 {
-    uint8 takeoff_active = 0U;
-
-    MotorHardware_InitOnce();
-
     if(icm_calibration_flag)
     {
         MenuMotorTest_SetOutputEnable(0U);
         Angle_Loop_Reset_Rate_Cmd_Lpf();
         clear_motor_throttle_state();
-        return;
+        return 1U;
     }
 
+    return 0U;
+}
+
+static void control_task_update_sensor_feedback(void)
+{
     get_ICM_data();
     Get_Attitude_Angle(&current_roll, &current_pitch, &current_yaw);
     Get_Angular_Rate(&current_gyro_roll, &current_gyro_pitch, &current_gyro_yaw);
-    PMW_Flow_AccumulateGyro(icm42688_gyro_x, icm42688_gyro_y, CONTROL_DT_S);// 更新PMW光流传感器的陀螺仪积分值，用于后续的运动补偿计算
+    PMW_Flow_AccumulateGyro(icm42688_gyro_x, icm42688_gyro_y, CONTROL_DT_S);
     PMW_Flow_PredictVelocity(X_V_F, Y_V_F, CONTROL_DT_S);
+}
+
+static uint8 control_task_handle_attitude_safety(void)
+{
     if(check_attitude_safety())
     {
         Angle_Loop_Reset_Rate_Cmd_Lpf();
-        return;
-    }// 急停触发后不继续执行后续的飞控计算，保持电机输出为0，直到飞行器被重置或重新解锁
-
-    /* 驱动自动起飞状态机：采样阶段靠早期 current_roll/pitch 即可累加，
-     * ramp 阶段会接管 base_throttle 与 target_angle_roll/pitch。 */
-    takeoff_active = Flight_Takeoff_Tick_250us();
-
-    if(MenuMotorTest_IsActive())
-    {
-        if(emergency_stop_triggered)
-        {
-            MenuMotorTest_SetOutputEnable(0U);
-            Angle_Loop_Reset_Rate_Cmd_Lpf();
-            clear_motor_throttle_state();
-            return;
-        }
-
-        Angle_Loop_Reset_Rate_Cmd_Lpf();
-        MenuMotorTest_ApplyOutput(motor_throttle);
-        return;
+        return 1U;
     }
 
+    return 0U;
+}
+
+static uint8 control_task_handle_motor_test(void)
+{
+    if(!MenuMotorTest_IsActive())
+    {
+        return 0U;
+    }
+
+    if(emergency_stop_triggered)
+    {
+        MenuMotorTest_SetOutputEnable(0U);
+        Angle_Loop_Reset_Rate_Cmd_Lpf();
+        clear_motor_throttle_state();
+        return 1U;
+    }
+
+    Angle_Loop_Reset_Rate_Cmd_Lpf();
+    MenuMotorTest_ApplyOutput(motor_throttle);
+    return 1U;
+}
+
+static uint8 control_task_handle_disarmed(void)
+{
     if(!armed)
     {
         Angle_Loop_Reset_Rate_Cmd_Lpf();
         clear_motor_throttle_state();
-        return;
+        return 1U;
     }
 
+    return 0U;
+}
+
+static void control_task_update_cruise_throttle(uint8 takeoff_active)
+{
     if(!takeoff_active)
     {
-        /* Cruise branch uses a fixed 0deg/0deg takeoff base. */
         Throttle_Runtime_Ramp(target_throttle, &current_throttle, THROTTLE_RAMP_RATE, CONTROL_DT_MS);
         base_throttle = current_throttle;
     }
-    /* takeoff_active 时 base_throttle / current_throttle / target_throttle 已由 ramp 阶段统一写入。 */
+}
 
-    if(control_mode == CONTROL_MODE_MANUAL)
+static uint8 control_task_handle_manual_mode(void)
+{
+    uint16 manual_output;
+    float position_target_vx_cms = 0.0f;
+    float position_target_vy_cms = 0.0f;
+
+    if(control_mode != CONTROL_MODE_MANUAL)
     {
-        uint16 manual_output = Motor_Mixer_Limit_Output(base_throttle);
-        float position_target_vx_cms = 0.0f;
-        float position_target_vy_cms = 0.0f;
+        return 0U;
+    }
 
-        Position_Loop_Update_Velocity_Target(0U,
-                                             0.0f,
-                                             0.0f,
-                                             &position_target_vx_cms,
-                                             &position_target_vy_cms);
-        Velocity_Loop_Set_Target_Velocity(position_target_vx_cms, position_target_vy_cms);
-        Angle_Loop_Reset_Rate_Cmd_Lpf();
-        motor_throttle[0] = manual_output;
-        motor_throttle[1] = manual_output;
-        motor_throttle[2] = manual_output;
-        motor_throttle[3] = manual_output;
+    manual_output = Motor_Mixer_Limit_Output(base_throttle);
+    Position_Loop_Update_Velocity_Target(0U,
+                                         0.0f,
+                                         0.0f,
+                                         &position_target_vx_cms,
+                                         &position_target_vy_cms);
+    Velocity_Loop_Set_Target_Velocity(position_target_vx_cms, position_target_vy_cms);
+    Angle_Loop_Reset_Rate_Cmd_Lpf();
+    motor_throttle[0] = manual_output;
+    motor_throttle[1] = manual_output;
+    motor_throttle[2] = manual_output;
+    motor_throttle[3] = manual_output;
+    return 1U;
+}
+
+static void control_task_update_angle_mode(uint8 takeoff_active)
+{
+    float captured_roll = 0.0f;
+    float captured_pitch = 0.0f;
+    float position_target_vx_cms = 0.0f;
+    float position_target_vy_cms = 0.0f;
+    float velocity_target_roll = 0.0f;
+    float velocity_target_pitch = 0.0f;
+    PMWFlowState_t flow_snap;
+    uint8 velocity_ready;
+
+    if(takeoff_active)
+    {
         return;
     }
 
-    if(!takeoff_active)
+    Flight_Takeoff_Get_Captured_Angles(&captured_roll, &captured_pitch);
+
+    if(!Velocity_Loop_Is_Enabled())
     {
-        float captured_roll = 0.0f;
-        float captured_pitch = 0.0f;
-        float position_target_vx_cms = 0.0f;
-        float position_target_vy_cms = 0.0f;
-        float velocity_target_roll = 0.0f;
-        float velocity_target_pitch = 0.0f;
-        PMWFlowState_t flow_snap;
-        uint8 velocity_ready;
-
-        Flight_Takeoff_Get_Captured_Angles(&captured_roll, &captured_pitch);
-
-        if(!Velocity_Loop_Is_Enabled())
-        {
-            Velocity_Loop_Set_Enabled(1U);
-            Velocity_Loop_Reset_Runtime();
-            Position_Loop_Set_Enabled(1U);
-        }
-
-        PMW_Flow_GetState(&flow_snap);
-        velocity_ready = (uint8)((flow_snap.valid && flow_snap.flow_used) ? 1U : 0U);
-        Position_Loop_Update_Velocity_Target(velocity_ready,
-                                             flow_snap.velocity_x_fused_cms,
-                                             flow_snap.velocity_y_fused_cms,
-                                             &position_target_vx_cms,
-                                             &position_target_vy_cms);
-        Velocity_Loop_Set_Target_Velocity(position_target_vx_cms, position_target_vy_cms);
-        Velocity_Loop_Update_Attitude_Target(velocity_ready,
-                                             flow_snap.velocity_x_fused_cms,
-                                             flow_snap.velocity_y_fused_cms,
-                                             captured_roll,
-                                             captured_pitch,
-                                             &velocity_target_roll,
-                                             &velocity_target_pitch);
-        target_angle_roll = velocity_target_roll;
-        target_angle_pitch = velocity_target_pitch;
-
-        pos_fusion_r_adc    = 0.0f;
-        pos_fusion_r_tof    = 0.0f;
-        pos_fusion_r_fused  = 0.0f;
-        pos_fusion_residual = 0.0f;
-        pos_fusion_fault    = 0U;
+        Velocity_Loop_Set_Enabled(1U);
+        Velocity_Loop_Reset_Runtime();
+        Position_Loop_Set_Enabled(1U);
     }
-    /* takeoff_active 时 target_angle_roll / target_angle_pitch 已由 ramp 阶段锁定为地面均值。 */
 
+    PMW_Flow_GetState(&flow_snap);
+    velocity_ready = (uint8)((flow_snap.valid && flow_snap.flow_used) ? 1U : 0U);
+    Position_Loop_Update_Velocity_Target(velocity_ready,
+                                         flow_snap.velocity_x_fused_cms,
+                                         flow_snap.velocity_y_fused_cms,
+                                         &position_target_vx_cms,
+                                         &position_target_vy_cms);
+    Velocity_Loop_Set_Target_Velocity(position_target_vx_cms, position_target_vy_cms);
+    Velocity_Loop_Update_Attitude_Target(velocity_ready,
+                                         flow_snap.velocity_x_fused_cms,
+                                         flow_snap.velocity_y_fused_cms,
+                                         captured_roll,
+                                         captured_pitch,
+                                         &velocity_target_roll,
+                                         &velocity_target_pitch);
+    target_angle_roll = velocity_target_roll;
+    target_angle_pitch = velocity_target_pitch;
+
+    pos_fusion_r_adc    = 0.0f;
+    pos_fusion_r_tof    = 0.0f;
+    pos_fusion_r_fused  = 0.0f;
+    pos_fusion_residual = 0.0f;
+    pos_fusion_fault    = 0U;
+}
+
+static void control_task_update_inner_loops(void)
+{
     Angle_Loop_Update(target_angle_roll,
                       target_angle_pitch,
                       target_angle_yaw,
@@ -401,4 +396,45 @@ void PIT_Control_Task_250us(void)
                        base_throttle,
                        current_roll,
                        current_pitch);
+}
+
+void PIT_Control_Task_250us(void)
+{
+    uint8 takeoff_active = 0U;
+
+    MotorHardware_InitOnce();
+
+    if(control_task_handle_imu_calibration())
+    {
+        return;
+    }
+
+    control_task_update_sensor_feedback();
+
+    if(control_task_handle_attitude_safety())
+    {
+        return;
+    }
+
+    takeoff_active = Flight_Takeoff_Tick_250us();
+
+    if(control_task_handle_motor_test())
+    {
+        return;
+    }
+
+    if(control_task_handle_disarmed())
+    {
+        return;
+    }
+
+    control_task_update_cruise_throttle(takeoff_active);
+
+    if(control_task_handle_manual_mode())
+    {
+        return;
+    }
+
+    control_task_update_angle_mode(takeoff_active);
+    control_task_update_inner_loops();
 }

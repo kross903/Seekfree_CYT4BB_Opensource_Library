@@ -2,8 +2,10 @@
 #define _PIT_Demo_h_
 
 #include "zf_common_headfile.h"
+#include "common/battery_monitor.h"
 #include "common/flight_safety.h"
 #include "control/angle_loop.h"
+#include "control/ground_remote_input.h"
 #include "control/motor_mixer.h"
 #include "control/pid_controller.h"
 #include "control/position_loop.h"
@@ -51,18 +53,6 @@ extern volatile float target_angle_yaw;
 extern volatile float angle_roll_compensation;
 extern volatile float angle_pitch_compensation;
 extern volatile float angle_yaw_compensation;
-
-// ==================== Battery protection ====================
-extern float voltage;
-
-// ==================== External ADC and car battery inputs ====================
-extern volatile int adc_x;
-extern volatile int adc_y;
-extern volatile int adc_x_filtered;
-extern volatile int adc_y_filtered;
-extern volatile float adc_x_nomalize ;
-extern volatile float adc_y_nomalize ;
-extern volatile float car_bat_voltage;  /* 小车通过 core_link 发送的电池电压，单位 V。 */
 
 /* 位置闭环 adc/ToF 双数据校验观测量。 */
 extern volatile float pos_fusion_r_adc;

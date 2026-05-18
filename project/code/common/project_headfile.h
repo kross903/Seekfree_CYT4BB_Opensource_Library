@@ -11,6 +11,7 @@
 
 // ===================================================== Core =====================================================
 #include "common/All_Init.h"
+#include "common/battery_monitor.h"
 #include "common/flight_safety.h"
 #include "common/PIT_Demo.h"
 #include "common/shared_data.h"
@@ -26,7 +27,7 @@
 #include "control/ControlMath.h"
 #include "control/angle_loop.h"
 #include "control/flight_control.h"
-#include "control/joystick.h"
+#include "control/ground_remote_input.h"
 #include "control/motor_mixer.h"
 #include "control/pid_controller.h"
 #include "control/position_loop.h"

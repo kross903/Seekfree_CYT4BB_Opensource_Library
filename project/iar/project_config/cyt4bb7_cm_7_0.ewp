@@ -1124,6 +1124,9 @@
             <name>$PROJ_DIR$\..\..\code\common\All_Init.c</name>
         </file>
         <file>
+            <name>$PROJ_DIR$\..\..\code\common\battery_monitor.c</name>
+        </file>
+        <file>
             <name>$PROJ_DIR$\..\..\code\vision\beacon_detect.c</name>
         </file>
         <file>
@@ -1187,7 +1190,7 @@
             <name>$PROJ_DIR$\..\..\code\vision\ir_localization.c</name>
         </file>
         <file>
-            <name>$PROJ_DIR$\..\..\code\control\Joystick.c</name>
+            <name>$PROJ_DIR$\..\..\code\control\ground_remote_input.c</name>
         </file>
         <file>
             <name>$PROJ_DIR$\..\..\code\menu\key.c</name>

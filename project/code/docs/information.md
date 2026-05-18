@@ -33,7 +33,7 @@
     - `flight_control.c/.h`
     - `pid_controller.c/.h`
     - `ControlMath.c/.h`
-    - `joystick.c/.h`
+    - `ground_remote_input.c/.h`
 
 - `project/code/icm`
   - 放 IMU 相关驱动与姿态/角速度接口。
