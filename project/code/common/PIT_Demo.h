@@ -4,9 +4,11 @@
 #include "zf_common_headfile.h"
 #include "common/flight_safety.h"
 #include "control/angle_loop.h"
+#include "control/motor_mixer.h"
 #include "control/pid_controller.h"
 #include "control/position_loop.h"
 #include "control/rate_loop.h"
+#include "control/throttle_runtime.h"
 #include "control/velocity_loop.h"
 #include "pmw/optical_flow_feed.h"
 
@@ -28,16 +30,6 @@
 // ==================== Flight runtime state ====================
 extern volatile uint8 armed;
 extern volatile uint8 control_mode;
-
-/*
- * [2026-03-10]
- * Purpose:
- * 1. Keep these three variables as an active-mode snapshot for existing monitor/UI code.
- * 2. The real runtime throttle state is now stored per control mode and mirrored here.
- */
-extern volatile float target_throttle;
-extern volatile float current_throttle;
-extern volatile float base_throttle;
 
 extern volatile uint16 motor_throttle[4];
 extern uint16 throttle_buffer[4];
@@ -86,10 +78,6 @@ extern volatile uint8 pos_fusion_fault;
  * 2. The `mode` parameter is retained only for compatibility with existing wrappers.
  */
 void Flight_Runtime_Reset_All_Throttle_States(void);
-void Flight_Runtime_Set_Throttle_For_Mode(uint8 mode, float throttle);
-float Flight_Runtime_Get_Target_Throttle_For_Mode(uint8 mode);
-float Flight_Runtime_Get_Base_Throttle_For_Mode(uint8 mode);
-void Flight_Runtime_Sync_Public_Throttle_State(void);
 
 void Flight_Motor_Test_Start(void);
 void Flight_Motor_Test_Stop(void);

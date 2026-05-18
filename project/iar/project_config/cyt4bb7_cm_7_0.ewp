@@ -1211,6 +1211,9 @@
             <name>$PROJ_DIR$\..\..\code\control\angle_loop.c</name>
         </file>
         <file>
+            <name>$PROJ_DIR$\..\..\code\control\motor_mixer.c</name>
+        </file>
+        <file>
             <name>$PROJ_DIR$\..\..\code\control\pid_controller.c</name>
         </file>
         <file>
@@ -1218,6 +1221,9 @@
         </file>
         <file>
             <name>$PROJ_DIR$\..\..\code\control\rate_loop.c</name>
+        </file>
+        <file>
+            <name>$PROJ_DIR$\..\..\code\control\throttle_runtime.c</name>
         </file>
         <file>
             <name>$PROJ_DIR$\..\..\code\control\velocity_loop.c</name>

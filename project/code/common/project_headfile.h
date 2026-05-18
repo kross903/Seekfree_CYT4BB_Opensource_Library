@@ -27,9 +27,11 @@
 #include "control/angle_loop.h"
 #include "control/flight_control.h"
 #include "control/joystick.h"
+#include "control/motor_mixer.h"
 #include "control/pid_controller.h"
 #include "control/position_loop.h"
 #include "control/rate_loop.h"
+#include "control/throttle_runtime.h"
 #include "control/velocity_loop.h"
 
 // ===================================================== ICM ======================================================

@@ -14,8 +14,13 @@ Release/
 
 # IAR generated outputs
 **/project_config/Debug_*/
+project/iar/Debug_*/
+project/iar/settings/*.wsdt
 *.pbd
 *.dep
+*.ninja_deps
+*.ninja_log
+*_build_cache
 
 # OS
 Thumbs.db

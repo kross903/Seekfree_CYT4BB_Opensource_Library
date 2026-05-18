@@ -1,8 +1,10 @@
 #include "common/PIT_Demo.h"
 #include "common/project_headfile.h"
 #include "control/angle_loop.h"
+#include "control/motor_mixer.h"
 #include "control/position_loop.h"
 #include "control/rate_loop.h"
+#include "control/throttle_runtime.h"
 #include "control/velocity_loop.h"
 #include "menu/menu_motor_test.h"
 #include "motor_hardware/motor_hardware.h"
@@ -13,7 +15,6 @@
 #define THROTTLE_RAMP_RATE             2.0f
 #define CONTROL_DT_S                   0.00025f
 #define CONTROL_DT_MS                  0.25f
-#define TILT_THRUST_COMP_MAX           1.30f
 
 #define ADC_INPUT_LPF_ALPHA            0.20f
 
@@ -62,10 +63,6 @@
 volatile uint8 armed = 0;
 volatile uint8 control_mode = 0;
 
-volatile float target_throttle = 0.0f;
-volatile float current_throttle = 0.0f;
-volatile float base_throttle = 0.0f;
-
 volatile float target_angle_roll = 0.0f;
 volatile float target_angle_pitch = 0.0f;
 volatile float target_angle_yaw = 0.0f;
@@ -90,7 +87,6 @@ float current_gyro_pitch = 0.0f;
 float current_gyro_yaw = 0.0f;
 
 volatile uint16 motor_throttle[4] = {0, 0, 0, 0};
-float motor_output[4] = {0.0f, 0.0f, 0.0f, 0.0f};
 uint16 throttle_buffer[4] = {0, 0, 0, 0};
 
 volatile int adc_x = 0;
@@ -111,50 +107,6 @@ volatile uint8 pos_fusion_fault    = 0U;
 // ==================== Motor output and motor-test state ====================
 
 // ==================== Motor output helpers ====================
-
-static uint16 motor_output_limit_max(void)
-{
-    if(SAFE_MAX_MOTOR_OUTPUT_LIMIT > MOTOR_OUTPUT_SCALE_MAX)
-    {
-        return MOTOR_OUTPUT_SCALE_MAX;
-    }
-
-    return SAFE_MAX_MOTOR_OUTPUT_LIMIT;
-}
-
-static inline float throttle_safe_limit(float throttle)
-{
-    if(throttle > SAFE_MAX_THROTTLE)
-    {
-        throttle = SAFE_MAX_THROTTLE;
-    }
-    else if(throttle < 0.0f)
-    {
-        throttle = 0.0f;
-    }
-    return throttle;
-}
-
-static inline void throttle_ramp(float target, volatile float *current, float rate, float dt_ms)
-{
-    float error = target - (*current);
-    float step = rate * dt_ms;
-
-    if(error > step)
-    {
-        (*current) += step;
-    }
-    else if(error < -step)
-    {
-        (*current) -= step;
-    }
-    else
-    {
-        (*current) = target;
-    }
-
-    *current = throttle_safe_limit(*current);
-}
 
 static void clear_motor_throttle_state(void)
 {
@@ -181,102 +133,20 @@ static uint8 check_attitude_safety(void)
     return Flight_Safety_Check_Attitude();
 }
 
-static uint16 motor_output_safe_limit(float output)
-{
-    uint16 output_limit = motor_output_limit_max();
-
-    if(output > output_limit)
-    {
-        output = output_limit;
-    }
-    else if(output < 0.0f)
-    {
-        output = 0.0f;
-    }
-    return (uint16)output;
-}
-
-static uint16 motor_output_flight_limit(float output, float common_throttle)
-{
-    if((armed != 0U) && (common_throttle >= SAFE_MIN_THROTTLE) && (output < SAFE_MIN_THROTTLE))
-    {
-        output = SAFE_MIN_THROTTLE;
-    }
-
-    return motor_output_safe_limit(output);
-}
-
-static void mix_motor_output(void)
-{
-    uint8 i = 0U;
-    float roll_rad;
-    float pitch_rad;
-    float tilt_cos;
-    float thrust_base;
-    float thrust_base_comp;
-
-    roll_rad = current_roll * DEG2RAD;
-    pitch_rad = current_pitch * DEG2RAD;
-    tilt_cos = cosf(roll_rad) * cosf(pitch_rad);
-    if(tilt_cos < (1.0f / TILT_THRUST_COMP_MAX))
-    {
-        tilt_cos = (1.0f / TILT_THRUST_COMP_MAX);
-    }
-
-    thrust_base = HeightSpeedPID_output + base_throttle;
-    thrust_base_comp = thrust_base / tilt_cos;
-
-    motor_output[3] = thrust_base_comp + roll_output + pitch_output - yaw_output;
-    motor_output[2] = thrust_base_comp + roll_output - pitch_output + yaw_output;
-    motor_output[1] = thrust_base_comp - roll_output + pitch_output + yaw_output;
-    motor_output[0] = thrust_base_comp - roll_output - pitch_output - yaw_output;
-
-    for(i = 0U; i < 4U; i++)
-    {
-        motor_throttle[i] = motor_output_flight_limit(motor_output[i], thrust_base_comp);
-    }
-}
-
 // ==================== Flight runtime public interface ====================
 
 void Flight_Runtime_Reset_All_Throttle_States(void)
 {
-    target_throttle = 0.0f;
-    current_throttle = 0.0f;
-    base_throttle = 0.0f;
+    Throttle_Runtime_Reset_Throttle_State();
     MenuMotorTest_SetOutputEnable(0U);
     MenuMotorTest_SetThrottle(0U);
     Angle_Loop_Reset_Rate_Cmd_Lpf();
     clear_motor_throttle_state();
 }
 
-void Flight_Runtime_Set_Throttle_For_Mode(uint8 mode, float throttle)
-{
-    (void)mode;
-    target_throttle = throttle_safe_limit(throttle);
-}
-
-float Flight_Runtime_Get_Target_Throttle_For_Mode(uint8 mode)
-{
-    (void)mode;
-    return target_throttle;
-}
-
-float Flight_Runtime_Get_Base_Throttle_For_Mode(uint8 mode)
-{
-    (void)mode;
-    return base_throttle;
-}
-
-void Flight_Runtime_Sync_Public_Throttle_State(void)
-{
-}
-
 void Flight_Motor_Test_Start(void)
 {
-    target_throttle = 0.0f;
-    current_throttle = 0.0f;
-    base_throttle = 0.0f;
+    Throttle_Runtime_Reset_Throttle_State();
     MenuMotorTest_Start();
     clear_motor_throttle_state();
 }
@@ -284,9 +154,7 @@ void Flight_Motor_Test_Start(void)
 void Flight_Motor_Test_Stop(void)
 {
     MenuMotorTest_Stop();
-    target_throttle = 0.0f;
-    current_throttle = 0.0f;
-    base_throttle = 0.0f;
+    Throttle_Runtime_Reset_Throttle_State();
     clear_motor_throttle_state();
 }
 
@@ -443,14 +311,14 @@ void PIT_Control_Task_250us(void)
     if(!takeoff_active)
     {
         /* Cruise branch uses a fixed 0deg/0deg takeoff base. */
-        throttle_ramp(target_throttle, &current_throttle, THROTTLE_RAMP_RATE, CONTROL_DT_MS);
+        Throttle_Runtime_Ramp(target_throttle, &current_throttle, THROTTLE_RAMP_RATE, CONTROL_DT_MS);
         base_throttle = current_throttle;
     }
     /* takeoff_active 时 base_throttle / current_throttle / target_throttle 已由 ramp 阶段统一写入。 */
 
     if(control_mode == CONTROL_MODE_MANUAL)
     {
-        uint16 manual_output = motor_output_safe_limit(base_throttle);
+        uint16 manual_output = Motor_Mixer_Limit_Output(base_throttle);
         float position_target_vx_cms = 0.0f;
         float position_target_vy_cms = 0.0f;
 
@@ -528,5 +396,9 @@ void PIT_Control_Task_250us(void)
                      current_gyro_pitch,
                      current_gyro_yaw);
 
-    mix_motor_output();
+    Motor_Mixer_Update(motor_throttle,
+                       armed,
+                       base_throttle,
+                       current_roll,
+                       current_pitch);
 }
