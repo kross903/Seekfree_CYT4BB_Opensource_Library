@@ -189,6 +189,8 @@ typedef struct
     float target_y_cm;
     float fb_x_cm;
     float fb_y_cm;
+    float error_x_cm;
+    float error_y_cm;
     float vx_cmd_cms;
     float vy_cmd_cms;
     float x_i_out;

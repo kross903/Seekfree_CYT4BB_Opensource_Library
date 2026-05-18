@@ -59,6 +59,7 @@
 #define POSITION_LOOP_VX_SIGN          (+1.0f)
 #define POSITION_LOOP_VY_SIGN          (+1.0f)
 #define POSITION_LOOP_DEADZONE_CM      (3.0f)
+#define POSITION_LOOP_PREDICT_RELEASE_EPS_CM (1.0f)
 
 /*
  * 真位置闭环参数。
@@ -200,10 +201,21 @@ static volatile uint8 g_position_loop_ir_track_valid = 0U;
 static volatile uint8 g_position_loop_velocity_ready = 0U;
 static volatile float g_position_loop_fb_x_cm        = 0.0f;
 static volatile float g_position_loop_fb_y_cm        = 0.0f;
+static volatile float g_position_loop_error_x_cm     = 0.0f;
+static volatile float g_position_loop_error_y_cm     = 0.0f;
 static volatile float g_position_loop_vx_cmd_cms     = 0.0f;
 static volatile float g_position_loop_vy_cmd_cms     = 0.0f;
 static volatile float g_position_loop_x_i_out        = 0.0f;
 static volatile float g_position_loop_y_i_out        = 0.0f;
+static uint8 g_position_loop_last_pose_valid = 0U;
+static uint8 g_position_loop_predict_hold_active = 0U;
+static float g_position_loop_last_x_cm = 0.0f;
+static float g_position_loop_last_y_cm = 0.0f;
+static float g_position_loop_hold_start_x_cm = 0.0f;
+static float g_position_loop_hold_start_y_cm = 0.0f;
+static float g_position_loop_hold_distance_cm = 0.0f;
+static float g_position_loop_hold_dx_cm = 0.0f;
+static float g_position_loop_hold_dy_cm = 0.0f;
 
 /*
  * 光流 ToF 喂数据的容错状态。
@@ -847,8 +859,29 @@ static void position_loop_reset_runtime(void)
     g_position_loop_active = 0U;
     g_position_loop_vx_cmd_cms = 0.0f;
     g_position_loop_vy_cmd_cms = 0.0f;
+    g_position_loop_error_x_cm = 0.0f;
+    g_position_loop_error_y_cm = 0.0f;
     g_position_loop_x_i_out = 0.0f;
     g_position_loop_y_i_out = 0.0f;
+    g_position_loop_last_pose_valid = 0U;
+    g_position_loop_predict_hold_active = 0U;
+    g_position_loop_last_x_cm = 0.0f;
+    g_position_loop_last_y_cm = 0.0f;
+    g_position_loop_hold_start_x_cm = 0.0f;
+    g_position_loop_hold_start_y_cm = 0.0f;
+    g_position_loop_hold_distance_cm = 0.0f;
+    g_position_loop_hold_dx_cm = 0.0f;
+    g_position_loop_hold_dy_cm = 0.0f;
+}
+
+static void position_loop_reset_predict_hold(void)
+{
+    g_position_loop_predict_hold_active = 0U;
+    g_position_loop_hold_start_x_cm = 0.0f;
+    g_position_loop_hold_start_y_cm = 0.0f;
+    g_position_loop_hold_distance_cm = 0.0f;
+    g_position_loop_hold_dx_cm = 0.0f;
+    g_position_loop_hold_dy_cm = 0.0f;
 }
 
 static float position_loop_apply_deadzone(float error_cm)
@@ -861,18 +894,139 @@ static float position_loop_apply_deadzone(float error_cm)
     return error_cm;
 }
 
-static void position_loop_update_velocity_target(uint8 velocity_ready)
+static uint8 position_loop_get_raw_ir_track_valid(void)
 {
-    uint8 ir_track_valid = (uint8)((ir_pose_estimate.valid && !ir_position_lost_flag) ? 1U : 0U);
-    float pos_error_x_cm = position_loop_apply_deadzone(ir_pose_estimate.x);
-    float pos_error_y_cm = position_loop_apply_deadzone(ir_pose_estimate.y);
+    IR_LossDebug_t ir_loss_debug = {0};
 
-    g_position_loop_ir_track_valid = ir_track_valid;
+    IR_Localization_GetLossDebug(&ir_loss_debug);
+
+    return (uint8)((ir_loss_debug.raw_detect_valid && ir_pose_estimate.valid && !ir_position_lost_flag) ? 1U : 0U);
+}
+
+static uint8 position_loop_start_predict_hold(void)
+{
+    if(!g_position_loop_last_pose_valid)
+    {
+        return 0U;
+    }
+
+    g_position_loop_hold_start_x_cm = g_position_loop_last_x_cm;
+    g_position_loop_hold_start_y_cm = g_position_loop_last_y_cm;
+    g_position_loop_hold_distance_cm = sqrtf(g_position_loop_hold_start_x_cm * g_position_loop_hold_start_x_cm +
+                                             g_position_loop_hold_start_y_cm * g_position_loop_hold_start_y_cm);
+
+    if(g_position_loop_hold_distance_cm <= (POSITION_LOOP_DEADZONE_CM + POSITION_LOOP_PREDICT_RELEASE_EPS_CM))
+    {
+        position_loop_reset_predict_hold();
+        return 0U;
+    }
+
+    g_position_loop_hold_dx_cm = 0.0f;
+    g_position_loop_hold_dy_cm = 0.0f;
+    g_position_loop_predict_hold_active = 1U;
+
+    return 1U;
+}
+
+static uint8 position_loop_update_predict_hold(float measured_vx_cms,
+                                               float measured_vy_cms,
+                                               float *predict_x_cm,
+                                               float *predict_y_cm)
+{
+    float displacement_distance_cm;
+    float predicted_x_cm;
+    float predicted_y_cm;
+    float predicted_distance_cm;
+
+    if((predict_x_cm == NULL) || (predict_y_cm == NULL))
+    {
+        return 0U;
+    }
+
+    if(!g_position_loop_predict_hold_active)
+    {
+        if(!position_loop_start_predict_hold())
+        {
+            return 0U;
+        }
+    }
+
+    g_position_loop_hold_dx_cm += measured_vx_cms * CONTROL_DT_S;
+    g_position_loop_hold_dy_cm += measured_vy_cms * CONTROL_DT_S;
+    displacement_distance_cm = sqrtf(g_position_loop_hold_dx_cm * g_position_loop_hold_dx_cm +
+                                     g_position_loop_hold_dy_cm * g_position_loop_hold_dy_cm);
+    predicted_x_cm = g_position_loop_hold_start_x_cm - g_position_loop_hold_dx_cm;
+    predicted_y_cm = g_position_loop_hold_start_y_cm - g_position_loop_hold_dy_cm;
+    predicted_distance_cm = sqrtf(predicted_x_cm * predicted_x_cm + predicted_y_cm * predicted_y_cm);
+
+    if((displacement_distance_cm >= (g_position_loop_hold_distance_cm - POSITION_LOOP_PREDICT_RELEASE_EPS_CM)) ||
+       (predicted_distance_cm <= POSITION_LOOP_DEADZONE_CM))
+    {
+        g_position_loop_last_pose_valid = 0U;
+        position_loop_reset_predict_hold();
+        return 0U;
+    }
+
+    *predict_x_cm = predicted_x_cm;
+    *predict_y_cm = predicted_y_cm;
+
+    return 1U;
+}
+
+static void position_loop_update_velocity_target(uint8 velocity_ready,
+                                                 float measured_vx_cms,
+                                                 float measured_vy_cms)
+{
+    uint8 raw_ir_track_valid = position_loop_get_raw_ir_track_valid();
+    uint8 position_input_valid = 0U;
+    float position_input_x_cm = 0.0f;
+    float position_input_y_cm = 0.0f;
+    float pos_error_x_cm;
+    float pos_error_y_cm;
+
+    if(!g_position_loop_enabled || !velocity_ready)
+    {
+        g_position_loop_ir_track_valid = 0U;
+        g_position_loop_velocity_ready = velocity_ready;
+        g_position_loop_fb_x_cm = 0.0f;
+        g_position_loop_fb_y_cm = 0.0f;
+        g_position_loop_error_x_cm = 0.0f;
+        g_position_loop_error_y_cm = 0.0f;
+        g_velocity_loop_target_vx_cms = 0.0f;
+        g_velocity_loop_target_vy_cms = 0.0f;
+        position_loop_reset_runtime();
+        return;
+    }
+
+    if(raw_ir_track_valid)
+    {
+        position_input_valid = 1U;
+        position_input_x_cm = ir_pose_estimate.x;
+        position_input_y_cm = ir_pose_estimate.y;
+        g_position_loop_last_pose_valid = 1U;
+        g_position_loop_last_x_cm = position_input_x_cm;
+        g_position_loop_last_y_cm = position_input_y_cm;
+        position_loop_reset_predict_hold();
+    }
+    else
+    {
+        position_input_valid = position_loop_update_predict_hold(measured_vx_cms,
+                                                                 measured_vy_cms,
+                                                                 &position_input_x_cm,
+                                                                 &position_input_y_cm);
+    }
+
+    pos_error_x_cm = position_loop_apply_deadzone(position_input_x_cm);
+    pos_error_y_cm = position_loop_apply_deadzone(position_input_y_cm);
+
+    g_position_loop_ir_track_valid = position_input_valid;
     g_position_loop_velocity_ready = velocity_ready;
-    g_position_loop_fb_x_cm = ir_pose_estimate.x;
-    g_position_loop_fb_y_cm = ir_pose_estimate.y;
+    g_position_loop_fb_x_cm = position_input_x_cm;
+    g_position_loop_fb_y_cm = position_input_y_cm;
+    g_position_loop_error_x_cm = pos_error_x_cm;
+    g_position_loop_error_y_cm = pos_error_y_cm;
 
-    if(!g_position_loop_enabled || !velocity_ready || !ir_track_valid)
+    if(!position_input_valid)
     {
         g_velocity_loop_target_vx_cms = 0.0f;
         g_velocity_loop_target_vy_cms = 0.0f;
@@ -925,6 +1079,7 @@ void PIT_Control_Task_250us(void)
     Get_Attitude_Angle(&current_roll, &current_pitch, &current_yaw);
     Get_Angular_Rate(&current_gyro_roll, &current_gyro_pitch, &current_gyro_yaw);
     PMW_Flow_AccumulateGyro(icm42688_gyro_x, icm42688_gyro_y, CONTROL_DT_S);// 更新PMW光流传感器的陀螺仪积分值，用于后续的运动补偿计算
+    PMW_Flow_PredictVelocity(X_V_F, Y_V_F, CONTROL_DT_S);
     if(check_attitude_safety())
     {
         reset_angle_rate_cmd_lpf();
@@ -969,7 +1124,7 @@ void PIT_Control_Task_250us(void)
     {
         uint16 manual_output = motor_output_safe_limit(base_throttle);
 
-        position_loop_update_velocity_target(0U);
+        position_loop_update_velocity_target(0U, 0.0f, 0.0f);
         reset_angle_rate_cmd_lpf();
         motor_throttle[0] = manual_output;
         motor_throttle[1] = manual_output;
@@ -982,7 +1137,7 @@ void PIT_Control_Task_250us(void)
     {
         /* 巡航阶段：原 ADC 位置闭环已废弃，目标姿态默认锁在悬停基准角上。
          * 当 g_velocity_loop_enabled = 1 且光流 valid 时，
-         * 用光流滤波后的机体水平速度跑速度闭环：
+         * 用光流 + ICM 融合后的机体水平速度跑速度闭环：
          *   PID(target=0, fb=v_body_x/y)  -> 角度修正量 (deg)
          * 修正量再叠加到 captured / hover 基准角上，限幅只由 vel_pid_x/y.output_limit 决定，
          * 最终写入 target_angle_roll/pitch 交给已有姿态外环。 */
@@ -1009,7 +1164,9 @@ void PIT_Control_Task_250us(void)
         {
             PMWFlowState_t flow_snap;
             PMW_Flow_GetState(&flow_snap);
-            position_loop_update_velocity_target((uint8)((flow_snap.valid && flow_snap.flow_used) ? 1U : 0U));
+            position_loop_update_velocity_target((uint8)((flow_snap.valid && flow_snap.flow_used) ? 1U : 0U),
+                                                 flow_snap.velocity_x_fused_cms,
+                                                 flow_snap.velocity_y_fused_cms);
 
             if(flow_snap.valid && flow_snap.flow_used)
             {
@@ -1064,7 +1221,7 @@ void PIT_Control_Task_250us(void)
         }
         else
         {
-            position_loop_update_velocity_target(0U);
+            position_loop_update_velocity_target(0U, 0.0f, 0.0f);
             target_angle_roll  = captured_roll;
             target_angle_pitch = captured_pitch;
             PID_Reset(&vel_pid_x);
@@ -1195,8 +1352,6 @@ uint8 Position_Loop_Is_Enabled(void)
 
 void Position_Loop_Get_Diag(PositionLoopDiag_t *diag)
 {
-    uint8 ir_track_valid = (uint8)((ir_pose_estimate.valid && !ir_position_lost_flag) ? 1U : 0U);
-
     if(diag == NULL)
     {
         return;
@@ -1204,15 +1359,17 @@ void Position_Loop_Get_Diag(PositionLoopDiag_t *diag)
 
     diag->target_x_cm = POSITION_LOOP_TARGET_X_CM;
     diag->target_y_cm = POSITION_LOOP_TARGET_Y_CM;
-    diag->fb_x_cm = ir_pose_estimate.x;
-    diag->fb_y_cm = ir_pose_estimate.y;
+    diag->fb_x_cm = g_position_loop_fb_x_cm;
+    diag->fb_y_cm = g_position_loop_fb_y_cm;
+    diag->error_x_cm = g_position_loop_error_x_cm;
+    diag->error_y_cm = g_position_loop_error_y_cm;
     diag->vx_cmd_cms = g_position_loop_vx_cmd_cms;
     diag->vy_cmd_cms = g_position_loop_vy_cmd_cms;
     diag->x_i_out = g_position_loop_x_i_out;
     diag->y_i_out = g_position_loop_y_i_out;
     diag->enabled = g_position_loop_enabled;
     diag->active = g_position_loop_active;
-    diag->ir_track_valid = ir_track_valid;
+    diag->ir_track_valid = g_position_loop_ir_track_valid;
     diag->velocity_ready = g_position_loop_velocity_ready;
 }
 

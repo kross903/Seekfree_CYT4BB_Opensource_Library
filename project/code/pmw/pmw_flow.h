@@ -48,6 +48,7 @@ typedef struct
 void PMW_Flow_Init(void);
 void PMW_Flow_Reset(void);
 void PMW_Flow_AccumulateGyro(float gyro_x_rate_dps, float gyro_y_rate_dps, float dt_s);
+void PMW_Flow_PredictVelocity(float imu_velocity_x_cms, float imu_velocity_y_cms, float dt_s);
 void PMW_Flow_UpdateSample(int16 flow_delta_x,
                            int16 flow_delta_y,
                            float roll_deg,

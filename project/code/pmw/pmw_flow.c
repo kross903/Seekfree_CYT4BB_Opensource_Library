@@ -44,24 +44,23 @@
 #define PMW_FLOW_TWO_PI                     (6.28318530717958647692f)
 
 /*
- * 光流速度鲁棒化参数：先拒绝坏数据和物理不可能的跳变，再做低通。
- * UP-FLOW-302 当前约 40Hz / dt=25ms，VEL_LPF_CUTOFF_HZ=3Hz 时 alpha 约 0.38。
+ * 光流速度鲁棒化参数：坏数据先门控，速度变化只做重力加速度量级的斜率限制。
+ * UP-FLOW-302 当前约 40Hz / dt=25ms，VEL_LPF_CUTOFF_HZ=8Hz 时 alpha 约 0.72。
  */
 #define PMW_FLOW_RANGE_LPF_ALPHA            (0.40f)
 #define PMW_FLOW_TOF_JUMP_REJECT_CM         (15.0f)
-#define PMW_FLOW_VEL_LPF_CUTOFF_HZ          (3.0f)
-#define PMW_FLOW_VEL_MEDIAN_WINDOW_SIZE     (3U)
+#define PMW_FLOW_GRAVITY_CMS2               (980.665f)
+#define PMW_FLOW_VEL_LPF_CUTOFF_HZ          (8.0f)
 #define PMW_FLOW_VEL_DEADBAND_CMS           (5.0f)
 #define PMW_FLOW_TILT_GATE_DEG              (25.0f)
 #define PMW_FLOW_VEL_ABS_LIMIT_CMS          (300.0f)
-#define PMW_FLOW_VEL_HARD_JUMP_CMS          (100.0f)
-#define PMW_FLOW_VEL_SLEW_LIMIT_CMS2        (800.0f)
+#define PMW_FLOW_VEL_SLEW_LIMIT_CMS2        PMW_FLOW_GRAVITY_CMS2
 #define PMW_FLOW_VEL_SLEW_MIN_STEP_CMS      (12.0f)
-#define PMW_FLOW_VEL_OUTPUT_SLEW_LIMIT_CMS2 (600.0f)
+#define PMW_FLOW_VEL_OUTPUT_SLEW_LIMIT_CMS2 PMW_FLOW_GRAVITY_CMS2
 #define PMW_FLOW_FUSION_FLOW_ALPHA          (0.18f)
 #define PMW_FLOW_FUSION_IMU_X_SIGN          (1.0f)
 #define PMW_FLOW_FUSION_IMU_Y_SIGN          (1.0f)
-#define PMW_FLOW_FUSION_IMU_DELTA_LIMIT_CMS2 (1000.0f)
+#define PMW_FLOW_FUSION_IMU_DELTA_LIMIT_CMS2 PMW_FLOW_GRAVITY_CMS2
 #define PMW_FLOW_FUSION_RESIDUAL_RESET_CMS  (120.0f)
 #define PMW_FLOW_INVALID_HOLD_FRAMES        (3U)
 #define PMW_FLOW_INVALID_DECAY_FRAMES       (8U)
@@ -96,10 +95,6 @@ static float g_pmw_flow_vel_x_output_cms = 0.0f;
 static float g_pmw_flow_vel_y_output_cms = 0.0f;
 static uint8 g_pmw_flow_vel_output_init = 0U;
 static uint8 g_pmw_flow_invalid_sample_count = 0U;
-static float g_pmw_flow_vel_x_median_samples[PMW_FLOW_VEL_MEDIAN_WINDOW_SIZE] = {0.0f};
-static float g_pmw_flow_vel_y_median_samples[PMW_FLOW_VEL_MEDIAN_WINDOW_SIZE] = {0.0f};
-static uint8 g_pmw_flow_vel_median_init = 0U;
-static uint8 g_pmw_flow_vel_median_index = 0U;
 static float g_pmw_flow_fused_vx_cms = 0.0f;
 static float g_pmw_flow_fused_vy_cms = 0.0f;
 static float g_pmw_flow_fusion_imu_vx_last_cms = 0.0f;
@@ -125,32 +120,6 @@ static uint8 pmw_flow_is_valid_number(float value)
 static uint8 pmw_flow_is_valid_delta_count(int16 value)
 {
     return (uint8)((value > -PMW_FLOW_MAX_ABS_DELTA_COUNT) && (value < PMW_FLOW_MAX_ABS_DELTA_COUNT));
-}
-
-static float pmw_flow_median3(float first_value, float second_value, float third_value)
-{
-    float swap_value;
-
-    if(first_value > second_value)
-    {
-        swap_value = first_value;
-        first_value = second_value;
-        second_value = swap_value;
-    }
-    if(second_value > third_value)
-    {
-        swap_value = second_value;
-        second_value = third_value;
-        third_value = swap_value;
-    }
-    if(first_value > second_value)
-    {
-        swap_value = first_value;
-        first_value = second_value;
-        second_value = swap_value;
-    }
-
-    return second_value;
 }
 
 static float pmw_flow_apply_velocity_deadband(float velocity_cms)
@@ -295,7 +264,6 @@ static void pmw_flow_apply_invalid_velocity_hold(PMWFlowState_t *state)
         state->velocity_y_cms = 0.0f;
         state->valid = 0U;
         g_pmw_flow_vel_filt_init = 0U;
-        g_pmw_flow_vel_median_init = 0U;
         g_pmw_flow_range_filt_init = 0U;
         g_pmw_flow_range_last_valid_init = 0U;
         g_pmw_flow_vel_output_init = 0U;
@@ -304,44 +272,6 @@ static void pmw_flow_apply_invalid_velocity_hold(PMWFlowState_t *state)
 
     state->speed_cms = sqrtf(state->velocity_x_cms * state->velocity_x_cms +
                              state->velocity_y_cms * state->velocity_y_cms);
-}
-
-static void pmw_flow_update_velocity_median(float *velocity_x_cms, float *velocity_y_cms)
-{
-    uint8 sample_index;
-
-    if((velocity_x_cms == NULL) || (velocity_y_cms == NULL))
-    {
-        return;
-    }
-
-    if(!g_pmw_flow_vel_median_init)
-    {
-        for(sample_index = 0U; sample_index < PMW_FLOW_VEL_MEDIAN_WINDOW_SIZE; sample_index++)
-        {
-            g_pmw_flow_vel_x_median_samples[sample_index] = *velocity_x_cms;
-            g_pmw_flow_vel_y_median_samples[sample_index] = *velocity_y_cms;
-        }
-        g_pmw_flow_vel_median_index = 0U;
-        g_pmw_flow_vel_median_init = 1U;
-    }
-    else
-    {
-        g_pmw_flow_vel_x_median_samples[g_pmw_flow_vel_median_index] = *velocity_x_cms;
-        g_pmw_flow_vel_y_median_samples[g_pmw_flow_vel_median_index] = *velocity_y_cms;
-        g_pmw_flow_vel_median_index++;
-        if(g_pmw_flow_vel_median_index >= PMW_FLOW_VEL_MEDIAN_WINDOW_SIZE)
-        {
-            g_pmw_flow_vel_median_index = 0U;
-        }
-    }
-
-    *velocity_x_cms = pmw_flow_median3(g_pmw_flow_vel_x_median_samples[0],
-                                       g_pmw_flow_vel_x_median_samples[1],
-                                       g_pmw_flow_vel_x_median_samples[2]);
-    *velocity_y_cms = pmw_flow_median3(g_pmw_flow_vel_y_median_samples[0],
-                                       g_pmw_flow_vel_y_median_samples[1],
-                                       g_pmw_flow_vel_y_median_samples[2]);
 }
 
 static void pmw_flow_update_velocity_feedback(PMWFlowState_t *state,
@@ -353,8 +283,6 @@ static void pmw_flow_update_velocity_feedback(PMWFlowState_t *state,
     uint8 imu_velocity_valid;
     float imu_vx_cms;
     float imu_vy_cms;
-    float imu_delta_x_cms;
-    float imu_delta_y_cms;
 
     if(state == NULL)
     {
@@ -382,22 +310,8 @@ static void pmw_flow_update_velocity_feedback(PMWFlowState_t *state,
                 g_pmw_flow_fusion_imu_vy_last_cms = imu_vy_cms;
                 g_pmw_flow_fusion_init = 1U;
             }
-            else
-            {
-                imu_delta_x_cms = pmw_flow_limit_velocity_rate(imu_vx_cms - g_pmw_flow_fusion_imu_vx_last_cms,
-                                                               0.0f,
-                                                               PMW_FLOW_FUSION_IMU_DELTA_LIMIT_CMS2,
-                                                               state->dt_s);
-                imu_delta_y_cms = pmw_flow_limit_velocity_rate(imu_vy_cms - g_pmw_flow_fusion_imu_vy_last_cms,
-                                                               0.0f,
-                                                               PMW_FLOW_FUSION_IMU_DELTA_LIMIT_CMS2,
-                                                               state->dt_s);
-
-                g_pmw_flow_fused_vx_cms += imu_delta_x_cms;
-                g_pmw_flow_fused_vy_cms += imu_delta_y_cms;
-                g_pmw_flow_fusion_imu_vx_last_cms = imu_vx_cms;
-                g_pmw_flow_fusion_imu_vy_last_cms = imu_vy_cms;
-            }
+            g_pmw_flow_fusion_imu_vx_last_cms = imu_vx_cms;
+            g_pmw_flow_fusion_imu_vy_last_cms = imu_vy_cms;
 
             acc_used = 1U;
 
@@ -623,14 +537,6 @@ void PMW_Flow_Reset(void)
     g_pmw_flow_vel_y_output_cms = 0.0f;
     g_pmw_flow_vel_output_init = 0U;
     g_pmw_flow_invalid_sample_count = 0U;
-    g_pmw_flow_vel_x_median_samples[0] = 0.0f;
-    g_pmw_flow_vel_x_median_samples[1] = 0.0f;
-    g_pmw_flow_vel_x_median_samples[2] = 0.0f;
-    g_pmw_flow_vel_y_median_samples[0] = 0.0f;
-    g_pmw_flow_vel_y_median_samples[1] = 0.0f;
-    g_pmw_flow_vel_y_median_samples[2] = 0.0f;
-    g_pmw_flow_vel_median_init = 0U;
-    g_pmw_flow_vel_median_index = 0U;
     g_pmw_flow_fused_vx_cms = 0.0f;
     g_pmw_flow_fused_vy_cms = 0.0f;
     g_pmw_flow_fusion_imu_vx_last_cms = 0.0f;
@@ -650,6 +556,52 @@ void PMW_Flow_AccumulateGyro(float gyro_x_rate_dps, float gyro_y_rate_dps, float
 
     g_pmw_flow_gyro_flow_x_delta_rad += gyro_x_rate_dps * PMW_FLOW_DEG2RAD * dt_s * PMW_FLOW_GYRO_X_DELTA_SIGN;
     g_pmw_flow_gyro_flow_y_delta_rad += gyro_y_rate_dps * PMW_FLOW_DEG2RAD * dt_s * PMW_FLOW_GYRO_Y_DELTA_SIGN;
+}
+
+void PMW_Flow_PredictVelocity(float imu_velocity_x_cms, float imu_velocity_y_cms, float dt_s)
+{
+    float imu_vx_cms;
+    float imu_vy_cms;
+    float imu_delta_x_cms;
+    float imu_delta_y_cms;
+
+    if(!(dt_s > 0.0f) ||
+       !pmw_flow_is_valid_number(imu_velocity_x_cms) ||
+       !pmw_flow_is_valid_number(imu_velocity_y_cms))
+    {
+        return;
+    }
+
+    imu_vx_cms = imu_velocity_x_cms * PMW_FLOW_FUSION_IMU_X_SIGN;
+    imu_vy_cms = imu_velocity_y_cms * PMW_FLOW_FUSION_IMU_Y_SIGN;
+
+    if(!g_pmw_flow_fusion_init)
+    {
+        g_pmw_flow_fusion_imu_vx_last_cms = imu_vx_cms;
+        g_pmw_flow_fusion_imu_vy_last_cms = imu_vy_cms;
+        return;
+    }
+
+    imu_delta_x_cms = pmw_flow_limit_velocity_rate(imu_vx_cms - g_pmw_flow_fusion_imu_vx_last_cms,
+                                                   0.0f,
+                                                   PMW_FLOW_FUSION_IMU_DELTA_LIMIT_CMS2,
+                                                   dt_s);
+    imu_delta_y_cms = pmw_flow_limit_velocity_rate(imu_vy_cms - g_pmw_flow_fusion_imu_vy_last_cms,
+                                                   0.0f,
+                                                   PMW_FLOW_FUSION_IMU_DELTA_LIMIT_CMS2,
+                                                   dt_s);
+
+    g_pmw_flow_fused_vx_cms += imu_delta_x_cms;
+    g_pmw_flow_fused_vy_cms += imu_delta_y_cms;
+    g_pmw_flow_fusion_imu_vx_last_cms = imu_vx_cms;
+    g_pmw_flow_fusion_imu_vy_last_cms = imu_vy_cms;
+
+    g_pmw_flow_fused_vx_cms = pmw_flow_limit_float(g_pmw_flow_fused_vx_cms,
+                                                   -PMW_FLOW_VEL_ABS_LIMIT_CMS,
+                                                   PMW_FLOW_VEL_ABS_LIMIT_CMS);
+    g_pmw_flow_fused_vy_cms = pmw_flow_limit_float(g_pmw_flow_fused_vy_cms,
+                                                   -PMW_FLOW_VEL_ABS_LIMIT_CMS,
+                                                   PMW_FLOW_VEL_ABS_LIMIT_CMS);
 }
 
 void PMW_Flow_ResetWorldPosition(void)
@@ -828,28 +780,11 @@ void PMW_Flow_UpdateSample(int16 flow_delta_x,
     }
     else
     {
-        /* (6) 速度样本预处理：三点中值去单帧尖峰；硬跳变拒绝；再用物理加速度限制斜率。 */
-        pmw_flow_update_velocity_median(&vx_raw, &vy_raw);
-
+        /* (6) 速度样本预处理：用重力加速度量级限制变化率，再做轻低通。 */
         if(g_pmw_flow_vel_filt_init)
         {
-            if(fabsf(vx_raw - g_pmw_flow_vel_x_filt_cms) > PMW_FLOW_VEL_HARD_JUMP_CMS)
-            {
-                vx_raw = g_pmw_flow_vel_x_filt_cms;
-            }
-            else
-            {
-                vx_raw = pmw_flow_limit_velocity_slew(vx_raw, g_pmw_flow_vel_x_filt_cms, dt_s);
-            }
-
-            if(fabsf(vy_raw - g_pmw_flow_vel_y_filt_cms) > PMW_FLOW_VEL_HARD_JUMP_CMS)
-            {
-                vy_raw = g_pmw_flow_vel_y_filt_cms;
-            }
-            else
-            {
-                vy_raw = pmw_flow_limit_velocity_slew(vy_raw, g_pmw_flow_vel_y_filt_cms, dt_s);
-            }
+            vx_raw = pmw_flow_limit_velocity_slew(vx_raw, g_pmw_flow_vel_x_filt_cms, dt_s);
+            vy_raw = pmw_flow_limit_velocity_slew(vy_raw, g_pmw_flow_vel_y_filt_cms, dt_s);
 
             velocity_lpf_alpha = pmw_flow_calc_lpf_alpha(PMW_FLOW_VEL_LPF_CUTOFF_HZ, dt_s);
             g_pmw_flow_vel_x_filt_cms += velocity_lpf_alpha * (vx_raw - g_pmw_flow_vel_x_filt_cms);
@@ -912,6 +847,15 @@ void PMW_Flow_GetState(PMWFlowState_t *state)
 
     PMW_Flow_SyncMainLoopBuffer();
     *state = g_pmw_flow_mainloop_state;
+
+    if(g_pmw_flow_fusion_init && state->valid)
+    {
+        state->velocity_x_fused_cms = g_pmw_flow_fused_vx_cms;
+        state->velocity_y_fused_cms = g_pmw_flow_fused_vy_cms;
+        state->velocity_x_fused_residual_cms = state->velocity_x_cms - state->velocity_x_fused_cms;
+        state->velocity_y_fused_residual_cms = state->velocity_y_cms - state->velocity_y_fused_cms;
+        state->acc_used = 1U;
+    }
 }
 
 /*

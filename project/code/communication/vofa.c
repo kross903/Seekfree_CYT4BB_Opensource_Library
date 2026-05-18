@@ -46,6 +46,9 @@ static void send_four_date(float date_1, float date_2, float date_3, float date_
  * FI  红外位置闭环诊断 (case 18)
  * FJ  速度环/光流门控诊断 (case 19)
  * FK  加速度/速度反馈/光流原始值对齐诊断 (case 20)
+ * FL  红外位置环 PID 调参诊断 (case 21)
+ * FM  X 轴位置-速度-Pitch-角速度链路诊断 (case 22)
+ * FN  Y 轴位置-速度-Roll-角速度链路诊断 (case 23)
  */
 static int send_back_flag = 0;
 static uint8 send_back_command = 'R';
@@ -872,6 +875,12 @@ void USART_PID_Adjust(void)
                 case 'j': send_back_flag = 19; break;
                 case 'K':
                 case 'k': send_back_flag = 20; break;
+                case 'L':
+                case 'l': send_back_flag = 21; break;
+                case 'M':
+                case 'm': send_back_flag = 22; break;
+                case 'N':
+                case 'n': send_back_flag = 23; break;
                 default: break;
             }
 
@@ -1019,11 +1028,11 @@ void send_date_back(void)
             PMWFlowState_t pmw_flow_state = {0};
             PMW_Flow_GetState(&pmw_flow_state);
 
-            send_four_date(X_V,
+            send_four_date(X_V_F,
                            pmw_flow_state.velocity_x_cms,
                            pmw_flow_state.velocity_x_fused_cms,
                            pmw_flow_state.velocity_x_fused_residual_cms,
-                           Y_V,
+                           Y_V_F,
                            pmw_flow_state.velocity_y_cms,
                            pmw_flow_state.velocity_y_fused_cms,
                            pmw_flow_state.velocity_y_fused_residual_cms);
@@ -1253,6 +1262,65 @@ void send_date_back(void)
                            pmw_flow_state.velocity_y_raw_cms,
                            (float)pmw_flow_state.flow_delta_x_count,
                            (float)pmw_flow_state.flow_delta_y_count);
+            break;
+        }
+
+        case 21:
+        {
+            PositionLoopDiag_t pos_diag = {0};
+            float x_p_out = 0.0f;
+            float y_p_out = 0.0f;
+
+            Position_Loop_Get_Diag(&pos_diag);
+            x_p_out = pos_pid_x.Kp * pos_diag.error_x_cm;
+            y_p_out = pos_pid_y.Kp * pos_diag.error_y_cm;
+
+            send_four_date(pos_diag.error_x_cm,
+                           x_p_out,
+                           pos_diag.x_i_out,
+                           pos_diag.vx_cmd_cms,
+                           pos_diag.error_y_cm,
+                           y_p_out,
+                           pos_diag.y_i_out,
+                           pos_diag.vy_cmd_cms);
+            break;
+        }
+
+        case 22:
+        {
+            PositionLoopDiag_t pos_diag = {0};
+            PMWFlowState_t pmw_flow_state = {0};
+
+            Position_Loop_Get_Diag(&pos_diag);
+            PMW_Flow_GetState(&pmw_flow_state);
+
+            send_four_date(pos_diag.fb_x_cm,
+                           pos_diag.vx_cmd_cms,
+                           pmw_flow_state.velocity_x_fused_cms,
+                           target_angle_pitch,
+                           current_pitch,
+                           target_pitch_rate,
+                           current_gyro_pitch,
+                           (float)pos_diag.active);
+            break;
+        }
+
+        case 23:
+        {
+            PositionLoopDiag_t pos_diag = {0};
+            PMWFlowState_t pmw_flow_state = {0};
+
+            Position_Loop_Get_Diag(&pos_diag);
+            PMW_Flow_GetState(&pmw_flow_state);
+
+            send_four_date(pos_diag.fb_y_cm,
+                           pos_diag.vy_cmd_cms,
+                           pmw_flow_state.velocity_y_fused_cms,
+                           target_angle_roll,
+                           current_roll,
+                           target_roll_rate,
+                           current_gyro_roll,
+                           (float)pos_diag.active);
             break;
         }
 
