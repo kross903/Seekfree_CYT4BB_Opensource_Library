@@ -11,6 +11,7 @@
 
 // ===================================================== Core =====================================================
 #include "common/All_Init.h"
+#include "common/flight_safety.h"
 #include "common/PIT_Demo.h"
 #include "common/shared_data.h"
 
@@ -23,9 +24,13 @@
 
 // =================================================== Control ====================================================
 #include "control/ControlMath.h"
+#include "control/angle_loop.h"
 #include "control/flight_control.h"
 #include "control/joystick.h"
 #include "control/pid_controller.h"
+#include "control/position_loop.h"
+#include "control/rate_loop.h"
+#include "control/velocity_loop.h"
 
 // ===================================================== ICM ======================================================
 #include "icm/icm.h"
@@ -39,11 +44,16 @@
 // ==================================================== Menu ======================================================
 #include "menu/key.h"
 #include "menu/menu.h"
+#include "menu/menu_motor_test.h"
 #include "menu/parameter_flash.h"
 #include "menu/parameter_scheme.h"
 #include "menu/screen_pages.h"
 
+// =============================================== Motor Hardware =================================================
+#include "motor_hardware/motor_hardware.h"
+
 // ===================================================== PMW ======================================================
+#include "pmw/optical_flow_feed.h"
 #include "pmw/pmw_flow.h"
 
 // ==================================================== Vision ====================================================
