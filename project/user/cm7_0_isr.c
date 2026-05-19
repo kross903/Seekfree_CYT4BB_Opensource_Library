@@ -39,7 +39,7 @@
 #include "zf_common_headfile.h"
 #include "../code/common/PIT_Demo.h"
 #include "../code/communication/core_link.h"
-#include "../code/kalman_filter/height_manager.h"
+#include "../code/control/height_manager.h"
 #include "../code/pmw/flow_sensor_config.h"
 
 // **************************** PIT中断函数 ****************************

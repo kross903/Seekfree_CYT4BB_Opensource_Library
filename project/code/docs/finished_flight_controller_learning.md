@@ -301,7 +301,6 @@ project/code/
 ├── menu/
 ├── communication/
 ├── icm/
-├── kalman_filter/
 └── docs/
 ```
 

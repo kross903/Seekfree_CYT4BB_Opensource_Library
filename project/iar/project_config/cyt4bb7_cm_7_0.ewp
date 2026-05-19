@@ -1169,10 +1169,7 @@
             <name>$PROJ_DIR$\..\..\code\common\flight_safety.c</name>
         </file>
         <file>
-            <name>$PROJ_DIR$\..\..\code\kalman_filter\gyro_kalman.c</name>
-        </file>
-        <file>
-            <name>$PROJ_DIR$\..\..\code\kalman_filter\height_manager.c</name>
+            <name>$PROJ_DIR$\..\..\code\control\height_manager.c</name>
         </file>
         <file>
             <name>$PROJ_DIR$\..\..\code\icm\icm.c</name>

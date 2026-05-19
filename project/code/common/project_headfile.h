@@ -39,10 +39,8 @@
 #include "icm/icm.h"
 #include "icm/icm42688.h"
 
-// ============================================== Kalman Filter ===================================================
-#include "kalman_filter/gyro_kalman.h"
-#include "kalman_filter/height_fusion.h"
-#include "kalman_filter/height_manager.h"
+// ============================================== Height Control ==================================================
+#include "control/height_manager.h"
 
 // ==================================================== Menu ======================================================
 #include "menu/key.h"

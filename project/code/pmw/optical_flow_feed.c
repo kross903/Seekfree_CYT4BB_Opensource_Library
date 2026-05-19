@@ -1,7 +1,7 @@
 #include "pmw/optical_flow_feed.h"
 #include "common/PIT_Demo.h"
 #include "icm/icm.h"
-#include "kalman_filter/height_manager.h"
+#include "control/height_manager.h"
 #include "pmw/pmw_flow.h"
 
 #define PMW_FLOW_TOF_MIN_VALID_MM       (50U)

@@ -3,7 +3,7 @@
 #include "common/PIT_Demo.h"
 #include "control/ControlMath.h"
 #include "control/rate_loop.h"
-#include "kalman_filter/height_manager.h"
+#include "control/height_manager.h"
 
 #define MOTOR_MIXER_TILT_THRUST_COMP_MAX       1.30f
 

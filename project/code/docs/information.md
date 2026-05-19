@@ -41,13 +41,6 @@
     - `icm.c/.h`
     - `icm42688.c/.h`
 
-- `project/code/kalman_filter`
-  - 放高度、陀螺等滤波与融合相关代码。
-  - 典型模块：
-    - `height_manager.c/.h`
-    - `height_fusion.c/.h`
-    - `gyro_kalman.c/.h`
-
 - `project/code/menu`
   - 放菜单系统、监视页、参数页面相关代码。
   - 典型模块：
@@ -127,7 +120,7 @@
   - 观测链路通常同时涉及 `project/code/communication/vofa.c` 和 `project/code/menu/screen_pages.c`
 
 - 高度相关：
-  - ToF 原始量、姿态修正高度、融合高度通常分布在 `project/code/kalman_filter/height_manager.c` 及主循环快照中
+  - ToF 原始量、姿态修正高度、融合高度通常分布在 `project/code/control/height_manager.c` 及主循环快照中
 
 - 菜单/监视页相关：
   - 页面枚举和快照结构一般在 `project/code/menu/screen_pages.h`
