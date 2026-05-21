@@ -44,17 +44,16 @@ static uint16 motor_mixer_flight_limit(float output, uint8 armed_state, float co
     return Motor_Mixer_Limit_Output(output);
 }
 
-void Motor_Mixer_Update(volatile uint16 motor_throttle_out[4],
-                        uint8 armed_state,
-                        float base_throttle_input,
-                        float roll_deg,
-                        float pitch_deg)
+static void motor_mixer_update_with_base(volatile uint16 motor_throttle_out[4],
+                                         uint8 armed_state,
+                                         float thrust_base,
+                                         float roll_deg,
+                                         float pitch_deg)
 {
     uint8 i = 0U;
     float roll_rad;
     float pitch_rad;
     float tilt_cos;
-    float thrust_base;
     float thrust_base_comp;
 
     roll_rad = roll_deg * DEG2RAD;
@@ -65,16 +64,42 @@ void Motor_Mixer_Update(volatile uint16 motor_throttle_out[4],
         tilt_cos = (1.0f / MOTOR_MIXER_TILT_THRUST_COMP_MAX);
     }
 
-    thrust_base = HeightSpeedPID_output + base_throttle_input;
     thrust_base_comp = thrust_base / tilt_cos;
 
-    motor_output[3] = thrust_base_comp + roll_output + pitch_output - yaw_output;
-    motor_output[2] = thrust_base_comp + roll_output - pitch_output + yaw_output;
-    motor_output[1] = thrust_base_comp - roll_output + pitch_output + yaw_output;
-    motor_output[0] = thrust_base_comp - roll_output - pitch_output - yaw_output;
+
+    motor_output[3] = thrust_base_comp - roll_output - pitch_output + yaw_output;
+    motor_output[2] = thrust_base_comp - roll_output + pitch_output - yaw_output;
+    motor_output[1] = thrust_base_comp + roll_output - pitch_output - yaw_output;
+    motor_output[0] = thrust_base_comp + roll_output + pitch_output + yaw_output;
 
     for(i = 0U; i < 4U; i++)
     {
         motor_throttle_out[i] = motor_mixer_flight_limit(motor_output[i], armed_state, thrust_base_comp);
     }
+}
+
+void Motor_Mixer_Update(volatile uint16 motor_throttle_out[4],
+                        uint8 armed_state,
+                        float base_throttle_input,
+                        float roll_deg,
+                        float pitch_deg)
+{
+    motor_mixer_update_with_base(motor_throttle_out,
+                                 armed_state,
+                                 HeightSpeedPID_output + base_throttle_input,
+                                 roll_deg,
+                                 pitch_deg);
+}
+
+void Motor_Mixer_Update_BaseOnly(volatile uint16 motor_throttle_out[4],
+                                 uint8 armed_state,
+                                 float base_throttle_input,
+                                 float roll_deg,
+                                 float pitch_deg)
+{
+    motor_mixer_update_with_base(motor_throttle_out,
+                                 armed_state,
+                                 base_throttle_input,
+                                 roll_deg,
+                                 pitch_deg);
 }

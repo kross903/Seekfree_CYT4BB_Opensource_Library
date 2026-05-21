@@ -102,6 +102,87 @@ static void test_placeholder_page(void)
     ips200_show_string(20U, 120U, "Use KEY4 to return");
 }
 
+static void fly_test_page(void)
+{
+    uint16 throttle = 0U;
+    uint8 output_enable = 0U;
+    uint8 safety_latched = 0U;
+    float target_roll = 0.0f;
+    float target_pitch = 0.0f;
+    float target_yaw = 0.0f;
+
+    if(!Flight_Fly_Test_Is_Active())
+    {
+        Flight_Fly_Test_Start();
+    }
+
+    if(key_flag == Button_1)
+    {
+        throttle = Flight_Fly_Test_Get_Throttle();
+        throttle = (throttle + FLY_TEST_THROTTLE_STEP > FLY_TEST_THROTTLE_MAX) ?
+                   FLY_TEST_THROTTLE_MAX : (throttle + FLY_TEST_THROTTLE_STEP);
+        Flight_Fly_Test_Set_Throttle(throttle);
+        key_flag = 0;
+    }
+    else if(key_flag == Button_2)
+    {
+        throttle = Flight_Fly_Test_Get_Throttle();
+        throttle = (throttle > FLY_TEST_THROTTLE_MIN + FLY_TEST_THROTTLE_STEP) ?
+                   (throttle - FLY_TEST_THROTTLE_STEP) : FLY_TEST_THROTTLE_MIN;
+        Flight_Fly_Test_Set_Throttle(throttle);
+        key_flag = 0;
+    }
+    else if(key_flag == Button_3)
+    {
+        output_enable = Flight_Fly_Test_Get_Output_Enable();
+        Flight_Fly_Test_Set_Output_Enable(output_enable ? 0U : 1U);
+        key_flag = 0;
+    }
+    else if(key_flag == Button_4)
+    {
+        Flight_Fly_Test_Stop();
+        return;
+    }
+
+    throttle = Flight_Fly_Test_Get_Throttle();
+    output_enable = Flight_Fly_Test_Get_Output_Enable();
+    safety_latched = Flight_Fly_Test_Get_Safety_Latched();
+    Flight_Fly_Test_Get_Target(&target_roll, &target_pitch, &target_yaw);
+
+    ips200_show_string(20U, 32U, "Fly Test           ");
+    ips200_show_string(20U, 48U, "K1:+ K2:- K3:OUT K4:BACK");
+    ips200_show_string(20U, 72U, "THR:");
+    ips200_show_int(76U, 72U, (int)throttle, 4U);
+    ips200_show_string(140U, 72U, "OUT:");
+    ips200_show_string(188U, 72U, output_enable ? "ON " : "OFF");
+
+    ips200_show_string(20U, 96U, "SAFE:");
+    ips200_show_string(84U, 96U, safety_latched ? "LATCH" : "OK   ");
+    ips200_show_string(156U, 96U, "NO PROP");
+
+    ips200_show_string(20U, 120U, "R:");
+    ips200_show_float(52U, 120U, current_roll, 3U, 1U);
+    ips200_show_string(132U, 120U, "P:");
+    ips200_show_float(164U, 120U, current_pitch, 3U, 1U);
+
+    ips200_show_string(20U, 144U, "TR:");
+    ips200_show_float(60U, 144U, target_roll, 3U, 1U);
+    ips200_show_string(132U, 144U, "TP:");
+    ips200_show_float(172U, 144U, target_pitch, 3U, 1U);
+
+    ips200_show_string(20U, 168U, "M1:");
+    ips200_show_int(52U, 168U, (int)motor_throttle[0], 4U);
+    ips200_show_string(120U, 168U, "M2:");
+    ips200_show_int(152U, 168U, (int)motor_throttle[1], 4U);
+    ips200_show_string(20U, 192U, "M3:");
+    ips200_show_int(52U, 192U, (int)motor_throttle[2], 4U);
+    ips200_show_string(120U, 192U, "M4:");
+    ips200_show_int(152U, 192U, (int)motor_throttle[3], 4U);
+
+    ips200_show_string(20U, 216U, "FIX FRAME BEFORE ON");
+    (void)target_yaw;
+}
+
 static void motor_test_page(void)
 {
     static uint8 edit_field = 0U;
@@ -240,6 +321,7 @@ void init_test_menu(void)
     menu_create_item(&testMenu, "IMU Test", test_placeholder_page, NULL);
     menu_create_item(&testMenu, "PMW Test", test_placeholder_page, NULL);
     menu_create_item(&testMenu, "Motor Test", motor_test_page, NULL);
+    menu_create_item(&testMenu, "Fly Test", fly_test_page, NULL);
     menu_create_item(&testMenu, "VOFA Test", test_placeholder_page, NULL);
     
 }

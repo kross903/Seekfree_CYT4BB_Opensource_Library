@@ -12,6 +12,7 @@ extern float roll_output;
 extern float pitch_output;
 extern float yaw_output;
 
+void Rate_Loop_Reset_Output(void);
 void Rate_Loop_Update(float target_roll_rate,
                       float target_pitch_rate,
                       float target_yaw_rate,

@@ -2,8 +2,10 @@
 #include "common/project_headfile.h"
 #include <string.h>
 
-#define SHARED_CAMERA_BASE_ADDR   0x28001000u
-#define SHARED_CAMERA_MAGIC       0x43414D31u
+#define SHARED_CAMERA_BASE_ADDR                       0x28001000u
+#define SHARED_CAMERA_MAGIC                           0x43414D31u
+#define CROSS_CORE_CAMERA_ASSISTANT_IMAGE_ENABLE      1U
+#define CROSS_CORE_CAMERA_ASSISTANT_FRAME_DIVIDER     10U
 
 typedef struct
 {
@@ -20,6 +22,10 @@ static volatile SharedCameraFrame_t *const g_shared_cam = (volatile SharedCamera
 void CrossCoreCamera_CameraCoreInit(void)
 {
     (void)mt9v03x_init();
+#if CROSS_CORE_CAMERA_ASSISTANT_IMAGE_ENABLE
+    seekfree_assistant_interface_init(SEEKFREE_ASSISTANT_DEBUG_UART);
+    seekfree_assistant_camera_information_config(SEEKFREE_ASSISTANT_MT9V03X, (void *)g_shared_cam->image[0], MT9V03X_W, MT9V03X_H);
+#endif
     g_shared_cam->magic = SHARED_CAMERA_MAGIC;
     g_shared_cam->frame_seq = 0U;
     g_shared_cam->width = (uint16)MT9V03X_W;
@@ -29,6 +35,10 @@ void CrossCoreCamera_CameraCoreInit(void)
 
 void CrossCoreCamera_CameraCoreTask(void)
 {
+#if CROSS_CORE_CAMERA_ASSISTANT_IMAGE_ENABLE
+    static uint8 assistant_frame_divider = 0U;
+#endif
+
     if(!mt9v03x_finish_flag)
     {
         return;
@@ -38,6 +48,14 @@ void CrossCoreCamera_CameraCoreTask(void)
     memcpy((void *)g_shared_cam->image[0], mt9v03x_image[0], MT9V03X_IMAGE_SIZE);
     g_shared_cam->frame_seq++;
     SCB_CleanInvalidateDCache_by_Addr((void *)g_shared_cam, sizeof(SharedCameraFrame_t));
+#if CROSS_CORE_CAMERA_ASSISTANT_IMAGE_ENABLE
+    assistant_frame_divider++;
+    if(assistant_frame_divider >= CROSS_CORE_CAMERA_ASSISTANT_FRAME_DIVIDER)
+    {
+        assistant_frame_divider = 0U;
+        seekfree_assistant_camera_send();
+    }
+#endif
 }
 
 uint8 CrossCoreCamera_ControlCoreFetchFrame(void)

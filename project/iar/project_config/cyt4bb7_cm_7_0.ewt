@@ -1432,6 +1432,12 @@
             <name>$PROJ_DIR$\..\..\code\common\All_Init.c</name>
         </file>
         <file>
+            <name>$PROJ_DIR$\..\..\code\control\angle_loop.c</name>
+        </file>
+        <file>
+            <name>$PROJ_DIR$\..\..\code\control\angle_loop.h</name>
+        </file>
+        <file>
             <name>$PROJ_DIR$\..\..\code\common\battery_monitor.c</name>
         </file>
         <file>
@@ -1439,6 +1445,12 @@
         </file>
         <file>
             <name>$PROJ_DIR$\..\..\code\control\ControlMath.c</name>
+        </file>
+        <file>
+            <name>$PROJ_DIR$\..\..\code\control\ControlMath.h</name>
+        </file>
+        <file>
+            <name>$PROJ_DIR$\..\..\code\communication\comm_mux.c</name>
         </file>
         <file>
             <name>$PROJ_DIR$\..\..\code\communication\core_link.c</name>
@@ -1474,7 +1486,25 @@
             <name>$PROJ_DIR$\..\..\code\control\flight_control.c</name>
         </file>
         <file>
+            <name>$PROJ_DIR$\..\..\code\control\flight_control.h</name>
+        </file>
+        <file>
+            <name>$PROJ_DIR$\..\..\code\common\flight_safety.c</name>
+        </file>
+        <file>
+            <name>$PROJ_DIR$\..\..\code\pmw\flow_sensor_config.h</name>
+        </file>
+        <file>
+            <name>$PROJ_DIR$\..\..\code\control\ground_remote_input.c</name>
+        </file>
+        <file>
+            <name>$PROJ_DIR$\..\..\code\control\ground_remote_input.h</name>
+        </file>
+        <file>
             <name>$PROJ_DIR$\..\..\code\control\height_manager.c</name>
+        </file>
+        <file>
+            <name>$PROJ_DIR$\..\..\code\control\height_manager.h</name>
         </file>
         <file>
             <name>$PROJ_DIR$\..\..\code\icm\icm.c</name>
@@ -1492,16 +1522,37 @@
             <name>$PROJ_DIR$\..\..\code\vision\ir_localization.c</name>
         </file>
         <file>
-            <name>$PROJ_DIR$\..\..\code\control\ground_remote_input.c</name>
-        </file>
-        <file>
             <name>$PROJ_DIR$\..\..\code\menu\key.c</name>
         </file>
         <file>
             <name>$PROJ_DIR$\..\..\code\menu\menu.c</name>
         </file>
         <file>
+            <name>$PROJ_DIR$\..\..\code\menu\menu_fly_test.c</name>
+        </file>
+        <file>
             <name>$PROJ_DIR$\..\..\code\menu\menu_list.c</name>
+        </file>
+        <file>
+            <name>$PROJ_DIR$\..\..\code\menu\menu_motor_test.c</name>
+        </file>
+        <file>
+            <name>$PROJ_DIR$\..\..\code\motor_hardware\motor_hardware.c</name>
+        </file>
+        <file>
+            <name>$PROJ_DIR$\..\..\code\motor_hardware\motor_hardware.h</name>
+        </file>
+        <file>
+            <name>$PROJ_DIR$\..\..\code\control\motor_mixer.c</name>
+        </file>
+        <file>
+            <name>$PROJ_DIR$\..\..\code\control\motor_mixer.h</name>
+        </file>
+        <file>
+            <name>$PROJ_DIR$\..\..\code\pmw\optical_flow_feed.c</name>
+        </file>
+        <file>
+            <name>$PROJ_DIR$\..\..\code\pmw\optical_flow_feed.h</name>
         </file>
         <file>
             <name>$PROJ_DIR$\..\..\code\menu\parameter_flash.c</name>
@@ -1510,16 +1561,49 @@
             <name>$PROJ_DIR$\..\..\code\control\pid_controller.c</name>
         </file>
         <file>
+            <name>$PROJ_DIR$\..\..\code\control\pid_controller.h</name>
+        </file>
+        <file>
             <name>$PROJ_DIR$\..\..\code\common\PIT_Demo.c</name>
         </file>
         <file>
             <name>$PROJ_DIR$\..\..\code\pmw\pmw_flow.c</name>
         </file>
         <file>
+            <name>$PROJ_DIR$\..\..\code\pmw\pmw_flow.h</name>
+        </file>
+        <file>
+            <name>$PROJ_DIR$\..\..\code\control\position_loop.c</name>
+        </file>
+        <file>
+            <name>$PROJ_DIR$\..\..\code\control\position_loop.h</name>
+        </file>
+        <file>
+            <name>$PROJ_DIR$\..\..\code\control\rate_loop.c</name>
+        </file>
+        <file>
+            <name>$PROJ_DIR$\..\..\code\control\rate_loop.h</name>
+        </file>
+        <file>
             <name>$PROJ_DIR$\..\..\code\menu\screen_pages.c</name>
         </file>
         <file>
             <name>$PROJ_DIR$\..\..\code\common\shared_data.c</name>
+        </file>
+        <file>
+            <name>$PROJ_DIR$\..\..\code\control\throttle_runtime.c</name>
+        </file>
+        <file>
+            <name>$PROJ_DIR$\..\..\code\control\throttle_runtime.h</name>
+        </file>
+        <file>
+            <name>$PROJ_DIR$\..\..\code\control\velocity_loop.c</name>
+        </file>
+        <file>
+            <name>$PROJ_DIR$\..\..\code\control\velocity_loop.h</name>
+        </file>
+        <file>
+            <name>$PROJ_DIR$\..\..\code\vision\vision_runtime.c</name>
         </file>
         <file>
             <name>$PROJ_DIR$\..\..\code\communication\vofa.c</name>
@@ -2456,6 +2540,12 @@
         </file>
         <file>
             <name>$PROJ_DIR$\..\..\..\libraries\zf_device\zf_device_uart_receiver.h</name>
+        </file>
+        <file>
+            <name>$PROJ_DIR$\..\..\..\libraries\zf_device\zf_device_upflow302.c</name>
+        </file>
+        <file>
+            <name>$PROJ_DIR$\..\..\..\libraries\zf_device\zf_device_upflow302.h</name>
         </file>
         <file>
             <name>$PROJ_DIR$\..\..\..\libraries\zf_device\zf_device_wifi_spi.c</name>

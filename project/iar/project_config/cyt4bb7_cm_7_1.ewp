@@ -1119,6 +1119,12 @@
         </settings>
     </configuration>
     <group>
+        <name>app_port</name>
+        <file>
+            <name>$PROJ_DIR$\..\..\code\communication\cross_core_camera.c</name>
+        </file>
+    </group>
+    <group>
         <name>code</name>
         <file>
             <name>$PROJ_DIR$\..\..\code\本文件夹作用.txt</name>
@@ -2021,12 +2027,6 @@
             <name>$PROJ_DIR$\..\..\..\libraries\zf_device\zf_device_pmw3901.h</name>
         </file>
         <file>
-            <name>$PROJ_DIR$\..\..\..\libraries\zf_device\zf_device_upflow302.c</name>
-        </file>
-        <file>
-            <name>$PROJ_DIR$\..\..\..\libraries\zf_device\zf_device_upflow302.h</name>
-        </file>
-        <file>
             <name>$PROJ_DIR$\..\..\..\libraries\zf_device\zf_device_tft180.c</name>
         </file>
         <file>
@@ -2049,6 +2049,12 @@
         </file>
         <file>
             <name>$PROJ_DIR$\..\..\..\libraries\zf_device\zf_device_uart_receiver.h</name>
+        </file>
+        <file>
+            <name>$PROJ_DIR$\..\..\..\libraries\zf_device\zf_device_upflow302.c</name>
+        </file>
+        <file>
+            <name>$PROJ_DIR$\..\..\..\libraries\zf_device\zf_device_upflow302.h</name>
         </file>
         <file>
             <name>$PROJ_DIR$\..\..\..\libraries\zf_device\zf_device_wifi_spi.c</name>
@@ -2164,9 +2170,5 @@
         <file>
             <name>$PROJ_DIR$\..\..\..\libraries\zf_driver\zf_driver_uart.h</name>
         </file>
-    </group>
-    <group>
-        <name>app_port</name>
-        <file><name>$PROJ_DIR$\..\..\code\communication\cross_core_camera.c</name></file>
     </group>
 </project>

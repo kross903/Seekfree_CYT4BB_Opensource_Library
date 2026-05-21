@@ -1,6 +1,7 @@
 #include "common/flight_safety.h"
 #include "common/PIT_Demo.h"
 #include "control/flight_control.h"
+#include "menu/menu_fly_test.h"
 #include "menu/menu_motor_test.h"
 
 volatile uint8 emergency_stop_triggered = 0U;
@@ -53,6 +54,7 @@ void Flight_Runtime_Emergency_Stop(uint8 reason)
     emergency_stop_triggered = 1U;
     emergency_stop_reason = reason;
     MenuMotorTest_Stop();
+    MenuFlyTest_Stop();
     target_throttle = 0.0f;
     current_throttle = 0.0f;
     base_throttle = 0.0f;

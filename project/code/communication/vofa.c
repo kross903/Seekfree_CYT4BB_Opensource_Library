@@ -1,4 +1,5 @@
 #include "communication/vofa.h"
+#include "communication/comm_mux.h"
 #include "common/project_headfile.h"
 #include <math.h>
 #include <string.h>
@@ -24,6 +25,10 @@ static fifo_struct uart_data_fifo;
 
 static void send_four_date(float date_1, float date_2, float date_3, float date_4,
                            float date_5, float date_6, float date_7, float date_8);
+static void send_sixteen_date(float date_1, float date_2, float date_3, float date_4,
+                              float date_5, float date_6, float date_7, float date_8,
+                              float date_9, float date_10, float date_11, float date_12,
+                              float date_13, float date_14, float date_15, float date_16);
 
 /*
  * 回传模式开关 (FX 命令切换):
@@ -49,6 +54,7 @@ static void send_four_date(float date_1, float date_2, float date_3, float date_
  * FL  红外位置环 PID 调参诊断 (case 21)
  * FM  X 轴位置-速度-Pitch-角速度链路诊断 (case 22)
  * FN  Y 轴位置-速度-Roll-角速度链路诊断 (case 23)
+ * FP  X/Y 双轴位置-速度-角度-角速度 16 路综合诊断 (case 24)
  */
 static int send_back_flag = 0;
 static uint8 send_back_command = 'R';
@@ -543,6 +549,35 @@ static void send_four_date(float date_1, float date_2, float date_3, float date_
     uart_write_buffer(UART_INDEX, (const uint8 *)tail, 4);
 }
 
+static void send_sixteen_date(float date_1, float date_2, float date_3, float date_4,
+                              float date_5, float date_6, float date_7, float date_8,
+                              float date_9, float date_10, float date_11, float date_12,
+                              float date_13, float date_14, float date_15, float date_16)
+{
+    char tail[4] = {0x00, 0x00, 0x80, 0x7f};
+    float byte[16] = {0};
+
+    byte[0] = date_1;
+    byte[1] = date_2;
+    byte[2] = date_3;
+    byte[3] = date_4;
+    byte[4] = date_5;
+    byte[5] = date_6;
+    byte[6] = date_7;
+    byte[7] = date_8;
+    byte[8] = date_9;
+    byte[9] = date_10;
+    byte[10] = date_11;
+    byte[11] = date_12;
+    byte[12] = date_13;
+    byte[13] = date_14;
+    byte[14] = date_15;
+    byte[15] = date_16;
+
+    uart_write_buffer(UART_INDEX, (const uint8 *)byte, 4 * 16);
+    uart_write_buffer(UART_INDEX, (const uint8 *)tail, 4);
+}
+
 void Init_uart(void)
 {
     fifo_init(&uart_data_fifo, FIFO_DATA_8BIT, uart_get_data, VOFA_PACKET_MAX_LEN);
@@ -561,6 +596,11 @@ void Send_test(void)
     uint32 read_count = 0;
     uint32 index = 0;
 
+    if(!CommMux_IsVofaMode())
+    {
+        return;
+    }
+
     fifo_data_count = fifo_used(&uart_data_fifo);
     if(fifo_data_count != 0)
     {
@@ -578,6 +618,13 @@ void Send_test(void)
 
 void uart_rx_interrupt_handler(void)
 {
+    if(!CommMux_IsVofaMode())
+    {
+        uint8 discard = 0U;
+        uart_query_byte(UART_INDEX, &discard);
+        return;
+    }
+
 //  get_data = uart_read_byte(UART_INDEX);
     uart_query_byte(UART_INDEX, &get_data);
     fifo_write_buffer(&uart_data_fifo, &get_data, 1);
@@ -724,6 +771,11 @@ void USART_PID_Adjust(void)
     uint8 has_value = 0;
     uint8 command = 0;
     uint8 item = 0;
+
+    if(!CommMux_IsVofaMode())
+    {
+        return;
+    }
 
     if(!load_next_vofa_packet())
     {
@@ -881,6 +933,8 @@ void USART_PID_Adjust(void)
                 case 'm': send_back_flag = 22; break;
                 case 'N':
                 case 'n': send_back_flag = 23; break;
+                case 'P':
+                case 'p': send_back_flag = 24; break;
                 default: break;
             }
 
@@ -919,6 +973,11 @@ void USART_PID_Adjust(void)
 void send_date_back(void)
 {
     uint8 ir_track_valid = 0U;
+
+    if(!CommMux_IsVofaMode())
+    {
+        return;
+    }
 
     IR_Localization_ServiceLostProtection();
     ir_track_valid = (uint8)((ir_pose_estimate.valid && !ir_position_lost_flag) ? 1U : 0U);
@@ -1321,6 +1380,33 @@ void send_date_back(void)
                            target_roll_rate,
                            current_gyro_roll,
                            (float)pos_diag.active);
+            break;
+        }
+
+        case 24:
+        {
+            PositionLoopDiag_t pos_diag = {0};
+            PMWFlowState_t pmw_flow_state = {0};
+
+            Position_Loop_Get_Diag(&pos_diag);
+            PMW_Flow_GetState(&pmw_flow_state);
+
+            send_sixteen_date(pos_diag.fb_x_cm,
+                              pos_diag.vx_cmd_cms,
+                              pmw_flow_state.velocity_x_fused_cms,
+                              target_angle_pitch,
+                              current_pitch,
+                              target_pitch_rate,
+                              current_gyro_pitch,
+                              pos_diag.fb_y_cm,
+                              pos_diag.vy_cmd_cms,
+                              pmw_flow_state.velocity_y_fused_cms,
+                              target_angle_roll,
+                              current_roll,
+                              target_roll_rate,
+                              current_gyro_roll,
+                              (float)pos_diag.active,
+                              0.0f);
             break;
         }
 

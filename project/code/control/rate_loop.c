@@ -10,6 +10,13 @@ float roll_output = 0.0f;
 float pitch_output = 0.0f;
 float yaw_output = 0.0f;
 
+void Rate_Loop_Reset_Output(void)
+{
+    roll_output = 0.0f;
+    pitch_output = 0.0f;
+    yaw_output = 0.0f;
+}
+
 void Rate_Loop_Update(float target_roll_rate,
                       float target_pitch_rate,
                       float target_yaw_rate,

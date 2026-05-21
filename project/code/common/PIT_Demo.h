@@ -80,6 +80,17 @@ void Flight_Motor_Test_Set_Output_Enable(uint8 enable);
 uint8 Flight_Motor_Test_Get_Output_Enable(void);
 uint16 Flight_Motor_Test_Get_Output_Limit(void);
 
+void Flight_Fly_Test_Start(void);
+void Flight_Fly_Test_Stop(void);
+uint8 Flight_Fly_Test_Is_Active(void);
+void Flight_Fly_Test_Set_Throttle(uint16 throttle);
+uint16 Flight_Fly_Test_Get_Throttle(void);
+void Flight_Fly_Test_Set_Output_Enable(uint8 enable);
+uint8 Flight_Fly_Test_Get_Output_Enable(void);
+void Flight_Fly_Test_Get_Target(float *roll, float *pitch, float *yaw);
+uint8 Flight_Fly_Test_Get_Safety_Latched(void);
+void Flight_Fly_Test_Clear_Safety_Latch(void);
+
 void PIT_KeyVoltage_Task_5ms(void);
 void PIT_Adc_Task_5ms(void);
 void PIT_OpticalFlow_Task(void);

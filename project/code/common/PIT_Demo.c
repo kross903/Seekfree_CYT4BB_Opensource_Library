@@ -8,6 +8,7 @@
 #include "control/rate_loop.h"
 #include "control/throttle_runtime.h"
 #include "control/velocity_loop.h"
+#include "menu/menu_fly_test.h"
 #include "menu/menu_motor_test.h"
 #include "motor_hardware/motor_hardware.h"
 #include "pmw/optical_flow_feed.h"
@@ -123,6 +124,28 @@ static uint8 check_attitude_safety(void)
     return Flight_Safety_Check_Attitude();
 }
 
+static uint8 check_fly_test_attitude_safety(void)
+{
+    return (uint8)((current_roll > FLY_TEST_ATTITUDE_SAFE_DEG) ||
+                   (current_roll < -FLY_TEST_ATTITUDE_SAFE_DEG) ||
+                   (current_pitch > FLY_TEST_ATTITUDE_SAFE_DEG) ||
+                   (current_pitch < -FLY_TEST_ATTITUDE_SAFE_DEG));
+}
+
+static float limit_fly_test_attitude_output(float output)
+{
+    if(output > FLY_TEST_ATTITUDE_OUTPUT_LIMIT)
+    {
+        output = FLY_TEST_ATTITUDE_OUTPUT_LIMIT;
+    }
+    else if(output < -FLY_TEST_ATTITUDE_OUTPUT_LIMIT)
+    {
+        output = -FLY_TEST_ATTITUDE_OUTPUT_LIMIT;
+    }
+
+    return output;
+}
+
 // ==================== Flight runtime public interface ====================
 
 void Flight_Runtime_Reset_All_Throttle_States(void)
@@ -130,12 +153,15 @@ void Flight_Runtime_Reset_All_Throttle_States(void)
     Throttle_Runtime_Reset_Throttle_State();
     MenuMotorTest_SetOutputEnable(0U);
     MenuMotorTest_SetThrottle(0U);
+    MenuFlyTest_Stop();
     Angle_Loop_Reset_Rate_Cmd_Lpf();
+    Rate_Loop_Reset_Output();
     clear_motor_throttle_state();
 }
 
 void Flight_Motor_Test_Start(void)
 {
+    Flight_Fly_Test_Stop();
     Throttle_Runtime_Reset_Throttle_State();
     MenuMotorTest_Start();
     clear_motor_throttle_state();
@@ -188,6 +214,115 @@ uint16 Flight_Motor_Test_Get_Output_Limit(void)
     return MenuMotorTest_GetOutputLimit();
 }
 
+void Flight_Fly_Test_Start(void)
+{
+    MenuMotorTest_Stop();
+    Flight_Takeoff_Abort();
+    Velocity_Loop_Set_Enabled(0U);
+    Position_Loop_Set_Enabled(0U);
+    Throttle_Runtime_Reset_Throttle_State();
+    Angle_Loop_Reset_Rate_Cmd_Lpf();
+    Rate_Loop_Reset_Output();
+    PID_Reset(&angle_pid_roll);
+    PID_Reset(&angle_pid_pitch);
+    PID_Reset(&angle_pid_yaw);
+    PID_Reset(&gyro_pid_roll);
+    PID_Reset(&gyro_pid_pitch);
+    PID_Reset(&gyro_pid_yaw);
+    clear_motor_throttle_state();
+    MenuFlyTest_Start();
+}
+
+void Flight_Fly_Test_Stop(void)
+{
+    MenuFlyTest_SetOutputEnable(0U);
+    MenuFlyTest_Stop();
+    Angle_Loop_Reset_Rate_Cmd_Lpf();
+    Rate_Loop_Reset_Output();
+    PID_Reset(&angle_pid_roll);
+    PID_Reset(&angle_pid_pitch);
+    PID_Reset(&angle_pid_yaw);
+    PID_Reset(&gyro_pid_roll);
+    PID_Reset(&gyro_pid_pitch);
+    PID_Reset(&gyro_pid_yaw);
+    clear_motor_throttle_state();
+}
+
+uint8 Flight_Fly_Test_Is_Active(void)
+{
+    return MenuFlyTest_IsActive();
+}
+
+void Flight_Fly_Test_Set_Throttle(uint16 throttle)
+{
+    MenuFlyTest_SetThrottle(throttle);
+}
+
+uint16 Flight_Fly_Test_Get_Throttle(void)
+{
+    return MenuFlyTest_GetThrottle();
+}
+
+void Flight_Fly_Test_Set_Output_Enable(uint8 enable)
+{
+    if(!enable)
+    {
+        MenuFlyTest_SetOutputEnable(0U);
+        Angle_Loop_Reset_Rate_Cmd_Lpf();
+        Rate_Loop_Reset_Output();
+        clear_motor_throttle_state();
+        return;
+    }
+
+    if(emergency_stop_triggered)
+    {
+        MenuFlyTest_SetOutputEnable(0U);
+        clear_motor_throttle_state();
+        return;
+    }
+
+    if(check_fly_test_attitude_safety())
+    {
+        MenuFlyTest_SetSafetyLatched(1U);
+        MenuFlyTest_SetOutputEnable(0U);
+        clear_motor_throttle_state();
+        return;
+    }
+
+    MenuFlyTest_ClearSafetyLatch();
+    MenuFlyTest_CaptureTarget(current_roll, current_pitch, current_yaw);
+    Angle_Loop_Reset_Rate_Cmd_Lpf();
+    Rate_Loop_Reset_Output();
+    PID_Reset(&angle_pid_roll);
+    PID_Reset(&angle_pid_pitch);
+    PID_Reset(&angle_pid_yaw);
+    PID_Reset(&gyro_pid_roll);
+    PID_Reset(&gyro_pid_pitch);
+    PID_Reset(&gyro_pid_yaw);
+    clear_motor_throttle_state();
+    MenuFlyTest_SetOutputEnable(1U);
+}
+
+uint8 Flight_Fly_Test_Get_Output_Enable(void)
+{
+    return MenuFlyTest_GetOutputEnable();
+}
+
+void Flight_Fly_Test_Get_Target(float *roll, float *pitch, float *yaw)
+{
+    MenuFlyTest_GetTarget(roll, pitch, yaw);
+}
+
+uint8 Flight_Fly_Test_Get_Safety_Latched(void)
+{
+    return MenuFlyTest_GetSafetyLatched();
+}
+
+void Flight_Fly_Test_Clear_Safety_Latch(void)
+{
+    MenuFlyTest_ClearSafetyLatch();
+}
+
 // ==================== PIT periodic tasks ====================
 
 void PIT_KeyVoltage_Task_5ms(void)
@@ -217,9 +352,11 @@ void PIT_PMW3901_Task_20ms(void)
 
 void PIT_Motor_Task_500us(void)
 {
+    uint8 output_enabled = (uint8)(MenuMotorTest_GetOutputEnable() || MenuFlyTest_GetOutputEnable());
+
     MotorHardware_WriteOutput(motor_throttle,
                               armed,
-                              MenuMotorTest_GetOutputEnable(),
+                              output_enabled,
                               MenuMotorTest_IsActive());
 }
 
@@ -230,7 +367,9 @@ static uint8 control_task_handle_imu_calibration(void)
     if(icm_calibration_flag)
     {
         MenuMotorTest_SetOutputEnable(0U);
+        MenuFlyTest_SetOutputEnable(0U);
         Angle_Loop_Reset_Rate_Cmd_Lpf();
+        Rate_Loop_Reset_Output();
         clear_motor_throttle_state();
         return 1U;
     }
@@ -269,12 +408,82 @@ static uint8 control_task_handle_motor_test(void)
     {
         MenuMotorTest_SetOutputEnable(0U);
         Angle_Loop_Reset_Rate_Cmd_Lpf();
+        Rate_Loop_Reset_Output();
         clear_motor_throttle_state();
         return 1U;
     }
 
     Angle_Loop_Reset_Rate_Cmd_Lpf();
+    Rate_Loop_Reset_Output();
     MenuMotorTest_ApplyOutput(motor_throttle);
+    return 1U;
+}
+
+static uint8 control_task_handle_fly_test(void)
+{
+    float target_roll = 0.0f;
+    float target_pitch = 0.0f;
+    float target_yaw = 0.0f;
+
+    if(!MenuFlyTest_IsActive())
+    {
+        return 0U;
+    }
+
+    if(emergency_stop_triggered)
+    {
+        MenuFlyTest_SetOutputEnable(0U);
+        Angle_Loop_Reset_Rate_Cmd_Lpf();
+        Rate_Loop_Reset_Output();
+        clear_motor_throttle_state();
+        return 1U;
+    }
+
+    if(!MenuFlyTest_GetOutputEnable())
+    {
+        Angle_Loop_Reset_Rate_Cmd_Lpf();
+        Rate_Loop_Reset_Output();
+        clear_motor_throttle_state();
+        return 1U;
+    }
+
+    if(check_fly_test_attitude_safety())
+    {
+        MenuFlyTest_SetSafetyLatched(1U);
+        MenuFlyTest_SetOutputEnable(0U);
+        Angle_Loop_Reset_Rate_Cmd_Lpf();
+        Rate_Loop_Reset_Output();
+        clear_motor_throttle_state();
+        return 1U;
+    }
+
+    MenuFlyTest_GetTarget(&target_roll, &target_pitch, &target_yaw);
+    Angle_Loop_Update(target_roll,
+                      target_pitch,
+                      target_yaw,
+                      current_roll,
+                      current_pitch,
+                      current_yaw);
+    target_yaw_rate = 0.0f;
+    PID_Reset(&angle_pid_yaw);
+
+    Rate_Loop_Update(target_roll_rate,
+                     target_pitch_rate,
+                     0.0f,
+                     current_gyro_roll,
+                     current_gyro_pitch,
+                     current_gyro_yaw);
+    PID_Reset(&gyro_pid_yaw);
+
+    roll_output = limit_fly_test_attitude_output(roll_output);
+    pitch_output = limit_fly_test_attitude_output(pitch_output);
+    yaw_output = 0.0f;
+
+    Motor_Mixer_Update_BaseOnly(motor_throttle,
+                                1U,
+                                (float)MenuFlyTest_GetThrottle(),
+                                current_roll,
+                                current_pitch);
     return 1U;
 }
 
@@ -419,6 +628,11 @@ void PIT_Control_Task_250us(void)
     takeoff_active = Flight_Takeoff_Tick_250us();
 
     if(control_task_handle_motor_test())
+    {
+        return;
+    }
+
+    if(control_task_handle_fly_test())
     {
         return;
     }

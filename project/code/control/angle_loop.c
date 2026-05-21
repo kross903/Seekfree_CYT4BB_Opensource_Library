@@ -22,6 +22,7 @@ void Angle_Loop_Reset_Rate_Cmd_Lpf(void)
     g_target_pitch_rate_lpf = 0.0f;
     target_roll_rate = 0.0f;
     target_pitch_rate = 0.0f;
+    target_yaw_rate = 0.0f;
 }
 
 static void angle_loop_update_rate_cmd_lpf(float roll_rate_raw, float pitch_rate_raw)

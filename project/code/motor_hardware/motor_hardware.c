@@ -7,7 +7,15 @@
 #define MOTOR_PWM_CH2                  TCPWM_CH10_P05_1
 #define MOTOR_PWM_CH3                  TCPWM_CH11_P05_2
 #define MOTOR_PWM_CH4                  TCPWM_CH12_P05_3
+// #define MOTOR_PWM_CH1                  TCPWM_CH12_P05_3
+// #define MOTOR_PWM_CH2                  TCPWM_CH11_P05_2
+// #define MOTOR_PWM_CH3                  TCPWM_CH10_P05_1
+// #define MOTOR_PWM_CH4                  TCPWM_CH09_P05_0
 #define MOTOR_PWM_DUTY_MIN             2000U
+
+// 1  2     4   3
+// 3  4     2   1
+
 
 #define MOTOR_HW_COMP_M1_SCALE         1.00f
 #define MOTOR_HW_COMP_M3_SCALE         1.00f

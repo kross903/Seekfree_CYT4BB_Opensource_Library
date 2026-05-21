@@ -41,7 +41,7 @@ extern volatile uint8 armed;
  */
 #define TOF_SENSOR_OFFSET_Y_CM       (7.0f)
 #define FLOW_SENSOR_OFFSET_Y_CM      (-7.0f)
-#define TOF_SENSOR_TILT_Y_DEG        (10.0f)
+#define TOF_SENSOR_TILT_Y_DEG        (15.0f)
 #define TOF_BEAM_VERTICAL_COS_MIN    (0.20f)
 
 HeightFusionResult_t g_height_result = {0};

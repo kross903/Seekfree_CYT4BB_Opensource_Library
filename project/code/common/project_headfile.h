@@ -17,6 +17,7 @@
 #include "common/shared_data.h"
 
 // ================================================= Communication =================================================
+#include "communication/comm_mux.h"
 #include "communication/core_link.h"
 #include "communication/core_link_user.h"
 #include "communication/cross_core_camera.h"
@@ -45,6 +46,7 @@
 // ==================================================== Menu ======================================================
 #include "menu/key.h"
 #include "menu/menu.h"
+#include "menu/menu_fly_test.h"
 #include "menu/menu_motor_test.h"
 #include "menu/parameter_flash.h"
 #include "menu/parameter_scheme.h"
@@ -63,5 +65,6 @@
 #include "vision/drone_ipm_embedded.h"
 #include "vision/ipm_interface.h"
 #include "vision/ir_localization.h"
+#include "vision/vision_runtime.h"
 
 #endif
