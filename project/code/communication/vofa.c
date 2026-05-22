@@ -55,6 +55,7 @@ static void send_sixteen_date(float date_1, float date_2, float date_3, float da
  * FM  X 轴位置-速度-Pitch-角速度链路诊断 (case 22)
  * FN  Y 轴位置-速度-Roll-角速度链路诊断 (case 23)
  * FP  X/Y 双轴位置-速度-角度-角速度 16 路综合诊断 (case 24)
+ * FQ  小车红外灯/信标红外灯识别效果 16 路诊断 (case 25)
  */
 static int send_back_flag = 0;
 static uint8 send_back_command = 'R';
@@ -584,9 +585,38 @@ void Init_uart(void)
     uart_init(UART_INDEX, UART_BAUDRATE, UART_TX_PIN, UART_RX_PIN);
     uart_rx_interrupt(UART_INDEX, 1);
 
-    uart_write_string(UART_INDEX, "UART Text.");
-    uart_write_byte(UART_INDEX, '\r');
-    uart_write_byte(UART_INDEX, '\n');
+    if(CommMux_IsVofaMode())
+    {
+        uart_write_string(UART_INDEX, "UART Text.");
+        uart_write_byte(UART_INDEX, '\r');
+        uart_write_byte(UART_INDEX, '\n');
+    }
+}
+
+void Vofa_ClearRxState(void)
+{
+    uint8 discard = 0U;
+
+    uart_rx_interrupt(UART_INDEX, 0);
+
+    fifo_clear(&uart_data_fifo);
+    memset(uart_get_data, 0, sizeof(uart_get_data));
+    memset(fifo_get_data, 0, sizeof(fifo_get_data));
+
+    memset(vofa_partial_packet, 0, sizeof(vofa_partial_packet));
+    vofa_partial_length = 0U;
+
+    memset(vofa_packet_queue, 0, sizeof(vofa_packet_queue));
+    vofa_packet_queue_head = 0U;
+    vofa_packet_queue_tail = 0U;
+    vofa_packet_queue_count = 0U;
+    vofa_packet_ready = 0U;
+
+    while(uart_query_byte(UART_INDEX, &discard))
+    {
+    }
+
+    uart_rx_interrupt(UART_INDEX, 1);
 }
 
 void Send_test(void)
@@ -621,7 +651,9 @@ void uart_rx_interrupt_handler(void)
     if(!CommMux_IsVofaMode())
     {
         uint8 discard = 0U;
-        uart_query_byte(UART_INDEX, &discard);
+        while(uart_query_byte(UART_INDEX, &discard))
+        {
+        }
         return;
     }
 
@@ -935,6 +967,8 @@ void USART_PID_Adjust(void)
                 case 'n': send_back_flag = 23; break;
                 case 'P':
                 case 'p': send_back_flag = 24; break;
+                case 'Q':
+                case 'q': send_back_flag = 25; break;
                 default: break;
             }
 
@@ -1407,6 +1441,31 @@ void send_date_back(void)
                               current_gyro_roll,
                               (float)pos_diag.active,
                               0.0f);
+            break;
+        }
+
+        case 25:
+        {
+            VisionRuntimeDiag_t vision_diag = {0};
+
+            VisionRuntime_GetDiag(&vision_diag);
+
+            send_sixteen_date((float)vision_diag.ir_raw_detect_valid,
+                              (float)vision_diag.ir_track_valid,
+                              (float)vision_diag.ir_detected_point_count,
+                              (float)vision_diag.beacon_count,
+                              vision_diag.ir_x_cm,
+                              vision_diag.ir_y_cm,
+                              vision_diag.ir_square_side_cm,
+                              vision_diag.ir_height_cm,
+                              (float)vision_diag.beacon_has_nearest,
+                              vision_diag.beacon_nearest_x_cm,
+                              vision_diag.beacon_nearest_y_cm,
+                              vision_diag.beacon_nearest_distance_cm,
+                              vision_diag.beacon_nearest_area,
+                              vision_diag.beacon_nearest_brightness,
+                              vision_diag.beacon_nearest_occupancy,
+                              vision_diag.beacon_nearest_aspect);
             break;
         }
 

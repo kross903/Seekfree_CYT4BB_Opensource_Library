@@ -29,7 +29,7 @@
         <EnableCache>1</EnableCache>
     </ArmDriver>
     <DebugChecksum>
-        <Checksum>1577241251</Checksum>
+        <Checksum>1047984891</Checksum>
     </DebugChecksum>
     <Exceptions>
         <StopOnUncaught>_ 0</StopOnUncaught>
@@ -44,8 +44,8 @@
     <SWOManager>
         <SamplingDivider>8192</SamplingDivider>
         <OverrideClock>0</OverrideClock>
-        <CpuClock>172052037</CpuClock>
-        <SwoClock>1684104530</SwoClock>
+        <CpuClock>1398101057</CpuClock>
+        <SwoClock>1381319470</SwoClock>
         <DataLogMode>0</DataLogMode>
         <ItmPortsEnabled>63</ItmPortsEnabled>
         <ItmTermIOPorts>1</ItmTermIOPorts>
@@ -54,6 +54,10 @@
         <PowerForcePC>1</PowerForcePC>
         <PowerConnectPC>1</PowerConnectPC>
     </SWOManager>
+    <SfrWindow>
+        <Show>1 1</Show>
+        <Sort>4 0</Sort>
+    </SfrWindow>
     <Trace1>
         <Enabled>0</Enabled>
         <ShowSource>1</ShowSource>
@@ -84,10 +88,6 @@
         <EventLSU>0</EventLSU>
         <EventSLEEP>0</EventSLEEP>
     </SWOTraceWindow>
-    <SfrWindow>
-        <Show>1 1</Show>
-        <Sort>4 0</Sort>
-    </SfrWindow>
     <TermIOLog>
         <LoggingEnabled>_ 0</LoggingEnabled>
         <LogFile>_ ""</LogFile>

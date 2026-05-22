@@ -149,13 +149,28 @@ static void drone_screen_mirror_end(uint8 send)
 static void update_monitor_view(void)
 {
     static uint8 drone_status_tick_div = 0;
+    uint8 camera_new_frame = 0U;
     uint8 link_tick = 0;
     uint8 input_handled = 0U;
     uint8 page_changed = 0U;
     monitor_page_enum page_before;
     MonitorRuntimeSnapshot snapshot;
 
-    (void)CrossCoreCamera_ControlCoreFetchFrame();
+    if(CommMux_UpdateFromSwitch())
+    {
+        Vofa_ClearRxState();
+    }
+
+    camera_new_frame = CrossCoreCamera_ControlCoreFetchFrame();
+    if(CommMux_IsAssistantImageMode())
+    {
+        if(camera_new_frame)
+        {
+            (void)CrossCoreCamera_ControlCoreSendAssistantFrame();
+        }
+        return;
+    }
+
     build_monitor_runtime_snapshot(&snapshot);
     link_tick = drone_car_link_task();
 
@@ -206,13 +221,17 @@ static void run_monitor_view_loop(void)
 static void initialize_control_core_modules(void)
 {
     CommMux_Init();
+    CommMux_SwitchInit();
+    (void)CommMux_UpdateFromSwitch();
     Init_uart();
+    CrossCoreCamera_ControlCoreAssistantInit();
     core_link_init();
     core_link_user_init();
     flash_init();
     Device_Init();
 
     IR_Localization_Init();
+    BeaconDetect_Init();
     IPM_Interface_Init();
     HeightManager_Init(100.0f);
 }

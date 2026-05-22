@@ -4,7 +4,7 @@
 
 #define SHARED_CAMERA_BASE_ADDR                       0x28001000u
 #define SHARED_CAMERA_MAGIC                           0x43414D31u
-#define CROSS_CORE_CAMERA_ASSISTANT_IMAGE_ENABLE      1U
+#define CROSS_CORE_CAMERA_ASSISTANT_IMAGE_ENABLE      0U
 #define CROSS_CORE_CAMERA_ASSISTANT_FRAME_DIVIDER     10U
 
 typedef struct
@@ -78,3 +78,43 @@ uint8 CrossCoreCamera_ControlCoreFetchFrame(void)
     mt9v03x_finish_flag = 1U;
     return 1U;
 }
+
+#if CY_CORE_CM7_0
+uint32 seekfree_assistant_transfer(const uint8 *buff, uint32 length)
+{
+    if(!CommMux_IsAssistantImageMode())
+    {
+        return length;
+    }
+
+    uart_write_buffer(UART_INDEX, buff, length);
+    return 0U;
+}
+
+uint32 seekfree_assistant_receive(uint8 *buff, uint32 length)
+{
+    (void)buff;
+    (void)length;
+    return 0U;
+}
+
+void CrossCoreCamera_ControlCoreAssistantInit(void)
+{
+    seekfree_assistant_interface_init(SEEKFREE_ASSISTANT_CUSTOM);
+    seekfree_assistant_camera_information_config(SEEKFREE_ASSISTANT_MT9V03X,
+                                                 mt9v03x_image[0],
+                                                 MT9V03X_W,
+                                                 MT9V03X_H);
+}
+
+uint8 CrossCoreCamera_ControlCoreSendAssistantFrame(void)
+{
+    if(!CommMux_IsAssistantImageMode())
+    {
+        return 0U;
+    }
+
+    seekfree_assistant_camera_send();
+    return 1U;
+}
+#endif

@@ -248,6 +248,8 @@ S1=450!
 | `FL=0!` 或 `FL!` | 红外位置环 PID 调参诊断：I0/I4 死区后位置误差, I1/I5 P项, I2/I6 I项, I3/I7 输出目标速度 |
 | `FM=0!` 或 `FM!` | X 轴多环控制链路：位置输入、目标速度、实际速度、Pitch 目标/实际、目标/实际 Pitch 角速度 |
 | `FN=0!` 或 `FN!` | Y 轴多环控制链路：位置输入、目标速度、实际速度、Roll 目标/实际、目标/实际 Roll 角速度 |
+| `FP=0!` 或 `FP!` | X/Y 双轴多环控制链路 16 路综合诊断：I0-I6 为 X/Pitch 链路, I7-I13 为 Y/Roll 链路, I14 位置环激活 |
+| `FQ=0!` 或 `FQ!` | 小车红外灯/信标红外灯识别效果 16 路诊断：I0-I7 为小车红外正方形, I8-I15 为最近信标灯 |
 
 说明：
 
@@ -265,7 +267,7 @@ S1=450!
 
 ## 回传数据说明
 
-当前 `send_date_back()` 会根据 `send_back_flag` 返回 8 路浮点数据。
+当前 `send_date_back()` 会根据 `send_back_flag` 返回浮点数据；除 `FP` / `FQ` 使用 16 路外，其余模式均为 8 路。
 
 ### `F0`：默认飞行状态回传
 
@@ -681,6 +683,52 @@ PMW3901 模式返回通道：
 
 使用方法：用 `FN!` 可以从左到右看 Y 轴闭环是否逐级传递：位置输入 `I0` 产生目标速度 `I1`，速度误差 `I1-I2` 推动 Roll 目标角 `I3`，角度误差 `I3-I4` 生成目标 Roll 角速度 `I5`，最终由角速度环追踪 `I6`。如果 `I2` 方向和 `I1` 反着走，优先查 Y 轴光流/融合速度符号；如果 `I3/I4` 跟随方向反了，优先查 Roll 控制极性。
 
+### `FP`：X/Y 双轴位置-速度-角度-角速度 16 路综合诊断
+
+返回通道：
+
+- `I0`: `pos_diag.fb_x_cm`——X 方向位置环输入位置，单位 cm；视觉正常时来自红外中心，视觉丢失保持时来自速度积分预测
+- `I1`: `pos_diag.vx_cmd_cms`——X 方向速度环输入目标速度，单位 cm/s；由 X 位置环输出
+- `I2`: `pmw_flow_state.velocity_x_fused_cms`——X 方向速度环实际反馈速度，单位 cm/s；光流 + ICM 融合速度
+- `I3`: `target_angle_pitch`——Pitch 角度环输入目标角，单位 deg；X 方向速度环通过 Pitch 修正实现前后加速度控制
+- `I4`: `current_pitch`——实际 Pitch 姿态角，单位 deg
+- `I5`: `target_pitch_rate`——Pitch 角速度环输入目标角速度，角度环输出经低通后的结果
+- `I6`: `current_gyro_pitch`——实际 Pitch 角速度
+- `I7`: `pos_diag.fb_y_cm`——Y 方向位置环输入位置，单位 cm；视觉正常时来自红外中心，视觉丢失保持时来自速度积分预测
+- `I8`: `pos_diag.vy_cmd_cms`——Y 方向速度环输入目标速度，单位 cm/s；由 Y 位置环输出
+- `I9`: `pmw_flow_state.velocity_y_fused_cms`——Y 方向速度环实际反馈速度，单位 cm/s；光流 + ICM 融合速度
+- `I10`: `target_angle_roll`——Roll 角度环输入目标角，单位 deg；Y 方向速度环通过 Roll 修正实现左右加速度控制
+- `I11`: `current_roll`——实际 Roll 姿态角，单位 deg
+- `I12`: `target_roll_rate`——Roll 角速度环输入目标角速度，角度环输出经低通后的结果
+- `I13`: `current_gyro_roll`——实际 Roll 角速度
+- `I14`: `pos_diag.active`——位置环本周期是否实际参与控制，1 表示位置链路正在输出目标速度
+- `I15`: `0`——占位，当前未使用
+
+使用方法：`FP!` 把 `FM!` 的 X/Pitch 链路和 `FN!` 的 Y/Roll 链路合并到同一帧 16 路数据，适合同时观察双轴位置误差、速度反馈、姿态目标和角速度跟随。上位机需要配置 16 个通道，否则只能看到前 8 路。
+
+### `FQ`：小车红外灯 / 信标红外灯识别效果 16 路诊断
+
+返回通道：
+
+- `I0`: `vision_diag.ir_raw_detect_valid`——小车红外正方形本帧原始几何检测成功标志
+- `I1`: `vision_diag.ir_track_valid`——小车红外中心当前是否可追踪，丢失保护触发后为 0
+- `I2`: `vision_diag.ir_detected_point_count`——小车红外识别点数，正常四点为 4，三点补全时为 3
+- `I3`: `vision_diag.beacon_count`——信标红外灯候选总数，即 `BeaconDetect_Process()` 筛选后的数量
+- `I4`: `vision_diag.ir_x_cm`——小车红外中心 X 坐标，单位 cm
+- `I5`: `vision_diag.ir_y_cm`——小车红外中心 Y 坐标，单位 cm
+- `I6`: `vision_diag.ir_square_side_cm`——小车红外正方形边长估计，正常应接近 10cm
+- `I7`: `vision_diag.ir_height_cm`——小车红外尺度估计高度 / 视觉高度，单位 cm
+- `I8`: `vision_diag.beacon_has_nearest`——是否存在最近信标，1 表示 `I9-I15` 有效
+- `I9`: `vision_diag.beacon_nearest_x_cm`——最近信标 X 坐标，单位 cm
+- `I10`: `vision_diag.beacon_nearest_y_cm`——最近信标 Y 坐标，单位 cm
+- `I11`: `vision_diag.beacon_nearest_distance_cm`——最近信标相对正下方的距离，单位 cm
+- `I12`: `vision_diag.beacon_nearest_area`——最近信标连通域面积，单位 pixel
+- `I13`: `vision_diag.beacon_nearest_brightness`——最近信标连通域平均亮度
+- `I14`: `vision_diag.beacon_nearest_occupancy`——最近信标连通域占空比，面积 / 外接矩形面积
+- `I15`: `vision_diag.beacon_nearest_aspect`——最近信标连通域外接矩形宽高比
+
+使用方法：`FQ!` 用来判断小车红外灯和信标红外灯是否互相误识别。只放小车灯时，`I0/I1` 应为 1、`I2` 应为 3 或 4、`I6` 应接近 10cm，`I3` 不应异常增多；只放信标灯时，`I3` 应大于 0、`I8` 应为 1，而 `I0/I1/I2` 不应稳定表现为小车正方形。注意 `I3` 是经过 `BeaconDetect` 面积、宽高比、占空比筛选后的信标候选数量，不是阈值后二值图中的全部亮斑数量。
+
 ## 上位机常用发送示例
 
 ### 设置 Roll 姿态环
@@ -805,6 +853,8 @@ FK!
 FL!
 FM!
 FN!
+FP!
+FQ!
 ```
 
 ### 强制失锁

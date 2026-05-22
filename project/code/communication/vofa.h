@@ -20,5 +20,6 @@ void Send_test(void);
 void uart_rx_interrupt_handler(void);
 void USART_PID_Adjust(void);
 void send_date_back(void);
+void Vofa_ClearRxState(void);
 
 #endif
