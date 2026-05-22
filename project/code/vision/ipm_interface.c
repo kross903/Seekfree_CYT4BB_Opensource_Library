@@ -53,6 +53,7 @@ void IPM_Interface_Update(float roll_deg, float pitch_deg, float height_cm)
  */
 void IPM_Interface_UpdateFromIMU(float height_cm)
 {
+#if CY_CORE_CM7_0
     /* 
      * ??????? IMU ???????????????
      * ?????
@@ -65,6 +66,9 @@ void IPM_Interface_UpdateFromIMU(float height_cm)
     float pitch = Pitch_a; /* ? ICM.h ????? */
     
     DroneIPM_Embedded_Update(roll, pitch, height_cm);
+#else
+    DroneIPM_Embedded_Update(0.0f, 0.0f, height_cm);
+#endif
 }
 
 /* ====================== 坐标变换 ====================== */

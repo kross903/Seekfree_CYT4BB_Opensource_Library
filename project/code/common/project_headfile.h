@@ -21,6 +21,7 @@
 #include "communication/core_link.h"
 #include "communication/core_link_user.h"
 #include "communication/cross_core_camera.h"
+#include "communication/cross_core_vision.h"
 #include "communication/dshot600.h"
 #include "communication/vofa.h"
 

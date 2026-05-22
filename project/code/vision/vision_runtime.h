@@ -24,7 +24,13 @@ typedef struct
     float beacon_nearest_aspect;
 } VisionRuntimeDiag_t;
 
+void VisionRuntime_ProcessImage(const uint8 image[MT9V03X_H][MT9V03X_W],
+                                float roll_deg,
+                                float pitch_deg,
+                                float height_cm);
 void VisionRuntime_ProcessFrame(float height_cm);
 void VisionRuntime_GetDiag(VisionRuntimeDiag_t *diag);
+void VisionRuntime_SetDiag(const VisionRuntimeDiag_t *diag);
+void VisionRuntime_UpdateDiagFromCurrentState(void);
 
 #endif /* VISION_RUNTIME_H_ */

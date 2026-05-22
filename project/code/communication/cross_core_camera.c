@@ -2,22 +2,43 @@
 #include "common/project_headfile.h"
 #include <string.h>
 
-#define SHARED_CAMERA_BASE_ADDR                       0x28001000u
 #define SHARED_CAMERA_MAGIC                           0x43414D31u
 #define CROSS_CORE_CAMERA_ASSISTANT_IMAGE_ENABLE      0U
 #define CROSS_CORE_CAMERA_ASSISTANT_FRAME_DIVIDER     10U
+#define SHARED_CAMERA_CACHE_LINE_SIZE                 32U
+#define SHARED_CAMERA_PAD_BYTES(type)                 (SHARED_CAMERA_CACHE_LINE_SIZE - (sizeof(type) % SHARED_CAMERA_CACHE_LINE_SIZE))
 
 typedef struct
 {
     uint32 magic;
-    uint32 frame_seq;
     uint16 width;
     uint16 height;
     uint8 reserved[8];
     uint8 image[MT9V03X_H][MT9V03X_W];
+    uint32 frame_seq;
+} SharedCameraPayload_t;
+
+typedef struct
+{
+    SharedCameraPayload_t payload;
+    uint8 padding[SHARED_CAMERA_PAD_BYTES(SharedCameraPayload_t)];
 } SharedCameraFrame_t;
 
-static volatile SharedCameraFrame_t *const g_shared_cam = (volatile SharedCameraFrame_t *)SHARED_CAMERA_BASE_ADDR;
+#pragma default_variable_attributes = @ ".shared_camera"
+static volatile SharedCameraFrame_t s_shared_cam __ALIGNED(SHARED_CAMERA_CACHE_LINE_SIZE);
+#pragma default_variable_attributes =
+
+static volatile SharedCameraPayload_t *const g_shared_cam = &s_shared_cam.payload;
+
+static void clean_shared_camera_cache(void)
+{
+    SCB_CleanDCache_by_Addr((void *)g_shared_cam, sizeof(SharedCameraFrame_t));
+}
+
+static void invalidate_shared_camera_cache(void)
+{
+    SCB_InvalidateDCache_by_Addr((void *)g_shared_cam, sizeof(SharedCameraFrame_t));
+}
 
 void CrossCoreCamera_CameraCoreInit(void)
 {
@@ -30,10 +51,10 @@ void CrossCoreCamera_CameraCoreInit(void)
     g_shared_cam->frame_seq = 0U;
     g_shared_cam->width = (uint16)MT9V03X_W;
     g_shared_cam->height = (uint16)MT9V03X_H;
-    SCB_CleanInvalidateDCache_by_Addr((void *)g_shared_cam, sizeof(SharedCameraFrame_t));
+    clean_shared_camera_cache();
 }
 
-void CrossCoreCamera_CameraCoreTask(void)
+uint8 CrossCoreCamera_CameraCoreTask(void)
 {
 #if CROSS_CORE_CAMERA_ASSISTANT_IMAGE_ENABLE
     static uint8 assistant_frame_divider = 0U;
@@ -41,13 +62,13 @@ void CrossCoreCamera_CameraCoreTask(void)
 
     if(!mt9v03x_finish_flag)
     {
-        return;
+        return 0U;
     }
 
     mt9v03x_finish_flag = 0;
     memcpy((void *)g_shared_cam->image[0], mt9v03x_image[0], MT9V03X_IMAGE_SIZE);
     g_shared_cam->frame_seq++;
-    SCB_CleanInvalidateDCache_by_Addr((void *)g_shared_cam, sizeof(SharedCameraFrame_t));
+    clean_shared_camera_cache();
 #if CROSS_CORE_CAMERA_ASSISTANT_IMAGE_ENABLE
     assistant_frame_divider++;
     if(assistant_frame_divider >= CROSS_CORE_CAMERA_ASSISTANT_FRAME_DIVIDER)
@@ -56,13 +77,14 @@ void CrossCoreCamera_CameraCoreTask(void)
         seekfree_assistant_camera_send();
     }
 #endif
+    return 1U;
 }
 
 uint8 CrossCoreCamera_ControlCoreFetchFrame(void)
 {
     static uint32 last_seq = 0U;
 
-    SCB_CleanInvalidateDCache_by_Addr((void *)g_shared_cam, sizeof(SharedCameraFrame_t));
+    invalidate_shared_camera_cache();
     if(g_shared_cam->magic != SHARED_CAMERA_MAGIC)
     {
         return 0U;

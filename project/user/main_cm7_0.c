@@ -100,11 +100,6 @@ static void build_monitor_runtime_snapshot(MonitorRuntimeSnapshot *snapshot)
     snapshot->optical_flow_speed_cms = pmw_flow_state.speed_cms;
 }
 
-static void update_monitor_vision_state(void)
-{
-    VisionRuntime_ProcessFrame(tof_height_true_filt * 100.0f);
-}
-
 static void service_monitor_telemetry(void)
 {
     Send_test();
@@ -185,7 +180,6 @@ static void update_monitor_view(void)
         return;
     }
 
-    update_monitor_vision_state();
     service_monitor_telemetry();
     build_monitor_runtime_snapshot(&snapshot);
 
@@ -225,14 +219,12 @@ static void initialize_control_core_modules(void)
     (void)CommMux_UpdateFromSwitch();
     Init_uart();
     CrossCoreCamera_ControlCoreAssistantInit();
+    CrossCoreVision_InitShared();
     core_link_init();
     core_link_user_init();
     flash_init();
     Device_Init();
 
-    IR_Localization_Init();
-    BeaconDetect_Init();
-    IPM_Interface_Init();
     HeightManager_Init(100.0f);
 }
 

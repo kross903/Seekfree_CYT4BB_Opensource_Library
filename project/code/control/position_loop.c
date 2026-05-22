@@ -1,5 +1,6 @@
 #include "control/position_loop.h"
 #include "vision/ir_localization.h"
+#include "vision/vision_runtime.h"
 
 #define POSITION_LOOP_TARGET_X_CM      (0.0f)
 #define POSITION_LOOP_TARGET_Y_CM      (0.0f)
@@ -90,11 +91,11 @@ static float position_loop_apply_deadzone(float error_cm)
 
 static uint8 position_loop_get_raw_ir_track_valid(void)
 {
-    IR_LossDebug_t ir_loss_debug = {0};
+    VisionRuntimeDiag_t vision_diag = {0};
 
-    IR_Localization_GetLossDebug(&ir_loss_debug);
+    VisionRuntime_GetDiag(&vision_diag);
 
-    return (uint8)((ir_loss_debug.raw_detect_valid && ir_pose_estimate.valid && !ir_position_lost_flag) ? 1U : 0U);
+    return (uint8)((vision_diag.ir_raw_detect_valid && ir_pose_estimate.valid && !ir_position_lost_flag) ? 1U : 0U);
 }
 
 static uint8 position_loop_start_predict_hold(void)

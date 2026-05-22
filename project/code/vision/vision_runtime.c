@@ -8,11 +8,9 @@
 
 static VisionRuntimeDiag_t s_vision_runtime_diag;
 
-static void VisionRuntime_UpdateDiagFromCurrentFrame(int beacon_count,
-                                                     const BeaconResult_t *beacon_results)
+static void VisionRuntime_UpdateIrDiagFromCurrentState(void)
 {
     IR_LossDebug_t ir_loss_debug = {0};
-    int nearest_index = -1;
 
     IR_Localization_GetLossDebug(&ir_loss_debug);
 
@@ -23,6 +21,14 @@ static void VisionRuntime_UpdateDiagFromCurrentFrame(int beacon_count,
     s_vision_runtime_diag.ir_y_cm = ir_pose_estimate.y;
     s_vision_runtime_diag.ir_square_side_cm = ir_pose_estimate.square_side_cm;
     s_vision_runtime_diag.ir_height_cm = ir_pose_estimate.z;
+}
+
+static void VisionRuntime_UpdateDiagFromCurrentFrame(int beacon_count,
+                                                     const BeaconResult_t *beacon_results)
+{
+    int nearest_index = -1;
+
+    VisionRuntime_UpdateIrDiagFromCurrentState();
 
     s_vision_runtime_diag.beacon_count = beacon_count;
     s_vision_runtime_diag.beacon_has_nearest = 0U;
@@ -53,12 +59,25 @@ static void VisionRuntime_UpdateDiagFromCurrentFrame(int beacon_count,
     }
 }
 
-void VisionRuntime_ProcessFrame(float height_cm)
+void VisionRuntime_ProcessImage(const uint8 image[MT9V03X_H][MT9V03X_W],
+                                float roll_deg,
+                                float pitch_deg,
+                                float height_cm)
 {
     static BeaconResult_t beacon_results[BEACON_MAX_DETECTIONS];
     int beacon_count = 0;
 
     IR_Localization_ServiceLostProtection();
+    IPM_Interface_Update(roll_deg, pitch_deg, height_cm);
+    IR_Localization_Process(image, &ir_pose_estimate);
+    beacon_count = BeaconDetect_Process(image, beacon_results, BEACON_MAX_DETECTIONS);
+    VisionRuntime_UpdateDiagFromCurrentFrame(beacon_count, beacon_results);
+}
+
+void VisionRuntime_ProcessFrame(float height_cm)
+{
+    static BeaconResult_t beacon_results[BEACON_MAX_DETECTIONS];
+    int beacon_count = 0;
 
     if(!mt9v03x_finish_flag)
     {
@@ -80,4 +99,19 @@ void VisionRuntime_GetDiag(VisionRuntimeDiag_t *diag)
     }
 
     memcpy(diag, &s_vision_runtime_diag, sizeof(VisionRuntimeDiag_t));
+}
+
+void VisionRuntime_SetDiag(const VisionRuntimeDiag_t *diag)
+{
+    if(diag == NULL)
+    {
+        return;
+    }
+
+    memcpy(&s_vision_runtime_diag, diag, sizeof(VisionRuntimeDiag_t));
+}
+
+void VisionRuntime_UpdateDiagFromCurrentState(void)
+{
+    VisionRuntime_UpdateIrDiagFromCurrentState();
 }

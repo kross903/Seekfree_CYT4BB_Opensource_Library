@@ -35,6 +35,61 @@
 
 #include "../code/common/project_headfile.h"
 
+static void camera_core_init_vision_modules(void)
+{
+    IR_Localization_Init();
+    BeaconDetect_Init();
+    IPM_Interface_Init();
+}
+
+static void camera_core_service_lost_timer(void)
+{
+    static uint8 loop_divider = 0U;
+    VisionRuntimeDiag_t vision_diag;
+    CrossCoreVisionControlResult_t control_result;
+
+    loop_divider++;
+    if(loop_divider >= 5U)
+    {
+        loop_divider = 0U;
+        IR_Localization_Task_5ms();
+        VisionRuntime_UpdateDiagFromCurrentState();
+        VisionRuntime_GetDiag(&vision_diag);
+        CrossCoreVision_BuildControlResult(&ir_pose_estimate,
+                                           ir_position_lost_flag,
+                                           &vision_diag,
+                                           &control_result);
+        CrossCoreVision_CameraCorePublishOutput(&control_result, &vision_diag);
+    }
+}
+
+static void camera_core_process_vision_frame(void)
+{
+    static CrossCoreVisionInput_t vision_input = {0U, 0.0f, 0.0f, 0.0f, 100.0f, 0U};
+    CrossCoreVisionInput_t latest_input;
+    VisionRuntimeDiag_t vision_diag;
+    CrossCoreVisionControlResult_t control_result;
+
+    if(CrossCoreVision_CameraCoreFetchInput(&latest_input))
+    {
+        vision_input = latest_input;
+    }
+
+    if(CrossCoreCamera_CameraCoreTask())
+    {
+        VisionRuntime_ProcessImage(mt9v03x_image,
+                                   vision_input.roll_deg,
+                                   vision_input.pitch_deg,
+                                   vision_input.height_cm);
+        VisionRuntime_GetDiag(&vision_diag);
+        CrossCoreVision_BuildControlResult(&ir_pose_estimate,
+                                           ir_position_lost_flag,
+                                           &vision_diag,
+                                           &control_result);
+        CrossCoreVision_CameraCorePublishOutput(&control_result, &vision_diag);
+    }
+}
+
 // ���µĹ��̻��߹����ƶ���λ�����ִ�����²���
 // ��һ�� �ر��������д򿪵��ļ�
 // �ڶ��� project->clean  �ȴ��·�����������
@@ -53,13 +108,17 @@ int main(void)
     // �˴���д�û����� ���������ʼ�������
 
     CrossCoreCamera_CameraCoreInit();
+    CrossCoreVision_InitShared();
+    camera_core_init_vision_modules();
     
 
     // �˴���д�û����� ���������ʼ�������
     while(true)
     {
         // �˴���д��Ҫѭ��ִ�еĴ���
-          CrossCoreCamera_CameraCoreTask();
+        camera_core_service_lost_timer();
+        camera_core_process_vision_frame();
+        system_delay_ms(1);
 
       
       

@@ -327,7 +327,10 @@ void Flight_Fly_Test_Clear_Safety_Latch(void)
 
 void PIT_KeyVoltage_Task_5ms(void)
 {
-    IR_Localization_Task_5ms();
+    CrossCoreVision_ControlCoreService(current_roll,
+                                       current_pitch,
+                                       current_yaw,
+                                       tof_height_true_filt * 100.0f);
     key_scanner();
     key_scan();
     BatteryMonitor_Task_5ms();

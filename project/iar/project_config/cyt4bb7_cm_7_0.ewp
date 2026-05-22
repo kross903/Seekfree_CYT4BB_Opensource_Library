@@ -1163,6 +1163,12 @@
             <name>$PROJ_DIR$\..\..\code\communication\cross_core_camera.h</name>
         </file>
         <file>
+            <name>$PROJ_DIR$\..\..\code\communication\cross_core_vision.c</name>
+        </file>
+        <file>
+            <name>$PROJ_DIR$\..\..\code\communication\cross_core_vision.h</name>
+        </file>
+        <file>
             <name>$PROJ_DIR$\..\..\code\vision\drone_ipm.c</name>
         </file>
         <file>
