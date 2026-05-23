@@ -3,6 +3,24 @@
 
 #include "zf_common_headfile.h"
 
+#define VISION_BINARY_THRESHOLD (150)
+
+typedef struct
+{
+    float centroid_row;
+    float centroid_col;
+    int area;
+    int min_row;
+    int max_row;
+    int min_col;
+    int max_col;
+    float average_brightness;
+    float aspect_ratio;
+    float occupancy_ratio;
+    float world_x;
+    float world_y;
+} VisionBlob_t;
+
 typedef struct
 {
     uint8 ir_raw_detect_valid;

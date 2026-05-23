@@ -67,7 +67,7 @@ void IPM_Interface_UpdateFromIMU(float height_cm);
  * @param world_x 输出:地面X坐标(向前为正,单位cm)
  * @param world_y 输出:地面Y坐标(向右为正,单位cm)
  *
- * `BeaconDetect_Process()` 与 `IR_Localization_Process()` 最终都会走到这里。
+ * Vision runtime 提取的连通域最终都会走到这里。
  */
 void IPM_Image2World(int img_x, int img_y, float *world_x, float *world_y);
 

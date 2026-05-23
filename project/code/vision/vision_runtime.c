@@ -7,6 +7,197 @@
 #include <string.h>
 
 static VisionRuntimeDiag_t s_vision_runtime_diag;
+static uint8 s_vision_binary[MT9V03X_H * MT9V03X_W];
+static uint8 s_vision_visited[MT9V03X_H * MT9V03X_W];
+static uint16 s_vision_queue[MT9V03X_H * MT9V03X_W];
+
+static float VisionRuntime_NormalizedAspect(int width, int height)
+{
+    float w = (float)width;
+    float h = (float)height;
+
+    if(w < 1.0f)
+    {
+        w = 1.0f;
+    }
+    if(h < 1.0f)
+    {
+        h = 1.0f;
+    }
+
+    return (w > h) ? (w / h) : (h / w);
+}
+
+static void VisionRuntime_Binarize(const uint8 image[MT9V03X_H][MT9V03X_W])
+{
+    int index = 0;
+
+    for(index = 0; index < (MT9V03X_H * MT9V03X_W); index++)
+    {
+        s_vision_binary[index] = (((const uint8 *)image)[index] >= VISION_BINARY_THRESHOLD) ? 1U : 0U;
+    }
+}
+
+static int VisionRuntime_GetScaledLargeAreaThreshold(void)
+{
+    float height_cm = g_ipm.height;
+    float linear_scale = 1.0f;
+    float area_scale = 1.0f;
+    int threshold = g_beacon_config.area_threshold;
+
+    if(height_cm <= 1.0f)
+    {
+        height_cm = 100.0f;
+    }
+    if(height_cm < 35.0f)
+    {
+        height_cm = 35.0f;
+    }
+    if(height_cm > 300.0f)
+    {
+        height_cm = 300.0f;
+    }
+
+    linear_scale = 100.0f / height_cm;
+    area_scale = linear_scale * linear_scale;
+    threshold = (int)((float)g_beacon_config.area_threshold * area_scale + 0.5f);
+
+    if(threshold < 3)
+    {
+        threshold = 3;
+    }
+
+    return threshold;
+}
+
+static void VisionRuntime_DispatchBlob(const VisionBlob_t *blob, int large_area_threshold)
+{
+    if(blob == NULL)
+    {
+        return;
+    }
+
+    if(blob->area >= large_area_threshold)
+    {
+        BeaconDetect_AppendBlob(blob);
+    }
+    else
+    {
+        IR_Localization_AppendBlob(blob);
+    }
+}
+
+static void VisionRuntime_ProcessBlobs(const uint8 image[MT9V03X_H][MT9V03X_W])
+{
+    int row = 0;
+    int col = 0;
+    int large_area_threshold = VisionRuntime_GetScaledLargeAreaThreshold();
+
+    memset(s_vision_visited, 0, sizeof(s_vision_visited));
+    VisionRuntime_Binarize(image);
+
+    for(row = 0; row < MT9V03X_H; row++)
+    {
+        for(col = 0; col < MT9V03X_W; col++)
+        {
+            int start_index = row * MT9V03X_W + col;
+            int front = 0;
+            int rear = 0;
+            int pixel_count = 0;
+            int row_sum = 0;
+            int col_sum = 0;
+            int brightness_sum = 0;
+            int min_row = row;
+            int max_row = row;
+            int min_col = col;
+            int max_col = col;
+
+            if(s_vision_binary[start_index] == 0U || s_vision_visited[start_index])
+            {
+                continue;
+            }
+
+            s_vision_queue[rear++] = (uint16)start_index;
+            s_vision_visited[start_index] = 1U;
+
+            while(front < rear)
+            {
+                int idx = s_vision_queue[front++];
+                int current_row = idx / MT9V03X_W;
+                int current_col = idx % MT9V03X_W;
+                int dr = 0;
+                int dc = 0;
+
+                pixel_count++;
+                row_sum += current_row;
+                col_sum += current_col;
+                brightness_sum += image[current_row][current_col];
+
+                if(current_row < min_row) min_row = current_row;
+                if(current_row > max_row) max_row = current_row;
+                if(current_col < min_col) min_col = current_col;
+                if(current_col > max_col) max_col = current_col;
+
+                for(dr = -1; dr <= 1; dr++)
+                {
+                    for(dc = -1; dc <= 1; dc++)
+                    {
+                        int next_row = 0;
+                        int next_col = 0;
+                        int next_index = 0;
+
+                        if(dr == 0 && dc == 0)
+                        {
+                            continue;
+                        }
+
+                        next_row = current_row + dr;
+                        next_col = current_col + dc;
+
+                        if(next_row < 0 || next_row >= MT9V03X_H ||
+                           next_col < 0 || next_col >= MT9V03X_W)
+                        {
+                            continue;
+                        }
+
+                        next_index = next_row * MT9V03X_W + next_col;
+                        if(s_vision_binary[next_index] != 0U && !s_vision_visited[next_index])
+                        {
+                            s_vision_visited[next_index] = 1U;
+                            if(rear < (MT9V03X_H * MT9V03X_W))
+                            {
+                                s_vision_queue[rear++] = (uint16)next_index;
+                            }
+                        }
+                    }
+                }
+            }
+
+            if(pixel_count > 0)
+            {
+                VisionBlob_t blob;
+                int width = max_col - min_col + 1;
+                int height = max_row - min_row + 1;
+
+                memset(&blob, 0, sizeof(blob));
+                blob.centroid_row = (float)row_sum / (float)pixel_count;
+                blob.centroid_col = (float)col_sum / (float)pixel_count;
+                blob.area = pixel_count;
+                blob.min_row = min_row;
+                blob.max_row = max_row;
+                blob.min_col = min_col;
+                blob.max_col = max_col;
+                blob.average_brightness = (float)brightness_sum / (float)pixel_count;
+                blob.aspect_ratio = VisionRuntime_NormalizedAspect(width, height);
+                blob.occupancy_ratio = (width > 0 && height > 0) ?
+                                       ((float)pixel_count / (float)(width * height)) : 0.0f;
+                IPM_Image2World((int)blob.centroid_col, (int)blob.centroid_row,
+                                &blob.world_x, &blob.world_y);
+                VisionRuntime_DispatchBlob(&blob, large_area_threshold);
+            }
+        }
+    }
+}
 
 static void VisionRuntime_UpdateDiagFromCurrentFrame(int beacon_count,
                                                      const BeaconResult_t *beacon_results)
@@ -67,8 +258,11 @@ void VisionRuntime_ProcessFrame(float height_cm)
 
     mt9v03x_finish_flag = 0;
     IPM_Interface_UpdateFromIMU(height_cm);
-    IR_Localization_Process(mt9v03x_image, &ir_pose_estimate);
-    beacon_count = BeaconDetect_Process(mt9v03x_image, beacon_results, BEACON_MAX_DETECTIONS);
+    IR_Localization_BeginBlobFrame();
+    BeaconDetect_BeginBlobFrame(beacon_results, BEACON_MAX_DETECTIONS);
+    VisionRuntime_ProcessBlobs(mt9v03x_image);
+    (void)IR_Localization_EndBlobFrame(&ir_pose_estimate);
+    beacon_count = BeaconDetect_EndBlobFrame();
     VisionRuntime_UpdateDiagFromCurrentFrame(beacon_count, beacon_results);
 }
 

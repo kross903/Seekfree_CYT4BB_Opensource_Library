@@ -18,6 +18,7 @@
 #define _BEACON_DETECT_H_
 
 #include "zf_common_headfile.h"
+#include "vision/vision_runtime.h"
 
 /* ====================== 配置 ====================== */
 
@@ -78,8 +79,9 @@ void BeaconDetect_Init(void);
  * @return 本帧检测到的信标数量
  * @note 调用前需要先通过 IPM_Interface_UpdateFromIMU() 更新姿态与高度
  */
-int BeaconDetect_Process(const uint8 image[MT9V03X_H][MT9V03X_W],
-                         BeaconResult_t *results, int max_results);
+void BeaconDetect_BeginBlobFrame(BeaconResult_t *results, int max_results);
+void BeaconDetect_AppendBlob(const VisionBlob_t *blob);
+int BeaconDetect_EndBlobFrame(void);
 
 /**
  * @brief 在检测结果中找出距离正下方最近的信标

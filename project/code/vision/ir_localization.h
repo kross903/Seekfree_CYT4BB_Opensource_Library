@@ -11,6 +11,7 @@
 #define IR_LOCALIZATION_H_
 
 #include "zf_common_headfile.h"
+#include "vision/vision_runtime.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -80,13 +81,9 @@ void IR_Localization_ServiceLostProtection(void);
 
 void IR_Localization_GetLossDebug(IR_LossDebug_t *debug);
 
-uint8 IR_Localization_Process(const uint8 image[MT9V03X_H][MT9V03X_W],
-                              IR_Pose_t *out_pose);
-
-uint8 IR_FindPoints(const uint8 image[MT9V03X_H][MT9V03X_W],
-                    IR_Point2D_t out_pts[IR_SQUARE_POINT_COUNT]);
-
-const uint8* IR_GetBinaryImage(void);
+void IR_Localization_BeginBlobFrame(void);
+void IR_Localization_AppendBlob(const VisionBlob_t *blob);
+uint8 IR_Localization_EndBlobFrame(IR_Pose_t *out_pose);
 
 // ==================== 全局输出 ====================
 extern IR_Pose_t ir_pose_estimate;

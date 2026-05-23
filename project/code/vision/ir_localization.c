@@ -50,17 +50,6 @@ volatile uint16 ir_position_lost_elapsed_ms = IR_POSITION_LOST_HOLD_MS;
 
 typedef struct
 {
-    float sum_x;
-    float sum_y;
-    int count;
-    int min_x;
-    int max_x;
-    int min_y;
-    int max_y;
-} IR_Region_t;
-
-typedef struct
-{
     int min_area;
     int max_area;
     int max_width;
@@ -89,6 +78,8 @@ static uint8 s_ir_has_trackable_pose = 0U;
 static uint16 s_ir_lost_elapsed_ms = IR_POSITION_LOST_HOLD_MS;
 static IR_Kalman1D_t s_ir_center_kalman_x = {0};
 static IR_Kalman1D_t s_ir_center_kalman_y = {0};
+static IR_Candidate_t s_ir_frame_candidates[IR_MAX_CANDIDATES];
+static uint8 s_ir_frame_candidate_count = 0U;
 
 static volatile uint8 s_ir_debug_raw_detect_valid = 0U;
 static volatile uint32 s_ir_debug_task_5ms_count = 0U;
@@ -98,13 +89,13 @@ static volatile uint32 s_ir_debug_process_fail_count = 0U;
 static volatile uint32 s_ir_debug_mark_lost_count = 0U;
 static volatile uint32 s_ir_debug_timeout_count = 0U;
 
-// Binary image buffer used by the IR point detector.
-static uint8 g_binary_image[MT9V03X_H * MT9V03X_W];
-
 static uint8 select_square_points_from_candidates(const IR_Candidate_t candidates[IR_MAX_CANDIDATES],
                                                   uint8 candidate_count,
                                                   IR_Point2D_t out_pts[IR_SQUARE_POINT_COUNT],
                                                   uint8 *out_point_count);
+static uint8 IR_Localization_ProcessPoints(IR_Point2D_t img_pts[IR_SQUARE_POINT_COUNT],
+                                           uint8 detected_point_count,
+                                           IR_Pose_t *out_pose);
 
 static void ir_center_kalman_reset_axis(IR_Kalman1D_t *kf)
 {
@@ -162,16 +153,6 @@ static void ir_center_kalman_update(float raw_x, float raw_y, float *filtered_x,
     if(filtered_y != NULL)
     {
         *filtered_y = ir_center_kalman_update_axis(&s_ir_center_kalman_y, raw_y);
-    }
-}
-
-static void binarize_image(const uint8 *src, uint8 *dst, int width, int height, uint8 threshold)
-{
-    int i = 0;
-
-    for(i = 0; i < width * height; i++)
-    {
-        dst[i] = (src[i] >= threshold) ? 255 : 0;
     }
 }
 
@@ -246,226 +227,47 @@ static void ir_get_blob_gate(IR_BlobGate_t *gate)
     }
 }
 
-static float ir_region_aspect_ratio(const IR_Region_t *region)
-{
-    float width = (float)(region->max_x - region->min_x + 1);
-    float height = (float)(region->max_y - region->min_y + 1);
-
-    if(width < 1.0f)
-    {
-        width = 1.0f;
-    }
-    if(height < 1.0f)
-    {
-        height = 1.0f;
-    }
-
-    return (width > height) ? (width / height) : (height / width);
-}
-
-static uint8 ir_region_is_small_light_candidate(const IR_Region_t *region, const IR_BlobGate_t *gate)
-{
-    int width = region->max_x - region->min_x + 1;
-    int height = region->max_y - region->min_y + 1;
-    float aspect_ratio = ir_region_aspect_ratio(region);
-
-    if(gate == NULL)
-    {
-        return 0U;
-    }
-
-    if(region->count < gate->min_area || region->count > gate->max_area)
-    {
-        return 0U;
-    }
-
-    if(width > gate->max_width || height > gate->max_height)
-    {
-        return 0U;
-    }
-
-    if(aspect_ratio > IR_BLOB_MAX_ASPECT_RATIO)
-    {
-        return 0U;
-    }
-
-    return 1U;
-}
-
-static void ir_insert_candidate(IR_Candidate_t candidates[IR_MAX_CANDIDATES],
-                                uint8 *candidate_count,
-                                const IR_Region_t *region,
-                                const IR_BlobGate_t *gate)
+static void IR_Localization_InsertCandidate(const VisionBlob_t *blob, const IR_BlobGate_t *blob_gate)
 {
     IR_Candidate_t candidate = {0};
-    float world_x = 0.0f;
-    float world_y = 0.0f;
-    float aspect_ratio = ir_region_aspect_ratio(region);
     float area_error = 0.0f;
     int replace_index = -1;
     float worst_score = -1.0f;
-    int i = 0;
+    int replace_i = 0;
 
-    candidate.img.u = region->sum_x / (float)region->count;
-    candidate.img.v = region->sum_y / (float)region->count;
-    candidate.img.intensity = (float)region->count;
-    area_error = fabsf((float)region->count - gate->expected_area) / gate->expected_area;
-    candidate.score = area_error * 20.0f + (aspect_ratio - 1.0f) * 10.0f;
-
-    IPM_Image2World((int)candidate.img.u, (int)candidate.img.v, &world_x, &world_y);
-    candidate.world.x = world_x;
-    candidate.world.y = world_y;
-
-    if(*candidate_count < IR_MAX_CANDIDATES)
+    if(blob == NULL || blob_gate == NULL)
     {
-        candidates[*candidate_count] = candidate;
-        (*candidate_count)++;
         return;
     }
 
-    for(i = 0; i < IR_MAX_CANDIDATES; i++)
+    candidate.img.u = blob->centroid_col;
+    candidate.img.v = blob->centroid_row;
+    candidate.img.intensity = (float)blob->area;
+    candidate.world.x = blob->world_x;
+    candidate.world.y = blob->world_y;
+    area_error = fabsf((float)blob->area - blob_gate->expected_area) / blob_gate->expected_area;
+    candidate.score = area_error * 20.0f + (blob->aspect_ratio - 1.0f) * 10.0f;
+
+    if(s_ir_frame_candidate_count < IR_MAX_CANDIDATES)
     {
-        if(candidates[i].score > worst_score)
+        s_ir_frame_candidates[s_ir_frame_candidate_count] = candidate;
+        s_ir_frame_candidate_count++;
+        return;
+    }
+
+    for(replace_i = 0; replace_i < IR_MAX_CANDIDATES; replace_i++)
+    {
+        if(s_ir_frame_candidates[replace_i].score > worst_score)
         {
-            worst_score = candidates[i].score;
-            replace_index = i;
+            worst_score = s_ir_frame_candidates[replace_i].score;
+            replace_index = replace_i;
         }
     }
 
     if(replace_index >= 0 && candidate.score < worst_score)
     {
-        candidates[replace_index] = candidate;
+        s_ir_frame_candidates[replace_index] = candidate;
     }
-}
-
-static uint8 find_ir_points_internal(const uint8 *binary_img, int img_w, int img_h,
-                                     IR_Point2D_t out_pts[IR_SQUARE_POINT_COUNT],
-                                     uint8 *out_point_count)
-{
-    IR_Candidate_t candidates[IR_MAX_CANDIDATES];
-    IR_BlobGate_t blob_gate;
-    static uint8 visited[MT9V03X_H * MT9V03X_W];
-    uint8 candidate_count = 0U;
-    int y = 0;
-    int x = 0;
-
-    ir_get_blob_gate(&blob_gate);
-    memset(visited, 0, (size_t)(img_w * img_h));
-    memset(candidates, 0, sizeof(candidates));
-    memset(out_pts, 0, sizeof(IR_Point2D_t) * IR_SQUARE_POINT_COUNT);
-    if(out_point_count != NULL)
-    {
-        *out_point_count = 0U;
-    }
-
-    for(y = 0; y < img_h; y++)
-    {
-        for(x = 0; x < img_w; x++)
-        {
-            int idx = y * img_w + x;
-
-            if(binary_img[idx] == 0 || visited[idx])
-            {
-                continue;
-            }
-
-            {
-                IR_Region_t region = {0};
-                static int stack_x[1000];
-                static int stack_y[1000];
-                int stack_top = 0;
-
-                region.sum_x = 0.0f;
-                region.sum_y = 0.0f;
-                region.count = 0;
-                region.min_x = img_w;
-                region.max_x = 0;
-                region.min_y = img_h;
-                region.max_y = 0;
-
-                stack_x[stack_top] = x;
-                stack_y[stack_top] = y;
-                stack_top++;
-                visited[idx] = 1;
-
-                while(stack_top > 0)
-                {
-                    int cx = 0;
-                    int cy = 0;
-                    int dy = 0;
-                    int dx = 0;
-
-                    stack_top--;
-                    cx = stack_x[stack_top];
-                    cy = stack_y[stack_top];
-
-                    region.sum_x += (float)cx;
-                    region.sum_y += (float)cy;
-                    region.count++;
-
-                    if(cx < region.min_x) region.min_x = cx;
-                    if(cx > region.max_x) region.max_x = cx;
-                    if(cy < region.min_y) region.min_y = cy;
-                    if(cy > region.max_y) region.max_y = cy;
-
-                    for(dy = -1; dy <= 1; dy++)
-                    {
-                        for(dx = -1; dx <= 1; dx++)
-                        {
-                            int nx = 0;
-                            int ny = 0;
-                            int nidx = 0;
-
-                            if(dx == 0 && dy == 0)
-                            {
-                                continue;
-                            }
-
-                            nx = cx + dx;
-                            ny = cy + dy;
-
-                            if(nx < 0 || nx >= img_w || ny < 0 || ny >= img_h)
-                            {
-                                continue;
-                            }
-
-                            nidx = ny * img_w + nx;
-                            if(binary_img[nidx] != 0 && !visited[nidx])
-                            {
-                                visited[nidx] = 1;
-                                if(stack_top < 1000)
-                                {
-                                    stack_x[stack_top] = nx;
-                                    stack_y[stack_top] = ny;
-                                    stack_top++;
-                                }
-                            }
-                        }
-                    }
-                }
-
-                if(ir_region_is_small_light_candidate(&region, &blob_gate))
-                {
-                    ir_insert_candidate(candidates, &candidate_count, &region, &blob_gate);
-                }
-            }
-        }
-    }
-
-    if(candidate_count < IR_SQUARE_MIN_DETECT_POINTS)
-    {
-        return 0;
-    }
-
-    return select_square_points_from_candidates(candidates, candidate_count, out_pts, out_point_count);
-}
-
-static uint8 IR_FindPointsWithCount(const uint8 image[MT9V03X_H][MT9V03X_W],
-                                    IR_Point2D_t out_pts[IR_SQUARE_POINT_COUNT],
-                                    uint8 *out_point_count)
-{
-    binarize_image((const uint8 *)image, g_binary_image, MT9V03X_W, MT9V03X_H, IR_THRESHOLD);
-    return find_ir_points_internal(g_binary_image, MT9V03X_W, MT9V03X_H, out_pts, out_point_count);
 }
 
 static float world_point_distance_cm(const IR_WorldPoint_t *a, const IR_WorldPoint_t *b)
@@ -950,18 +752,10 @@ void IR_Localization_ServiceLostProtection(void)
     }
 }
 
-uint8 IR_FindPoints(const uint8 image[MT9V03X_H][MT9V03X_W],
-                    IR_Point2D_t out_pts[IR_SQUARE_POINT_COUNT])
+static uint8 IR_Localization_ProcessPoints(IR_Point2D_t img_pts[IR_SQUARE_POINT_COUNT],
+                                           uint8 detected_point_count,
+                                           IR_Pose_t *out_pose)
 {
-    uint8 point_count = 0U;
-
-    return IR_FindPointsWithCount(image, out_pts, &point_count);
-}
-
-uint8 IR_Localization_Process(const uint8 image[MT9V03X_H][MT9V03X_W],
-                              IR_Pose_t *out_pose)
-{
-    IR_Point2D_t img_pts[IR_SQUARE_POINT_COUNT];
     IR_WorldPoint_t world_pts[IR_SQUARE_POINT_COUNT];
     float center_x = 0.0f;
     float center_y = 0.0f;
@@ -971,16 +765,8 @@ uint8 IR_Localization_Process(const uint8 image[MT9V03X_H][MT9V03X_W],
     float real_side_cm = IR_SQUARE_SIDE_M * 100.0f;
     float current_height = g_ipm.height;
     float estimated_z = 0.0f;
-    uint8 detected_point_count = 0U;
     uint8 reconstructed_point = 0U;
     int i = 0;
-
-    s_ir_debug_process_count++;
-
-    if(!IR_FindPointsWithCount(image, img_pts, &detected_point_count))
-    {
-        return IR_Localization_ProcessFail(out_pose);
-    }
 
     s_ir_debug_raw_detect_valid = 1U;
 
@@ -1058,7 +844,59 @@ uint8 IR_Localization_Process(const uint8 image[MT9V03X_H][MT9V03X_W],
     return 1;
 }
 
-const uint8* IR_GetBinaryImage(void)
+void IR_Localization_BeginBlobFrame(void)
 {
-    return g_binary_image;
+    memset(s_ir_frame_candidates, 0, sizeof(s_ir_frame_candidates));
+    s_ir_frame_candidate_count = 0U;
+}
+
+void IR_Localization_AppendBlob(const VisionBlob_t *blob)
+{
+    IR_BlobGate_t blob_gate;
+    int width = 0;
+    int height = 0;
+
+    if(blob == NULL)
+    {
+        return;
+    }
+
+    ir_get_blob_gate(&blob_gate);
+    width = blob->max_col - blob->min_col + 1;
+    height = blob->max_row - blob->min_row + 1;
+
+    if(blob->area < blob_gate.min_area || blob->area > blob_gate.max_area)
+    {
+        return;
+    }
+    if(width > blob_gate.max_width || height > blob_gate.max_height)
+    {
+        return;
+    }
+    if(blob->aspect_ratio > IR_BLOB_MAX_ASPECT_RATIO)
+    {
+        return;
+    }
+
+    IR_Localization_InsertCandidate(blob, &blob_gate);
+}
+
+uint8 IR_Localization_EndBlobFrame(IR_Pose_t *out_pose)
+{
+    IR_Point2D_t img_pts[IR_SQUARE_POINT_COUNT];
+    uint8 detected_point_count = 0U;
+
+    s_ir_debug_process_count++;
+
+    memset(img_pts, 0, sizeof(img_pts));
+    if(s_ir_frame_candidate_count < IR_SQUARE_MIN_DETECT_POINTS ||
+       !select_square_points_from_candidates(s_ir_frame_candidates,
+                                             s_ir_frame_candidate_count,
+                                             img_pts,
+                                             &detected_point_count))
+    {
+        return IR_Localization_ProcessFail(out_pose);
+    }
+
+    return IR_Localization_ProcessPoints(img_pts, detected_point_count, out_pose);
 }
