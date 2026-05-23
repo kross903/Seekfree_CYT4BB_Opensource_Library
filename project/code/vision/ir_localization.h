@@ -20,7 +20,9 @@ extern "C" {
 // ==================== 配置参数 ====================
 #define IR_SQUARE_POINT_COUNT  (4)
 #define IR_SQUARE_MIN_DETECT_POINTS (3)
-#define IR_SQUARE_SIDE_M       (0.10f)
+#define IR_RECT_LONG_SIDE_M    (0.10f)
+#define IR_RECT_SHORT_SIDE_M   (0.06f)
+#define IR_SQUARE_SIDE_M       IR_RECT_LONG_SIDE_M
 #define IR_THRESHOLD           (150)
 #define IR_MAX_CANDIDATES      (20)
 #define IR_MIN_POINT_DIST_PX   (4.0f)
@@ -80,9 +82,15 @@ void IR_Localization_Task_5ms(void);
 void IR_Localization_ServiceLostProtection(void);
 
 void IR_Localization_GetLossDebug(IR_LossDebug_t *debug);
+void IR_Localization_GetBlobRejectDebug(int *area_low_count,
+                                        int *area_high_count,
+                                        int *size_count,
+                                        int *aspect_count,
+                                        int *insert_count);
 
+int IR_Localization_GetScaledMaxBlobArea(void);
 void IR_Localization_BeginBlobFrame(void);
-void IR_Localization_AppendBlob(const VisionBlob_t *blob);
+uint8 IR_Localization_AppendBlob(const VisionBlob_t *blob);
 uint8 IR_Localization_EndBlobFrame(IR_Pose_t *out_pose);
 
 // ==================== 全局输出 ====================

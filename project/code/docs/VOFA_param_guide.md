@@ -710,24 +710,24 @@ PMW3901 模式返回通道：
 
 返回通道：
 
-- `I0`: `vision_diag.ir_raw_detect_valid`——小车红外正方形本帧原始几何检测成功标志
-- `I1`: `vision_diag.ir_track_valid`——小车红外中心当前是否可追踪，丢失保护触发后为 0
-- `I2`: `vision_diag.ir_detected_point_count`——小车红外识别点数，正常四点为 4，三点补全时为 3
-- `I3`: `vision_diag.beacon_count`——信标红外灯候选总数，即 `BeaconDetect_Process()` 筛选后的数量
-- `I4`: `vision_diag.ir_x_cm`——小车红外中心 X 坐标，单位 cm
-- `I5`: `vision_diag.ir_y_cm`——小车红外中心 Y 坐标，单位 cm
-- `I6`: `vision_diag.ir_square_side_cm`——小车红外正方形边长估计，正常应接近 10cm
-- `I7`: `vision_diag.ir_height_cm`——小车红外尺度估计高度 / 视觉高度，单位 cm
-- `I8`: `vision_diag.beacon_has_nearest`——是否存在最近信标，1 表示 `I9-I15` 有效
-- `I9`: `vision_diag.beacon_nearest_x_cm`——最近信标 X 坐标，单位 cm
-- `I10`: `vision_diag.beacon_nearest_y_cm`——最近信标 Y 坐标，单位 cm
-- `I11`: `vision_diag.beacon_nearest_distance_cm`——最近信标相对正下方的距离，单位 cm
-- `I12`: `vision_diag.beacon_nearest_area`——最近信标连通域面积，单位 pixel
-- `I13`: `vision_diag.beacon_nearest_brightness`——最近信标连通域平均亮度
-- `I14`: `vision_diag.beacon_nearest_occupancy`——最近信标连通域占空比，面积 / 外接矩形面积
-- `I15`: `vision_diag.beacon_nearest_aspect`——最近信标连通域外接矩形宽高比
+- `I0`: `vision_diag.blob_count`——本帧单次二值化 + 8 邻域 BFS 发现的全部连通域数量
+- `I1`: `vision_diag.ir_split_count`——按面积分流进入小车灯路径的原始数量，尚未经过小车灯单点筛选
+- `I2`: `vision_diag.beacon_split_count`——按面积分流进入地面信标路径的原始数量，尚未经过信标筛选
+- `I3`: `vision_diag.ir_blob_count`——进入小车灯路径后，通过小车灯单点面积/宽高/宽高比筛选的候选数量
+- `I4`: `vision_diag.ir_reject_area_low_count`——小车灯路径内因面积过小被拒绝的数量
+- `I5`: `vision_diag.ir_reject_area_high_count`——小车灯路径内因面积过大被拒绝的数量
+- `I6`: `vision_diag.ir_reject_size_count`——小车灯路径内因外接框宽高过大被拒绝的数量
+- `I7`: `vision_diag.ir_reject_aspect_count`——小车灯路径内因宽高比过大被拒绝的数量
+- `I8`: `vision_diag.ir_reject_insert_count`——小车灯路径内因候选池已满且评分较差被拒绝的数量
+- `I9`: `vision_diag.ir_track_valid`——小车红外中心当前是否可追踪，丢失保护触发后为 0
+- `I10`: `vision_diag.ir_detected_point_count`——小车红外矩形识别点数，正常四点为 4，三点补全时为 3
+- `I11`: `vision_diag.ir_x_cm`——小车红外中心 X 坐标，单位 cm
+- `I12`: `vision_diag.ir_y_cm`——小车红外中心 Y 坐标，单位 cm
+- `I13`: `vision_diag.ir_square_side_cm`——小车红外矩形长边估计，正常应接近 10cm
+- `I14`: `vision_diag.ir_height_cm`——小车红外尺度估计高度 / 视觉高度，单位 cm
+- `I15`: `vision_diag.beacon_blob_count`——进入地面信标路径后，通过信标宽高比/占空比筛选的候选数量
 
-使用方法：`FQ!` 用来判断小车红外灯和信标红外灯是否互相误识别。只放小车灯时，`I0/I1` 应为 1、`I2` 应为 3 或 4、`I6` 应接近 10cm，`I3` 不应异常增多；只放信标灯时，`I3` 应大于 0、`I8` 应为 1，而 `I0/I1/I2` 不应稳定表现为小车正方形。注意 `I3` 是经过 `BeaconDetect` 面积、宽高比、占空比筛选后的信标候选数量，不是阈值后二值图中的全部亮斑数量。
+使用方法：`FQ!` 先看 `I0/I1/I2/I3` 判断分流和小车单点筛选是否正常。若 `I1` 多但 `I3` 少，再看 `I4-I8` 定位是哪类单点筛选拒绝；若 `I3` 正常但 `I9/I10` 不正常，说明问题在 3/4 点矩形几何关系。
 
 ## 上位机常用发送示例
 

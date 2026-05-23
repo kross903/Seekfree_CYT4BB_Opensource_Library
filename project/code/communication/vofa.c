@@ -1450,22 +1450,22 @@ void send_date_back(void)
 
             VisionRuntime_GetDiag(&vision_diag);
 
-            send_sixteen_date((float)vision_diag.ir_raw_detect_valid,
+            send_sixteen_date((float)vision_diag.blob_count,
+                              (float)vision_diag.ir_split_count,
+                              (float)vision_diag.beacon_split_count,
+                              (float)vision_diag.ir_blob_count,
+                              (float)vision_diag.ir_reject_area_low_count,
+                              (float)vision_diag.ir_reject_area_high_count,
+                              (float)vision_diag.ir_reject_size_count,
+                              (float)vision_diag.ir_reject_aspect_count,
+                              (float)vision_diag.ir_reject_insert_count,
                               (float)vision_diag.ir_track_valid,
                               (float)vision_diag.ir_detected_point_count,
-                              (float)vision_diag.beacon_count,
                               vision_diag.ir_x_cm,
                               vision_diag.ir_y_cm,
                               vision_diag.ir_square_side_cm,
                               vision_diag.ir_height_cm,
-                              (float)vision_diag.beacon_has_nearest,
-                              vision_diag.beacon_nearest_x_cm,
-                              vision_diag.beacon_nearest_y_cm,
-                              vision_diag.beacon_nearest_distance_cm,
-                              vision_diag.beacon_nearest_area,
-                              vision_diag.beacon_nearest_brightness,
-                              vision_diag.beacon_nearest_occupancy,
-                              vision_diag.beacon_nearest_aspect);
+                              (float)vision_diag.beacon_blob_count);
             break;
         }
 

@@ -19,34 +19,36 @@ volatile uint8 ir_position_lost_flag = 1U;
 volatile uint16 ir_position_lost_elapsed_ms = IR_POSITION_LOST_HOLD_MS;
 
 #define IR_THREE_POINT_MIN_SIDE_CM          (2.0f)
-#define IR_THREE_POINT_SIDE_RATIO_MAX       (0.45f)
-#define IR_THREE_POINT_DIAG_RATIO_MAX       (0.45f)
 #define IR_CENTER_KALMAN_Q                  (0.20f)
 #define IR_CENTER_KALMAN_R                  (4.0f)
 #define IR_CENTER_KALMAN_INITIAL_P          (10.0f)
-#define IR_BLOB_MIN_AREA_PX                 (3)
-#define IR_BLOB_MAX_AREA_PX                 (260)
-#define IR_BLOB_MAX_WIDTH_PX                (32)
-#define IR_BLOB_MAX_HEIGHT_PX               (32)
-#define IR_BLOB_MAX_ASPECT_RATIO            (2.5f)
+#define IR_BLOB_MIN_AREA_PX                 (1)
+#define IR_BLOB_MAX_AREA_PX                 (900)
+#define IR_BLOB_MAX_WIDTH_PX                (70)
+#define IR_BLOB_MAX_HEIGHT_PX               (70)
+#define IR_BLOB_MAX_ASPECT_RATIO            (6.0f)
 #define IR_BLOB_REF_HEIGHT_CM               (100.0f)
+#define IR_LAMP_BOARD_HEIGHT_CM             (12.0f)
 #define IR_BLOB_HEIGHT_MIN_CM               (35.0f)
 #define IR_BLOB_HEIGHT_MAX_CM               (300.0f)
 #define IR_BLOB_MIN_AREA_FLOOR_PX           (1)
-#define IR_BLOB_MAX_AREA_CEILING_PX         (1200)
-#define IR_BLOB_MAX_WIDTH_CEILING_PX        (80)
-#define IR_BLOB_MAX_HEIGHT_CEILING_PX       (80)
-#define IR_SQUARE_SIDE_TARGET_CM            (IR_SQUARE_SIDE_M * 100.0f)
-#define IR_SQUARE_SIDE_MIN_CM               (5.0f)
-#define IR_SQUARE_SIDE_MAX_CM               (18.0f)
-#define IR_SQUARE_SIDE_SPREAD_MAX           (0.50f)
-#define IR_SQUARE_DIAG_SPREAD_MAX           (0.35f)
-#define IR_SQUARE_DIAG_RATIO_MAX            (0.35f)
-#define IR_SQUARE_GEOMETRY_MAX_SCORE        (3.5f)
+#define IR_BLOB_MAX_AREA_CEILING_PX         (2600)
+#define IR_BLOB_MAX_WIDTH_CEILING_PX        (140)
+#define IR_BLOB_MAX_HEIGHT_CEILING_PX       (140)
+#define IR_RECT_LONG_SIDE_TARGET_CM         (IR_RECT_LONG_SIDE_M * 100.0f)
+#define IR_RECT_SHORT_SIDE_TARGET_CM        (IR_RECT_SHORT_SIDE_M * 100.0f)
+#define IR_RECT_ASPECT_TARGET               (IR_RECT_LONG_SIDE_TARGET_CM / IR_RECT_SHORT_SIDE_TARGET_CM)
+#define IR_RECT_SIDE_MIN_CM                 (1.5f)
+#define IR_RECT_SIDE_MAX_CM                 (35.0f)
+#define IR_RECT_ASPECT_MIN                  (1.00f)
+#define IR_RECT_ASPECT_MAX                  (5.00f)
+#define IR_RECT_PAIR_SPREAD_MAX             (0.90f)
+#define IR_RECT_DIAG_SPREAD_MAX             (0.90f)
+#define IR_RECT_PYTHAG_RATIO_MAX            (0.90f)
+#define IR_SQUARE_GEOMETRY_MAX_SCORE        (10.0f)
 #define IR_SQUARE_CENTER_JUMP_SOFT_CM       (40.0f)
 #define IR_SQUARE_CENTER_JUMP_HARD_CM       (100.0f)
 #define IR_THREE_POINT_SCORE_PENALTY        (0.60f)
-#define IR_SQRT2                            (1.41421356f)
 
 typedef struct
 {
@@ -88,6 +90,11 @@ static volatile uint32 s_ir_debug_process_success_count = 0U;
 static volatile uint32 s_ir_debug_process_fail_count = 0U;
 static volatile uint32 s_ir_debug_mark_lost_count = 0U;
 static volatile uint32 s_ir_debug_timeout_count = 0U;
+static int s_ir_blob_reject_area_low_count = 0;
+static int s_ir_blob_reject_area_high_count = 0;
+static int s_ir_blob_reject_size_count = 0;
+static int s_ir_blob_reject_aspect_count = 0;
+static int s_ir_blob_reject_insert_count = 0;
 
 static uint8 select_square_points_from_candidates(const IR_Candidate_t candidates[IR_MAX_CANDIDATES],
                                                   uint8 candidate_count,
@@ -206,6 +213,10 @@ static void ir_get_blob_gate(IR_BlobGate_t *gate)
     {
         height_cm = IR_BLOB_REF_HEIGHT_CM;
     }
+    else if(height_cm > IR_LAMP_BOARD_HEIGHT_CM)
+    {
+        height_cm -= IR_LAMP_BOARD_HEIGHT_CM;
+    }
 
     height_cm = ir_clamp_float(height_cm, IR_BLOB_HEIGHT_MIN_CM, IR_BLOB_HEIGHT_MAX_CM);
     linear_scale = IR_BLOB_REF_HEIGHT_CM / height_cm;
@@ -216,7 +227,7 @@ static void ir_get_blob_gate(IR_BlobGate_t *gate)
     max_width = ir_round_to_int((float)IR_BLOB_MAX_WIDTH_PX * linear_scale);
     max_height = ir_round_to_int((float)IR_BLOB_MAX_HEIGHT_PX * linear_scale);
 
-    gate->min_area = ir_clamp_int(min_area, IR_BLOB_MIN_AREA_FLOOR_PX, IR_BLOB_MAX_AREA_PX);
+    gate->min_area = ir_clamp_int(min_area, IR_BLOB_MIN_AREA_FLOOR_PX, IR_BLOB_MAX_AREA_CEILING_PX);
     gate->max_area = ir_clamp_int(max_area, gate->min_area, IR_BLOB_MAX_AREA_CEILING_PX);
     gate->max_width = ir_clamp_int(max_width, 1, IR_BLOB_MAX_WIDTH_CEILING_PX);
     gate->max_height = ir_clamp_int(max_height, 1, IR_BLOB_MAX_HEIGHT_CEILING_PX);
@@ -227,7 +238,17 @@ static void ir_get_blob_gate(IR_BlobGate_t *gate)
     }
 }
 
-static void IR_Localization_InsertCandidate(const VisionBlob_t *blob, const IR_BlobGate_t *blob_gate)
+int IR_Localization_GetScaledMaxBlobArea(void)
+{
+    IR_BlobGate_t blob_gate;
+
+    memset(&blob_gate, 0, sizeof(blob_gate));
+    ir_get_blob_gate(&blob_gate);
+
+    return blob_gate.max_area;
+}
+
+static uint8 IR_Localization_InsertCandidate(const VisionBlob_t *blob, const IR_BlobGate_t *blob_gate)
 {
     IR_Candidate_t candidate = {0};
     float area_error = 0.0f;
@@ -237,7 +258,7 @@ static void IR_Localization_InsertCandidate(const VisionBlob_t *blob, const IR_B
 
     if(blob == NULL || blob_gate == NULL)
     {
-        return;
+        return 0U;
     }
 
     candidate.img.u = blob->centroid_col;
@@ -252,7 +273,7 @@ static void IR_Localization_InsertCandidate(const VisionBlob_t *blob, const IR_B
     {
         s_ir_frame_candidates[s_ir_frame_candidate_count] = candidate;
         s_ir_frame_candidate_count++;
-        return;
+        return 1U;
     }
 
     for(replace_i = 0; replace_i < IR_MAX_CANDIDATES; replace_i++)
@@ -267,7 +288,10 @@ static void IR_Localization_InsertCandidate(const VisionBlob_t *blob, const IR_B
     if(replace_index >= 0 && candidate.score < worst_score)
     {
         s_ir_frame_candidates[replace_index] = candidate;
+        return 1U;
     }
+
+    return 0U;
 }
 
 static float world_point_distance_cm(const IR_WorldPoint_t *a, const IR_WorldPoint_t *b)
@@ -298,7 +322,6 @@ static void sort_float_ascending(float *values, int count)
 static float calculate_square_side(const IR_WorldPoint_t pts[IR_SQUARE_POINT_COUNT])
 {
     float distances[6];
-    float side_sum = 0.0f;
     int dist_count = 0;
     int i = 0;
     int j = 0;
@@ -314,12 +337,7 @@ static float calculate_square_side(const IR_WorldPoint_t pts[IR_SQUARE_POINT_COU
 
     sort_float_ascending(distances, dist_count);
 
-    for(i = 0; i < 4; i++)
-    {
-        side_sum += distances[i];
-    }
-
-    return side_sum / 4.0f;
+    return 0.5f * (distances[2] + distances[3]);
 }
 
 static void calculate_square_center(const IR_WorldPoint_t pts[IR_SQUARE_POINT_COUNT],
@@ -352,9 +370,10 @@ static uint8 reconstruct_square_from_three_points(IR_WorldPoint_t world_pts[IR_S
     int right = 2;
     float side_a = 0.0f;
     float side_b = 0.0f;
-    float side_avg = 0.0f;
+    float short_side = 0.0f;
+    float long_side = 0.0f;
+    float aspect_ratio = 0.0f;
     float diag_expected = 0.0f;
-    float side_ratio = 0.0f;
     float diag_ratio = 0.0f;
 
     if(d02 > diag)
@@ -374,9 +393,10 @@ static uint8 reconstruct_square_from_three_points(IR_WorldPoint_t world_pts[IR_S
 
     side_a = world_point_distance_cm(&world_pts[right], &world_pts[diag_a]);
     side_b = world_point_distance_cm(&world_pts[right], &world_pts[diag_b]);
-    side_avg = 0.5f * (side_a + side_b);
+    short_side = (side_a < side_b) ? side_a : side_b;
+    long_side = (side_a > side_b) ? side_a : side_b;
 
-    if(side_avg < IR_THREE_POINT_MIN_SIDE_CM || side_avg > IR_SQUARE_SIDE_MAX_CM)
+    if(short_side < IR_RECT_SIDE_MIN_CM || long_side > IR_RECT_SIDE_MAX_CM)
     {
         return 0U;
     }
@@ -387,10 +407,12 @@ static uint8 reconstruct_square_from_three_points(IR_WorldPoint_t world_pts[IR_S
         return 0U;
     }
 
-    side_ratio = fabsf(side_a - side_b) / side_avg;
+    aspect_ratio = long_side / short_side;
     diag_ratio = fabsf(diag - diag_expected) / diag_expected;
 
-    if(side_ratio > IR_THREE_POINT_SIDE_RATIO_MAX || diag_ratio > IR_THREE_POINT_DIAG_RATIO_MAX)
+    if(aspect_ratio < IR_RECT_ASPECT_MIN ||
+       aspect_ratio > IR_RECT_ASPECT_MAX ||
+       diag_ratio > IR_RECT_PYTHAG_RATIO_MAX)
     {
         return 0U;
     }
@@ -435,14 +457,17 @@ static uint8 evaluate_square_geometry(const IR_WorldPoint_t world_pts[IR_SQUARE_
                                       float *out_score)
 {
     float distances[6];
-    float side_sum = 0.0f;
-    float side_avg = 0.0f;
+    float short_side_avg = 0.0f;
+    float long_side_avg = 0.0f;
     float diag_avg = 0.0f;
-    float side_spread = 0.0f;
+    float short_spread = 0.0f;
+    float long_spread = 0.0f;
     float diag_spread = 0.0f;
     float diag_expected = 0.0f;
     float diag_ratio = 0.0f;
-    float target_ratio = 0.0f;
+    float long_target_ratio = 0.0f;
+    float aspect_ratio = 0.0f;
+    float aspect_target_ratio = 0.0f;
     int dist_count = 0;
     int i = 0;
     int j = 0;
@@ -458,38 +483,44 @@ static uint8 evaluate_square_geometry(const IR_WorldPoint_t world_pts[IR_SQUARE_
 
     sort_float_ascending(distances, dist_count);
 
-    for(i = 0; i < 4; i++)
-    {
-        side_sum += distances[i];
-    }
-
-    side_avg = side_sum / 4.0f;
+    short_side_avg = 0.5f * (distances[0] + distances[1]);
+    long_side_avg = 0.5f * (distances[2] + distances[3]);
     diag_avg = 0.5f * (distances[4] + distances[5]);
 
-    if(side_avg < IR_SQUARE_SIDE_MIN_CM || side_avg > IR_SQUARE_SIDE_MAX_CM || diag_avg < IR_SQUARE_SIDE_MIN_CM)
+    if(short_side_avg < IR_RECT_SIDE_MIN_CM ||
+       long_side_avg > IR_RECT_SIDE_MAX_CM ||
+       diag_avg < IR_RECT_SIDE_MIN_CM)
     {
         return 0U;
     }
 
-    side_spread = (distances[3] - distances[0]) / side_avg;
+    aspect_ratio = long_side_avg / short_side_avg;
+    short_spread = fabsf(distances[1] - distances[0]) / short_side_avg;
+    long_spread = fabsf(distances[3] - distances[2]) / long_side_avg;
     diag_spread = fabsf(distances[5] - distances[4]) / diag_avg;
-    diag_expected = side_avg * IR_SQRT2;
+    diag_expected = sqrtf(short_side_avg * short_side_avg + long_side_avg * long_side_avg);
     diag_ratio = fabsf(diag_avg - diag_expected) / diag_expected;
-    target_ratio = fabsf(side_avg - IR_SQUARE_SIDE_TARGET_CM) / IR_SQUARE_SIDE_TARGET_CM;
+    long_target_ratio = fabsf(long_side_avg - IR_RECT_LONG_SIDE_TARGET_CM) / IR_RECT_LONG_SIDE_TARGET_CM;
+    aspect_target_ratio = fabsf(aspect_ratio - IR_RECT_ASPECT_TARGET) / IR_RECT_ASPECT_TARGET;
 
-    if(side_spread > IR_SQUARE_SIDE_SPREAD_MAX ||
-       diag_spread > IR_SQUARE_DIAG_SPREAD_MAX ||
-       diag_ratio > IR_SQUARE_DIAG_RATIO_MAX)
+    if(aspect_ratio < IR_RECT_ASPECT_MIN ||
+       aspect_ratio > IR_RECT_ASPECT_MAX ||
+       short_spread > IR_RECT_PAIR_SPREAD_MAX ||
+       long_spread > IR_RECT_PAIR_SPREAD_MAX ||
+       diag_spread > IR_RECT_DIAG_SPREAD_MAX ||
+       diag_ratio > IR_RECT_PYTHAG_RATIO_MAX)
     {
         return 0U;
     }
 
     if(out_score != NULL)
     {
-        *out_score = target_ratio * 1.5f +
-                     side_spread * 2.5f +
-                     diag_spread * 2.0f +
-                     diag_ratio * 2.0f;
+        *out_score = long_target_ratio * 1.2f +
+                     aspect_target_ratio * 1.0f +
+                     short_spread * 1.5f +
+                     long_spread * 1.5f +
+                     diag_spread * 1.5f +
+                     diag_ratio * 1.5f;
     }
 
     return 1U;
@@ -762,7 +793,7 @@ static uint8 IR_Localization_ProcessPoints(IR_Point2D_t img_pts[IR_SQUARE_POINT_
     float filtered_center_x = 0.0f;
     float filtered_center_y = 0.0f;
     float square_side_cm = 0.0f;
-    float real_side_cm = IR_SQUARE_SIDE_M * 100.0f;
+    float real_side_cm = IR_RECT_LONG_SIDE_TARGET_CM;
     float current_height = g_ipm.height;
     float estimated_z = 0.0f;
     uint8 reconstructed_point = 0U;
@@ -848,9 +879,42 @@ void IR_Localization_BeginBlobFrame(void)
 {
     memset(s_ir_frame_candidates, 0, sizeof(s_ir_frame_candidates));
     s_ir_frame_candidate_count = 0U;
+    s_ir_blob_reject_area_low_count = 0;
+    s_ir_blob_reject_area_high_count = 0;
+    s_ir_blob_reject_size_count = 0;
+    s_ir_blob_reject_aspect_count = 0;
+    s_ir_blob_reject_insert_count = 0;
 }
 
-void IR_Localization_AppendBlob(const VisionBlob_t *blob)
+void IR_Localization_GetBlobRejectDebug(int *area_low_count,
+                                        int *area_high_count,
+                                        int *size_count,
+                                        int *aspect_count,
+                                        int *insert_count)
+{
+    if(area_low_count != NULL)
+    {
+        *area_low_count = s_ir_blob_reject_area_low_count;
+    }
+    if(area_high_count != NULL)
+    {
+        *area_high_count = s_ir_blob_reject_area_high_count;
+    }
+    if(size_count != NULL)
+    {
+        *size_count = s_ir_blob_reject_size_count;
+    }
+    if(aspect_count != NULL)
+    {
+        *aspect_count = s_ir_blob_reject_aspect_count;
+    }
+    if(insert_count != NULL)
+    {
+        *insert_count = s_ir_blob_reject_insert_count;
+    }
+}
+
+uint8 IR_Localization_AppendBlob(const VisionBlob_t *blob)
 {
     IR_BlobGate_t blob_gate;
     int width = 0;
@@ -858,27 +922,41 @@ void IR_Localization_AppendBlob(const VisionBlob_t *blob)
 
     if(blob == NULL)
     {
-        return;
+        return 0U;
     }
 
     ir_get_blob_gate(&blob_gate);
     width = blob->max_col - blob->min_col + 1;
     height = blob->max_row - blob->min_row + 1;
 
-    if(blob->area < blob_gate.min_area || blob->area > blob_gate.max_area)
+    if(blob->area < blob_gate.min_area)
     {
-        return;
+        s_ir_blob_reject_area_low_count++;
+        return 0U;
+    }
+    if(blob->area > blob_gate.max_area)
+    {
+        s_ir_blob_reject_area_high_count++;
+        return 0U;
     }
     if(width > blob_gate.max_width || height > blob_gate.max_height)
     {
-        return;
+        s_ir_blob_reject_size_count++;
+        return 0U;
     }
     if(blob->aspect_ratio > IR_BLOB_MAX_ASPECT_RATIO)
     {
-        return;
+        s_ir_blob_reject_aspect_count++;
+        return 0U;
     }
 
-    IR_Localization_InsertCandidate(blob, &blob_gate);
+    if(IR_Localization_InsertCandidate(blob, &blob_gate))
+    {
+        return 1U;
+    }
+
+    s_ir_blob_reject_insert_count++;
+    return 0U;
 }
 
 uint8 IR_Localization_EndBlobFrame(IR_Pose_t *out_pose)

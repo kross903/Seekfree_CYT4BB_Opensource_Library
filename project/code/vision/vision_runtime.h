@@ -23,6 +23,17 @@ typedef struct
 
 typedef struct
 {
+    int blob_count;
+    int ir_split_count;
+    int beacon_split_count;
+    int ir_blob_count;
+    int beacon_blob_count;
+    int ir_reject_area_low_count;
+    int ir_reject_area_high_count;
+    int ir_reject_size_count;
+    int ir_reject_aspect_count;
+    int ir_reject_insert_count;
+
     uint8 ir_raw_detect_valid;
     uint8 ir_track_valid;
     uint8 ir_detected_point_count;

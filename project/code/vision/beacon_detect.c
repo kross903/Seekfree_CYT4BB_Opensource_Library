@@ -50,34 +50,35 @@ void BeaconDetect_BeginBlobFrame(BeaconResult_t *results, int max_results)
     s_beacon_frame_count = 0;
 }
 
-void BeaconDetect_AppendBlob(const VisionBlob_t *blob)
+uint8 BeaconDetect_AppendBlob(const VisionBlob_t *blob)
 {
     if(blob == NULL || s_beacon_frame_results == NULL || s_beacon_frame_max_results <= 0)
     {
-        return;
+        return 0U;
     }
 
     if(blob->aspect_ratio < g_beacon_config.min_aspect ||
        blob->aspect_ratio > g_beacon_config.max_aspect)
     {
-        return;
+        return 0U;
     }
     if(blob->occupancy_ratio < g_beacon_config.min_occupancy)
     {
-        return;
+        return 0U;
     }
     if(blob->centroid_row > (BEACON_IMG_ROWS / 2) && blob->area < 10)
     {
-        return;
+        return 0U;
     }
 
     if(s_beacon_frame_count >= s_beacon_frame_max_results)
     {
-        return;
+        return 0U;
     }
 
     BeaconDetect_FillResultFromBlob(blob, &s_beacon_frame_results[s_beacon_frame_count]);
     s_beacon_frame_count++;
+    return 1U;
 }
 
 int BeaconDetect_EndBlobFrame(void)

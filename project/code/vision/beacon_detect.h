@@ -80,7 +80,7 @@ void BeaconDetect_Init(void);
  * @note 调用前需要先通过 IPM_Interface_UpdateFromIMU() 更新姿态与高度
  */
 void BeaconDetect_BeginBlobFrame(BeaconResult_t *results, int max_results);
-void BeaconDetect_AppendBlob(const VisionBlob_t *blob);
+uint8 BeaconDetect_AppendBlob(const VisionBlob_t *blob);
 int BeaconDetect_EndBlobFrame(void);
 
 /**
