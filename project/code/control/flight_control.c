@@ -15,7 +15,7 @@
 // #define FLIGHT_TAKEOFF_DEFAULT_HOVER_PITCH_COMP_DEG  (0.0f)
 // #define FLIGHT_TAKEOFF_DEFAULT_HOVER_ROLL_COMP_DEG   (1.2f)
 // #define FLIGHT_TAKEOFF_DEFAULT_HOVER_PITCH_COMP_DEG  (-0.5f)
-#define FLIGHT_TAKEOFF_DEFAULT_HOVER_ROLL_COMP_DEG   (1.2f)
+#define FLIGHT_TAKEOFF_DEFAULT_HOVER_ROLL_COMP_DEG   (0.0f)
 #define FLIGHT_TAKEOFF_DEFAULT_HOVER_PITCH_COMP_DEG  (0.0f)
 extern volatile uint16 motor_throttle[4];
 
@@ -656,7 +656,8 @@ uint8 Flight_Takeoff_Tick_250us(void)
             }
 
             progress = (float)g_takeoff_tick_in_state / (float)TAKEOFF_RAMP_TICKS;
-            ramped = FLIGHT_TAKEOFF_RAMP_TARGET_THROTTLE * progress;
+            ramped = SAFE_MIN_THROTTLE +
+                     (FLIGHT_TAKEOFF_RAMP_TARGET_THROTTLE - SAFE_MIN_THROTTLE) * progress;
 
             /* 接管油门：绕过默认 throttle_ramp，直接写 base/current/target，保持三者一致。 */
             target_throttle = ramped;

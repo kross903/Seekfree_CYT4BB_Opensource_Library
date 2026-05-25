@@ -36,7 +36,7 @@ uint16 Motor_Mixer_Limit_Output(float output)
 
 static uint16 motor_mixer_flight_limit(float output, uint8 armed_state, float common_throttle)
 {
-    if((armed_state != 0U) && (common_throttle >= SAFE_MIN_THROTTLE) && (output < SAFE_MIN_THROTTLE))
+    if((armed_state != 0U) && (common_throttle > 0.0f) && (output < SAFE_MIN_THROTTLE))
     {
         output = SAFE_MIN_THROTTLE;
     }
@@ -84,9 +84,16 @@ void Motor_Mixer_Update(volatile uint16 motor_throttle_out[4],
                         float roll_deg,
                         float pitch_deg)
 {
+    float thrust_base = HeightSpeedPID_output + base_throttle_input;
+
+    if((armed_state != 0U) && (base_throttle_input > 0.0f) && (thrust_base < SAFE_MIN_THROTTLE))
+    {
+        thrust_base = SAFE_MIN_THROTTLE;
+    }
+
     motor_mixer_update_with_base(motor_throttle_out,
                                  armed_state,
-                                 HeightSpeedPID_output + base_throttle_input,
+                                 thrust_base,
                                  roll_deg,
                                  pitch_deg);
 }
@@ -97,6 +104,11 @@ void Motor_Mixer_Update_BaseOnly(volatile uint16 motor_throttle_out[4],
                                  float roll_deg,
                                  float pitch_deg)
 {
+    if((armed_state != 0U) && (base_throttle_input > 0.0f) && (base_throttle_input < SAFE_MIN_THROTTLE))
+    {
+        base_throttle_input = SAFE_MIN_THROTTLE;
+    }
+
     motor_mixer_update_with_base(motor_throttle_out,
                                  armed_state,
                                  base_throttle_input,

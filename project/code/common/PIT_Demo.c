@@ -74,8 +74,8 @@ volatile float target_angle_yaw = 0.0f;
  * 会在起飞前采样 3s 的 pitch/roll 并作为目标角度，等价于动态的地面标定，
  * 因此不再需要这组静态的安装角偏置。
  */
-volatile float angle_roll_compensation = 0.0;
-volatile float angle_pitch_compensation = 0.0;
+volatile float angle_roll_compensation = 2.0;
+volatile float angle_pitch_compensation = -0.50;
 volatile float angle_yaw_compensation = 0.0f;
 
 float current_roll = 0.0f;
@@ -519,7 +519,14 @@ static uint8 control_task_handle_manual_mode(void)
         return 0U;
     }
 
-    manual_output = Motor_Mixer_Limit_Output(base_throttle);
+    if((base_throttle > 0.0f) && (base_throttle < SAFE_MIN_THROTTLE))
+    {
+        manual_output = (uint16)SAFE_MIN_THROTTLE;
+    }
+    else
+    {
+        manual_output = Motor_Mixer_Limit_Output(base_throttle);
+    }
     Position_Loop_Update_Velocity_Target(0U,
                                          0.0f,
                                          0.0f,
