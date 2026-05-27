@@ -61,8 +61,13 @@ void IPM_Interface_UpdateFromIMU(float height_cm)
      * 
      * 如果实际情况相反，需要取负号
      */
+#if CY_CORE_CM7_0
     float roll = Roll_a;   /* ? ICM.h ????? */
     float pitch = Pitch_a; /* ? ICM.h ????? */
+#else
+    float roll = 0.0f;
+    float pitch = 0.0f;
+#endif
     
     DroneIPM_Embedded_Update(roll, pitch, height_cm);
 }
@@ -134,6 +139,7 @@ void IPM_GenerateBirdView(const uint8 src_img[MT9V03X_H][MT9V03X_W],
 void IPM_DisplayBirdView(const uint8 src_img[MT9V03X_H][MT9V03X_W],
                          int x, int y, float scale)
 {
+#if CY_CORE_CM7_0
     /* ????????? */
     IPM_GenerateBirdView(src_img, g_birdview_buf, 
                          IPM_BIRDVIEW_W, IPM_BIRDVIEW_H, scale);
@@ -151,6 +157,12 @@ void IPM_DisplayBirdView(const uint8 src_img[MT9V03X_H][MT9V03X_W],
             ips200_draw_point(x + dx, y + dy, color);
         }
     }
+#else
+    (void)src_img;
+    (void)x;
+    (void)y;
+    (void)scale;
+#endif
 }
 
 /**

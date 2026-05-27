@@ -63,6 +63,10 @@
 #define DEG2RAD_F     (PI_F / 180.0f)
 #define RAD2DEG_F     (180.0f / PI_F)
 
+#ifndef DRONE_IPM_EMBEDDED_LUT_ENABLE
+#define DRONE_IPM_EMBEDDED_LUT_ENABLE (0)
+#endif
+
 /* ====================== 预计算系数结构 ====================== */
 
 /**

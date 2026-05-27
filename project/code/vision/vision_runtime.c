@@ -1,12 +1,14 @@
 #include "vision/vision_runtime.h"
+#include <string.h>
 
+static VisionRuntimeDiag_t s_vision_runtime_diag;
+
+#if CY_CORE_CM7_1
 #include "vision/beacon_detect.h"
 #include "vision/ipm_interface.h"
 #include "vision/ir_localization.h"
 #include "zf_device_mt9v03x.h"
-#include <string.h>
 
-static VisionRuntimeDiag_t s_vision_runtime_diag;
 static uint8 s_vision_binary[MT9V03X_H * MT9V03X_W];
 static uint8 s_vision_visited[MT9V03X_H * MT9V03X_W];
 static uint16 s_vision_queue[MT9V03X_H * MT9V03X_W];
@@ -238,7 +240,10 @@ static void VisionRuntime_UpdateDiagFromCurrentFrame(int beacon_count,
     }
 }
 
-void VisionRuntime_ProcessFrame(float height_cm)
+static void VisionRuntime_ProcessFrameInternal(float roll_deg,
+                                               float pitch_deg,
+                                               float height_cm,
+                                               uint8 use_explicit_pose)
 {
     static BeaconResult_t beacon_results[BEACON_MAX_DETECTIONS];
     int beacon_count = 0;
@@ -251,7 +256,14 @@ void VisionRuntime_ProcessFrame(float height_cm)
     }
 
     mt9v03x_finish_flag = 0;
-    IPM_Interface_UpdateFromIMU(height_cm);
+    if(use_explicit_pose)
+    {
+        IPM_Interface_Update(roll_deg, pitch_deg, height_cm);
+    }
+    else
+    {
+        IPM_Interface_UpdateFromIMU(height_cm);
+    }
     s_vision_runtime_diag.blob_count = 0;
     s_vision_runtime_diag.ir_split_count = 0;
     s_vision_runtime_diag.beacon_split_count = 0;
@@ -265,6 +277,29 @@ void VisionRuntime_ProcessFrame(float height_cm)
     VisionRuntime_UpdateDiagFromCurrentFrame(beacon_count, beacon_results);
 }
 
+void VisionRuntime_ProcessFrame(float height_cm)
+{
+    VisionRuntime_ProcessFrameInternal(0.0f, 0.0f, height_cm, 0U);
+}
+
+void VisionRuntime_ProcessFrameWithPose(float roll_deg, float pitch_deg, float height_cm)
+{
+    VisionRuntime_ProcessFrameInternal(roll_deg, pitch_deg, height_cm, 1U);
+}
+#else
+void VisionRuntime_ProcessFrame(float height_cm)
+{
+    (void)height_cm;
+}
+
+void VisionRuntime_ProcessFrameWithPose(float roll_deg, float pitch_deg, float height_cm)
+{
+    (void)roll_deg;
+    (void)pitch_deg;
+    (void)height_cm;
+}
+#endif
+
 void VisionRuntime_GetDiag(VisionRuntimeDiag_t *diag)
 {
     if(diag == NULL)
@@ -273,4 +308,14 @@ void VisionRuntime_GetDiag(VisionRuntimeDiag_t *diag)
     }
 
     memcpy(diag, &s_vision_runtime_diag, sizeof(VisionRuntimeDiag_t));
+}
+
+void VisionRuntime_SetDiag(const VisionRuntimeDiag_t *diag)
+{
+    if(diag == NULL)
+    {
+        return;
+    }
+
+    memcpy(&s_vision_runtime_diag, diag, sizeof(VisionRuntimeDiag_t));
 }

@@ -661,14 +661,17 @@ static void ui_monitor_draw_image_hud(const MonitorImageHudData *data)
         return;
     }
 
-    ips200_show_gray_image(UI_MONITOR_IMAGE_X,
-                           UI_MONITOR_IMAGE_Y,
-                           data->image_buffer,
-                           MT9V03X_W,
-                           MT9V03X_H,
-                           UI_MONITOR_IMAGE_DISP_W,
-                           UI_MONITOR_IMAGE_DISP_H,
-                           0U);
+    if(data->image_buffer != NULL)
+    {
+        ips200_show_gray_image(UI_MONITOR_IMAGE_X,
+                               UI_MONITOR_IMAGE_Y,
+                               data->image_buffer,
+                               MT9V03X_W,
+                               MT9V03X_H,
+                               UI_MONITOR_IMAGE_DISP_W,
+                               UI_MONITOR_IMAGE_DISP_H,
+                               0U);
+    }
 
     ips200_show_int(UI_MONITOR_LEFT_VALUE_X, UI_MONITOR_HEIGHT_Y, data->target_throttle, 4U);
     ips200_show_int(UI_MONITOR_RIGHT_VALUE_X, UI_MONITOR_HEIGHT_Y, data->armed, 1U);

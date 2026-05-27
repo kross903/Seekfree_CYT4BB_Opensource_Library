@@ -319,9 +319,11 @@ void DroneIPM_Embedded_BirdView(const uint8_t *src, uint8_t *dst,
 /* ====================== 快速版本(预计算查找表) ====================== */
 
 /* 可选：预计算查找表(用于固定姿态场景) */
+#if DRONE_IPM_EMBEDDED_LUT_ENABLE
 static int16_t g_lut_x[IMAGE_HEIGHT][IMAGE_WIDTH];
 static int16_t g_lut_y[IMAGE_HEIGHT][IMAGE_WIDTH];
 static bool g_lut_valid = false;
+#endif
 
 /**
  * @brief 生成查找表(姿态固定时使用)
@@ -335,6 +337,7 @@ static bool g_lut_valid = false;
  */
 void DroneIPM_Embedded_GenerateLUT(int out_w, int out_h, float scale)
 {
+#if DRONE_IPM_EMBEDDED_LUT_ENABLE
     float center_px = (float)out_w / 2.0f;
     float center_py = (float)out_h / 2.0f;
 
@@ -355,6 +358,11 @@ void DroneIPM_Embedded_GenerateLUT(int out_w, int out_h, float scale)
     }
 
     g_lut_valid = true;
+#else
+    (void)out_w;
+    (void)out_h;
+    (void)scale;
+#endif
 }
 
 /**
@@ -363,6 +371,7 @@ void DroneIPM_Embedded_GenerateLUT(int out_w, int out_h, float scale)
 void DroneIPM_Embedded_BirdViewFast(const uint8_t *src, uint8_t *dst,
                                      int dst_w, int dst_h)
 {
+#if DRONE_IPM_EMBEDDED_LUT_ENABLE
     if (!g_lut_valid) {
         /* 查找表无效，回退到普通方法 */
         DroneIPM_Embedded_BirdView(src, dst, dst_w, dst_h, 0.5f);
@@ -381,5 +390,8 @@ void DroneIPM_Embedded_BirdViewFast(const uint8_t *src, uint8_t *dst,
             }
         }
     }
+#else
+    DroneIPM_Embedded_BirdView(src, dst, dst_w, dst_h, 0.5f);
+#endif
 }
 

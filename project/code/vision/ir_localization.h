@@ -82,6 +82,7 @@ void IR_Localization_Task_5ms(void);
 void IR_Localization_ServiceLostProtection(void);
 
 void IR_Localization_GetLossDebug(IR_LossDebug_t *debug);
+void IR_Localization_SetLossDebug(const IR_LossDebug_t *debug);
 void IR_Localization_GetBlobRejectDebug(int *area_low_count,
                                         int *area_high_count,
                                         int *size_count,

@@ -738,6 +738,27 @@ void IR_Localization_GetLossDebug(IR_LossDebug_t *debug)
     debug->timeout_count = s_ir_debug_timeout_count;
 }
 
+void IR_Localization_SetLossDebug(const IR_LossDebug_t *debug)
+{
+    if(!debug)
+    {
+        return;
+    }
+
+    s_ir_debug_raw_detect_valid = debug->raw_detect_valid;
+    s_ir_has_trackable_pose = debug->has_trackable_pose;
+    ir_position_lost_flag = debug->lost_flag;
+    ir_pose_estimate.valid = debug->pose_valid;
+    s_ir_lost_elapsed_ms = debug->lost_elapsed_ms;
+    ir_position_lost_elapsed_ms = debug->lost_elapsed_ms;
+    s_ir_debug_task_5ms_count = debug->task_5ms_count;
+    s_ir_debug_process_count = debug->process_count;
+    s_ir_debug_process_success_count = debug->process_success_count;
+    s_ir_debug_process_fail_count = debug->process_fail_count;
+    s_ir_debug_mark_lost_count = debug->mark_lost_count;
+    s_ir_debug_timeout_count = debug->timeout_count;
+}
+
 void IR_Localization_Init(void)
 {
     IR_Localization_SetPositionLost();

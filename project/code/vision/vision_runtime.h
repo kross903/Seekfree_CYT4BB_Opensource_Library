@@ -54,6 +54,8 @@ typedef struct
 } VisionRuntimeDiag_t;
 
 void VisionRuntime_ProcessFrame(float height_cm);
+void VisionRuntime_ProcessFrameWithPose(float roll_deg, float pitch_deg, float height_cm);
 void VisionRuntime_GetDiag(VisionRuntimeDiag_t *diag);
+void VisionRuntime_SetDiag(const VisionRuntimeDiag_t *diag);
 
 #endif /* VISION_RUNTIME_H_ */

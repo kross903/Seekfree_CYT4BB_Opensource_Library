@@ -59,7 +59,7 @@ static void build_monitor_runtime_snapshot(MonitorRuntimeSnapshot *snapshot)
     IR_Localization_ServiceLostProtection();
     ir_track_valid = (uint8)((ir_pose_estimate.valid && !ir_position_lost_flag) ? 1U : 0U);
 
-    snapshot->image_buffer = mt9v03x_image[0];
+    snapshot->image_buffer = NULL;
     snapshot->control_mode = control_mode;
     snapshot->armed = (uint8)(armed ? 1U : 0U);
     snapshot->low_voltage = (uint8)(low_voltage_protect_flag ? 1U : 0U);
@@ -102,7 +102,7 @@ static void build_monitor_runtime_snapshot(MonitorRuntimeSnapshot *snapshot)
 
 static void update_monitor_vision_state(void)
 {
-    VisionRuntime_ProcessFrame(tof_height_true_filt * 100.0f);
+    CrossCoreCamera_ControlCoreFetchFrame();
 }
 
 static void service_monitor_telemetry(void)
@@ -161,6 +161,9 @@ static void update_monitor_view(void)
         Vofa_ClearRxState();
     }
 
+    CrossCoreCamera_ControlCorePublishInput(current_roll,
+                                            current_pitch,
+                                            tof_height_true_filt * 100.0f);
     camera_new_frame = CrossCoreCamera_ControlCoreFetchFrame();
     if(CommMux_IsAssistantImageMode())
     {
@@ -233,8 +236,6 @@ static void initialize_control_core_modules(void)
     Device_Init();
 
     IR_Localization_Init();
-    BeaconDetect_Init();
-    IPM_Interface_Init();
     HeightManager_Init(100.0f);
 }
 
