@@ -151,6 +151,8 @@ static void update_monitor_view(void)
     static uint8 drone_status_tick_div = 0;
     uint8 camera_new_frame = 0U;
     uint8 link_tick = 0;
+    uint8 car_link_enabled = 0U;
+    uint8 car_link_enabled_changed = 0U;
     uint8 input_handled = 0U;
     uint8 page_changed = 0U;
     monitor_page_enum page_before;
@@ -176,12 +178,14 @@ static void update_monitor_view(void)
 
     build_monitor_runtime_snapshot(&snapshot);
     link_tick = drone_car_link_task();
+    car_link_enabled = core_link_user_is_link_enabled();
+    car_link_enabled_changed = core_link_user_consume_link_enabled_changed();
 
     page_before = g_monitor_page;
-    drone_screen_mirror_begin(1U);
+    drone_screen_mirror_begin(car_link_enabled);
     input_handled = screen_monitor_handle_input(&g_monitor_page, &snapshot, 50.0f);
     page_changed = (page_before != g_monitor_page) ? 1U : 0U;
-    drone_screen_mirror_end(page_changed);
+    drone_screen_mirror_end((uint8)(car_link_enabled && page_changed));
 
     if(input_handled)
     {
@@ -192,7 +196,7 @@ static void update_monitor_view(void)
     service_monitor_telemetry();
     build_monitor_runtime_snapshot(&snapshot);
 
-    if(link_tick)
+    if(car_link_enabled && link_tick)
     {
         drone_status_tick_div ++;
         if(drone_status_tick_div >= 10U)
@@ -201,19 +205,32 @@ static void update_monitor_view(void)
             core_link_user_send_drone_status_from_snapshot(&snapshot);
         }
     }
+    else if(!car_link_enabled)
+    {
+        drone_status_tick_div = 0;
+    }
 
-    drone_screen_mirror_begin(link_tick);
-    screen_monitor_refresh_page(g_monitor_page, &snapshot);
-    drone_screen_mirror_end(link_tick);
+    if(car_link_enabled && car_link_enabled_changed)
+    {
+        drone_screen_mirror_begin(1U);
+        screen_monitor_enter_page(g_monitor_page, &snapshot);
+        drone_screen_mirror_end(1U);
+    }
+    else
+    {
+        drone_screen_mirror_begin((uint8)(car_link_enabled && link_tick));
+        screen_monitor_refresh_page(g_monitor_page, &snapshot);
+        drone_screen_mirror_end((uint8)(car_link_enabled && link_tick));
+    }
 }
 
 static void run_monitor_view_loop(void)
 {
     MonitorRuntimeSnapshot snapshot;
     build_monitor_runtime_snapshot(&snapshot);
-    drone_screen_mirror_begin(1U);
+    drone_screen_mirror_begin(core_link_user_is_link_enabled());
     screen_monitor_enter_page(g_monitor_page, &snapshot);
-    drone_screen_mirror_end(1U);
+    drone_screen_mirror_end(core_link_user_is_link_enabled());
 
     while(menu_is_monitor_view())
     {

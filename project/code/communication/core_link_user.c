@@ -4,11 +4,15 @@ extern volatile float car_bat_voltage;
 
 #define CORE_LINK_USER_KEY_QUEUE_SIZE       (8U)
 #define CORE_LINK_USER_KEY_ACTIVE_THRESHOLD (0.5f)
+#define CORE_LINK_USER_SWITCH_THRESHOLD     (0.5f)
 
 static volatile uint8 s_core_link_user_key_queue[CORE_LINK_USER_KEY_QUEUE_SIZE] = {0};
 static volatile uint8 s_core_link_user_key_queue_head = 0;
 static volatile uint8 s_core_link_user_key_queue_tail = 0;
 static volatile uint8 s_core_link_user_monitor_exit_request = 0;
+static volatile uint8 s_core_link_user_link_enabled = 0;
+static volatile uint8 s_core_link_user_link_enabled_changed = 0;
+static volatile uint8 s_core_link_user_key_flag_remote = 0;
 static char s_core_link_user_text_receive[CORE_LINK_PAYLOAD_MAX_LEN + 1] = "none";
 
 static uint8 core_link_user_queue_next_index (uint8 index)
@@ -54,12 +58,20 @@ static uint8 core_link_user_pop_key_event (uint8 *key)
     return 1;
 }
 
-void core_link_user_init (void)
+static void core_link_user_clear_remote_events(void)
 {
     s_core_link_user_key_queue_head = 0;
     s_core_link_user_key_queue_tail = 0;
     s_core_link_user_monitor_exit_request = 0;
     memset((void *)s_core_link_user_key_queue, 0, sizeof(s_core_link_user_key_queue));
+}
+
+void core_link_user_init (void)
+{
+    core_link_user_clear_remote_events();
+    s_core_link_user_key_flag_remote = 0;
+    s_core_link_user_link_enabled = 0;
+    s_core_link_user_link_enabled_changed = 0;
     memset(s_core_link_user_text_receive, 0, sizeof(s_core_link_user_text_receive));
 }
 
@@ -72,20 +84,46 @@ void core_link_user_task (void)
         return;
     }
 
+    s_core_link_user_key_flag_remote = 0;
     if(core_link_user_pop_key_event(&key))
     {
         key_flag = key;
+        s_core_link_user_key_flag_remote = 1;
     }
 }
 
 void core_link_user_poll (void)
 {
     core_link_task();
-    core_link_user_task();
+    if(s_core_link_user_link_enabled)
+    {
+        core_link_user_task();
+    }
+}
+
+uint8 core_link_user_is_link_enabled (void)
+{
+    return s_core_link_user_link_enabled ? 1U : 0U;
+}
+
+uint8 core_link_user_consume_link_enabled_changed (void)
+{
+    if(!s_core_link_user_link_enabled_changed)
+    {
+        return 0U;
+    }
+
+    s_core_link_user_link_enabled_changed = 0;
+    return 1U;
 }
 
 uint8 core_link_user_consume_monitor_exit_request (void)
 {
+    if(!s_core_link_user_link_enabled)
+    {
+        return 0;
+    }
+
     if(!s_core_link_user_monitor_exit_request)
     {
         return 0;
@@ -98,6 +136,11 @@ uint8 core_link_user_consume_monitor_exit_request (void)
 void core_link_user_send_drone_status_from_snapshot (const MonitorRuntimeSnapshot *snapshot)
 {
     core_link_drone_status_packet_struct status = {0};
+
+    if(!s_core_link_user_link_enabled)
+    {
+        return;
+    }
 
     if(NULL == snapshot)
     {
@@ -123,12 +166,22 @@ void core_link_user_send_drone_status_from_snapshot (const MonitorRuntimeSnapsho
 
 void ips200_mirror_send_packet (const uint8 *payload, uint8 length)
 {
+    if(!s_core_link_user_link_enabled)
+    {
+        return;
+    }
+
     core_link_send_frame(CORE_LINK_PROTOCOL_SCREEN_CMD, payload, length);
 }
 
 void core_link_on_text_received (const uint8 *text, uint8 length)
 {
     uint8 copy_length = 0;
+
+    if(!s_core_link_user_link_enabled)
+    {
+        return;
+    }
 
     if(NULL == text)
     {
@@ -143,8 +196,34 @@ void core_link_on_text_received (const uint8 *text, uint8 length)
 void core_link_on_param_received (const core_link_param_packet_struct *param)
 {
     int32 adc_value = 0;
+    uint8 next_link_enabled = 0;
 
     if(NULL == param)
+    {
+        return;
+    }
+
+    if(('S' == param->command) && ('1' == param->item))
+    {
+        next_link_enabled = (param->value >= CORE_LINK_USER_SWITCH_THRESHOLD) ? 1U : 0U;
+        if(s_core_link_user_link_enabled != next_link_enabled)
+        {
+            s_core_link_user_link_enabled = next_link_enabled;
+            s_core_link_user_link_enabled_changed = 1U;
+            if(!next_link_enabled)
+            {
+                core_link_user_clear_remote_events();
+                if(s_core_link_user_key_flag_remote)
+                {
+                    key_flag = 0;
+                    s_core_link_user_key_flag_remote = 0;
+                }
+            }
+        }
+        return;
+    }
+
+    if(!s_core_link_user_link_enabled)
     {
         return;
     }

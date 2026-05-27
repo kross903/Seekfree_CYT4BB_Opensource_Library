@@ -7,6 +7,8 @@
 void core_link_user_init (void);
 void core_link_user_task (void);
 void core_link_user_poll (void);
+uint8 core_link_user_is_link_enabled (void);
+uint8 core_link_user_consume_link_enabled_changed (void);
 uint8 core_link_user_consume_monitor_exit_request (void);
 void core_link_user_send_drone_status_from_snapshot(const MonitorRuntimeSnapshot *snapshot);
 
