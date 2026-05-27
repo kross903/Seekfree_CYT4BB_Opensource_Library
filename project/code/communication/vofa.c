@@ -705,7 +705,6 @@ void Send_test(void)
         }
     }
 
-    system_delay_ms(10);
 }
 
 void uart_rx_interrupt_handler(void)
