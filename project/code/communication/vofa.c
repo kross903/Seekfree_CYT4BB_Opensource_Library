@@ -17,6 +17,8 @@
 
 #define VOFA_PACKET_MAX_LEN        64
 #define VOFA_PACKET_QUEUE_DEPTH    4
+#define VOFA_LOOP_OVERRUN_US       20000.0f
+#define VOFA_DWT_LAR_UNLOCK        0xC5ACCE55UL
 
 static uint8 uart_get_data[VOFA_PACKET_MAX_LEN];
 static uint8 fifo_get_data[VOFA_PACKET_MAX_LEN];
@@ -56,9 +58,89 @@ static void send_sixteen_date(float date_1, float date_2, float date_3, float da
  * FN  Y 轴位置-速度-Roll-角速度链路诊断 (case 23)
  * FP  X/Y 双轴位置-速度-角度-角速度 16 路综合诊断 (case 24)
  * FQ  小车红外灯/信标红外灯识别效果 16 路诊断 (case 25)
+ * FR  0 核主循环耗时诊断 (case 26)
  */
 static int send_back_flag = 0;
 static uint8 send_back_command = 'R';
+
+static uint8 vofa_loop_profiler_ready = 0U;
+static uint32 vofa_loop_start_cycle = 0U;
+static volatile float vofa_loop_last_us = 0.0f;
+static volatile float vofa_loop_max_us = 0.0f;
+static volatile float vofa_loop_avg_us = 0.0f;
+static volatile float vofa_loop_freq_hz = 0.0f;
+static volatile uint32 vofa_loop_count = 0U;
+static volatile uint32 vofa_loop_overrun_count = 0U;
+
+static void vofa_loop_profiler_init(void)
+{
+    if(vofa_loop_profiler_ready)
+    {
+        return;
+    }
+
+    CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+    if((DWT->CTRL & DWT_CTRL_NOCYCCNT_Msk) != 0U)
+    {
+        return;
+    }
+
+    DWT->LAR = VOFA_DWT_LAR_UNLOCK;
+    DWT->CYCCNT = 0U;
+    DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
+    vofa_loop_profiler_ready = 1U;
+}
+
+void Vofa_MainLoopProfile_Begin(void)
+{
+    vofa_loop_profiler_init();
+    if(!vofa_loop_profiler_ready)
+    {
+        return;
+    }
+
+    vofa_loop_start_cycle = DWT->CYCCNT;
+}
+
+void Vofa_MainLoopProfile_End(void)
+{
+    uint32 cycle_diff = 0U;
+    float elapsed_us = 0.0f;
+
+    if(!vofa_loop_profiler_ready || SystemCoreClock == 0U)
+    {
+        return;
+    }
+
+    cycle_diff = DWT->CYCCNT - vofa_loop_start_cycle;
+    elapsed_us = ((float)cycle_diff * 1000000.0f) / (float)SystemCoreClock;
+
+    vofa_loop_last_us = elapsed_us;
+    if(elapsed_us > vofa_loop_max_us)
+    {
+        vofa_loop_max_us = elapsed_us;
+    }
+
+    if(vofa_loop_count == 0U)
+    {
+        vofa_loop_avg_us = elapsed_us;
+    }
+    else
+    {
+        vofa_loop_avg_us += 0.02f * (elapsed_us - vofa_loop_avg_us);
+    }
+
+    vofa_loop_count++;
+    if(elapsed_us > VOFA_LOOP_OVERRUN_US)
+    {
+        vofa_loop_overrun_count++;
+    }
+
+    if(elapsed_us > 0.0f)
+    {
+        vofa_loop_freq_hz = 1000000.0f / elapsed_us;
+    }
+}
 
 /*
  * [2026-03-10]
@@ -941,6 +1023,8 @@ void USART_PID_Adjust(void)
                 case 'p': send_back_flag = 24; break;
                 case 'Q':
                 case 'q': send_back_flag = 25; break;
+                case 'R':
+                case 'r': send_back_flag = 26; break;
                 default: break;
             }
 
@@ -1112,13 +1196,12 @@ void send_date_back(void)
 
             Body_To_RollPitch_Level_Frame(Roll_acc_F, Pitch_acc_F, Yaw_acc_F,
                                           &ax_level_mg, &ay_level_mg, &az_level_mg);
-            (void)az_level_mg;
 
             send_four_date(current_roll,
                            current_pitch,
                            ax_level_mg,
                            ay_level_mg,
-                           acc_level_x_bias_mg,
+                           az_level_mg,
                            acc_level_y_bias_mg,
                            ax_level_mg - acc_level_x_bias_mg,
                            ay_level_mg - acc_level_y_bias_mg);
@@ -1440,6 +1523,17 @@ void send_date_back(void)
                               (float)vision_diag.beacon_blob_count);
             break;
         }
+
+        case 26:
+            send_four_date(vofa_loop_last_us,
+                           vofa_loop_max_us,
+                           vofa_loop_avg_us,
+                           vofa_loop_freq_hz,
+                           (float)vofa_loop_count,
+                           (float)vofa_loop_overrun_count,
+                           VOFA_LOOP_OVERRUN_US,
+                           (float)SystemCoreClock);
+            break;
 
         default:
             break;

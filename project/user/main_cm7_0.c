@@ -214,7 +214,9 @@ static void run_monitor_view_loop(void)
 
     while(menu_is_monitor_view())
     {
+        Vofa_MainLoopProfile_Begin();
         update_monitor_view();
+        Vofa_MainLoopProfile_End();
     }
 }
 

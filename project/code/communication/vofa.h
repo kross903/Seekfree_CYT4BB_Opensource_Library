@@ -21,5 +21,7 @@ void uart_rx_interrupt_handler(void);
 void USART_PID_Adjust(void);
 void send_date_back(void);
 void Vofa_ClearRxState(void);
+void Vofa_MainLoopProfile_Begin(void);
+void Vofa_MainLoopProfile_End(void);
 
 #endif
