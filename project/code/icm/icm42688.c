@@ -1,6 +1,5 @@
 #include "icm42688.h"
 #include "common/project_headfile.h"
-#include <math.h>
 
 int icm_calibration_over_flag = 0;
 int icm_calibration_flag = 0;
@@ -26,8 +25,35 @@ short int IMU_calibrate_flag = 0;//0的时候开启陀螺仪测定零飘矫正�
 // 静态函数声明,以下函数均为该.c文件内部调用
 static void Write_Data_ICM42688(unsigned char reg, unsigned char data);
 static void Read_Datas_ICM42688(unsigned char reg, unsigned char *data, unsigned int num);
+static void ICM42688_ApplyInstallMatrix(float x_in, float y_in, float z_in,
+                                        float *x_out, float *y_out, float *z_out);
 // 数据转换为实际物理数据的转换系数
 float icm42688_acc_inv = 1, icm42688_gyro_inv = 1;
+
+static const float k_icm42688_sensor_to_body[3][3] = {
+    /* fixed install compensation:
+     * roll  = +2.85 deg
+     * pitch = -0.50 deg
+     * yaw   =  0.00 deg
+     */
+    {0.999961923f, -0.000433895f, -0.008715742f},
+    {0.000000000f,  0.998763128f, -0.049721374f},
+    {0.008726535f,  0.049719481f,  0.998725098f},
+};
+
+static void ICM42688_ApplyInstallMatrix(float x_in, float y_in, float z_in,
+                                        float *x_out, float *y_out, float *z_out)
+{
+    *x_out = k_icm42688_sensor_to_body[0][0] * x_in +
+             k_icm42688_sensor_to_body[0][1] * y_in +
+             k_icm42688_sensor_to_body[0][2] * z_in;
+    *y_out = k_icm42688_sensor_to_body[1][0] * x_in +
+             k_icm42688_sensor_to_body[1][1] * y_in +
+             k_icm42688_sensor_to_body[1][2] * z_in;
+    *z_out = k_icm42688_sensor_to_body[2][0] * x_in +
+             k_icm42688_sensor_to_body[2][1] * y_in +
+             k_icm42688_sensor_to_body[2][2] * z_in;
+}
 
 //void SPI_switch_to_ICM42688(void){
 //    ((SPI_TypeDef *)SPI3_BASE)->CTLR1 &= 0xFFF4;// 18M MODE0
@@ -111,14 +137,6 @@ void Get_Acc_ICM42688(void)
     float raw_x;
     float raw_y;
     float raw_z;
-    float roll_rad;
-    float pitch_rad;
-    float sin_roll;
-    float cos_roll;
-    float sin_pitch;
-    float cos_pitch;
-    float roll_y;
-    float roll_z;
 
     Read_Datas_ICM42688(ICM42688_ACCEL_DATA_X1, data, 6);
     raw_x_r = (short int)(((short int)data[0] << 8) | data[1]);
@@ -132,23 +150,8 @@ void Get_Acc_ICM42688(void)
     raw_y = icm42688_acc_inv * raw_y_r;
     raw_z = icm42688_acc_inv * raw_z_r;
 
-    /*
-     * Apply fixed sensor-to-body installation compensation before the data
-     * enters the attitude solver. We currently compensate roll and pitch only.
-     */
-    roll_rad = angle_roll_compensation * DEG2RAD;
-    pitch_rad = angle_pitch_compensation * DEG2RAD;
-    sin_roll = sinf(roll_rad);
-    cos_roll = cosf(roll_rad);
-    sin_pitch = sinf(pitch_rad);
-    cos_pitch = cosf(pitch_rad);
-
-    roll_y = cos_roll * raw_y - sin_roll * raw_z;
-    roll_z = sin_roll * raw_y + cos_roll * raw_z;
-
-    icm42688_acc_x = cos_pitch * raw_x + sin_pitch * roll_z;
-    icm42688_acc_y = roll_y;
-    icm42688_acc_z = -sin_pitch * raw_x + cos_pitch * roll_z;
+    ICM42688_ApplyInstallMatrix(raw_x, raw_y, raw_z,
+                                &icm42688_acc_x, &icm42688_acc_y, &icm42688_acc_z);
 }
 
 /**
@@ -183,6 +186,9 @@ void Get_Gyro_ICM42688(void)
     short int raw_x_r;
     short int raw_y_r;
     short int raw_z_r;
+    float gyro_x_sensor;
+    float gyro_y_sensor;
+    float gyro_z_sensor;
 
     Read_Datas_ICM42688(ICM42688_GYRO_DATA_X1, data, 6);
     raw_x_r = (short int)(((short int)data[0] << 8) | data[1]);
@@ -192,9 +198,12 @@ void Get_Gyro_ICM42688(void)
     icm42688_gyro_y_r = raw_y_r;
     icm42688_gyro_z_r = raw_z_r;
 
-    icm42688_gyro_x = icm42688_gyro_inv * raw_x_r - gyro_x_correction;
-    icm42688_gyro_y = icm42688_gyro_inv * raw_y_r - gyro_y_correction;
-    icm42688_gyro_z = icm42688_gyro_inv * raw_z_r - gyro_z_correction;
+    gyro_x_sensor = icm42688_gyro_inv * raw_x_r - gyro_x_correction;
+    gyro_y_sensor = icm42688_gyro_inv * raw_y_r - gyro_y_correction;
+    gyro_z_sensor = icm42688_gyro_inv * raw_z_r - gyro_z_correction;
+
+    ICM42688_ApplyInstallMatrix(gyro_x_sensor, gyro_y_sensor, gyro_z_sensor,
+                                &icm42688_gyro_x, &icm42688_gyro_y, &icm42688_gyro_z);
 }
 void Get_RAW_Gyro_ICM42688(void)
 {

@@ -50,9 +50,6 @@ extern volatile float target_angle_roll;
 extern volatile float target_angle_pitch;
 extern volatile float target_angle_yaw;
 
-extern volatile float angle_roll_compensation;
-extern volatile float angle_pitch_compensation;
-extern volatile float angle_yaw_compensation;
 
 /* 位置闭环 adc/ToF 双数据校验观测量。 */
 extern volatile float pos_fusion_r_adc;

@@ -262,25 +262,6 @@ static void set_hover_angle_compensation_value(uint8 item, float value)
     Flight_Takeoff_Set_Hover_Angle_Compensation(hover_roll, hover_pitch);
 }
 
-    float roll_compensation = 0.0f;
-    float pitch_compensation = 0.0f;
-    float yaw_compensation = 0.0f;
-static void set_angle_compensation_value(uint8 item, float value)
-{
-
-
-    Flight_Control_Get_Angle_Compensation(&roll_compensation, &pitch_compensation, &yaw_compensation);
-
-    switch(item)
-    {
-        case '1': roll_compensation = value; break;
-        case '2': pitch_compensation = value; break;
-        case '3': yaw_compensation = value; break;
-        default:  return;
-    }
-
-    Flight_Control_Set_Angle_Compensation(roll_compensation, pitch_compensation, yaw_compensation);
-}
 
 /*
  * VOFA 调参：陀螺去旋转增益。
@@ -412,10 +393,9 @@ static void send_pid_data_back(uint8 command)
 
         case 'T':
             Flight_Control_Get_Target_Angle(&roll, &pitch, &yaw);
-            Flight_Control_Get_Angle_Compensation(&roll_compensation, &pitch_compensation, NULL);
             send_four_date(current_roll, current_pitch, current_yaw, icm42688_acc_x,
                 icm42688_acc_y, icm42688_acc_z,
-                roll_compensation, pitch_compensation);
+                roll, pitch);
 
             return;
 
@@ -876,14 +856,6 @@ void USART_PID_Adjust(void)
             send_back_command = 'S';
             break;
 
-        case 'T':
-            if(has_value)
-            {
-                set_angle_compensation_value(item, data_get);
-            }
-            send_back_command = 'T';
-            break;
-
         case 'B':
             if(has_value)
             {
@@ -1056,7 +1028,7 @@ void send_date_back(void)
             send_four_date((float)icm42688_gyro_x_r, (float)icm42688_gyro_y_r,
                            (float)icm42688_gyro_z_r, icm42688_gyro_x,
                            icm42688_gyro_y, icm42688_gyro_z,
-                           angle_roll_compensation, angle_pitch_compensation);
+                           0.0f, 0.0f);
             break;
 
         case 5:

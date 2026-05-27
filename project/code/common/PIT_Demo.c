@@ -74,10 +74,6 @@ volatile float target_angle_yaw = 0.0f;
  * 会在起飞前采样 3s 的 pitch/roll 并作为目标角度，等价于动态的地面标定，
  * 因此不再需要这组静态的安装角偏置。
  */
-volatile float angle_roll_compensation = 2.0;
-volatile float angle_pitch_compensation = -0.50;
-volatile float angle_yaw_compensation = 0.0f;
-
 float current_roll = 0.0f;
 float current_pitch = 0.0f;
 float current_yaw = 0.0f;

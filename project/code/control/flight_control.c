@@ -71,10 +71,6 @@ static void sync_runtime_snapshot(void)
     g_flight_ctrl.target_angle_pitch = target_angle_pitch;
     g_flight_ctrl.target_angle_yaw = target_angle_yaw;
 
-    g_flight_ctrl.angle_roll_compensation = angle_roll_compensation;
-    g_flight_ctrl.angle_pitch_compensation = angle_pitch_compensation;
-    g_flight_ctrl.angle_yaw_compensation = angle_yaw_compensation;
-
     g_flight_ctrl.armed = armed;
     g_flight_ctrl.control_mode = control_mode;
     g_flight_ctrl.target_throttle = target_throttle;
@@ -317,31 +313,6 @@ void Flight_Control_Get_Target_Angle(float *roll, float *pitch, float *yaw)
 }
 
 /* 传感器安装补偿角，当前用于 IMU roll/pitch 旋转补偿。 */
-void Flight_Control_Set_Angle_Compensation(float roll_compensation, float pitch_compensation, float yaw_compensation)
-{
-    angle_roll_compensation = roll_compensation;
-    angle_pitch_compensation = pitch_compensation;
-    angle_yaw_compensation = yaw_compensation;
-
-    sync_runtime_snapshot();
-}
-
-void Flight_Control_Get_Angle_Compensation(float *roll_compensation, float *pitch_compensation, float *yaw_compensation)
-{
-    if(roll_compensation != NULL)
-    {
-        *roll_compensation = angle_roll_compensation;
-    }
-    if(pitch_compensation != NULL)
-    {
-        *pitch_compensation = angle_pitch_compensation;
-    }
-    if(yaw_compensation != NULL)
-    {
-        *yaw_compensation = angle_yaw_compensation;
-    }
-}
-
 /*
  * 解锁飞控主链路。
  * 如果当前模式合法则继续保留，并在下一次油门爬坡前清空运行态油门和 PID 历史量。
