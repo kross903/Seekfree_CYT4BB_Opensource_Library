@@ -44,6 +44,8 @@
 // �������ǿ�Դ��չ��� ��������ֲ���߲��Ը���������
 
 // **************************** �������� ****************************
+#define MONITOR_LOCAL_SCREEN_REFRESH_DIV    (5U)
+
 static monitor_page_enum g_monitor_page = MONITOR_PAGE_DATA;
 
 static void build_monitor_runtime_snapshot(MonitorRuntimeSnapshot *snapshot)
@@ -149,10 +151,12 @@ static void drone_screen_mirror_end(uint8 send)
 static void update_monitor_view(void)
 {
     static uint8 drone_status_tick_div = 0;
+    static uint8 local_screen_refresh_div = 0U;
     uint8 camera_new_frame = 0U;
     uint8 link_tick = 0;
     uint8 screen_mirror_enabled = 0U;
     uint8 screen_mirror_enabled_changed = 0U;
+    uint8 local_screen_refresh_tick = 0U;
     uint8 input_handled = 0U;
     uint8 page_changed = 0U;
     monitor_page_enum page_before;
@@ -198,6 +202,13 @@ static void update_monitor_view(void)
 
     if(link_tick)
     {
+        local_screen_refresh_div ++;
+        if(local_screen_refresh_div >= MONITOR_LOCAL_SCREEN_REFRESH_DIV)
+        {
+            local_screen_refresh_div = 0U;
+            local_screen_refresh_tick = 1U;
+        }
+
         drone_status_tick_div ++;
         if(drone_status_tick_div >= 10U)
         {
@@ -212,11 +223,11 @@ static void update_monitor_view(void)
         screen_monitor_enter_page(g_monitor_page, &snapshot);
         drone_screen_mirror_end(1U);
     }
-    else
+    else if(local_screen_refresh_tick)
     {
-        drone_screen_mirror_begin((uint8)(screen_mirror_enabled && link_tick));
+        drone_screen_mirror_begin(screen_mirror_enabled);
         screen_monitor_refresh_page(g_monitor_page, &snapshot);
-        drone_screen_mirror_end((uint8)(screen_mirror_enabled && link_tick));
+        drone_screen_mirror_end(screen_mirror_enabled);
     }
 }
 
