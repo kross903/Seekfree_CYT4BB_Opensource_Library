@@ -102,6 +102,43 @@ static void test_placeholder_page(void)
     ips200_show_string(20U, 120U, "Use KEY4 to return");
 }
 
+static void vision_view_page(void)
+{
+    static uint8 request_sent = 0U;
+    uint8 wait_count = 0U;
+
+    if(!request_sent)
+    {
+        ips200_clear();
+        ips200_show_string(20U, 72U, "CM7_1 Vision View");
+        ips200_show_string(20U, 96U, "Waiting image...");
+        ips200_show_string(20U, 120U, "K4:Back");
+        CrossCoreCamera_ControlCoreRequestVisionScreen(1U);
+        request_sent = 1U;
+        key_flag = 0;
+    }
+
+    core_link_user_poll();
+
+    if(key_flag == Button_4)
+    {
+        CrossCoreCamera_ControlCoreRequestVisionScreen(0U);
+        while(CrossCoreCamera_ControlCoreIsVisionScreenActive() && wait_count < 20U)
+        {
+            core_link_user_poll();
+            system_delay_ms(10);
+            wait_count++;
+        }
+
+        ips200_set_dir(IPS200_PORTAIT);
+        ips200_init(IPS200_TYPE_SPI);
+        ips200_set_font(IPS200_8X16_FONT);
+        request_sent = 0U;
+        key_flag = Button_4;
+        return;
+    }
+}
+
 static void fly_test_page(void)
 {
     uint16 throttle = 0U;
@@ -320,6 +357,7 @@ void init_test_menu(void)
 
     menu_create_item(&testMenu, "IMU Test", test_placeholder_page, NULL);
     menu_create_item(&testMenu, "PMW Test", test_placeholder_page, NULL);
+    menu_create_item(&testMenu, "Vision View", vision_view_page, NULL);
     menu_create_item(&testMenu, "Motor Test", motor_test_page, NULL);
     menu_create_item(&testMenu, "Fly Test", fly_test_page, NULL);
     menu_create_item(&testMenu, "VOFA Test", test_placeholder_page, NULL);

@@ -3,11 +3,17 @@
 
 #define SHARED_VISION_INPUT_ADDR                    0x28001000u
 #define SHARED_VISION_RESULT_ADDR                   0x28001100u
+#define SHARED_VISION_SCREEN_CTRL_ADDR              0x28001200u
 #define SHARED_VISION_MAGIC                         0x56495331u
+#define SHARED_VISION_SCREEN_MAGIC                  0x56534331u
 #define CROSS_CORE_CAMERA_ASSISTANT_IMAGE_ENABLE    0U
 #define CROSS_CORE_CAMERA_ASSISTANT_FRAME_DIVIDER   10U
+#define CROSS_CORE_CAMERA_SCREEN_FRAME_DIVIDER      5U
 #define CROSS_CORE_VISION_IPC_RESULT_READY          0x56495352u
 #define CROSS_CORE_CAMERA_DWT_LAR_UNLOCK            0xC5ACCE55UL
+
+#define CROSS_CORE_CAMERA_SCREEN_OWNER_NONE         0U
+#define CROSS_CORE_CAMERA_SCREEN_OWNER_VISION       1U
 
 typedef struct
 {
@@ -32,10 +38,22 @@ typedef struct
     uint32 pose_update_seq;
 } SharedVisionResult_t;
 
+typedef struct
+{
+    uint32 magic;
+    uint32 request_seq;
+    uint32 active_seq;
+    uint8 requested_owner;
+    uint8 active_owner;
+    uint8 reserved[2];
+} SharedVisionScreenCtrl_t;
+
 static volatile SharedVisionInput_t *const g_shared_vision_input =
     (volatile SharedVisionInput_t *)SHARED_VISION_INPUT_ADDR;
 static volatile SharedVisionResult_t *const g_shared_vision_result =
     (volatile SharedVisionResult_t *)SHARED_VISION_RESULT_ADDR;
+static volatile SharedVisionScreenCtrl_t *const g_shared_vision_screen_ctrl =
+    (volatile SharedVisionScreenCtrl_t *)SHARED_VISION_SCREEN_CTRL_ADDR;
 
 #if CY_CORE_CM7_1
 static void CrossCoreCamera_CleanInput(void)
@@ -51,6 +69,16 @@ static void CrossCoreCamera_InvalidateInput(void)
 static void CrossCoreCamera_CleanResult(void)
 {
     SCB_CleanDCache_by_Addr((void *)g_shared_vision_result, sizeof(SharedVisionResult_t));
+}
+
+static void CrossCoreCamera_InvalidateScreenCtrl(void)
+{
+    SCB_InvalidateDCache_by_Addr((void *)g_shared_vision_screen_ctrl, sizeof(SharedVisionScreenCtrl_t));
+}
+
+static void CrossCoreCamera_CleanScreenCtrl(void)
+{
+    SCB_CleanDCache_by_Addr((void *)g_shared_vision_screen_ctrl, sizeof(SharedVisionScreenCtrl_t));
 }
 
 static uint8 CrossCoreCamera_DwtInit(void)
@@ -109,6 +137,86 @@ static void CrossCoreCamera_AgeVisionLossTimer(void)
     }
 }
 
+static void CrossCoreCamera_SetCameraCoreScreenActive(uint8 active)
+{
+    g_shared_vision_screen_ctrl->magic = SHARED_VISION_SCREEN_MAGIC;
+    g_shared_vision_screen_ctrl->active_owner = active ? CROSS_CORE_CAMERA_SCREEN_OWNER_VISION
+                                                       : CROSS_CORE_CAMERA_SCREEN_OWNER_NONE;
+    g_shared_vision_screen_ctrl->active_seq++;
+    CrossCoreCamera_CleanScreenCtrl();
+}
+
+static void CrossCoreCamera_CameraCoreDrawVisionScreen(const VisionRuntimeDiag_t *diag)
+{
+    uint16 image_y = 20U;
+    uint16 image_w = MT9V03X_W;
+    uint16 image_h = MT9V03X_H;
+
+    ips200_show_gray_image(0U, image_y, mt9v03x_image[0], MT9V03X_W, MT9V03X_H, image_w, image_h, 0U);
+
+    ips200_set_color(RGB565_YELLOW, RGB565_BLACK);
+    ips200_show_string(0U, 0U, "RAW IMG CM7_1");
+    ips200_set_color(RGB565_WHITE, RGB565_BLACK);
+    ips200_show_string(0U, 152U, "IR:");
+    ips200_show_string(32U, 152U, ir_position_lost_flag ? "LOST " : "OK   ");
+    ips200_show_string(96U, 152U, "PTS:");
+    ips200_show_int(136U, 152U, diag != NULL ? diag->ir_detected_point_count : 0, 1U);
+
+    ips200_show_string(0U, 176U, "X:");
+    ips200_show_float(32U, 176U, ir_pose_estimate.x, 4U, 1U);
+    ips200_show_string(120U, 176U, "Y:");
+    ips200_show_float(152U, 176U, ir_pose_estimate.y, 4U, 1U);
+    ips200_show_string(0U, 200U, "K4 BACK");
+}
+
+static void CrossCoreCamera_CameraCoreServiceVisionScreen(const VisionRuntimeDiag_t *diag)
+{
+    static uint8 vision_screen_active = 0U;
+    static uint8 frame_divider = 0U;
+    uint8 requested = 0U;
+
+    CrossCoreCamera_InvalidateScreenCtrl();
+    if(g_shared_vision_screen_ctrl->magic == SHARED_VISION_SCREEN_MAGIC &&
+       g_shared_vision_screen_ctrl->requested_owner == CROSS_CORE_CAMERA_SCREEN_OWNER_VISION)
+    {
+        requested = 1U;
+    }
+
+    if(requested && !vision_screen_active)
+    {
+        ips200_set_dir(IPS200_PORTAIT);
+        ips200_init(IPS200_TYPE_SPI);
+        ips200_set_font(IPS200_8X16_FONT);
+        ips200_clear();
+        vision_screen_active = 1U;
+        frame_divider = CROSS_CORE_CAMERA_SCREEN_FRAME_DIVIDER;
+        CrossCoreCamera_SetCameraCoreScreenActive(1U);
+    }
+    else if(!requested && vision_screen_active)
+    {
+        vision_screen_active = 0U;
+        frame_divider = 0U;
+        CrossCoreCamera_SetCameraCoreScreenActive(0U);
+    }
+
+    if(!vision_screen_active)
+    {
+        return;
+    }
+
+    if(diag == NULL)
+    {
+        return;
+    }
+
+    frame_divider++;
+    if(frame_divider >= CROSS_CORE_CAMERA_SCREEN_FRAME_DIVIDER)
+    {
+        frame_divider = 0U;
+        CrossCoreCamera_CameraCoreDrawVisionScreen(diag);
+    }
+}
+
 static void CrossCoreCamera_CameraCoreIpcCallback(uint32 ipc_data)
 {
     (void)ipc_data;
@@ -129,6 +237,16 @@ static void CrossCoreCamera_InvalidateResult(void)
 static void CrossCoreCamera_CleanResult(void)
 {
     SCB_CleanDCache_by_Addr((void *)g_shared_vision_result, sizeof(SharedVisionResult_t));
+}
+
+static void CrossCoreCamera_InvalidateScreenCtrl(void)
+{
+    SCB_InvalidateDCache_by_Addr((void *)g_shared_vision_screen_ctrl, sizeof(SharedVisionScreenCtrl_t));
+}
+
+static void CrossCoreCamera_CleanScreenCtrl(void)
+{
+    SCB_CleanDCache_by_Addr((void *)g_shared_vision_screen_ctrl, sizeof(SharedVisionScreenCtrl_t));
 }
 
 static volatile uint8 s_vision_ipc_result_pending = 0U;
@@ -161,8 +279,14 @@ void CrossCoreCamera_CameraCoreInit(void)
     g_shared_vision_input->height_cm = 100.0f;
     g_shared_vision_result->magic = SHARED_VISION_MAGIC;
     g_shared_vision_result->seq = 0U;
+    g_shared_vision_screen_ctrl->magic = SHARED_VISION_SCREEN_MAGIC;
+    g_shared_vision_screen_ctrl->request_seq = 0U;
+    g_shared_vision_screen_ctrl->active_seq = 0U;
+    g_shared_vision_screen_ctrl->requested_owner = CROSS_CORE_CAMERA_SCREEN_OWNER_NONE;
+    g_shared_vision_screen_ctrl->active_owner = CROSS_CORE_CAMERA_SCREEN_OWNER_NONE;
     CrossCoreCamera_CleanInput();
     CrossCoreCamera_CleanResult();
+    CrossCoreCamera_CleanScreenCtrl();
 #endif
 }
 
@@ -178,6 +302,7 @@ void CrossCoreCamera_CameraCoreTask(void)
 
     if(!mt9v03x_finish_flag)
     {
+        CrossCoreCamera_CameraCoreServiceVisionScreen(NULL);
         return;
     }
 
@@ -208,6 +333,7 @@ void CrossCoreCamera_CameraCoreTask(void)
     g_shared_vision_result->seq++;
     CrossCoreCamera_CleanResult();
     (void)ipc_send_data(CROSS_CORE_VISION_IPC_RESULT_READY);
+    CrossCoreCamera_CameraCoreServiceVisionScreen(&diag_snapshot);
 
 #if CROSS_CORE_CAMERA_ASSISTANT_IMAGE_ENABLE
     assistant_frame_divider++;
@@ -297,8 +423,14 @@ void CrossCoreCamera_ControlCoreAssistantInit(void)
     g_shared_vision_input->height_cm = 100.0f;
     g_shared_vision_result->magic = 0U;
     g_shared_vision_result->seq = 0U;
+    g_shared_vision_screen_ctrl->magic = SHARED_VISION_SCREEN_MAGIC;
+    g_shared_vision_screen_ctrl->request_seq = 0U;
+    g_shared_vision_screen_ctrl->active_seq = 0U;
+    g_shared_vision_screen_ctrl->requested_owner = CROSS_CORE_CAMERA_SCREEN_OWNER_NONE;
+    g_shared_vision_screen_ctrl->active_owner = CROSS_CORE_CAMERA_SCREEN_OWNER_NONE;
     CrossCoreCamera_CleanInput();
     CrossCoreCamera_CleanResult();
+    CrossCoreCamera_CleanScreenCtrl();
     seekfree_assistant_interface_init(SEEKFREE_ASSISTANT_CUSTOM);
 }
 
@@ -306,5 +438,33 @@ uint8 CrossCoreCamera_ControlCoreSendAssistantFrame(void)
 {
     /* Full camera frames now stay on CM7_1; CM7_0 must not send a stale local image. */
     return 0U;
+}
+
+void CrossCoreCamera_ControlCoreRequestVisionScreen(uint8 enable)
+{
+    CrossCoreCamera_InvalidateScreenCtrl();
+    if(g_shared_vision_screen_ctrl->magic != SHARED_VISION_SCREEN_MAGIC)
+    {
+        g_shared_vision_screen_ctrl->magic = SHARED_VISION_SCREEN_MAGIC;
+        g_shared_vision_screen_ctrl->request_seq = 0U;
+        g_shared_vision_screen_ctrl->active_seq = 0U;
+        g_shared_vision_screen_ctrl->active_owner = CROSS_CORE_CAMERA_SCREEN_OWNER_NONE;
+    }
+
+    g_shared_vision_screen_ctrl->requested_owner = enable ? CROSS_CORE_CAMERA_SCREEN_OWNER_VISION
+                                                          : CROSS_CORE_CAMERA_SCREEN_OWNER_NONE;
+    g_shared_vision_screen_ctrl->request_seq++;
+    CrossCoreCamera_CleanScreenCtrl();
+}
+
+uint8 CrossCoreCamera_ControlCoreIsVisionScreenActive(void)
+{
+    CrossCoreCamera_InvalidateScreenCtrl();
+    if(g_shared_vision_screen_ctrl->magic != SHARED_VISION_SCREEN_MAGIC)
+    {
+        return 0U;
+    }
+
+    return (g_shared_vision_screen_ctrl->active_owner == CROSS_CORE_CAMERA_SCREEN_OWNER_VISION) ? 1U : 0U;
 }
 #endif
