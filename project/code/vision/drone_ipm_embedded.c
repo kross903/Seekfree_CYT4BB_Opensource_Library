@@ -30,6 +30,92 @@ DroneIPM_Coeff_t g_ipm;
 static const float W_half = (float)IMAGE_WIDTH / 2.0f;
 static const float H_half = (float)IMAGE_HEIGHT / 2.0f;
 
+static void DroneIPM_Embedded_PixelToRayBody(float img_x, float img_y, float ray_body[3])
+{
+#if DRONE_IPM_CAMERA_PROJECTION == DRONE_IPM_CAMERA_PROJECTION_FISHEYE_EQUIDISTANT
+    float du = img_x - W_half;
+    float dv = img_y - H_half;
+    float radius = sqrtf(du * du + dv * dv);
+
+    if(radius < 1e-6f)
+    {
+        ray_body[0] = 0.0f;
+        ray_body[1] = 0.0f;
+        ray_body[2] = 1.0f;
+        return;
+    }
+
+    {
+        float theta = radius * g_ipm.K_fov_x;
+        float sin_theta = sinf(theta);
+        float cos_theta = cosf(theta);
+        float radial_scale = sin_theta / radius;
+
+        ray_body[0] = dv * radial_scale;
+        ray_body[1] = du * radial_scale;
+        ray_body[2] = cos_theta;
+    }
+#else
+    float u_n = (img_x - W_half) * g_ipm.K_fov_x;
+    float v_n = (img_y - H_half) * g_ipm.K_fov_y;
+
+    ray_body[0] = v_n;
+    ray_body[1] = u_n;
+    ray_body[2] = 1.0f;
+#endif
+}
+
+static bool DroneIPM_Embedded_RayBodyToPixel(const float ray_body[3], int *result)
+{
+    float img_x_f = 0.0f;
+    float img_y_f = 0.0f;
+
+    if(ray_body[2] <= 0.0f)
+    {
+        return false;
+    }
+
+#if DRONE_IPM_CAMERA_PROJECTION == DRONE_IPM_CAMERA_PROJECTION_FISHEYE_EQUIDISTANT
+    {
+        float lateral = sqrtf(ray_body[0] * ray_body[0] + ray_body[1] * ray_body[1]);
+
+        if(lateral < 1e-6f)
+        {
+            img_x_f = W_half;
+            img_y_f = H_half;
+        }
+        else
+        {
+            float theta = atan2f(lateral, ray_body[2]);
+            float radius = theta * g_ipm.K_inv;
+            float pixel_scale = radius / lateral;
+
+            img_x_f = ray_body[1] * pixel_scale + W_half;
+            img_y_f = ray_body[0] * pixel_scale + H_half;
+        }
+    }
+#else
+    {
+        float v_n = ray_body[0] / ray_body[2];
+        float u_n = ray_body[1] / ray_body[2];
+
+        img_x_f = u_n / g_ipm.K_fov_x + W_half;
+        img_y_f = v_n / g_ipm.K_fov_y + H_half;
+    }
+#endif
+
+    result[0] = (int)(img_x_f + 0.5f);
+    result[1] = (int)(img_y_f + 0.5f);
+
+    if(result[0] < 0 || result[0] >= IMAGE_WIDTH ||
+       result[1] < 0 || result[1] >= IMAGE_HEIGHT)
+    {
+        return false;
+    }
+
+    return true;
+}
+
 /**
  * @brief 初始化IPM系数
  *
@@ -40,16 +126,25 @@ void DroneIPM_Embedded_Init(void)
 {
     memset(&g_ipm, 0, sizeof(g_ipm));
 
-    /* 计算FOV相关系数 */
-    float tan_fov_x = tanf(CAM_FOV_X * DEG2RAD_F);
-    float tan_fov_y = tanf(CAM_FOV_Y * DEG2RAD_F);
+#if DRONE_IPM_CAMERA_PROJECTION == DRONE_IPM_CAMERA_PROJECTION_FISHEYE_EQUIDISTANT
+    {
+        float half_diagonal_fov_rad = 0.5f * CAM_FOV_DIAGONAL_DEG * DEG2RAD_F;
+        float img_radius_half = sqrtf(W_half * W_half + H_half * H_half);
 
-    /* 像素到归一化坐标的系数 */
-    g_ipm.K_fov_x = tan_fov_x / W_half;
-    g_ipm.K_fov_y = tan_fov_y / H_half;
+        g_ipm.K_fov_x = half_diagonal_fov_rad / img_radius_half;
+        g_ipm.K_fov_y = g_ipm.K_fov_x;
+        g_ipm.K_inv = img_radius_half / half_diagonal_fov_rad;
+    }
+#else
+    {
+        float tan_fov_x = tanf(CAM_FOV_X * DEG2RAD_F);
+        float tan_fov_y = tanf(CAM_FOV_Y * DEG2RAD_F);
 
-    /* 归一化坐标到像素的系数 */
-    g_ipm.K_inv = W_half / tan_fov_x;
+        g_ipm.K_fov_x = tan_fov_x / W_half;
+        g_ipm.K_fov_y = tan_fov_y / H_half;
+        g_ipm.K_inv = W_half / tan_fov_x;
+    }
+#endif
 
     /* 初始化为水平状态 */
     DroneIPM_Embedded_Update(0.0f, 0.0f, 100.0f);
@@ -136,24 +231,8 @@ void DroneIPM_Embedded_Update(float roll_deg, float pitch_deg, float height)
  */
 void DroneIPM_Embedded_Image2World(sint16 img_x, sint16 img_y, float *result)
 {
-    /* 步骤1: 像素坐标转归一化坐标
-     * 图像中心(W/2, H/2)对应归一化坐标(0, 0)
-     * u_n: 向右为正, v_n: 向下为正
-     */
-    float u_n = ((float)img_x - W_half) * g_ipm.K_fov_x;  /* 对应机体Y */
-    float v_n = ((float)img_y - H_half) * g_ipm.K_fov_y;  /* 对应机体X */
-
-    /* 步骤2: 构建机体坐标系中的光线方向
-     * 摄像头正朝下: 光轴沿机体+Z方向(向下)
-     * 图像v方向 -> 机体X方向(向前)
-     * 图像u方向 -> 机体Y方向(向右)
-     *
-     * ray_body = [v_n, u_n, 1] (未归一化)
-     */
     float ray_body[3];
-    ray_body[0] = v_n;    /* X: 图像v对应前后 */
-    ray_body[1] = u_n;    /* Y: 图像u对应左右 */
-    ray_body[2] = 1.0f;   /* Z: 光轴朝下 */
+    DroneIPM_Embedded_PixelToRayBody((float)img_x, (float)img_y, ray_body);
 
     /* 步骤3: 将光线变换到世界坐标系
      * ray_world = R * ray_body
@@ -229,33 +308,7 @@ bool DroneIPM_Embedded_World2Image(float world_x, float world_y, int *result)
                   g_ipm.R[1][2] * vec_world[1] +
                   g_ipm.R[2][2] * vec_world[2];
 
-    /* 步骤3: 检查点是否在摄像头视野内(+Z方向) */
-    if (vec_body[2] <= 0.0f) {
-        return false;  /* 点在摄像头后方 */
-    }
-
-    /* 步骤4: 投影到归一化坐标
-     * v_n = vec_body[0] / vec_body[2]
-     * u_n = vec_body[1] / vec_body[2]
-     */
-    float v_n = vec_body[0] / vec_body[2];
-    float u_n = vec_body[1] / vec_body[2];
-
-    /* 步骤5: 转换为像素坐标 */
-    float img_x_f = u_n / g_ipm.K_fov_x + W_half;
-    float img_y_f = v_n / g_ipm.K_fov_y + H_half;
-
-    /* 四舍五入 */
-    result[0] = (int)(img_x_f + 0.5f);
-    result[1] = (int)(img_y_f + 0.5f);
-
-    /* 检查是否在图像范围内 */
-    if (result[0] < 0 || result[0] >= IMAGE_WIDTH ||
-        result[1] < 0 || result[1] >= IMAGE_HEIGHT) {
-        return false;
-    }
-
-    return true;
+    return DroneIPM_Embedded_RayBodyToPixel(vec_body, result);
 }
 
 /**

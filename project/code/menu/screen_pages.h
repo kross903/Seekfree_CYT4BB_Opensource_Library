@@ -8,10 +8,10 @@ struct Menu;
 typedef enum
 {
     MONITOR_PAGE_DATA = 0,
+    MONITOR_PAGE_COUNT,
     MONITOR_PAGE_IMAGE,
     MONITOR_PAGE_TOF_ATTITUDE,
-    MONITOR_PAGE_OPTICAL_FLOW,
-    MONITOR_PAGE_COUNT
+    MONITOR_PAGE_OPTICAL_FLOW
 } monitor_page_enum;
 
 typedef struct

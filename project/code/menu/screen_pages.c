@@ -528,24 +528,22 @@ static void ui_monitor_draw_view_layout(void)
     ips200_clear();
 
     ips200_set_color(RGB565_YELLOW, RGB565_BLACK);
-    ips200_show_string(0U, UI_MONITOR_TITLE_Y, "FLIGHT MONITOR");
+    ips200_show_string(0U, UI_MONITOR_TITLE_Y, "FLIGHT SAFETY");
     ips200_show_string(0U, UI_MONITOR_MODE_Y, "MODE:");
     ips200_show_string(120U, UI_MONITOR_MODE_Y, "ARM:");
     ips200_show_string(0U, UI_MONITOR_BATTERY_Y, "BAT:");
-    ips200_show_string(120U, UI_MONITOR_BATTERY_Y, "STAT:");
+    ips200_show_string(120U, UI_MONITOR_BATTERY_Y, "LOW:");
     ips200_show_string(0U, UI_MONITOR_THROTTLE_Y, "TTHR:");
     ips200_show_string(120U, UI_MONITOR_THROTTLE_Y, "BTHR:");
-    ips200_show_string(0U, UI_MONITOR_ATTITUDE_Y, "ROLL:");
-    ips200_show_string(120U, UI_MONITOR_ATTITUDE_Y, "PITCH:");
-    ips200_show_string(0U, UI_MONITOR_YAW_Y, "YAW:");
-    ips200_show_string(120U, UI_MONITOR_YAW_Y, "BCN:");
-    ips200_show_string(0U, UI_MONITOR_NEAREST_Y, "NX:");
-    ips200_show_string(120U, UI_MONITOR_NEAREST_Y, "NY:");
-    ips200_show_string(0U, UI_MONITOR_HEIGHT_Y, "TOF:");
-    ips200_show_string(120U, UI_MONITOR_HEIGHT_Y, "HFH:");
-    ips200_show_string(0U, UI_MONITOR_IR_Y, "IRZ:");
-    ips200_show_string(120U, UI_MONITOR_IR_Y, "HFV:");
-    ips200_show_string(0U, UI_MONITOR_VISION_Y, "VISION:");
+    ips200_show_string(0U, UI_MONITOR_ATTITUDE_Y, "HFH:");
+    ips200_show_string(120U, UI_MONITOR_ATTITUDE_Y, "TOF:");
+    ips200_show_string(0U, UI_MONITOR_YAW_Y, "VZ:");
+    ips200_show_string(120U, UI_MONITOR_YAW_Y, "IR:");
+    ips200_show_string(0U, UI_MONITOR_NEAREST_Y, "IRX:");
+    ips200_show_string(120U, UI_MONITOR_NEAREST_Y, "IRY:");
+    ips200_show_string(0U, UI_MONITOR_HEIGHT_Y, "ROLL:");
+    ips200_show_string(120U, UI_MONITOR_HEIGHT_Y, "PITCH:");
+    ips200_show_string(0U, UI_MONITOR_IR_Y, "BCN:");
     ips200_show_string(0U, UI_MONITOR_HINT_BOTTOM_Y, "K4:STOP HOLD K4:MENU");
     ips200_set_color(RGB565_WHITE, RGB565_BLACK);
 }
@@ -630,10 +628,12 @@ static void ui_monitor_draw_view_hud(const MonitorViewHudData *data)
     ips200_show_int(UI_MONITOR_LEFT_VALUE_X, UI_MONITOR_THROTTLE_Y, data->target_throttle, 4U);
     ips200_show_int(UI_MONITOR_RIGHT_VALUE_X, UI_MONITOR_THROTTLE_Y, data->base_throttle, 4U);
 
-    ips200_show_float(UI_MONITOR_LEFT_VALUE_X, UI_MONITOR_ATTITUDE_Y, data->roll, 4U, 1U);
-    ips200_show_float(UI_MONITOR_RIGHT_VALUE_X, UI_MONITOR_ATTITUDE_Y, data->pitch, 4U, 1U);
-    ips200_show_float(UI_MONITOR_LEFT_VALUE_X, UI_MONITOR_YAW_Y, data->yaw, 4U, 1U);
-    ips200_show_int(UI_MONITOR_RIGHT_VALUE_X, UI_MONITOR_YAW_Y, data->beacon_count, 2U);
+    ips200_show_float(UI_MONITOR_LEFT_VALUE_X, UI_MONITOR_ATTITUDE_Y, data->fused_height_cm, 4U, 1U);
+    ips200_show_float(UI_MONITOR_RIGHT_VALUE_X, UI_MONITOR_ATTITUDE_Y, data->tof_height_cm, 4U, 1U);
+    ips200_show_float(UI_MONITOR_LEFT_VALUE_X, UI_MONITOR_YAW_Y, data->fused_velocity_cms, 4U, 1U);
+    ui_show_padded_text(UI_MONITOR_RIGHT_VALUE_X, UI_MONITOR_YAW_Y, data->has_nearest ? "TRACK" : "LOST", 6U,
+                        data->has_nearest ? RGB565_GREEN : RGB565_RED);
+    ips200_set_color(RGB565_WHITE, RGB565_BLACK);
 
     if(data->has_nearest)
     {
@@ -646,11 +646,9 @@ static void ui_monitor_draw_view_hud(const MonitorViewHudData *data)
         ui_show_padded_text(UI_MONITOR_RIGHT_VALUE_X, UI_MONITOR_NEAREST_Y, "NONE", 6U, RGB565_WHITE);
     }
 
-    ips200_show_float(UI_MONITOR_LEFT_VALUE_X, UI_MONITOR_HEIGHT_Y, data->tof_height_cm, 4U, 1U);
-    ips200_show_float(UI_MONITOR_RIGHT_VALUE_X, UI_MONITOR_HEIGHT_Y, data->fused_height_cm, 4U, 1U);
-    ips200_show_float(UI_MONITOR_LEFT_VALUE_X, UI_MONITOR_IR_Y, data->ir_height_cm, 4U, 1U);
-    ips200_show_float(UI_MONITOR_RIGHT_VALUE_X, UI_MONITOR_IR_Y, data->fused_velocity_cms, 4U, 1U);
-    ui_show_padded_text(UI_MONITOR_VISION_VALUE_X, UI_MONITOR_VISION_Y, data->vision_text, 4U, RGB565_WHITE);
+    ips200_show_float(UI_MONITOR_LEFT_VALUE_X, UI_MONITOR_HEIGHT_Y, data->roll, 4U, 1U);
+    ips200_show_float(UI_MONITOR_RIGHT_VALUE_X, UI_MONITOR_HEIGHT_Y, data->pitch, 4U, 1U);
+    ips200_show_int(UI_MONITOR_LEFT_VALUE_X, UI_MONITOR_IR_Y, data->beacon_count, 2U);
     ui_show_padded_text(0U, UI_MONITOR_HINT_TOP_Y, data->hint_text, 28U, RGB565_WHITE);
 }
 

@@ -47,13 +47,25 @@
 #define IMAGE_HEIGHT  120   /* 根据实际摄像头修改 */
 #endif
 
+/* Camera projection model. The 170 deg M12 lens is treated as an equidistant fisheye by default. */
+#define DRONE_IPM_CAMERA_PROJECTION_PINHOLE              (0)
+#define DRONE_IPM_CAMERA_PROJECTION_FISHEYE_EQUIDISTANT  (1)
+
+#ifndef DRONE_IPM_CAMERA_PROJECTION
+#define DRONE_IPM_CAMERA_PROJECTION  DRONE_IPM_CAMERA_PROJECTION_FISHEYE_EQUIDISTANT
+#endif
+
+#ifndef CAM_FOV_DIAGONAL_DEG
+#define CAM_FOV_DIAGONAL_DEG  170.0f
+#endif
+
 /* 摄像头参数 - 根据MT9V03X实际标定修改 */
 #ifndef CAM_FOV_X
-#define CAM_FOV_X     50.0f  /* 水平半视场角(度) */
+#define CAM_FOV_X     84.1f  /* pinhole fallback horizontal half FOV */
 #endif
 
 #ifndef CAM_FOV_Y
-#define CAM_FOV_Y     35.0f  /* 垂直半视场角(度) */
+#define CAM_FOV_Y     80.8f  /* pinhole fallback vertical half FOV */
 #endif
 
 /* 常量定义 */
@@ -81,12 +93,12 @@ typedef struct {
     /* 摄像头位置(世界系) */
     float X0, Y0, Z0;
 
-    /* FOV相关系数 */
-    float K_fov_x;   /* = tan(fov_x) / (IMAGE_WIDTH/2) */
-    float K_fov_y;   /* = tan(fov_y) / (IMAGE_HEIGHT/2) */
+    /* Projection coefficients. Meaning depends on DRONE_IPM_CAMERA_PROJECTION. */
+    float K_fov_x;
+    float K_fov_y;
 
-    /* 逆变换系数(世界->图像) */
-    float K_inv;     /* = IMAGE_WIDTH / (2 * tan(fov_x)) */
+    /* Inverse projection coefficient. */
+    float K_inv;
 
     /* 当前状态 */
     float roll;      /* 弧度 */
