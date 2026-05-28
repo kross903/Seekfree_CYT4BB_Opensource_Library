@@ -45,8 +45,9 @@ static void send_sixteen_date(float date_1, float date_2, float date_3, float da
  *   F8  光流速度闭环综合监视 (case 8): I0~I3 X轴 光流实际/目标/积分项/pitch修正,
  *                                       I4~I7 Y轴 光流实际/目标/积分项/roll 修正
  * FD  高度环监视 (case 13): I0 实际高度(cm), I1 目标高度(cm),
- *                                        I2 高度误差(cm), I3 HeightPID输出,
- *                                        I4 比例项, I5 积分项, I6 微分项, I7 base_throttle
+ *                                        I2 高度误差(cm), I3 油门修正,
+ *                                        I4 目标垂直速度, I5 融合垂直速度,
+ *                                        I6 速度误差, I7 base_throttle
  * FE  光流原始输入诊断 (case 14)
  * FG  红外正方形中心点与丢失保护诊断 (case 16)
  * FH  红外丢失保护状态机诊断 (case 17)
@@ -1024,6 +1025,8 @@ void USART_PID_Adjust(void)
                 case 'q': send_back_flag = 25; break;
                 case 'R':
                 case 'r': send_back_flag = 26; break;
+                case 'S':
+                case 's': send_back_flag = 27; break;
                 default: break;
             }
 
@@ -1241,19 +1244,19 @@ void send_date_back(void)
 
         case 13:
         {
-            /* 高度环全要素监视。
-             * I0 实际高度 (cm)       - 滤波后高度
-             * I1 目标高度 (cm)       - HEIGHT_TARGET_CM = 100
-             * I2 高度误差 (cm)       - 目标 - 实际
-             * I3 HeightPID 整体输出  - HeightSpeedPID_output
-             * I4 比例项 (Kp * error) - HeightPID.Kp * (target - actual)
-             * I5 积分项              - HeightPID.Ki * HeightPID.integral
-             * I6 微分项              - HeightPID.Kd * HeightPID.derivative
-             * I7 base_throttle       - 当前基础油门，便于观察高度环修正幅度
+            /* FD: I0 height, I1 target, I2 height error, I3 throttle correction,
+             *     I4 target vz, I5 fused vz, I6 velocity error, I7 base throttle.
              */
-            float actual_cm  = tof_height_true_filt * 100.0f;
-            float target_cm  = HeightManager_Get_Active_Target();
-            float error_cm   = target_cm - actual_cm;
+            HeightManagerDiag_t height_diag;
+            float actual_cm;
+            float target_cm;
+            float error_cm;
+
+            HeightManager_Get_Diag(&height_diag);
+
+            actual_cm  = g_height_result.height_cm;
+            target_cm  = HeightManager_Get_Active_Target();
+            error_cm   = target_cm - actual_cm;
             if(error_cm > 40.0f)
             {
                 error_cm = 40.0f;
@@ -1262,17 +1265,13 @@ void send_date_back(void)
             {
                 error_cm = -40.0f;
             }
-            float p_term     = HeightPID.Kp * error_cm;
-            float i_term     = HeightPID.Ki * HeightPID.integral;
-            float d_term     = HeightPID.Kd * HeightPID.derivative;
-
             send_four_date(actual_cm,
                            target_cm,
                            error_cm,
                            HeightSpeedPID_output,
-                           p_term,
-                           i_term,
-                           d_term,
+                           height_diag.target_velocity_cms,
+                           g_height_result.velocity_cms,
+                           height_diag.velocity_error_cms,
                            base_throttle);
             break;
         }
@@ -1533,6 +1532,35 @@ void send_date_back(void)
                            VOFA_LOOP_OVERRUN_US,
                            (float)SystemCoreClock);
             break;
+
+        case 27:
+        {
+            HeightManagerDiag_t height_diag;
+            float actual_cm;
+            float target_cm;
+
+            HeightManager_Get_Diag(&height_diag);
+            actual_cm = g_height_result.height_cm;
+            target_cm = HeightManager_Get_Active_Target();
+
+            send_sixteen_date(actual_cm,
+                              target_cm,
+                              height_diag.tof_median_cm,
+                              height_diag.tof_height_filt_cm,
+                              height_diag.tof_velocity_cms,
+                              height_diag.acc_velocity_cms,
+                              height_diag.fused_velocity_cms,
+                              height_diag.target_velocity_cms,
+                              height_diag.velocity_error_cms,
+                              height_diag.velocity_pid_output,
+                              height_diag.acc_z_level_mg,
+                              height_diag.gravity_bias_mg,
+                              height_diag.acc_z_cms2,
+                              (float)height_diag.tof_valid,
+                              (float)height_diag.acc_used,
+                              (float)height_diag.cascade_enabled);
+            break;
+        }
 
         default:
             break;

@@ -422,6 +422,7 @@ void Flight_Control_Reset_All_PID(void)
     PID_Reset(&pos_pid_x);
     PID_Reset(&pos_pid_y);
     PID_Reset(&HeightPID);
+    PID_Reset(&HeightVelPID);
 
     sync_runtime_snapshot();
 }
@@ -449,6 +450,7 @@ void Flight_Control_Reset_Angle_PID(uint8 axis)
 void Flight_Control_Reset_Height_PID(void)
 {
     PID_Reset(&HeightPID);
+    PID_Reset(&HeightVelPID);
     sync_runtime_snapshot();
 }
 

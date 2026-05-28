@@ -237,7 +237,7 @@ S1=450!
 | `FA=0!` 或 `FA!` | 加速度水平化残差诊断 |
 | `FB=0!` 或 `FB!` | 光流速度旋转到世界系后的速度与积分位置 |
 | `FC=0!` 或 `FC!` | 速度积分位置与光流单帧位移积分位置对比 |
-| `FD=0!` 或 `FD!` | 高度环监视：I0 实际高度, I1 目标高度, I2 误差, I3 PID输出, I4 P项, I5 I项, I6 D项, I7 base_throttle |
+| `FD=0!` 或 `FD!` | 高度环摘要：I0 实际高度, I1 目标高度, I2 高度误差, I3 油门修正, I4 目标垂直速度, I5 融合垂直速度, I6 速度误差, I7 base_throttle |
 | `FE=0!` 或 `FE!` | 光流原始输入诊断：UP-FLOW-302 模式下回传原始 x/y、valid、状态、新帧标志、帧间隔 |
 | `FF=0!` 或 `FF!` | Roll/Pitch 角度环监视：目标角、实际角、I项输出、低通后的总输出 |
 | `FG=0!` 或 `FG!` | 红外正方形中心点：I0 中心 X, I1 中心 Y, I2 视觉高度, I3 正方形边长, I4 可追踪, I5 丢失标志, I7 本帧识别点数 |
@@ -519,10 +519,10 @@ F9 当前用于观察 ICM 预测速度、光流校正速度和融合速度的差
 - `I0`: `actual_cm`——ToF 滤波后实际高度，单位 cm
 - `I1`: `target_cm`——高度管理器当前目标高度，单位 cm
 - `I2`: `error_cm`——高度误差，已限幅到 `[-40, 40]cm`
-- `I3`: `HeightSpeedPID_output`——高度 PID 整体输出
-- `I4`: `p_term`——比例项，`HeightPID.Kp * error_cm`
-- `I5`: `i_term`——积分项，`HeightPID.Ki * HeightPID.integral`
-- `I6`: `d_term`——微分项，`HeightPID.Kd * HeightPID.derivative`
+- `I3`: `HeightSpeedPID_output`——速度内环输出的油门修正
+- `I4`: `target_velocity_cms`——高度外环输出的目标垂直速度，单位 cm/s
+- `I5`: `g_height_result.velocity_cms`——融合垂直速度，单位 cm/s
+- `I6`: `velocity_error_cms`——速度误差，单位 cm/s
 - `I7`: `base_throttle`——当前基础油门
 
 ### `FE`：光流原始输入诊断
@@ -872,7 +872,29 @@ FN!
 FP!
 FQ!
 FR!
+FS!
 ```
+
+### `FS`: Height estimator / cascade PID
+
+Use `FS!` for the new height estimator and cascade loop diagnostics.
+
+- `I0`: fused height, cm
+- `I1`: active target height, cm
+- `I2`: ToF median height after tilt/install compensation, cm
+- `I3`: filtered ToF height, cm
+- `I4`: ToF differential velocity after strong LPF, cm/s
+- `I5`: accelerometer integrated velocity after LPF/leak, cm/s
+- `I6`: fused vertical velocity, cm/s
+- `I7`: outer-loop target vertical velocity, cm/s
+- `I8`: velocity error, cm/s
+- `I9`: velocity PID throttle correction
+- `I10`: roll/pitch-level Z acceleration, mg
+- `I11`: gravity bias, mg
+- `I12`: gravity-removed Z acceleration, cm/s^2
+- `I13`: ToF valid flag
+- `I14`: accelerometer velocity used flag
+- `I15`: cascade enabled flag
 
 ### 强制失锁
 

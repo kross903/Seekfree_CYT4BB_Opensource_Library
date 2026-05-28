@@ -42,6 +42,7 @@ static void init_default_pid_parameters(void)
     /* HeightPID @ 100Hz. Parameters restored from commit 4b9a48f "定点飞行参数". */
     // PID_Init(&HeightPID, 1.0f, 0.001f, 0.01f, 80.0f, 30.0f, 10000.0f, 0.3f);
     PID_Init(&HeightPID, 2.0f, 0.0001f, 0.1f, 80.0f, 30.0f, 10000.0f, 0.3f);
+    PID_Init(&HeightVelPID, 1.0f, 0.0001f, 0.0f, 80.0f, 20.0f, 10000.0f, 0.3f);
     // PID_Init(&angle_pid_roll,  8.5f, 0.0005f, 0.0f, 300.0f, 60000.0f, 10000.0f, 0.8f);
     // PID_Init(&angle_pid_pitch, 6.5f, 0.0001f, 0.0f, 300.0f, 60000.0f, 10000.0f, 0.8f);
     // PID_Init(&angle_pid_yaw, 3.0f, 0.0f, 0.0f, 100.0f, 20.0f, 0.0f, 0.0f);
