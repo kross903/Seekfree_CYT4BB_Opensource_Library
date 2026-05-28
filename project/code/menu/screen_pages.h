@@ -8,15 +8,11 @@ struct Menu;
 typedef enum
 {
     MONITOR_PAGE_DATA = 0,
-    MONITOR_PAGE_COUNT,
-    MONITOR_PAGE_IMAGE,
-    MONITOR_PAGE_TOF_ATTITUDE,
-    MONITOR_PAGE_OPTICAL_FLOW
+    MONITOR_PAGE_COUNT
 } monitor_page_enum;
 
 typedef struct
 {
-    uint8 *image_buffer;
     uint8 control_mode;
     uint8 armed;
     uint8 low_voltage;
@@ -30,31 +26,9 @@ typedef struct
     int32 beacon_count;
     float nearest_x;
     float nearest_y;
-    float tof_raw_cm;
     float tof_height_cm;
     float fused_height_cm;
-    float ir_height_cm;
     float fused_velocity_cms;
-    uint8 optical_flow_valid;
-    int32 optical_flow_dx;
-    int32 optical_flow_dy;
-    int32 optical_flow_x_integral;
-    float optical_flow_dt_s;
-    float optical_flow_tof_los_cm;
-    float optical_flow_range_cm;
-    float optical_flow_roll_deg;
-    float optical_flow_pitch_deg;
-    float optical_flow_x_rad;
-    float optical_flow_y_rad;
-    float optical_flow_gyro_x_delta_rad;
-    float optical_flow_gyro_y_delta_rad;
-    float optical_flow_comp_x_rad;
-    float optical_flow_comp_y_rad;
-    float optical_flow_vx_raw_cms;
-    float optical_flow_vy_raw_cms;
-    float optical_flow_vx_cms;
-    float optical_flow_vy_cms;
-    float optical_flow_speed_cms;
 } MonitorRuntimeSnapshot;
 
 void ui_menu_init_display(void);
@@ -74,8 +48,6 @@ void ui_origin_show_live_attitude(float roll, float pitch, float yaw);
 void ui_origin_show_average_attitude(float averaged_roll, float averaged_pitch, float averaged_yaw);
 void ui_origin_show_saved(void);
 
-void ui_monitor_show_view_page(const MonitorRuntimeSnapshot *snapshot, uint8 draw_layout);
-void ui_monitor_show_image_page(const MonitorRuntimeSnapshot *snapshot, uint8 draw_layout);
 uint8 screen_monitor_handle_input(monitor_page_enum *page,
                                   const MonitorRuntimeSnapshot *snapshot,
                                   float throttle_step);

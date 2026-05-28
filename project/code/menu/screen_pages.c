@@ -27,14 +27,8 @@
 #define UI_ORIGIN_LINE_HEIGHT        16U
 #define UI_ORIGIN_VALUE_X            120U
 
-#define UI_MONITOR_IMAGE_X           26U
-#define UI_MONITOR_IMAGE_Y           24U
-#define UI_MONITOR_IMAGE_DISP_W      188U
-#define UI_MONITOR_IMAGE_DISP_H      120U
-
 #define UI_MONITOR_LEFT_VALUE_X      48U
 #define UI_MONITOR_RIGHT_VALUE_X     172U
-#define UI_MONITOR_VISION_VALUE_X    72U
 
 #define UI_MONITOR_TITLE_Y           0U
 #define UI_MONITOR_MODE_Y            24U
@@ -45,7 +39,6 @@
 #define UI_MONITOR_NEAREST_Y         144U
 #define UI_MONITOR_HEIGHT_Y          168U
 #define UI_MONITOR_IR_Y              192U
-#define UI_MONITOR_VISION_Y          216U
 #define UI_MONITOR_HINT_TOP_Y        288U
 #define UI_MONITOR_HINT_BOTTOM_Y     304U
 #define MONITOR_ARM_START_THROTTLE   400.0f
@@ -347,7 +340,6 @@ void ui_origin_show_saved(void)
 typedef struct
 {
     const char *mode_text;
-    const char *vision_text;
     const char *hint_text;
     uint8 armed;
     uint8 low_voltage;
@@ -357,64 +349,13 @@ typedef struct
     int32 base_throttle;
     float roll;
     float pitch;
-    float yaw;
     int32 beacon_count;
     float nearest_x;
     float nearest_y;
     float tof_height_cm;
     float fused_height_cm;
-    float ir_height_cm;
     float fused_velocity_cms;
 } MonitorViewHudData;
-
-typedef struct
-{
-    uint8 *image_buffer;
-    const char *mode_text;
-    const char *hint_text;
-    int32 target_throttle;
-    uint8 armed;
-    int32 beacon_count;
-} MonitorImageHudData;
-
-typedef struct
-{
-    const char *hint_text;
-    float tof_raw_cm;
-    float tof_filt_cm;
-    float roll;
-    float pitch;
-    float yaw;
-    int32 optical_flow_dx;
-    int32 optical_flow_dy;
-    int32 optical_flow_x_integral;
-} MonitorTofAttitudeHudData;
-
-typedef struct
-{
-    const char *hint_text;
-    const char *valid_text;
-    uint8 valid;
-    float dt_ms;
-    float tof_los_cm;
-    float range_cm;
-    float roll_deg;
-    float pitch_deg;
-    int32 flow_delta_x;
-    int32 flow_delta_y;
-    int32 flow_x_integral;
-    float flow_x_rad;
-    float flow_y_rad;
-    float gyro_x_delta_rad;
-    float gyro_y_delta_rad;
-    float flow_comp_x_rad;
-    float flow_comp_y_rad;
-    float velocity_x_raw_cms;
-    float velocity_y_raw_cms;
-    float velocity_x_cms;
-    float velocity_y_cms;
-    float speed_cms;
-} MonitorOpticalFlowHudData;
 
 static const char *ui_monitor_mode_text(uint8 control_mode)
 {
@@ -426,11 +367,6 @@ static const char *ui_monitor_hint_text(uint8 armed)
     return armed ? "K1:+100 K2:-100 K3:KEEP" : "K1:PREV K2:NEXT K3:ARM";
 }
 
-static const char *ui_monitor_flow_valid_text(uint8 optical_flow_valid)
-{
-    return optical_flow_valid ? "OK" : "DROP";
-}
-
 static void ui_monitor_fill_view_hud(const MonitorRuntimeSnapshot *snapshot, MonitorViewHudData *data)
 {
     if(snapshot == NULL || data == NULL)
@@ -439,7 +375,6 @@ static void ui_monitor_fill_view_hud(const MonitorRuntimeSnapshot *snapshot, Mon
     }
 
     data->mode_text = ui_monitor_mode_text(snapshot->control_mode);
-    data->vision_text = "RUN";
     data->hint_text = ui_monitor_hint_text(snapshot->armed);
     data->armed = snapshot->armed;
     data->low_voltage = snapshot->low_voltage;
@@ -449,78 +384,12 @@ static void ui_monitor_fill_view_hud(const MonitorRuntimeSnapshot *snapshot, Mon
     data->base_throttle = snapshot->base_throttle;
     data->roll = snapshot->roll;
     data->pitch = snapshot->pitch;
-    data->yaw = snapshot->yaw;
     data->beacon_count = snapshot->beacon_count;
     data->nearest_x = snapshot->nearest_x;
     data->nearest_y = snapshot->nearest_y;
     data->tof_height_cm = snapshot->tof_height_cm;
     data->fused_height_cm = snapshot->fused_height_cm;
-    data->ir_height_cm = snapshot->ir_height_cm;
     data->fused_velocity_cms = snapshot->fused_velocity_cms;
-}
-
-static void ui_monitor_fill_image_hud(const MonitorRuntimeSnapshot *snapshot, MonitorImageHudData *data)
-{
-    if(snapshot == NULL || data == NULL)
-    {
-        return;
-    }
-
-    data->image_buffer = snapshot->image_buffer;
-    data->mode_text = ui_monitor_mode_text(snapshot->control_mode);
-    data->hint_text = ui_monitor_hint_text(snapshot->armed);
-    data->target_throttle = snapshot->target_throttle;
-    data->armed = snapshot->armed;
-    data->beacon_count = snapshot->beacon_count;
-}
-
-static void ui_monitor_fill_tof_attitude_hud(const MonitorRuntimeSnapshot *snapshot, MonitorTofAttitudeHudData *data)
-{
-    if(snapshot == NULL || data == NULL)
-    {
-        return;
-    }
-
-    data->hint_text = ui_monitor_hint_text(snapshot->armed);
-    data->tof_raw_cm = snapshot->tof_raw_cm;
-    data->tof_filt_cm = snapshot->tof_height_cm;
-    data->roll = snapshot->roll;
-    data->pitch = snapshot->pitch;
-    data->yaw = snapshot->yaw;
-    data->optical_flow_dx = snapshot->optical_flow_dx;
-    data->optical_flow_dy = snapshot->optical_flow_dy;
-    data->optical_flow_x_integral = snapshot->optical_flow_x_integral;
-}
-
-static void ui_monitor_fill_optical_flow_hud(const MonitorRuntimeSnapshot *snapshot, MonitorOpticalFlowHudData *data)
-{
-    if(snapshot == NULL || data == NULL)
-    {
-        return;
-    }
-
-    data->hint_text = ui_monitor_hint_text(snapshot->armed);
-    data->valid_text = ui_monitor_flow_valid_text(snapshot->optical_flow_valid);
-    data->valid = snapshot->optical_flow_valid;
-    data->dt_ms = snapshot->optical_flow_dt_s * 1000.0f;
-    data->tof_los_cm = snapshot->optical_flow_tof_los_cm;
-    data->range_cm = snapshot->optical_flow_range_cm;
-    data->roll_deg = snapshot->optical_flow_roll_deg;
-    data->pitch_deg = snapshot->optical_flow_pitch_deg;
-    data->flow_delta_x = snapshot->optical_flow_dx;
-    data->flow_delta_y = snapshot->optical_flow_dy;
-    data->flow_x_integral = snapshot->optical_flow_x_integral;
-    data->flow_x_rad = snapshot->optical_flow_x_rad;
-    data->flow_y_rad = snapshot->optical_flow_y_rad;
-    data->gyro_x_delta_rad = snapshot->optical_flow_gyro_x_delta_rad;
-    data->gyro_y_delta_rad = snapshot->optical_flow_gyro_y_delta_rad;
-    data->flow_comp_x_rad = snapshot->optical_flow_comp_x_rad;
-    data->flow_comp_y_rad = snapshot->optical_flow_comp_y_rad;
-    data->velocity_x_raw_cms = snapshot->optical_flow_vx_raw_cms;
-    data->velocity_y_raw_cms = snapshot->optical_flow_vy_raw_cms;
-    data->velocity_x_cms = snapshot->optical_flow_vx_cms;
-    data->velocity_y_cms = snapshot->optical_flow_vy_cms;
-    data->speed_cms = snapshot->optical_flow_speed_cms;
 }
 
 static void ui_monitor_draw_view_layout(void)
@@ -544,68 +413,6 @@ static void ui_monitor_draw_view_layout(void)
     ips200_show_string(0U, UI_MONITOR_HEIGHT_Y, "ROLL:");
     ips200_show_string(120U, UI_MONITOR_HEIGHT_Y, "PITCH:");
     ips200_show_string(0U, UI_MONITOR_IR_Y, "BCN:");
-    ips200_show_string(0U, UI_MONITOR_HINT_BOTTOM_Y, "K4:STOP HOLD K4:MENU");
-    ips200_set_color(RGB565_WHITE, RGB565_BLACK);
-}
-
-static void ui_monitor_draw_image_layout(void)
-{
-    ips200_clear();
-
-    ips200_set_color(RGB565_YELLOW, RGB565_BLACK);
-    ips200_show_string(0U, UI_MONITOR_TITLE_Y, "FLIGHT IMAGE");
-    ips200_show_string(0U, UI_MONITOR_HEIGHT_Y, "THR:");
-    ips200_show_string(120U, UI_MONITOR_HEIGHT_Y, "ARM:");
-    ips200_show_string(0U, UI_MONITOR_IR_Y, "X:");
-    ips200_show_string(120U, UI_MONITOR_IR_Y, "Y:");
-    ips200_show_string(0U, UI_MONITOR_HINT_BOTTOM_Y, "K4:STOP HOLD K4:MENU");
-    ips200_set_color(RGB565_WHITE, RGB565_BLACK);
-}
-
-static void ui_monitor_draw_tof_attitude_layout(void)
-{
-    ips200_clear();
-
-    ips200_set_color(RGB565_YELLOW, RGB565_BLACK);
-    ips200_show_string(0U, UI_MONITOR_TITLE_Y, "TOF / ATTITUDE");
-    ips200_show_string(0U, UI_MONITOR_MODE_Y, "TOF RAW:");
-    ips200_show_string(0U, UI_MONITOR_BATTERY_Y, "TOF FILT:");
-    ips200_show_string(0U, UI_MONITOR_THROTTLE_Y, "ROLL:");
-    ips200_show_string(0U, UI_MONITOR_ATTITUDE_Y, "PITCH:");
-    ips200_show_string(0U, UI_MONITOR_YAW_Y, "YAW:");
-    ips200_show_string(0U, UI_MONITOR_NEAREST_Y, "OF DX:");
-    ips200_show_string(0U, UI_MONITOR_HEIGHT_Y, "OF DY:");
-    ips200_show_string(0U, UI_MONITOR_IR_Y, "OF XI:");
-    ips200_show_string(0U, UI_MONITOR_HINT_BOTTOM_Y, "K4:STOP HOLD K4:MENU");
-    ips200_set_color(RGB565_WHITE, RGB565_BLACK);
-}
-
-static void ui_monitor_draw_optical_flow_layout(void)
-{
-    ips200_clear();
-
-    ips200_set_color(RGB565_YELLOW, RGB565_BLACK);
-    ips200_show_string(0U, UI_MONITOR_TITLE_Y, "OPTICAL FLOW");
-    ips200_show_string(0U, UI_MONITOR_MODE_Y, "VAL:");
-    ips200_show_string(120U, UI_MONITOR_MODE_Y, "DTms:");
-    ips200_show_string(0U, UI_MONITOR_BATTERY_Y, "DX:");
-    ips200_show_string(120U, UI_MONITOR_BATTERY_Y, "DY:");
-    ips200_show_string(0U, UI_MONITOR_THROTTLE_Y, "TOF:");
-    ips200_show_string(120U, UI_MONITOR_THROTTLE_Y, "RNG:");
-    ips200_show_string(0U, UI_MONITOR_ATTITUDE_Y, "FX:");
-    ips200_show_string(120U, UI_MONITOR_ATTITUDE_Y, "FY:");
-    ips200_show_string(0U, UI_MONITOR_YAW_Y, "GX:");
-    ips200_show_string(120U, UI_MONITOR_YAW_Y, "GY:");
-    ips200_show_string(0U, UI_MONITOR_NEAREST_Y, "CX:");
-    ips200_show_string(120U, UI_MONITOR_NEAREST_Y, "CY:");
-    ips200_show_string(0U, UI_MONITOR_HEIGHT_Y, "VXr:");
-    ips200_show_string(120U, UI_MONITOR_HEIGHT_Y, "VYr:");
-    ips200_show_string(0U, UI_MONITOR_IR_Y, "VX:");
-    ips200_show_string(120U, UI_MONITOR_IR_Y, "VY:");
-    ips200_show_string(0U, UI_MONITOR_VISION_Y, "SPD:");
-    ips200_show_string(120U, UI_MONITOR_VISION_Y, "ROLL:");
-    ips200_show_string(0U, 240U, "PIT:");
-    ips200_show_string(120U, 240U, "XI:");
     ips200_show_string(0U, UI_MONITOR_HINT_BOTTOM_Y, "K4:STOP HOLD K4:MENU");
     ips200_set_color(RGB565_WHITE, RGB565_BLACK);
 }
@@ -652,91 +459,7 @@ static void ui_monitor_draw_view_hud(const MonitorViewHudData *data)
     ui_show_padded_text(0U, UI_MONITOR_HINT_TOP_Y, data->hint_text, 28U, RGB565_WHITE);
 }
 
-static void ui_monitor_draw_image_hud(const MonitorImageHudData *data)
-{
-    if(data == NULL)
-    {
-        return;
-    }
-
-    if(data->image_buffer != NULL)
-    {
-        ips200_show_gray_image(UI_MONITOR_IMAGE_X,
-                               UI_MONITOR_IMAGE_Y,
-                               data->image_buffer,
-                               MT9V03X_W,
-                               MT9V03X_H,
-                               UI_MONITOR_IMAGE_DISP_W,
-                               UI_MONITOR_IMAGE_DISP_H,
-                               0U);
-    }
-
-    ips200_show_int(UI_MONITOR_LEFT_VALUE_X, UI_MONITOR_HEIGHT_Y, data->target_throttle, 4U);
-    ips200_show_int(UI_MONITOR_RIGHT_VALUE_X, UI_MONITOR_HEIGHT_Y, data->armed, 1U);
-    ips200_show_int(UI_MONITOR_LEFT_VALUE_X, UI_MONITOR_IR_Y, adc_x, 5U);
-    ips200_show_int(UI_MONITOR_RIGHT_VALUE_X, UI_MONITOR_IR_Y, adc_y, 5U);
-    ui_show_padded_text(0U, UI_MONITOR_HINT_TOP_Y, data->hint_text, 28U, RGB565_WHITE);
-}
-
-static void ui_monitor_draw_tof_attitude_hud(const MonitorTofAttitudeHudData *data)
-{
-    if(data == NULL)
-    {
-        return;
-    }
-
-    ips200_show_float(UI_MONITOR_RIGHT_VALUE_X, UI_MONITOR_MODE_Y, data->tof_raw_cm, 4U, 1U);
-    ips200_show_float(UI_MONITOR_RIGHT_VALUE_X, UI_MONITOR_BATTERY_Y, data->tof_filt_cm, 4U, 1U);
-    ips200_show_float(UI_MONITOR_RIGHT_VALUE_X, UI_MONITOR_THROTTLE_Y, data->roll, 4U, 1U);
-    ips200_show_float(UI_MONITOR_RIGHT_VALUE_X, UI_MONITOR_ATTITUDE_Y, data->pitch, 4U, 1U);
-    ips200_show_float(UI_MONITOR_RIGHT_VALUE_X, UI_MONITOR_YAW_Y, data->yaw, 4U, 1U);
-    ips200_show_int(UI_MONITOR_RIGHT_VALUE_X, UI_MONITOR_NEAREST_Y, data->optical_flow_dx, 6U);
-    ips200_show_int(UI_MONITOR_RIGHT_VALUE_X, UI_MONITOR_HEIGHT_Y, data->optical_flow_dy, 6U);
-    ips200_show_int(UI_MONITOR_RIGHT_VALUE_X, UI_MONITOR_IR_Y, data->optical_flow_x_integral, 6U);
-    ui_show_padded_text(0U, UI_MONITOR_HINT_TOP_Y, data->hint_text, 28U, RGB565_WHITE);
-}
-
-static void ui_monitor_draw_optical_flow_hud(const MonitorOpticalFlowHudData *data)
-{
-    if(data == NULL)
-    {
-        return;
-    }
-
-    ui_show_padded_text(UI_MONITOR_LEFT_VALUE_X, UI_MONITOR_MODE_Y, data->valid_text, 5U,
-                        data->valid ? RGB565_GREEN : RGB565_RED);
-    ips200_set_color(RGB565_WHITE, RGB565_BLACK);
-    ips200_show_float(UI_MONITOR_RIGHT_VALUE_X, UI_MONITOR_MODE_Y, data->dt_ms, 3U, 1U);
-
-    ips200_show_int(UI_MONITOR_LEFT_VALUE_X, UI_MONITOR_BATTERY_Y, data->flow_delta_x, 6U);
-    ips200_show_int(UI_MONITOR_RIGHT_VALUE_X, UI_MONITOR_BATTERY_Y, data->flow_delta_y, 6U);
-
-    ips200_show_float(UI_MONITOR_LEFT_VALUE_X, UI_MONITOR_THROTTLE_Y, data->tof_los_cm, 4U, 1U);
-    ips200_show_float(UI_MONITOR_RIGHT_VALUE_X, UI_MONITOR_THROTTLE_Y, data->range_cm, 4U, 1U);
-
-    ips200_show_float(UI_MONITOR_LEFT_VALUE_X, UI_MONITOR_ATTITUDE_Y, data->flow_x_rad, 1U, 4U);
-    ips200_show_float(UI_MONITOR_RIGHT_VALUE_X, UI_MONITOR_ATTITUDE_Y, data->flow_y_rad, 1U, 4U);
-
-    ips200_show_float(UI_MONITOR_LEFT_VALUE_X, UI_MONITOR_YAW_Y, data->gyro_x_delta_rad, 1U, 4U);
-    ips200_show_float(UI_MONITOR_RIGHT_VALUE_X, UI_MONITOR_YAW_Y, data->gyro_y_delta_rad, 1U, 4U);
-
-    ips200_show_float(UI_MONITOR_LEFT_VALUE_X, UI_MONITOR_NEAREST_Y, data->flow_comp_x_rad, 1U, 4U);
-    ips200_show_float(UI_MONITOR_RIGHT_VALUE_X, UI_MONITOR_NEAREST_Y, data->flow_comp_y_rad, 1U, 4U);
-
-    ips200_show_float(UI_MONITOR_LEFT_VALUE_X, UI_MONITOR_HEIGHT_Y, data->velocity_x_raw_cms, 4U, 1U);
-    ips200_show_float(UI_MONITOR_RIGHT_VALUE_X, UI_MONITOR_HEIGHT_Y, data->velocity_y_raw_cms, 4U, 1U);
-
-    ips200_show_float(UI_MONITOR_LEFT_VALUE_X, UI_MONITOR_IR_Y, data->velocity_x_cms, 4U, 1U);
-    ips200_show_float(UI_MONITOR_RIGHT_VALUE_X, UI_MONITOR_IR_Y, data->velocity_y_cms, 4U, 1U);
-
-    ips200_show_float(UI_MONITOR_LEFT_VALUE_X, UI_MONITOR_VISION_Y, data->speed_cms, 4U, 1U);
-    ips200_show_float(UI_MONITOR_RIGHT_VALUE_X, UI_MONITOR_VISION_Y, data->roll_deg, 4U, 1U);
-    ips200_show_float(UI_MONITOR_LEFT_VALUE_X, 240U, data->pitch_deg, 4U, 1U);
-    ips200_show_int(UI_MONITOR_RIGHT_VALUE_X, 240U, data->flow_x_integral, 6U);
-    ui_show_padded_text(0U, UI_MONITOR_HINT_TOP_Y, data->hint_text, 28U, RGB565_WHITE);
-}
-
-void ui_monitor_show_view_page(const MonitorRuntimeSnapshot *snapshot, uint8 draw_layout)
+static void ui_monitor_show_view_page(const MonitorRuntimeSnapshot *snapshot, uint8 draw_layout)
 {
     MonitorViewHudData data;
 
@@ -752,60 +475,6 @@ void ui_monitor_show_view_page(const MonitorRuntimeSnapshot *snapshot, uint8 dra
 
     ui_monitor_fill_view_hud(snapshot, &data);
     ui_monitor_draw_view_hud(&data);
-}
-
-void ui_monitor_show_image_page(const MonitorRuntimeSnapshot *snapshot, uint8 draw_layout)
-{
-    MonitorImageHudData data;
-
-    if(snapshot == NULL)
-    {
-        return;
-    }
-
-    if(draw_layout)
-    {
-        ui_monitor_draw_image_layout();
-    }
-
-    ui_monitor_fill_image_hud(snapshot, &data);
-    ui_monitor_draw_image_hud(&data);
-}
-
-static void ui_monitor_show_tof_attitude_page(const MonitorRuntimeSnapshot *snapshot, uint8 draw_layout)
-{
-    MonitorTofAttitudeHudData data;
-
-    if(snapshot == NULL)
-    {
-        return;
-    }
-
-    if(draw_layout)
-    {
-        ui_monitor_draw_tof_attitude_layout();
-    }
-
-    ui_monitor_fill_tof_attitude_hud(snapshot, &data);
-    ui_monitor_draw_tof_attitude_hud(&data);
-}
-
-static void ui_monitor_show_optical_flow_page(const MonitorRuntimeSnapshot *snapshot, uint8 draw_layout)
-{
-    MonitorOpticalFlowHudData data;
-
-    if(snapshot == NULL)
-    {
-        return;
-    }
-
-    if(draw_layout)
-    {
-        ui_monitor_draw_optical_flow_layout();
-    }
-
-    ui_monitor_fill_optical_flow_hud(snapshot, &data);
-    ui_monitor_draw_optical_flow_hud(&data);
 }
 
 /* ===================== ?????????? ===================== */
@@ -859,43 +528,17 @@ static void screen_monitor_switch_page(monitor_page_enum *page, int8 direction)
 
 void screen_monitor_enter_page(monitor_page_enum page, const MonitorRuntimeSnapshot *snapshot)
 {
-    switch(page)
+    if(page == MONITOR_PAGE_DATA)
     {
-    case MONITOR_PAGE_DATA:
         ui_monitor_show_view_page(snapshot, 1U);
-        break;
-    case MONITOR_PAGE_IMAGE:
-        ui_monitor_show_image_page(snapshot, 1U);
-        break;
-    case MONITOR_PAGE_TOF_ATTITUDE:
-        ui_monitor_show_tof_attitude_page(snapshot, 1U);
-        break;
-    case MONITOR_PAGE_OPTICAL_FLOW:
-        ui_monitor_show_optical_flow_page(snapshot, 1U);
-        break;
-    default:
-        break;
     }
 }
 
 void screen_monitor_refresh_page(monitor_page_enum page, const MonitorRuntimeSnapshot *snapshot)
 {
-    switch(page)
+    if(page == MONITOR_PAGE_DATA)
     {
-    case MONITOR_PAGE_DATA:
         ui_monitor_show_view_page(snapshot, 0U);
-        break;
-    case MONITOR_PAGE_IMAGE:
-        ui_monitor_show_image_page(snapshot, 0U);
-        break;
-    case MONITOR_PAGE_TOF_ATTITUDE:
-        ui_monitor_show_tof_attitude_page(snapshot, 0U);
-        break;
-    case MONITOR_PAGE_OPTICAL_FLOW:
-        ui_monitor_show_optical_flow_page(snapshot, 0U);
-        break;
-    default:
-        break;
     }
 }
 
