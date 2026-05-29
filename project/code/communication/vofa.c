@@ -1027,6 +1027,10 @@ void USART_PID_Adjust(void)
                 case 'r': send_back_flag = 26; break;
                 case 'S':
                 case 's': send_back_flag = 27; break;
+                case 'T':
+                case 't': send_back_flag = 28; break;
+                case 'U':
+                case 'u': send_back_flag = 29; break;
                 default: break;
             }
 
@@ -1559,6 +1563,59 @@ void send_date_back(void)
                               (float)height_diag.tof_valid,
                               (float)height_diag.acc_used,
                               (float)height_diag.cascade_enabled);
+            break;
+        }
+
+        case 28:
+        {
+            PMWFlowState_t pmw_flow_state = {0};
+
+            PMW_Flow_GetState(&pmw_flow_state);
+
+            send_sixteen_date((float)pmw_flow_state.valid,
+                              (float)pmw_flow_state.flow_used,
+                              pmw_flow_state.dt_s,
+                              pmw_flow_state.range_cm,
+                              pmw_flow_state.flow_x_rad,
+                              pmw_flow_state.gyro_flow_y_delta_rad,
+                              pmw_flow_state.flow_comp_x_rad,
+                              pmw_flow_state.flow_y_rad,
+                              pmw_flow_state.gyro_flow_x_delta_rad,
+                              pmw_flow_state.flow_comp_y_rad,
+                              pmw_flow_state.velocity_x_raw_cms,
+                              pmw_flow_state.velocity_y_raw_cms,
+                              pmw_flow_state.velocity_x_cms,
+                              pmw_flow_state.velocity_y_cms,
+                              pmw_flow_state.velocity_x_fused_cms,
+                              pmw_flow_state.velocity_y_fused_cms);
+            break;
+        }
+
+        case 29:
+        {
+            PMWFlowState_t pmw_flow_state = {0};
+            uint16 tof_stale_ticks = 0U;
+            uint8 tof_source = 0U;
+
+            PMW_Flow_GetState(&pmw_flow_state);
+            PMW_Flow_Get_TOF_Status(NULL, &tof_stale_ticks, &tof_source);
+
+            send_sixteen_date((float)pmw_flow_state.valid,
+                              (float)pmw_flow_state.flow_used,
+                              (float)pmw_flow_state.acc_used,
+                              pmw_flow_state.flow_confidence,
+                              pmw_flow_state.flow_fusion_alpha,
+                              pmw_flow_state.flow_residual_norm_cms,
+                              pmw_flow_state.velocity_x_cms,
+                              pmw_flow_state.velocity_y_cms,
+                              pmw_flow_state.velocity_x_fused_cms,
+                              pmw_flow_state.velocity_y_fused_cms,
+                              pmw_flow_state.velocity_x_fused_residual_cms,
+                              pmw_flow_state.velocity_y_fused_residual_cms,
+                              pmw_flow_state.dt_s,
+                              pmw_flow_state.range_cm,
+                              (float)tof_source,
+                              (float)tof_stale_ticks);
             break;
         }
 

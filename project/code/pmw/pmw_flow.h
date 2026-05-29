@@ -4,6 +4,10 @@
 #include "zf_common_headfile.h"
 #include "flow_sensor_config.h"
 
+#define PMW_FLOW_TOF_SOURCE_NONE       (0U)
+#define PMW_FLOW_TOF_SOURCE_LIVE       (1U)
+#define PMW_FLOW_TOF_SOURCE_HOLD       (2U)
+
 typedef struct
 {
     uint8 valid;
@@ -32,6 +36,9 @@ typedef struct
     float velocity_y_fused_cms;
     float velocity_x_fused_residual_cms;
     float velocity_y_fused_residual_cms;
+    float flow_confidence;
+    float flow_fusion_alpha;
+    float flow_residual_norm_cms;
     float velocity_x_world_cms;
     float velocity_y_world_cms;
     float position_x_world_cm;
@@ -54,6 +61,7 @@ void PMW_Flow_UpdateSample(int16 flow_delta_x,
                            float roll_deg,
                            float pitch_deg,
                            float tof_los_cm,
+                           uint8 tof_source,
                            float dt_s,
                            float imu_velocity_x_cms,
                            float imu_velocity_y_cms);

@@ -57,7 +57,20 @@
 #define PMW_FLOW_VEL_SLEW_LIMIT_CMS2        PMW_FLOW_GRAVITY_CMS2
 #define PMW_FLOW_VEL_SLEW_MIN_STEP_CMS      (12.0f)
 #define PMW_FLOW_VEL_OUTPUT_SLEW_LIMIT_CMS2 PMW_FLOW_GRAVITY_CMS2
-#define PMW_FLOW_FUSION_FLOW_ALPHA          (0.30f)
+/* Keep disabled for first flight tests: FU! still reports the candidate dynamic alpha. */
+#define PMW_FLOW_CONFIDENCE_FUSION_ENABLE   (0U)
+#define PMW_FLOW_FUSION_ALPHA_DEFAULT       (0.30f)
+#define PMW_FLOW_FUSION_ALPHA_MIN           (0.05f)
+#define PMW_FLOW_FUSION_ALPHA_MAX           (0.35f)
+#define PMW_FLOW_CONFIDENCE_MIN_UPDATE      (0.15f)
+#define PMW_FLOW_CONFIDENCE_RESIDUAL_GOOD_CMS (20.0f)
+#define PMW_FLOW_CONFIDENCE_RESIDUAL_BAD_CMS  (100.0f)
+#define PMW_FLOW_CONFIDENCE_DT_GOOD_RATIO   (0.20f)
+#define PMW_FLOW_CONFIDENCE_DT_BAD_RATIO    (0.50f)
+#define PMW_FLOW_CONFIDENCE_SPEED_GOOD_RATIO (0.50f)
+#define PMW_FLOW_CONFIDENCE_SPEED_BAD_RATIO  (0.90f)
+#define PMW_FLOW_CONFIDENCE_TOF_HOLD_SCALE  (0.45f)
+#define PMW_FLOW_CONFIDENCE_TOF_JUMP_SCALE  (0.60f)
 #define PMW_FLOW_FUSION_IMU_X_SIGN          (1.0f)
 #define PMW_FLOW_FUSION_IMU_Y_SIGN          (1.0f)
 #define PMW_FLOW_FUSION_IMU_DELTA_LIMIT_CMS2 PMW_FLOW_GRAVITY_CMS2
@@ -157,6 +170,105 @@ static float pmw_flow_calc_lpf_alpha(float cutoff_hz, float dt_s)
 
     alpha = 1.0f - expf(-PMW_FLOW_TWO_PI * cutoff_hz * dt_s);
     return pmw_flow_limit_float(alpha, 0.0f, 1.0f);
+}
+
+static float pmw_flow_ramp_down_confidence(float value, float good_value, float bad_value)
+{
+    float confidence;
+
+    if(!(bad_value > good_value))
+    {
+        return 1.0f;
+    }
+
+    if(value <= good_value)
+    {
+        return 1.0f;
+    }
+    if(value >= bad_value)
+    {
+        return 0.0f;
+    }
+
+    confidence = 1.0f - ((value - good_value) / (bad_value - good_value));
+    return pmw_flow_limit_float(confidence, 0.0f, 1.0f);
+}
+
+static float pmw_flow_calc_confidence(const PMWFlowState_t *state,
+                                      uint8 tof_source,
+                                      uint8 tof_jump_rejected,
+                                      float fused_vx_cms,
+                                      float fused_vy_cms)
+{
+    float confidence = 1.0f;
+    float tilt_abs_max_deg;
+    float residual_x_cms;
+    float residual_y_cms;
+    float residual_norm_cms;
+    float dt_error_ratio;
+    float speed_ratio;
+
+    if(state == NULL)
+    {
+        return 0.0f;
+    }
+
+    if(!state->valid ||
+       !pmw_flow_is_valid_number(state->velocity_x_cms) ||
+       !pmw_flow_is_valid_number(state->velocity_y_cms) ||
+       !pmw_flow_is_valid_number(fused_vx_cms) ||
+       !pmw_flow_is_valid_number(fused_vy_cms))
+    {
+        return 0.0f;
+    }
+
+    tilt_abs_max_deg = fabsf(state->roll_deg);
+    if(fabsf(state->pitch_deg) > tilt_abs_max_deg)
+    {
+        tilt_abs_max_deg = fabsf(state->pitch_deg);
+    }
+    confidence *= pmw_flow_ramp_down_confidence(tilt_abs_max_deg,
+                                                0.0f,
+                                                PMW_FLOW_TILT_GATE_DEG);
+
+    residual_x_cms = state->velocity_x_cms - fused_vx_cms;
+    residual_y_cms = state->velocity_y_cms - fused_vy_cms;
+    residual_norm_cms = sqrtf(residual_x_cms * residual_x_cms +
+                              residual_y_cms * residual_y_cms);
+    confidence *= pmw_flow_ramp_down_confidence(residual_norm_cms,
+                                                PMW_FLOW_CONFIDENCE_RESIDUAL_GOOD_CMS,
+                                                PMW_FLOW_CONFIDENCE_RESIDUAL_BAD_CMS);
+
+    dt_error_ratio = fabsf(state->dt_s - FLOW_SENSOR_NOMINAL_DT_S) / FLOW_SENSOR_NOMINAL_DT_S;
+    confidence *= pmw_flow_ramp_down_confidence(dt_error_ratio,
+                                                PMW_FLOW_CONFIDENCE_DT_GOOD_RATIO,
+                                                PMW_FLOW_CONFIDENCE_DT_BAD_RATIO);
+
+    speed_ratio = fabsf(state->velocity_x_raw_cms);
+    if(fabsf(state->velocity_y_raw_cms) > speed_ratio)
+    {
+        speed_ratio = fabsf(state->velocity_y_raw_cms);
+    }
+    speed_ratio /= PMW_FLOW_VEL_ABS_LIMIT_CMS;
+    confidence *= pmw_flow_ramp_down_confidence(speed_ratio,
+                                                PMW_FLOW_CONFIDENCE_SPEED_GOOD_RATIO,
+                                                PMW_FLOW_CONFIDENCE_SPEED_BAD_RATIO);
+
+    if(tof_source == PMW_FLOW_TOF_SOURCE_HOLD)
+    {
+        confidence *= PMW_FLOW_CONFIDENCE_TOF_HOLD_SCALE;
+    }
+    else if(tof_source != PMW_FLOW_TOF_SOURCE_LIVE)
+    {
+        confidence = 0.0f;
+    }
+
+    if(tof_jump_rejected)
+    {
+        confidence *= PMW_FLOW_CONFIDENCE_TOF_JUMP_SCALE;
+    }
+
+    return pmw_flow_limit_float(confidence, 0.0f, 1.0f);
 }
 
 static float pmw_flow_limit_velocity_slew(float sample_cms, float previous_cms, float dt_s)
@@ -275,6 +387,8 @@ static void pmw_flow_apply_invalid_velocity_hold(PMWFlowState_t *state)
 }
 
 static void pmw_flow_update_velocity_feedback(PMWFlowState_t *state,
+                                              uint8 tof_source,
+                                              uint8 tof_jump_rejected,
                                               float imu_velocity_x_cms,
                                               float imu_velocity_y_cms)
 {
@@ -283,6 +397,11 @@ static void pmw_flow_update_velocity_feedback(PMWFlowState_t *state,
     uint8 imu_velocity_valid;
     float imu_vx_cms;
     float imu_vy_cms;
+    float residual_x_cms;
+    float residual_y_cms;
+    float residual_norm_cms;
+    float flow_confidence;
+    float fusion_alpha;
 
     if(state == NULL)
     {
@@ -314,26 +433,57 @@ static void pmw_flow_update_velocity_feedback(PMWFlowState_t *state,
             g_pmw_flow_fusion_imu_vy_last_cms = imu_vy_cms;
 
             acc_used = 1U;
+            residual_x_cms = state->velocity_x_cms - g_pmw_flow_fused_vx_cms;
+            residual_y_cms = state->velocity_y_cms - g_pmw_flow_fused_vy_cms;
+            residual_norm_cms = sqrtf(residual_x_cms * residual_x_cms +
+                                      residual_y_cms * residual_y_cms);
+            flow_confidence = pmw_flow_calc_confidence(state,
+                                                       tof_source,
+                                                       tof_jump_rejected,
+                                                       g_pmw_flow_fused_vx_cms,
+                                                       g_pmw_flow_fused_vy_cms);
+            fusion_alpha = PMW_FLOW_FUSION_ALPHA_MIN +
+                           flow_confidence * (PMW_FLOW_FUSION_ALPHA_MAX - PMW_FLOW_FUSION_ALPHA_MIN);
+            fusion_alpha = pmw_flow_limit_float(fusion_alpha,
+                                                PMW_FLOW_FUSION_ALPHA_MIN,
+                                                PMW_FLOW_FUSION_ALPHA_MAX);
+            state->flow_confidence = flow_confidence;
+            state->flow_fusion_alpha = fusion_alpha;
+            state->flow_residual_norm_cms = residual_norm_cms;
 
-            if(fabsf(state->velocity_x_cms - g_pmw_flow_fused_vx_cms) > PMW_FLOW_FUSION_RESIDUAL_RESET_CMS)
+#if PMW_FLOW_CONFIDENCE_FUSION_ENABLE
+            if(residual_norm_cms > PMW_FLOW_FUSION_RESIDUAL_RESET_CMS)
+            {
+                if(flow_confidence >= PMW_FLOW_CONFIDENCE_MIN_UPDATE)
+                {
+                    g_pmw_flow_fused_vx_cms = state->velocity_x_cms;
+                    g_pmw_flow_fused_vy_cms = state->velocity_y_cms;
+                }
+            }
+            else if(flow_confidence >= PMW_FLOW_CONFIDENCE_MIN_UPDATE)
+            {
+                g_pmw_flow_fused_vx_cms += fusion_alpha * residual_x_cms;
+                g_pmw_flow_fused_vy_cms += fusion_alpha * residual_y_cms;
+            }
+#else
+            if(fabsf(residual_x_cms) > PMW_FLOW_FUSION_RESIDUAL_RESET_CMS)
             {
                 g_pmw_flow_fused_vx_cms = state->velocity_x_cms;
             }
             else
             {
-                g_pmw_flow_fused_vx_cms += PMW_FLOW_FUSION_FLOW_ALPHA *
-                                           (state->velocity_x_cms - g_pmw_flow_fused_vx_cms);
+                g_pmw_flow_fused_vx_cms += PMW_FLOW_FUSION_ALPHA_DEFAULT * residual_x_cms;
             }
 
-            if(fabsf(state->velocity_y_cms - g_pmw_flow_fused_vy_cms) > PMW_FLOW_FUSION_RESIDUAL_RESET_CMS)
+            if(fabsf(residual_y_cms) > PMW_FLOW_FUSION_RESIDUAL_RESET_CMS)
             {
                 g_pmw_flow_fused_vy_cms = state->velocity_y_cms;
             }
             else
             {
-                g_pmw_flow_fused_vy_cms += PMW_FLOW_FUSION_FLOW_ALPHA *
-                                           (state->velocity_y_cms - g_pmw_flow_fused_vy_cms);
+                g_pmw_flow_fused_vy_cms += PMW_FLOW_FUSION_ALPHA_DEFAULT * residual_y_cms;
             }
+#endif
 
             g_pmw_flow_fused_vx_cms = pmw_flow_limit_float(g_pmw_flow_fused_vx_cms,
                                                            -PMW_FLOW_VEL_ABS_LIMIT_CMS,
@@ -349,6 +499,9 @@ static void pmw_flow_update_velocity_feedback(PMWFlowState_t *state,
         {
             state->velocity_x_fused_cms = state->velocity_x_cms;
             state->velocity_y_fused_cms = state->velocity_y_cms;
+            state->flow_confidence = 1.0f;
+            state->flow_fusion_alpha = PMW_FLOW_FUSION_ALPHA_MAX;
+            state->flow_residual_norm_cms = 0.0f;
             g_pmw_flow_fused_vx_cms = state->velocity_x_cms;
             g_pmw_flow_fused_vy_cms = state->velocity_y_cms;
             g_pmw_flow_fusion_init = 0U;
@@ -358,6 +511,9 @@ static void pmw_flow_update_velocity_feedback(PMWFlowState_t *state,
     {
         state->velocity_x_fused_cms = 0.0f;
         state->velocity_y_fused_cms = 0.0f;
+        state->flow_confidence = 0.0f;
+        state->flow_fusion_alpha = 0.0f;
+        state->flow_residual_norm_cms = 0.0f;
         g_pmw_flow_fusion_init = 0U;
     }
 
@@ -622,6 +778,7 @@ void PMW_Flow_UpdateSample(int16 flow_delta_x,
                            float roll_deg,
                            float pitch_deg,
                            float tof_los_cm,
+                           uint8 tof_source,
                            float dt_s,
                            float imu_velocity_x_cms,
                            float imu_velocity_y_cms)
@@ -633,6 +790,7 @@ void PMW_Flow_UpdateSample(int16 flow_delta_x,
     float vy_raw;
     float tilt_abs_max_deg;
     float velocity_lpf_alpha;
+    uint8 tof_jump_rejected = 0U;
     new_state.flow_delta_x_count = flow_delta_x;
     new_state.flow_delta_y_count = flow_delta_y;
     new_state.dt_s = dt_s;
@@ -671,7 +829,11 @@ void PMW_Flow_UpdateSample(int16 flow_delta_x,
     {
         new_state.range_cm = tof_los_cm;
         pmw_flow_apply_invalid_velocity_hold(&new_state);
-        pmw_flow_update_velocity_feedback(&new_state, imu_velocity_x_cms, imu_velocity_y_cms);
+        pmw_flow_update_velocity_feedback(&new_state,
+                                          tof_source,
+                                          tof_jump_rejected,
+                                          imu_velocity_x_cms,
+                                          imu_velocity_y_cms);
         pmw_flow_update_world_odometry(&new_state);
         pmw_flow_publish_state(&new_state);
         return;
@@ -684,6 +846,7 @@ void PMW_Flow_UpdateSample(int16 flow_delta_x,
         if(fabsf(range_sample_cm - g_pmw_flow_range_last_valid_cm) > PMW_FLOW_TOF_JUMP_REJECT_CM)
         {
             range_sample_cm = g_pmw_flow_range_last_valid_cm;
+            tof_jump_rejected = 1U;
         }
         else
         {
@@ -760,7 +923,11 @@ void PMW_Flow_UpdateSample(int16 flow_delta_x,
        (fabsf(vy_raw) > PMW_FLOW_VEL_ABS_LIMIT_CMS))
     {
         pmw_flow_apply_invalid_velocity_hold(&new_state);
-        pmw_flow_update_velocity_feedback(&new_state, imu_velocity_x_cms, imu_velocity_y_cms);
+        pmw_flow_update_velocity_feedback(&new_state,
+                                          tof_source,
+                                          tof_jump_rejected,
+                                          imu_velocity_x_cms,
+                                          imu_velocity_y_cms);
         pmw_flow_update_world_odometry(&new_state);
         pmw_flow_publish_state(&new_state);
         return;
@@ -808,7 +975,11 @@ void PMW_Flow_UpdateSample(int16 flow_delta_x,
 
     new_state.speed_cms = sqrtf(new_state.velocity_x_cms * new_state.velocity_x_cms +
                                 new_state.velocity_y_cms * new_state.velocity_y_cms);
-    pmw_flow_update_velocity_feedback(&new_state, imu_velocity_x_cms, imu_velocity_y_cms);
+    pmw_flow_update_velocity_feedback(&new_state,
+                                      tof_source,
+                                      tof_jump_rejected,
+                                      imu_velocity_x_cms,
+                                      imu_velocity_y_cms);
     pmw_flow_update_world_odometry(&new_state);
 
     pmw_flow_publish_state(&new_state);
@@ -854,6 +1025,10 @@ void PMW_Flow_GetState(PMWFlowState_t *state)
         state->velocity_y_fused_cms = g_pmw_flow_fused_vy_cms;
         state->velocity_x_fused_residual_cms = state->velocity_x_cms - state->velocity_x_fused_cms;
         state->velocity_y_fused_residual_cms = state->velocity_y_cms - state->velocity_y_fused_cms;
+        state->flow_residual_norm_cms = sqrtf(state->velocity_x_fused_residual_cms *
+                                              state->velocity_x_fused_residual_cms +
+                                              state->velocity_y_fused_residual_cms *
+                                              state->velocity_y_fused_residual_cms);
         state->acc_used = 1U;
     }
 }

@@ -251,6 +251,8 @@ S1=450!
 | `FP=0!` 或 `FP!` | X/Y 双轴多环控制链路 16 路综合诊断：I0-I6 为 X/Pitch 链路, I7-I13 为 Y/Roll 链路, I14 位置环激活 |
 | `FQ=0!` 或 `FQ!` | 小车红外灯/信标红外灯识别效果 16 路诊断：I0-I7 为小车红外正方形, I8-I15 为最近信标灯 |
 | `FR=0!` 或 `FR!` | 0 核主循环耗时诊断：I0 最近一次耗时, I1 最大耗时, I2 平均耗时, I3 频率 |
+| `FT=0!` 或 `FT!` | 光流静止漂移 16 路诊断：原始光流、陀螺去旋转、ToF 高度、原始/滤波/融合速度 |
+| `FU=0!` 或 `FU!` | 光流可信度融合诊断：confidence、动态 alpha、残差、ToF 来源 |
 
 说明：
 
@@ -268,7 +270,7 @@ S1=450!
 
 ## 回传数据说明
 
-当前 `send_date_back()` 会根据 `send_back_flag` 返回浮点数据；除 `FP` / `FQ` 使用 16 路外，其余模式均为 8 路。
+当前 `send_date_back()` 会根据 `send_back_flag` 返回浮点数据；除 `FP` / `FQ` / `FS` / `FT` / `FU` 使用 16 路外，其余模式均为 8 路。
 
 ### `F0`：默认飞行状态回传
 
@@ -873,6 +875,8 @@ FP!
 FQ!
 FR!
 FS!
+FT!
+FU!
 ```
 
 ### `FS`: Height estimator / cascade PID
@@ -895,6 +899,48 @@ Use `FS!` for the new height estimator and cascade loop diagnostics.
 - `I13`: ToF valid flag
 - `I14`: accelerometer velocity used flag
 - `I15`: cascade enabled flag
+
+### `FT`: Optical-flow stationary drift diag
+
+Use `FT!` to observe the whole optical-flow velocity chain in one 16-channel frame.
+
+- `I0`: `pmw_flow_state.valid`
+- `I1`: `pmw_flow_state.flow_used`
+- `I2`: `pmw_flow_state.dt_s`
+- `I3`: `pmw_flow_state.range_cm`
+- `I4`: `pmw_flow_state.flow_x_rad`
+- `I5`: `pmw_flow_state.gyro_flow_y_delta_rad`
+- `I6`: `pmw_flow_state.flow_comp_x_rad`
+- `I7`: `pmw_flow_state.flow_y_rad`
+- `I8`: `pmw_flow_state.gyro_flow_x_delta_rad`
+- `I9`: `pmw_flow_state.flow_comp_y_rad`
+- `I10`: `pmw_flow_state.velocity_x_raw_cms`
+- `I11`: `pmw_flow_state.velocity_y_raw_cms`
+- `I12`: `pmw_flow_state.velocity_x_cms`
+- `I13`: `pmw_flow_state.velocity_y_cms`
+- `I14`: `pmw_flow_state.velocity_x_fused_cms`
+- `I15`: `pmw_flow_state.velocity_y_fused_cms`
+
+### `FU`: Optical-flow confidence fusion diag
+
+Use `FU!` to verify the dynamic optical-flow fusion confidence and alpha. With `PMW_FLOW_CONFIDENCE_FUSION_ENABLE = 0`, `I4` is the candidate dynamic alpha and the control output still uses the legacy fixed `0.30` correction.
+
+- `I0`: `pmw_flow_state.valid`
+- `I1`: `pmw_flow_state.flow_used`
+- `I2`: `pmw_flow_state.acc_used`
+- `I3`: `pmw_flow_state.flow_confidence`
+- `I4`: `pmw_flow_state.flow_fusion_alpha`
+- `I5`: `pmw_flow_state.flow_residual_norm_cms`
+- `I6`: `pmw_flow_state.velocity_x_cms`
+- `I7`: `pmw_flow_state.velocity_y_cms`
+- `I8`: `pmw_flow_state.velocity_x_fused_cms`
+- `I9`: `pmw_flow_state.velocity_y_fused_cms`
+- `I10`: `pmw_flow_state.velocity_x_fused_residual_cms`
+- `I11`: `pmw_flow_state.velocity_y_fused_residual_cms`
+- `I12`: `pmw_flow_state.dt_s`
+- `I13`: `pmw_flow_state.range_cm`
+- `I14`: `tof_source`, 0=NONE, 1=LIVE, 2=HOLD
+- `I15`: `tof_stale_ticks`
 
 ### 强制失锁
 

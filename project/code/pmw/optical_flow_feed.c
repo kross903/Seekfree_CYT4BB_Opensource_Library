@@ -7,9 +7,9 @@
 #define PMW_FLOW_TOF_MIN_VALID_MM       (50U)
 #define PMW_FLOW_TOF_MAX_VALID_MM       (4000U)
 #define PMW_FLOW_TOF_STALE_TIMEOUT_TICK (50U)
-#define PMW_FLOW_TOF_SRC_NONE           (0U)
-#define PMW_FLOW_TOF_SRC_LIVE           (1U)
-#define PMW_FLOW_TOF_SRC_HOLD           (2U)
+#define PMW_FLOW_TOF_SRC_NONE           PMW_FLOW_TOF_SOURCE_NONE
+#define PMW_FLOW_TOF_SRC_LIVE           PMW_FLOW_TOF_SOURCE_LIVE
+#define PMW_FLOW_TOF_SRC_HOLD           PMW_FLOW_TOF_SOURCE_HOLD
 
 static volatile float g_pmw3901_flow_height_used_cm = 0.0f;
 static volatile uint16 g_pmw3901_tof_stale_ticks = 0U;
@@ -122,6 +122,7 @@ void OpticalFlowFeed_Task(void)
                           current_roll,
                           current_pitch,
                           flow_height_cm,
+                          tof_source,
                           flow_sample_dt_s,
                           X_V_F,
                           Y_V_F);
