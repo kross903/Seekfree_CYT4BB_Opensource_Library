@@ -57,24 +57,27 @@
 #define PMW_FLOW_VEL_SLEW_LIMIT_CMS2        PMW_FLOW_GRAVITY_CMS2
 #define PMW_FLOW_VEL_SLEW_MIN_STEP_CMS      (12.0f)
 #define PMW_FLOW_VEL_OUTPUT_SLEW_LIMIT_CMS2 PMW_FLOW_GRAVITY_CMS2
-/* Keep disabled for first flight tests: FU! still reports the candidate dynamic alpha. */
-#define PMW_FLOW_CONFIDENCE_FUSION_ENABLE   (0U)
+/* Dynamic confidence fusion is enabled; FU! reports the active confidence and alpha. */
+#define PMW_FLOW_CONFIDENCE_FUSION_ENABLE   (1U)
 #define PMW_FLOW_FUSION_ALPHA_DEFAULT       (0.30f)
 #define PMW_FLOW_FUSION_ALPHA_MIN           (0.05f)
 #define PMW_FLOW_FUSION_ALPHA_MAX           (0.35f)
-#define PMW_FLOW_CONFIDENCE_MIN_UPDATE      (0.15f)
-#define PMW_FLOW_CONFIDENCE_RESIDUAL_GOOD_CMS (20.0f)
-#define PMW_FLOW_CONFIDENCE_RESIDUAL_BAD_CMS  (100.0f)
+#define PMW_FLOW_CONFIDENCE_MIN_UPDATE      (0.05f)
+#define PMW_FLOW_CONFIDENCE_TILT_GOOD_DEG   (8.0f)
+#define PMW_FLOW_CONFIDENCE_RESIDUAL_GOOD_CMS (40.0f)
+#define PMW_FLOW_CONFIDENCE_RESIDUAL_BAD_CMS  (160.0f)
 #define PMW_FLOW_CONFIDENCE_DT_GOOD_RATIO   (0.20f)
 #define PMW_FLOW_CONFIDENCE_DT_BAD_RATIO    (0.50f)
 #define PMW_FLOW_CONFIDENCE_SPEED_GOOD_RATIO (0.50f)
 #define PMW_FLOW_CONFIDENCE_SPEED_BAD_RATIO  (0.90f)
-#define PMW_FLOW_CONFIDENCE_TOF_HOLD_SCALE  (0.45f)
-#define PMW_FLOW_CONFIDENCE_TOF_JUMP_SCALE  (0.60f)
+#define PMW_FLOW_CONFIDENCE_TOF_HOLD_SCALE  (0.75f)
+#define PMW_FLOW_CONFIDENCE_TOF_JUMP_SCALE  (0.80f)
 #define PMW_FLOW_FUSION_IMU_X_SIGN          (1.0f)
 #define PMW_FLOW_FUSION_IMU_Y_SIGN          (1.0f)
 #define PMW_FLOW_FUSION_IMU_DELTA_LIMIT_CMS2 PMW_FLOW_GRAVITY_CMS2
 #define PMW_FLOW_FUSION_RESIDUAL_RESET_CMS  (120.0f)
+#define PMW_FLOW_FUSION_RESET_MIN_CONFIDENCE (0.60f)
+#define PMW_FLOW_FUSION_RESET_CONFIRM_FRAMES (2U)
 #define PMW_FLOW_INVALID_HOLD_FRAMES        (3U)
 #define PMW_FLOW_INVALID_DECAY_FRAMES       (8U)
 #define PMW_FLOW_INVALID_DECAY_ALPHA        (0.85f)
@@ -113,6 +116,7 @@ static float g_pmw_flow_fused_vy_cms = 0.0f;
 static float g_pmw_flow_fusion_imu_vx_last_cms = 0.0f;
 static float g_pmw_flow_fusion_imu_vy_last_cms = 0.0f;
 static uint8 g_pmw_flow_fusion_init = 0U;
+static uint8 g_pmw_flow_fusion_residual_reset_count = 0U;
 static float g_pmw_flow_world_vx_cms = 0.0f;
 static float g_pmw_flow_world_vy_cms = 0.0f;
 static float g_pmw_flow_world_x_cm = 0.0f;
@@ -228,7 +232,7 @@ static float pmw_flow_calc_confidence(const PMWFlowState_t *state,
         tilt_abs_max_deg = fabsf(state->pitch_deg);
     }
     confidence *= pmw_flow_ramp_down_confidence(tilt_abs_max_deg,
-                                                0.0f,
+                                                PMW_FLOW_CONFIDENCE_TILT_GOOD_DEG,
                                                 PMW_FLOW_TILT_GATE_DEG);
 
     residual_x_cms = state->velocity_x_cms - fused_vx_cms;
@@ -380,6 +384,7 @@ static void pmw_flow_apply_invalid_velocity_hold(PMWFlowState_t *state)
         g_pmw_flow_range_last_valid_init = 0U;
         g_pmw_flow_vel_output_init = 0U;
         g_pmw_flow_fusion_init = 0U;
+        g_pmw_flow_fusion_residual_reset_count = 0U;
     }
 
     state->speed_cms = sqrtf(state->velocity_x_cms * state->velocity_x_cms +
@@ -428,6 +433,7 @@ static void pmw_flow_update_velocity_feedback(PMWFlowState_t *state,
                 g_pmw_flow_fusion_imu_vx_last_cms = imu_vx_cms;
                 g_pmw_flow_fusion_imu_vy_last_cms = imu_vy_cms;
                 g_pmw_flow_fusion_init = 1U;
+                g_pmw_flow_fusion_residual_reset_count = 0U;
             }
             g_pmw_flow_fusion_imu_vx_last_cms = imu_vx_cms;
             g_pmw_flow_fusion_imu_vy_last_cms = imu_vy_cms;
@@ -454,16 +460,39 @@ static void pmw_flow_update_velocity_feedback(PMWFlowState_t *state,
 #if PMW_FLOW_CONFIDENCE_FUSION_ENABLE
             if(residual_norm_cms > PMW_FLOW_FUSION_RESIDUAL_RESET_CMS)
             {
-                if(flow_confidence >= PMW_FLOW_CONFIDENCE_MIN_UPDATE)
+                if(flow_confidence >= PMW_FLOW_FUSION_RESET_MIN_CONFIDENCE)
+                {
+                    if(g_pmw_flow_fusion_residual_reset_count < PMW_FLOW_FUSION_RESET_CONFIRM_FRAMES)
+                    {
+                        g_pmw_flow_fusion_residual_reset_count++;
+                    }
+                }
+                else
+                {
+                    g_pmw_flow_fusion_residual_reset_count = 0U;
+                }
+
+                if(g_pmw_flow_fusion_residual_reset_count >= PMW_FLOW_FUSION_RESET_CONFIRM_FRAMES)
                 {
                     g_pmw_flow_fused_vx_cms = state->velocity_x_cms;
                     g_pmw_flow_fused_vy_cms = state->velocity_y_cms;
+                    g_pmw_flow_fusion_residual_reset_count = 0U;
+                }
+                else if(flow_confidence >= PMW_FLOW_CONFIDENCE_MIN_UPDATE)
+                {
+                    g_pmw_flow_fused_vx_cms += fusion_alpha * residual_x_cms;
+                    g_pmw_flow_fused_vy_cms += fusion_alpha * residual_y_cms;
                 }
             }
             else if(flow_confidence >= PMW_FLOW_CONFIDENCE_MIN_UPDATE)
             {
+                g_pmw_flow_fusion_residual_reset_count = 0U;
                 g_pmw_flow_fused_vx_cms += fusion_alpha * residual_x_cms;
                 g_pmw_flow_fused_vy_cms += fusion_alpha * residual_y_cms;
+            }
+            else
+            {
+                g_pmw_flow_fusion_residual_reset_count = 0U;
             }
 #else
             if(fabsf(residual_x_cms) > PMW_FLOW_FUSION_RESIDUAL_RESET_CMS)
@@ -505,6 +534,7 @@ static void pmw_flow_update_velocity_feedback(PMWFlowState_t *state,
             g_pmw_flow_fused_vx_cms = state->velocity_x_cms;
             g_pmw_flow_fused_vy_cms = state->velocity_y_cms;
             g_pmw_flow_fusion_init = 0U;
+            g_pmw_flow_fusion_residual_reset_count = 0U;
         }
     }
     else
@@ -515,6 +545,7 @@ static void pmw_flow_update_velocity_feedback(PMWFlowState_t *state,
         state->flow_fusion_alpha = 0.0f;
         state->flow_residual_norm_cms = 0.0f;
         g_pmw_flow_fusion_init = 0U;
+        g_pmw_flow_fusion_residual_reset_count = 0U;
     }
 
     state->velocity_x_fused_residual_cms = state->velocity_x_cms - state->velocity_x_fused_cms;
@@ -698,6 +729,7 @@ void PMW_Flow_Reset(void)
     g_pmw_flow_fusion_imu_vx_last_cms = 0.0f;
     g_pmw_flow_fusion_imu_vy_last_cms = 0.0f;
     g_pmw_flow_fusion_init = 0U;
+    g_pmw_flow_fusion_residual_reset_count = 0U;
     PMW_Flow_ResetWorldPosition();
 }
 

@@ -921,26 +921,28 @@ Use `FT!` to observe the whole optical-flow velocity chain in one 16-channel fra
 - `I14`: `pmw_flow_state.velocity_x_fused_cms`
 - `I15`: `pmw_flow_state.velocity_y_fused_cms`
 
-### `FU`: Optical-flow confidence fusion diag
+### `FU`：光流可信度融合诊断
 
-Use `FU!` to verify the dynamic optical-flow fusion confidence and alpha. With `PMW_FLOW_CONFIDENCE_FUSION_ENABLE = 0`, `I4` is the candidate dynamic alpha and the control output still uses the legacy fixed `0.30` correction.
+返回通道：
 
-- `I0`: `pmw_flow_state.valid`
-- `I1`: `pmw_flow_state.flow_used`
-- `I2`: `pmw_flow_state.acc_used`
-- `I3`: `pmw_flow_state.flow_confidence`
-- `I4`: `pmw_flow_state.flow_fusion_alpha`
-- `I5`: `pmw_flow_state.flow_residual_norm_cms`
-- `I6`: `pmw_flow_state.velocity_x_cms`
-- `I7`: `pmw_flow_state.velocity_y_cms`
-- `I8`: `pmw_flow_state.velocity_x_fused_cms`
-- `I9`: `pmw_flow_state.velocity_y_fused_cms`
-- `I10`: `pmw_flow_state.velocity_x_fused_residual_cms`
-- `I11`: `pmw_flow_state.velocity_y_fused_residual_cms`
-- `I12`: `pmw_flow_state.dt_s`
-- `I13`: `pmw_flow_state.range_cm`
-- `I14`: `tof_source`, 0=NONE, 1=LIVE, 2=HOLD
-- `I15`: `tof_stale_ticks`
+- `I0`: `pmw_flow_state.valid`——光流后端速度状态是否有效，1 表示当前 `velocity_x/y_cms` 可用，0 表示光流硬门控未通过或无效样本已衰减结束
+- `I1`: `pmw_flow_state.flow_used`——本帧光流速度是否被融合链路采用，1 表示进入了光流速度反馈分支
+- `I2`: `pmw_flow_state.acc_used`——ICM 预测速度是否参与融合，1 表示 `X_V_F/Y_V_F` 有效且融合器已接入
+- `I3`: `pmw_flow_state.flow_confidence`——光流观测可信度，范围 0~1；姿态变大、ToF hold、ToF 跳变、速度残差变大、dt 偏离 25ms 或原始速度接近限幅都会降低该值
+- `I4`: `pmw_flow_state.flow_fusion_alpha`——根据 `I3` 计算出的候选动态融合系数；当前 `PMW_FLOW_CONFIDENCE_FUSION_ENABLE = 0` 时仅用于观察，控制输出仍使用旧的固定 `0.30` 修正
+- `I5`: `pmw_flow_state.flow_residual_norm_cms`——光流滤波速度与融合速度之间的二维残差模长，单位 cm/s，用于判断光流观测和当前融合估计是否冲突
+- `I6`: `pmw_flow_state.velocity_x_cms`——X 方向光流滤波后速度，单位 cm/s，已经经过限幅、斜率限制、低通和死区
+- `I7`: `pmw_flow_state.velocity_y_cms`——Y 方向光流滤波后速度，单位 cm/s，已经经过限幅、斜率限制、低通和死区
+- `I8`: `pmw_flow_state.velocity_x_fused_cms`——X 方向最终融合速度，单位 cm/s，也是速度环实际使用的 X 方向反馈速度
+- `I9`: `pmw_flow_state.velocity_y_fused_cms`——Y 方向最终融合速度，单位 cm/s，也是速度环实际使用的 Y 方向反馈速度
+- `I10`: `pmw_flow_state.velocity_x_fused_residual_cms`——X 方向光流滤波速度减融合速度的残差，单位 cm/s
+- `I11`: `pmw_flow_state.velocity_y_fused_residual_cms`——Y 方向光流滤波速度减融合速度的残差，单位 cm/s
+- `I12`: `pmw_flow_state.dt_s`——本次光流样本间隔，单位 s；UP-FLOW-302 正常应接近 0.025s
+- `I13`: `pmw_flow_state.range_cm`——参与光流速度换算的 ToF 高度 / 距离，单位 cm，已经经过光流后端的距离跳变拒绝和低通
+- `I14`: `tof_source`——ToF 来源，0=NONE 无有效高度，1=LIVE 当前帧实时 ToF，2=HOLD 使用上一帧有效 ToF 缓存
+- `I15`: `tof_stale_ticks`——ToF hold 连续使用计数，数值越大说明高度数据越久没有实时更新
+
+使用方法：`FU!` 先看 `I0/I1/I2` 判断光流速度、光流修正和 ICM 预测是否都在工作；再看 `I3/I4/I5` 判断可信度是否合理。静止桌面时 `I5` 应较小，`I3` 应保持较高；原地轻微转动时若去旋转残差变大，`I5` 会升高且 `I3/I4` 应下降；ToF 变成 hold 时 `I14=2`、`I15` 增加，`I3` 应明显下降。若 `I6/I7` 已明显漂移但 `I8/I9` 没被强拉偏，说明可信度降权正在起作用。
 
 ### 强制失锁
 
