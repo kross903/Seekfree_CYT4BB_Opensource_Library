@@ -52,14 +52,14 @@ static void send_sixteen_date(float date_1, float date_2, float date_3, float da
  * FG  红外正方形中心点与丢失保护诊断 (case 16)
  * FH  红外丢失保护状态机诊断 (case 17)
  * FI  红外位置闭环诊断 (case 18)
- * FJ  速度环/光流门控诊断 (case 19)
- * FK  加速度/速度反馈/光流原始值对齐诊断 (case 20)
  * FL  红外位置环 PID 调参诊断 (case 21)
  * FM  X 轴位置-速度-Pitch-角速度链路诊断 (case 22)
  * FN  Y 轴位置-速度-Roll-角速度链路诊断 (case 23)
  * FP  X/Y 双轴位置-速度-角度-角速度 16 路综合诊断 (case 24)
  * FQ  小车红外灯/信标红外灯识别效果 16 路诊断 (case 25)
  * FR  0 核主循环耗时诊断 (case 26)
+ * FS  高度估计 / 串级 PID 16 路诊断 (case 27)
+ * FU  光流融合状态 16 路诊断 (case 29)
  */
 static int send_back_flag = 0;
 static uint8 send_back_command = 'R';
@@ -990,7 +990,6 @@ void USART_PID_Adjust(void)
                 case '6': send_back_flag = 6; break;
                 case '7': send_back_flag = 7; break;
                 case '8': send_back_flag = 8; break;
-                case '9': send_back_flag = 9; break;
                 case 'A':
                 case 'a': send_back_flag = 10; break;
                 case 'B':
@@ -1009,10 +1008,6 @@ void USART_PID_Adjust(void)
                 case 'h': send_back_flag = 17; break;
                 case 'I':
                 case 'i': send_back_flag = 18; break;
-                case 'J':
-                case 'j': send_back_flag = 19; break;
-                case 'K':
-                case 'k': send_back_flag = 20; break;
                 case 'L':
                 case 'l': send_back_flag = 21; break;
                 case 'M':
@@ -1027,8 +1022,6 @@ void USART_PID_Adjust(void)
                 case 'r': send_back_flag = 26; break;
                 case 'S':
                 case 's': send_back_flag = 27; break;
-                case 'T':
-                case 't': send_back_flag = 28; break;
                 case 'U':
                 case 'u': send_back_flag = 29; break;
                 default: break;
@@ -1146,10 +1139,9 @@ void send_date_back(void)
         {
             /*
              * F8 - 速度环监视。
-             * 左半 (I0~I3) X 轴: 融合反馈速度 / 目标速度 / 积分输出 / 总输出；
-             * 右半 (I4~I7) Y 轴: 融合反馈速度 / 目标速度 / 积分输出 / 总输出。
+             * 左半 (I0~I3) X 轴: 速度环滤波反馈 / 目标速度 / 积分输出 / 总输出；
+             * 右半 (I4~I7) Y 轴: 速度环滤波反馈 / 目标速度 / 积分输出 / 总输出。
              */
-            PMWFlowState_t pmw_flow_state = {0};
             float vx_target_cms = 0.0f;
             float vy_target_cms = 0.0f;
             float pitch_corr_deg = 0.0f;
@@ -1159,12 +1151,9 @@ void send_date_back(void)
             float x_i_out = 0.0f;
             float y_i_out = 0.0f;
 
-            PMW_Flow_GetState(&pmw_flow_state);
-            fb_vx_cms = pmw_flow_state.velocity_x_fused_cms;
-            fb_vy_cms = pmw_flow_state.velocity_y_fused_cms;
             Velocity_Loop_Get_Target_Velocity(&vx_target_cms, &vy_target_cms);
             Velocity_Loop_Get_Diag(&pitch_corr_deg, &roll_corr_deg,
-                                   NULL, NULL,
+                                   &fb_vx_cms, &fb_vy_cms,
                                    &x_i_out, &y_i_out, NULL);
 
             send_four_date(fb_vx_cms,
@@ -1175,22 +1164,6 @@ void send_date_back(void)
                            vy_target_cms,
                            y_i_out,
                            roll_corr_deg);
-            break;
-        }
-
-        case 9:
-        {
-            PMWFlowState_t pmw_flow_state = {0};
-            PMW_Flow_GetState(&pmw_flow_state);
-
-            send_four_date(X_V_F,
-                           pmw_flow_state.velocity_x_cms,
-                           pmw_flow_state.velocity_x_fused_cms,
-                           pmw_flow_state.velocity_x_fused_residual_cms,
-                           Y_V_F,
-                           pmw_flow_state.velocity_y_cms,
-                           pmw_flow_state.velocity_y_fused_cms,
-                           pmw_flow_state.velocity_y_fused_residual_cms);
             break;
         }
 
@@ -1226,7 +1199,7 @@ void send_date_back(void)
                            pmw_flow_state.velocity_y_world_cms,
                            pmw_flow_state.position_x_world_cm,
                            pmw_flow_state.position_y_world_cm,
-                           (float)pmw_flow_state.reserved0);
+                           (float)pmw_flow_state.fused_velocity_valid);
             break;
         }
 
@@ -1363,55 +1336,6 @@ void send_date_back(void)
                            (float)pos_diag.active,
                            (float)pos_diag.ir_track_valid,
                            (float)pos_diag.velocity_ready);
-            break;
-        }
-
-        case 19:
-        {
-            PMWFlowState_t pmw_flow_state = {0};
-            float tof_los_cm = 0.0f;
-            uint16 tof_stale_ticks = 0U;
-            uint8 tof_source = 0U;
-            uint8 vel_loop_active = 0U;
-
-            PMW_Flow_GetState(&pmw_flow_state);
-            PMW_Flow_Get_TOF_Status(&tof_los_cm, &tof_stale_ticks, &tof_source);
-            Velocity_Loop_Get_Diag(NULL, NULL, NULL, NULL, NULL, NULL, &vel_loop_active);
-
-            send_four_date((float)Velocity_Loop_Is_Enabled(),
-                           (float)vel_loop_active,
-                           (float)pmw_flow_state.valid,
-                           (float)pmw_flow_state.flow_used,
-                           tof_los_cm,
-                           (float)tof_source,
-                           (float)tof_stale_ticks,
-                           pmw_flow_state.dt_s);
-            break;
-        }
-
-        case 20:
-        {
-            PMWFlowState_t pmw_flow_state = {0};
-            float ax_level_mg = 0.0f;
-            float ay_level_mg = 0.0f;
-            float az_level_mg = 0.0f;
-
-            PMW_Flow_GetState(&pmw_flow_state);
-            Body_To_RollPitch_Level_Frame(Roll_acc, Pitch_acc, Yaw_acc,
-                                          &ax_level_mg, &ay_level_mg, &az_level_mg);
-            (void)az_level_mg;
-
-            ax_level_mg -= acc_level_x_bias_mg;
-            ay_level_mg -= acc_level_y_bias_mg;
-
-            send_four_date(ax_level_mg,
-                           ay_level_mg,
-                           pmw_flow_state.velocity_x_fused_cms,
-                           pmw_flow_state.velocity_y_fused_cms,
-                           pmw_flow_state.velocity_x_raw_cms,
-                           pmw_flow_state.velocity_y_raw_cms,
-                           (float)pmw_flow_state.flow_delta_x_count,
-                           (float)pmw_flow_state.flow_delta_y_count);
             break;
         }
 
@@ -1566,56 +1490,35 @@ void send_date_back(void)
             break;
         }
 
-        case 28:
-        {
-            PMWFlowState_t pmw_flow_state = {0};
-
-            PMW_Flow_GetState(&pmw_flow_state);
-
-            send_sixteen_date((float)pmw_flow_state.valid,
-                              (float)pmw_flow_state.flow_used,
-                              pmw_flow_state.dt_s,
-                              pmw_flow_state.range_cm,
-                              pmw_flow_state.flow_x_rad,
-                              pmw_flow_state.gyro_flow_y_delta_rad,
-                              pmw_flow_state.flow_comp_x_rad,
-                              pmw_flow_state.flow_y_rad,
-                              pmw_flow_state.gyro_flow_x_delta_rad,
-                              pmw_flow_state.flow_comp_y_rad,
-                              pmw_flow_state.velocity_x_raw_cms,
-                              pmw_flow_state.velocity_y_raw_cms,
-                              pmw_flow_state.velocity_x_cms,
-                              pmw_flow_state.velocity_y_cms,
-                              pmw_flow_state.velocity_x_fused_cms,
-                              pmw_flow_state.velocity_y_fused_cms);
-            break;
-        }
-
         case 29:
         {
             PMWFlowState_t pmw_flow_state = {0};
-            uint16 tof_stale_ticks = 0U;
             uint8 tof_source = 0U;
+            float fb_vx_cms = 0.0f;
+            float fb_vy_cms = 0.0f;
 
             PMW_Flow_GetState(&pmw_flow_state);
-            PMW_Flow_Get_TOF_Status(NULL, &tof_stale_ticks, &tof_source);
+            PMW_Flow_Get_TOF_Status(NULL, NULL, &tof_source);
+            Velocity_Loop_Get_Diag(NULL, NULL,
+                                   &fb_vx_cms, &fb_vy_cms,
+                                   NULL, NULL, NULL);
 
             send_sixteen_date((float)pmw_flow_state.valid,
                               (float)pmw_flow_state.flow_used,
                               (float)pmw_flow_state.acc_used,
+                              (float)pmw_flow_state.fused_velocity_valid,
+                              (float)tof_source,
+                              pmw_flow_state.range_cm,
+                              pmw_flow_state.dt_s,
                               pmw_flow_state.flow_confidence,
                               pmw_flow_state.flow_fusion_alpha,
                               pmw_flow_state.flow_residual_norm_cms,
+                              fb_vx_cms,
+                              fb_vy_cms,
                               pmw_flow_state.velocity_x_cms,
                               pmw_flow_state.velocity_y_cms,
                               pmw_flow_state.velocity_x_fused_cms,
-                              pmw_flow_state.velocity_y_fused_cms,
-                              pmw_flow_state.velocity_x_fused_residual_cms,
-                              pmw_flow_state.velocity_y_fused_residual_cms,
-                              pmw_flow_state.dt_s,
-                              pmw_flow_state.range_cm,
-                              (float)tof_source,
-                              (float)tof_stale_ticks);
+                              pmw_flow_state.velocity_y_fused_cms);
             break;
         }
 

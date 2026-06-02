@@ -563,7 +563,7 @@ static void control_task_update_angle_mode(uint8 takeoff_active)
     }
 
     PMW_Flow_GetState(&flow_snap);
-    velocity_ready = (uint8)((flow_snap.valid && flow_snap.flow_used) ? 1U : 0U);
+    velocity_ready = flow_snap.fused_velocity_valid;
     Position_Loop_Update_Velocity_Target(velocity_ready,
                                          flow_snap.velocity_x_fused_cms,
                                          flow_snap.velocity_y_fused_cms,

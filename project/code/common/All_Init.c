@@ -41,7 +41,7 @@ static void init_default_pid_parameters(void)
              400.0f, 10.0f, 0.0f, 0.0f);
     /* HeightPID @ 100Hz. Parameters restored from commit 4b9a48f "定点飞行参数". */
     // PID_Init(&HeightPID, 1.0f, 0.001f, 0.01f, 80.0f, 30.0f, 10000.0f, 0.3f);
-    PID_Init(&HeightPID, 2.0f, 0.0001f, 0.1f, 80.0f, 30.0f, 10000.0f, 0.3f);
+    PID_Init(&HeightPID, 2.0f, 0.0001f, 0.0f, 80.0f, 30.0f, 10000.0f, 0.3f);
     PID_Init(&HeightVelPID, 1.0f, 0.0001f, 0.0f, 80.0f, 20.0f, 10000.0f, 0.3f);
     // PID_Init(&angle_pid_roll,  8.5f, 0.0005f, 0.0f, 300.0f, 60000.0f, 10000.0f, 0.8f);
     // PID_Init(&angle_pid_pitch, 6.5f, 0.0001f, 0.0f, 300.0f, 60000.0f, 10000.0f, 0.8f);
@@ -63,8 +63,8 @@ static void init_default_pid_parameters(void)
      *   - Ki/Kd 默认关，避免在 4kHz 控制环里 Ki 过快窜飞 (反馈本身只有 50Hz 更新)
      *   - Kp/Ki/Kd/output_limit/integral_limit 后续可由 VOFA V/W 命令或菜单"Velocity PID"组细调
      */
-    PID_Init(&vel_pid_x, 1.0f, 0.0001f, 0.0f, 80.0f, 20.0f, 10000.0f, 0.8f);
-    PID_Init(&vel_pid_y, 1.0f, 0.0001f, 0.0f, 80.0f, 20.0f, 10000.0f, 0.8f);
+    PID_Init(&vel_pid_x, 0.5f, 0.000f, 0.0f, 80.0f, 20.0f, 10000.0f, 0.8f);
+    PID_Init(&vel_pid_y, 0.5f, 0.000f, 0.0f, 80.0f, 20.0f, 10000.0f, 0.8f);
 
     PID_Init(&pos_pid_x, 2.0f, 0.001f, 0.0f, 100.0f, 30.0f, 10000.0f, 1.0f);
     PID_Init(&pos_pid_y, 2.0f, 0.001f, 0.0f, 100.0f, 30.0f, 10000.0f, 1.0f);

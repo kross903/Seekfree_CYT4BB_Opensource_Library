@@ -13,7 +13,7 @@ typedef struct
     uint8 valid;
     uint8 flow_used;
     uint8 acc_used;
-    uint8 reserved0;
+    uint8 fused_velocity_valid;
     int16 flow_delta_x_count;
     int16 flow_delta_y_count;
     float dt_s;
