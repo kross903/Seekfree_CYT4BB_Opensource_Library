@@ -14,7 +14,7 @@ extern volatile uint8 armed;
 #define TOF_MEDIAN_WINDOW                 3U
 
 #define HEIGHT_CASCADE_ENABLE             1U
-#define HEIGHT_TARGET_DEFAULT_CM          110.0f
+#define HEIGHT_TARGET_DEFAULT_CM          120.0f
 #define HEIGHT_TARGET_START_CM            50.0f
 #define HEIGHT_TARGET_ERROR_LIMIT_CM      40.0f
 #define HEIGHT_TARGET_RAMP_DURATION_S     3.0f
@@ -391,7 +391,7 @@ void HeightManager_Init(float initial_height_cm)
 {
     if(initial_height_cm < 1.0f)
     {
-        initial_height_cm = 100.0f;
+        initial_height_cm = 120.0f;
     }
 
     height_m = 0.0f;

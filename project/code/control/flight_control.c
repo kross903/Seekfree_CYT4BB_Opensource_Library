@@ -126,6 +126,7 @@ void Flight_Control_Set_Gyro_PID(uint8 axis, float kp, float ki, float kd)
         pid->Kp = kp;
         pid->Ki = ki;
         pid->Kd = kd;
+        Rate_Loop_Reset_DTerm_Axis(axis);
         sync_runtime_snapshot();
     }
 }
@@ -414,6 +415,7 @@ void Flight_Control_Reset_All_PID(void)
     PID_Reset(&gyro_pid_roll);
     PID_Reset(&gyro_pid_pitch);
     PID_Reset(&gyro_pid_yaw);
+    Rate_Loop_Reset_DTerm();
     PID_Reset(&angle_pid_roll);
     PID_Reset(&angle_pid_pitch);
     PID_Reset(&angle_pid_yaw);
@@ -433,6 +435,7 @@ void Flight_Control_Reset_Gyro_PID(uint8 axis)
     if(pid != NULL)
     {
         PID_Reset(pid);
+        Rate_Loop_Reset_DTerm_Axis(axis);
         sync_runtime_snapshot();
     }
 }

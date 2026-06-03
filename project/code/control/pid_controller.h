@@ -23,6 +23,7 @@ void PID_Init(PID_Controller *pid, float kp, float ki, float kd,
 // 根据目标值、当前值和采样周期计算新的控制输出。
 // 当前实现仍按固定中断节拍工作，dt 参数保留用于接口兼容。
 float PID_Calculate(PID_Controller *pid, float target, float current, float dt);
+float PID_Calculate_PI_Unlimited(PID_Controller *pid, float target, float current, float dt);
 
 // 清空 PID 内部历史量，通常在解锁、切模式或急停后调用。
 void PID_Reset(PID_Controller *pid);

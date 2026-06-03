@@ -61,6 +61,7 @@ static void send_sixteen_date(float date_1, float date_2, float date_3, float da
  * FS  高度估计 / 串级 PID 16 路诊断 (case 27)
  * FU  光流融合状态 16 路诊断 (case 29)
  */
+/* F9: Roll/Pitch D-term filter diag. */
 static int send_back_flag = 0;
 static uint8 send_back_command = 'R';
 
@@ -990,6 +991,7 @@ void USART_PID_Adjust(void)
                 case '6': send_back_flag = 6; break;
                 case '7': send_back_flag = 7; break;
                 case '8': send_back_flag = 8; break;
+                case '9': send_back_flag = 9; break;
                 case 'A':
                 case 'a': send_back_flag = 10; break;
                 case 'B':
@@ -1164,6 +1166,22 @@ void send_date_back(void)
                            vy_target_cms,
                            y_i_out,
                            roll_corr_deg);
+            break;
+        }
+
+        case 9:
+        {
+            RateLoopDTermDiag_t dterm_diag;
+
+            Rate_Loop_Get_DTerm_Diag(&dterm_diag);
+            send_four_date(dterm_diag.roll_raw_gyro,
+                           dterm_diag.roll_filtered_gyro,
+                           dterm_diag.roll_raw_derivative,
+                           dterm_diag.roll_d_output,
+                           dterm_diag.pitch_raw_gyro,
+                           dterm_diag.pitch_filtered_gyro,
+                           dterm_diag.pitch_raw_derivative,
+                           dterm_diag.pitch_d_output);
             break;
         }
 

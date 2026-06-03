@@ -101,19 +101,19 @@ static float s_parameter_defaults[MAX_PARAMETERS];
 ParameterConfig param_config[] = {
     PARAM_CFG("Gyro Roll Kp",            0,  &gyro_pid_roll.Kp,                -10.0f,   100.0f,   0.01f,  PARAM_GROUP_GYRO,    PARAM_OBJECT_ROLL,   PARAM_ITEM_KP),
     PARAM_CFG("Gyro Roll Ki",            1,  &gyro_pid_roll.Ki,                -10.0f,   100.0f,   0.01f,  PARAM_GROUP_GYRO,    PARAM_OBJECT_ROLL,   PARAM_ITEM_KI),
-    PARAM_CFG("Gyro Roll Kd",            2,  &gyro_pid_roll.Kd,                  0.0f,    10.0f,   0.001f, PARAM_GROUP_GYRO,    PARAM_OBJECT_ROLL,   PARAM_ITEM_KD),
+    PARAM_CFG("Gyro Roll Kd",            2,  &gyro_pid_roll.Kd,                  0.0f,    0.01f,   0.00001f, PARAM_GROUP_GYRO,    PARAM_OBJECT_ROLL,   PARAM_ITEM_KD),
     PARAM_CFG("Gyro Roll Out Limit",     3,  &gyro_pid_roll.output_limit,        0.0f, 10000.0f, 100.0f,    PARAM_GROUP_GYRO,    PARAM_OBJECT_ROLL,   PARAM_ITEM_OUTPUT_LIMIT),
     PARAM_CFG("Gyro Roll Int Limit",     4,  &gyro_pid_roll.integral_limit,      0.0f,   100.0f,  10.0f,    PARAM_GROUP_GYRO,    PARAM_OBJECT_ROLL,   PARAM_ITEM_INTEGRAL_LIMIT),
 
     PARAM_CFG("Gyro Pitch Kp",           5,  &gyro_pid_pitch.Kp,               -10.0f,   100.0f,   0.01f,  PARAM_GROUP_GYRO,    PARAM_OBJECT_PITCH,  PARAM_ITEM_KP),
     PARAM_CFG("Gyro Pitch Ki",           6,  &gyro_pid_pitch.Ki,               -10.0f,   100.0f,   0.01f,  PARAM_GROUP_GYRO,    PARAM_OBJECT_PITCH,  PARAM_ITEM_KI),
-    PARAM_CFG("Gyro Pitch Kd",           7,  &gyro_pid_pitch.Kd,               -10.0f,   100.0f,   0.001f, PARAM_GROUP_GYRO,    PARAM_OBJECT_PITCH,  PARAM_ITEM_KD),
+    PARAM_CFG("Gyro Pitch Kd",           7,  &gyro_pid_pitch.Kd,                0.0f,    0.01f,   0.00001f, PARAM_GROUP_GYRO,    PARAM_OBJECT_PITCH,  PARAM_ITEM_KD),
     PARAM_CFG("Gyro Pitch Out Limit",    8,  &gyro_pid_pitch.output_limit,       0.0f,  1000.0f, 100.0f,    PARAM_GROUP_GYRO,    PARAM_OBJECT_PITCH,  PARAM_ITEM_OUTPUT_LIMIT),
     PARAM_CFG("Gyro Pitch Int Limit",    9,  &gyro_pid_pitch.integral_limit,     0.0f,  1000.0f,  10.0f,    PARAM_GROUP_GYRO,    PARAM_OBJECT_PITCH,  PARAM_ITEM_INTEGRAL_LIMIT),
 
     PARAM_CFG("Gyro Yaw Kp",            10,  &gyro_pid_yaw.Kp,                 -10.0f,   100.0f,   0.01f,  PARAM_GROUP_GYRO,    PARAM_OBJECT_YAW,    PARAM_ITEM_KP),
     PARAM_CFG("Gyro Yaw Ki",            11,  &gyro_pid_yaw.Ki,                 -10.0f,   100.0f,   0.01f,  PARAM_GROUP_GYRO,    PARAM_OBJECT_YAW,    PARAM_ITEM_KI),
-    PARAM_CFG("Gyro Yaw Kd",            12,  &gyro_pid_yaw.Kd,                 -10.0f,   100.0f,   0.001f, PARAM_GROUP_GYRO,    PARAM_OBJECT_YAW,    PARAM_ITEM_KD),
+    PARAM_CFG("Gyro Yaw Kd",            12,  &gyro_pid_yaw.Kd,                  0.0f,    0.01f,   0.00001f, PARAM_GROUP_GYRO,    PARAM_OBJECT_YAW,    PARAM_ITEM_KD),
     PARAM_CFG("Gyro Yaw Out Limit",     13,  &gyro_pid_yaw.output_limit,         0.0f, 10000.0f, 100.0f,    PARAM_GROUP_GYRO,    PARAM_OBJECT_YAW,    PARAM_ITEM_OUTPUT_LIMIT),
     PARAM_CFG("Gyro Yaw Int Limit",     14,  &gyro_pid_yaw.integral_limit,       0.0f,  1000.0f,  10.0f,    PARAM_GROUP_GYRO,    PARAM_OBJECT_YAW,    PARAM_ITEM_INTEGRAL_LIMIT),
 

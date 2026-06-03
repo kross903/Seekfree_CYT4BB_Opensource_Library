@@ -86,6 +86,38 @@ float PID_Calculate(PID_Controller *pid, float target, float current, float dt)
     return output;
 }
 
+/* PI-only path for rate loop P/I when D-term is computed from gyro derivative. */
+float PID_Calculate_PI_Unlimited(PID_Controller *pid, float target, float current, float dt)
+{
+    float error = 0.0f;
+    float integral_factor = 1.0f;
+
+    (void)dt;
+
+    error = target - current;
+
+    if(fabsf(error) > 0.0f)
+    {
+        integral_factor = (fabsf(error) < pid->IntegralThreshold) ? 1.0f
+                                                                 : (pid->IntegralThreshold / fabsf(error));
+    }
+
+    pid->integral += integral_factor * error;
+
+    if(pid->integral > pid->integral_limit)
+    {
+        pid->integral = pid->integral_limit;
+    }
+    else if(pid->integral < -pid->integral_limit)
+    {
+        pid->integral = -pid->integral_limit;
+    }
+
+    pid->prev_error = error;
+
+    return pid->Kp * error + pid->Ki * pid->integral;
+}
+
 /*
  * PID 状态复位入口:
  * 清空积分和历史误差，常用于切模式、重新解锁或参数大改后。
@@ -93,5 +125,6 @@ float PID_Calculate(PID_Controller *pid, float target, float current, float dt)
 void PID_Reset(PID_Controller *pid)
 {
     pid->integral = 0.0f;
+    pid->derivative = 0.0f;
     pid->prev_error = 0.0f;
 }

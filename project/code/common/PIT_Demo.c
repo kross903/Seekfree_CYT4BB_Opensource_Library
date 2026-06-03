@@ -387,6 +387,7 @@ static uint8 control_task_handle_attitude_safety(void)
     if(check_attitude_safety())
     {
         Angle_Loop_Reset_Rate_Cmd_Lpf();
+        Rate_Loop_Reset_Output();
         return 1U;
     }
 
@@ -488,6 +489,7 @@ static uint8 control_task_handle_disarmed(void)
     if(!armed)
     {
         Angle_Loop_Reset_Rate_Cmd_Lpf();
+        Rate_Loop_Reset_Output();
         clear_motor_throttle_state();
         return 1U;
     }
@@ -530,6 +532,7 @@ static uint8 control_task_handle_manual_mode(void)
                                          &position_target_vy_cms);
     Velocity_Loop_Set_Target_Velocity(position_target_vx_cms, position_target_vy_cms);
     Angle_Loop_Reset_Rate_Cmd_Lpf();
+    Rate_Loop_Reset_Output();
     motor_throttle[0] = manual_output;
     motor_throttle[1] = manual_output;
     motor_throttle[2] = manual_output;
