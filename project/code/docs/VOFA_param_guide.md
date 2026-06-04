@@ -25,7 +25,7 @@
 
 ```text
 R1=5.50!
-V4=40.0!
+V4=120.0!
 Gx=0.82!
 F8!
 FU!
@@ -111,23 +111,23 @@ FU!
 ### 调参流程
 
 1. 发送 `FU!`，确认 `I3 fused_velocity_valid`、`I1 flow_used`、`I7 confidence` 和 `I4 tof_source` 是否正常。
-2. 若 `FU` 正常，再发送 `F8!` 调速度环 PID，观察目标速度、速度环滤波反馈、积分项和姿态修正。
+2. 若 `FU` 正常，再发送 `F8!` 调速度环 PID，观察目标速度、速度环直接反馈、积分项和姿态修正。
 3. 若 `FU` 异常，先不要调 PID。优先看 `tof_source/range/dt/confidence`，必要时再用 `F0!` 或 `FE!` 排查光流传感器输入。
 
 ### `F8`: 速度环调参摘要
 
 | 通道 | 含义 |
 |---|---|
-| `I0` | X 方向速度环滤波反馈 `fb_vx_cms` |
+| `I0` | X 方向速度环直接反馈 `fb_vx_cms` |
 | `I1` | X 方向目标速度 `vx_target_cms` |
 | `I2` | X 速度环积分项输出 `x_i_out` |
 | `I3` | Pitch 修正输出 `pitch_corr_deg` |
-| `I4` | Y 方向速度环滤波反馈 `fb_vy_cms` |
+| `I4` | Y 方向速度环直接反馈 `fb_vy_cms` |
 | `I5` | Y 方向目标速度 `vy_target_cms` |
 | `I6` | Y 速度环积分项输出 `y_i_out` |
 | `I7` | Roll 修正输出 `roll_corr_deg` |
 
-`F8 I0/I4` 是速度 PID 实际使用的低通反馈；原始融合速度看 `FU I14/I15`。
+`F8 I0/I4` 是速度 PID 实际使用的直接反馈；该值应与融合速度 `FU I14/I15` 基本同步。
 
 ### `F9`: 姿态解算总览
 
@@ -150,6 +150,8 @@ FU!
 | `I14` | `Yaw_acc_F`，滤波后 Z 加速度，单位 mg |
 | `I15` | `Check_IMU_Data_Quality()`，`0` 正常，`-1` 异常 |
 
+Mahony 加速度修正强度由加速度模值偏差和当前最大轴角速度共同决定：静止/低速时快速收敛，中等运动时降低修正，明显转动或加速度异常时仅保留弱修正，避免滞后的加速度方向拖慢 Roll/Pitch 姿态响应。
+
 ### `FU`: 光流融合状态深度诊断
 
 | 通道 | 含义 |
@@ -164,8 +166,8 @@ FU!
 | `I7` | `pmw_flow_state.flow_confidence`，光流观测可信度 |
 | `I8` | `pmw_flow_state.flow_fusion_alpha`，动态融合系数 |
 | `I9` | `pmw_flow_state.flow_residual_norm_cms`，光流速度与融合速度残差模长 |
-| `I10` | `fb_vx_cms`，X 方向速度环滤波输入速度 |
-| `I11` | `fb_vy_cms`，Y 方向速度环滤波输入速度 |
+| `I10` | `fb_vx_cms`，X 方向速度环直接输入速度 |
+| `I11` | `fb_vy_cms`，Y 方向速度环直接输入速度 |
 | `I12` | `pmw_flow_state.velocity_x_cms`，X 滤波后光流速度 |
 | `I13` | `pmw_flow_state.velocity_y_cms`，Y 滤波后光流速度 |
 | `I14` | `pmw_flow_state.velocity_x_fused_cms`，X 融合速度 |
@@ -178,7 +180,7 @@ FU!
 - `acc_used` 说明 ICM 预测链路正在参与融合。
 - `fused_velocity_valid` 说明速度环可以继续使用融合速度；短时光流/ToF 失效时可在预测保持窗口内保持为 1。
 - `flow_confidence` 对有效光流观测设置下限 `0.30`；无真实观测时仍为 `0`。
-- `flow_fusion_alpha` 当前范围为 `0.20 ~ 0.65`；`confidence=0.30` 对应 alpha 下限，`confidence=1.0` 对应 alpha 上限。
+- `flow_fusion_alpha` 当前范围为 `0.30 ~ 0.80`；`confidence=0.30` 对应 alpha 下限，`confidence=1.0` 对应 alpha 上限。
 
 ### `F0`: 光流后端原始/补偿量
 
@@ -278,8 +280,8 @@ PMW3901 模式：
 | `I1` | Y 目标位置 `pos_diag.target_y_cm` |
 | `I2` | X 目标速度 `pos_diag.vx_cmd_cms` |
 | `I3` | Y 目标速度 `pos_diag.vy_cmd_cms` |
-| `I4` | X 实际速度，速度环滤波反馈 `fb_vx_cms` |
-| `I5` | Y 实际速度，速度环滤波反馈 `fb_vy_cms` |
+| `I4` | X 实际速度，速度环直接反馈 `fb_vx_cms` |
+| `I5` | Y 实际速度，速度环直接反馈 `fb_vy_cms` |
 | `I6` | X 对应目标角度 `target_angle_pitch` |
 | `I7` | Y 对应目标角度 `target_angle_roll` |
 | `I8` | X 对应实际角度 `current_pitch` |
@@ -291,7 +293,7 @@ PMW3901 模式：
 | `I14` | 目标高度 `HeightManager_Get_Active_Target()` |
 | `I15` | 实际高度 `g_height_result.height_cm` |
 
-X 轴速度闭环输出对应 Pitch，Y 轴速度闭环输出对应 Roll。`I4/I5` 是速度 PID 实际使用的滤波反馈；原始融合速度看 `FU I14/I15`。
+X 轴速度闭环输出对应 Pitch，Y 轴速度闭环输出对应 Roll。`I4/I5` 是速度 PID 实际使用的直接反馈；该值应与融合速度 `FU I14/I15` 基本同步。
 
 ## 其他常用回传
 
@@ -329,10 +331,16 @@ FR!
 
 ```text
 FU!
-V1=3.00!
-V4=40.0!
-W1=3.00!
-W4=40.0!
+V1=0.80!
+V2=0!
+V3=0!
+V4=120.0!
+V5=30.0!
+W1=0.80!
+W2=0!
+W3=0!
+W4=120.0!
+W5=30.0!
 F8!
 ```
 

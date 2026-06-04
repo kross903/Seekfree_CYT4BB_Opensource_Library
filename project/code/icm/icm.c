@@ -505,6 +505,19 @@ void MahonyAHRSupdateIMU(float gx, float gy, float gz,
     // 判断加速度数据是否有效
     if(!((ax == 0.0f) && (ay == 0.0f) && (az == 0.0f)))
     {
+        float gyro_abs_x_dps = fabsf(gx);
+        float gyro_abs_y_dps = fabsf(gy);
+        float gyro_abs_z_dps = fabsf(gz);
+        float gyro_abs_max_dps = gyro_abs_x_dps;
+        float acc_norm_error_mg = fabsf(acc_norm - 1000.0f);
+
+        if(gyro_abs_y_dps > gyro_abs_max_dps) {
+            gyro_abs_max_dps = gyro_abs_y_dps;
+        }
+        if(gyro_abs_z_dps > gyro_abs_max_dps) {
+            gyro_abs_max_dps = gyro_abs_z_dps;
+        }
+
         // 角速度转换为弧度
         gx *= DEG2RAD;
         gy *= DEG2RAD;
@@ -542,21 +555,20 @@ void MahonyAHRSupdateIMU(float gx, float gy, float gz,
             integralFBz = 0.0f;
         }
 
-        // 【修改5】自适应调整Kp - 核心修改点
-        // 使用滤波后的模值，放宽阈值，防止完全归零
-        // 假设静止时重力约为 1000mg (根据你的传感器量程调整)
-        if(fabsf(acc_norm - 1000.0f) < 50.0f) {
+        // Mahony修正强度同时参考加速度可信度和陀螺运动状态。
+        // 机体转动时减弱加速度修正，避免姿态被滞后的加速度方向拖慢。
+        if((gyro_abs_max_dps < 8.0f) && (acc_norm_error_mg < 50.0f)) {
             // 静止或微小运动: 高增益，快速收敛
-            twoKp = 8.6f;
+            twoKp = 2.0f;
         }
-        else if(fabsf(acc_norm - 1000.0f) < 200.0f) {
+        else if((gyro_abs_max_dps < 30.0f) && (acc_norm_error_mg < 150.0f)) {
             // 中等运动: 中等增益，平衡响应和稳定性
-            twoKp = 4.0f;
+            twoKp = 0.8f;
         }
         else {
             // 【关键修改】剧烈运动: 保留极小增益，防止长时间漂移
             // 不要设为 0，这样即使在振动环境下也能保持微弱的修正
-            twoKp = 0.01f;
+            twoKp = 0.05f;
         }
 
         // 比例反馈
