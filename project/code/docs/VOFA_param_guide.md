@@ -4,7 +4,7 @@
 
 - 调参先看推荐入口，不优先打开底层诊断。
 - 光流速度链只保留 `F8` 和 `FU` 两个推荐入口。
-- `F9`、`FJ`、`FK`、`FT` 已从固件回传中删除，发送这些命令不会切换当前回传模式。
+- `FJ`、`FK`、`FT` 已从固件回传中删除，发送这些命令不会切换当前回传模式。
 
 ## 串口配置
 
@@ -49,6 +49,7 @@ FU!
 | `Y` | Yaw 姿态环 PID | `Y1 Kp`, `Y2 Ki`, `Y3 Kd` |
 | `y` | Yaw 角速度环 PID | `y1 Kp`, `y2 Ki`, `y3 Kd`, `y4 integral_limit` |
 | `H` | 高度环 PID | `H1 Kp`, `H2 Ki`, `H3 Kd` |
+| `h` | 高度速度内环 PID | `h1 Kp`, `h2 Ki`, `h3 Kd` |
 | `S` | 目标油门 | `S1 throttle` |
 | `T` | IMU 安装补偿角 | `T1 roll_acc_offset`, `T2 pitch_acc_offset`, `T3 reserved_yaw_offset` |
 | `B` | 悬停基准角补偿 | `B1 roll_base_offset`, `B2 pitch_base_offset` |
@@ -66,7 +67,7 @@ FU!
 |---|---|---|
 | 光流速度环调参 | `FU!` -> `F8!` | 先确认融合状态和 ToF，再观察速度环目标、反馈、积分项和输出 |
 | 高度环调参 | `FD!` 或 `FS!` | `FD` 看 8 路摘要，`FS` 看高度估计和串级 PID 全链路 |
-| 红外位置闭环 | `FI!` 或 `FP!` | `FI` 看位置环摘要，`FP` 看 X/Y 双轴多环链路 |
+| 红外位置闭环 | `FI!` 或 `FP!` | `FI` 看位置环摘要，`FP` 看 X/Y/高度闭环总览 |
 | 底层光流排障 | `F0!` 或 `FE!` | `F0` 看后端光流补偿，`FE` 看传感器原始输入 |
 | 红外识别排障 | `FG!`, `FH!`, `FQ!` | 分别看中心点、丢失保护、连通域/筛选统计 |
 | 主循环耗时 | `FR!` | 看 VOFA/监视页相关主循环耗时 |
@@ -84,6 +85,7 @@ FU!
 | `F6!` | 8 | Roll/Pitch 角度与角速度目标对比 |
 | `F7!` | 8 | ADC、摇杆滤波值和目标角 |
 | `F8!` | 8 | 光流速度环调参摘要 |
+| `F9!` | 16 | 姿态解算总览 |
 | `FA!` | 8 | 加速度水平化残差 |
 | `FB!` | 8 | 光流速度旋转到世界系后的速度和积分位置 |
 | `FC!` | 8 | 速度积分位置与光流单帧位移积分位置对比 |
@@ -96,13 +98,13 @@ FU!
 | `FL!` | 8 | 红外位置环 PID 调参 |
 | `FM!` | 8 | X 轴位置-速度-Pitch-角速度链路 |
 | `FN!` | 8 | Y 轴位置-速度-Roll-角速度链路 |
-| `FP!` | 16 | X/Y 双轴多环综合诊断 |
+| `FP!` | 16 | X/Y/高度闭环总览诊断 |
 | `FQ!` | 16 | 红外灯识别和筛选统计 |
 | `FR!` | 8 | 0 核主循环耗时 |
 | `FS!` | 16 | 高度估计和高度串级 PID |
 | `FU!` | 16 | 光流融合状态深度诊断 |
 
-已删除模式：`F9!`, `FJ!`, `FK!`, `FT!`。这些命令不再映射到 `send_back_flag`，发送后保持当前回传模式不变。
+已删除模式：`FJ!`, `FK!`, `FT!`。这些命令不再映射到 `send_back_flag`，发送后保持当前回传模式不变。
 
 ## 光流速度链
 
@@ -126,6 +128,27 @@ FU!
 | `I7` | Roll 修正输出 `roll_corr_deg` |
 
 `F8 I0/I4` 是速度 PID 实际使用的低通反馈；原始融合速度看 `FU I14/I15`。
+
+### `F9`: 姿态解算总览
+
+| 通道 | 含义 |
+|---|---|
+| `I0` | `current_roll` / `Roll_a`，Mahony Roll，单位 deg |
+| `I1` | `current_pitch` / `Pitch_a`，Mahony Pitch，单位 deg |
+| `I2` | `current_yaw` / `Yaw_a`，Mahony Yaw，单位 deg |
+| `I3` | `Yaw_a_Pi_genrl * Rad2Ang`，相对初始 Yaw，单位 deg |
+| `I4` | `q0`，Mahony 四元数 |
+| `I5` | `q1`，Mahony 四元数 |
+| `I6` | `q2`，Mahony 四元数 |
+| `I7` | `q3`，Mahony 四元数 |
+| `I8` | `Roll_g_F`，滤波后 Roll 角速度，单位 deg/s |
+| `I9` | `Pitch_g_F`，滤波后 Pitch 角速度，单位 deg/s |
+| `I10` | `Yaw_g_F`，滤波后 Yaw 角速度，单位 deg/s |
+| `I11` | `acc_norm_filtered`，姿态解算使用的滤波加速度模值，单位 mg |
+| `I12` | `Roll_acc_F`，滤波后 Roll/X 加速度，单位 mg |
+| `I13` | `Pitch_acc_F`，滤波后 Pitch/Y 加速度，单位 mg |
+| `I14` | `Yaw_acc_F`，滤波后 Z 加速度，单位 mg |
+| `I15` | `Check_IMU_Data_Quality()`，`0` 正常，`-1` 异常 |
 
 ### `FU`: 光流融合状态深度诊断
 
@@ -244,8 +267,31 @@ PMW3901 模式：
 | `FL!` | X/Y 位置误差、P 项、I 项和目标速度输出 |
 | `FM!` | X 轴位置 -> 速度 -> Pitch -> Pitch 角速度链路 |
 | `FN!` | Y 轴位置 -> 速度 -> Roll -> Roll 角速度链路 |
-| `FP!` | `FM` 和 `FN` 合并成 16 路双轴综合诊断 |
+| `FP!` | X/Y 位置目标、速度、姿态、角速度和高度闭环 16 路总览 |
 | `FQ!` | 连通域、筛选拒绝计数、红外中心点和最近信标候选数量 |
+
+### `FP!`: X/Y/高度闭环总览
+
+| 通道 | 含义 |
+|---|---|
+| `I0` | X 目标位置 `pos_diag.target_x_cm` |
+| `I1` | Y 目标位置 `pos_diag.target_y_cm` |
+| `I2` | X 目标速度 `pos_diag.vx_cmd_cms` |
+| `I3` | Y 目标速度 `pos_diag.vy_cmd_cms` |
+| `I4` | X 实际速度，速度环滤波反馈 `fb_vx_cms` |
+| `I5` | Y 实际速度，速度环滤波反馈 `fb_vy_cms` |
+| `I6` | X 对应目标角度 `target_angle_pitch` |
+| `I7` | Y 对应目标角度 `target_angle_roll` |
+| `I8` | X 对应实际角度 `current_pitch` |
+| `I9` | Y 对应实际角度 `current_roll` |
+| `I10` | X 对应目标角速度 `target_pitch_rate` |
+| `I11` | Y 对应目标角速度 `target_roll_rate` |
+| `I12` | X 对应实际角速度 `current_gyro_pitch` |
+| `I13` | Y 对应实际角速度 `current_gyro_roll` |
+| `I14` | 目标高度 `HeightManager_Get_Active_Target()` |
+| `I15` | 实际高度 `g_height_result.height_cm` |
+
+X 轴速度闭环输出对应 Pitch，Y 轴速度闭环输出对应 Roll。`I4/I5` 是速度 PID 实际使用的滤波反馈；原始融合速度看 `FU I14/I15`。
 
 ## 其他常用回传
 
@@ -257,6 +303,7 @@ PMW3901 模式：
 | `F5!` | 加速度原始值、校准值、模长 |
 | `F6!` | Roll/Pitch 目标角、实际角、目标角速度、实际角速度 |
 | `F7!` | ADC 原始值、滤波值、归一化值和目标角 |
+| `F9!` | Mahony 姿态角、四元数、滤波角速度、滤波加速度和 IMU 健康状态 |
 | `FA!` | 当前 Roll/Pitch、水平化加速度、加速度零偏残差 |
 | `FB!` | 光流速度旋转到世界系后的速度和积分位置 |
 | `FC!` | 速度积分位置与单帧光流位移积分位置对比 |
@@ -267,6 +314,7 @@ PMW3901 模式：
 
 ```text
 F8!
+F9!
 FU!
 FD!
 FS!
@@ -314,6 +362,22 @@ F0!
 Gx=0.82!
 Gy=0.94!
 FU!
+```
+
+Height cascade PID tuning:
+
+```text
+H1=2.0!       // outer height-loop HeightPID.Kp
+H2=0.0001!    // outer height-loop HeightPID.Ki
+H3=0.0!       // outer height-loop HeightPID.Kd
+
+h1=1.0!       // inner height-velocity-loop HeightVelPID.Kp
+h2=0.0001!    // inner height-velocity-loop HeightVelPID.Ki
+h3=0.0!       // inner height-velocity-loop HeightVelPID.Kd
+
+F1!           // read back the last selected PID command group
+FD!           // 8-channel height-loop summary
+FS!           // 16-channel height estimator/cascade PID diagnostic
 ```
 
 强制失锁：

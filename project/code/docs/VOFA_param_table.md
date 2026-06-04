@@ -75,16 +75,17 @@
 | 积分限幅 `integral_limit` | `10.0` | `y4=10.0!` |
 | 微分限幅 / 滤波参数 | `0.0 / 0.0` | 不通过当前 VOFA 指令修改 |
 
-### 1.7 高度环 PID
+### 1.7 高度串级 PID
 
 | 参数 | 默认值 | VOFA 指令 |
 |---|---:|---|
-| `Kp` | `4.00` | `H1=4.00!` |
-| `Ki` | `0.0001` | `H2=0.0001!` |
-| `Kd` | `0.10` | `H3=0.10!` |
-| 输出限幅 `output_limit` | `80.0` | 当前未开放单独指令 |
-| 积分限幅 `integral_limit` | `30.0` | 当前未开放单独指令 |
-| 微分限幅 / 滤波参数 | `10000.0 / 0.3` | 不通过当前 VOFA 指令修改 |
+| 外层 `HeightPID.Kp` | `2.0` | `H1=2.0!` |
+| 外层 `HeightPID.Ki` | `0.0001` | `H2=0.0001!` |
+| 外层 `HeightPID.Kd` | `0.0` | `H3=0.0!` |
+| 内层 `HeightVelPID.Kp` | `1.0` | `h1=1.0!` |
+| 内层 `HeightVelPID.Ki` | `0.0001` | `h2=0.0001!` |
+| 内层 `HeightVelPID.Kd` | `0.0` | `h3=0.0!` |
+| 输出限幅 / 积分限幅 / 微分限幅 / 滤波参数 | 见 `All_Init.c` | 当前未开放单独指令 |
 
 ### 1.8 光流速度环 PID
 
@@ -250,7 +251,7 @@
 | `F6!` | Roll/Pitch 角度与角速度对比 |
 | `F7!` | ADC 原始值、滤波值与目标角 |
 | `F8!` | 光流速度闭环综合监视 |
-| `F9!` | 加速度积分速度、光流速度与融合速度对比 |
+| `F9!` | 姿态解算总览 16 路诊断 |
 | `FA!` | 加速度水平化残差诊断 |
 | `FB!` | 光流速度旋转到世界系后的速度与积分位置 |
 | `FC!` | 速度积分位置与光流单帧位移积分位置对比 |
@@ -265,8 +266,50 @@
 | `FL!` | 红外位置环 PID 调参诊断 |
 | `FM!` | X 轴位置-速度-Pitch-角速度链路诊断 |
 | `FN!` | Y 轴位置-速度-Roll-角速度链路诊断 |
-| `FP!` | X/Y 双轴位置-速度-角度-角速度 16 路综合诊断 |
+| `FP!` | X/Y/高度闭环 16 路总览诊断 |
 | `FQ!` | 小车红外灯/信标红外灯识别效果 16 路诊断 |
+
+### `F9!` 姿态解算总览诊断
+
+| 通道 | 含义 |
+|---|---|
+| `I0` | `current_roll` / `Roll_a`，Mahony Roll，单位 deg |
+| `I1` | `current_pitch` / `Pitch_a`，Mahony Pitch，单位 deg |
+| `I2` | `current_yaw` / `Yaw_a`，Mahony Yaw，单位 deg |
+| `I3` | `Yaw_a_Pi_genrl * Rad2Ang`，相对初始 Yaw，单位 deg |
+| `I4` | `q0`，Mahony 四元数 |
+| `I5` | `q1`，Mahony 四元数 |
+| `I6` | `q2`，Mahony 四元数 |
+| `I7` | `q3`，Mahony 四元数 |
+| `I8` | `Roll_g_F`，滤波后 Roll 角速度，单位 deg/s |
+| `I9` | `Pitch_g_F`，滤波后 Pitch 角速度，单位 deg/s |
+| `I10` | `Yaw_g_F`，滤波后 Yaw 角速度，单位 deg/s |
+| `I11` | `acc_norm_filtered`，姿态解算使用的滤波加速度模值，单位 mg |
+| `I12` | `Roll_acc_F`，滤波后 Roll/X 加速度，单位 mg |
+| `I13` | `Pitch_acc_F`，滤波后 Pitch/Y 加速度，单位 mg |
+| `I14` | `Yaw_acc_F`，滤波后 Z 加速度，单位 mg |
+| `I15` | `Check_IMU_Data_Quality()`，`0` 正常，`-1` 异常 |
+
+### `FP!` X/Y/高度闭环总览诊断
+
+| 通道 | 含义 |
+|---|---|
+| `I0` | X 目标位置 `pos_diag.target_x_cm` |
+| `I1` | Y 目标位置 `pos_diag.target_y_cm` |
+| `I2` | X 目标速度 `pos_diag.vx_cmd_cms` |
+| `I3` | Y 目标速度 `pos_diag.vy_cmd_cms` |
+| `I4` | X 实际速度，速度环滤波反馈 `fb_vx_cms` |
+| `I5` | Y 实际速度，速度环滤波反馈 `fb_vy_cms` |
+| `I6` | X 对应目标角度 `target_angle_pitch` |
+| `I7` | Y 对应目标角度 `target_angle_roll` |
+| `I8` | X 对应实际角度 `current_pitch` |
+| `I9` | Y 对应实际角度 `current_roll` |
+| `I10` | X 对应目标角速度 `target_pitch_rate` |
+| `I11` | Y 对应目标角速度 `target_roll_rate` |
+| `I12` | X 对应实际角速度 `current_gyro_pitch` |
+| `I13` | Y 对应实际角速度 `current_gyro_roll` |
+| `I14` | 目标高度 `HeightManager_Get_Active_Target()` |
+| `I15` | 实际高度 `g_height_result.height_cm` |
 
 ## 6. 常用发送指令示例
 
@@ -381,6 +424,21 @@ FQ!
 ```text
 00=0!
 ```
+
+### Height cascade PID VOFA commands
+
+Current code defaults in `All_Init.c`:
+
+| Loop | Param | Default | VOFA command |
+|---|---|---:|---|
+| Outer height loop `HeightPID` | `Kp` | `2.0` | `H1=2.0!` |
+| Outer height loop `HeightPID` | `Ki` | `0.0001` | `H2=0.0001!` |
+| Outer height loop `HeightPID` | `Kd` | `0.0` | `H3=0.0!` |
+| Inner height velocity loop `HeightVelPID` | `Kp` | `1.0` | `h1=1.0!` |
+| Inner height velocity loop `HeightVelPID` | `Ki` | `0.0001` | `h2=0.0001!` |
+| Inner height velocity loop `HeightVelPID` | `Kd` | `0.0` | `h3=0.0!` |
+
+Use `F1!` to read back the last selected PID command group. Use `FD!` or `FS!` to monitor height-loop behavior.
 
 ## 7. 说明
 

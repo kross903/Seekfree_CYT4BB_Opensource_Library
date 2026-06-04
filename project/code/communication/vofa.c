@@ -35,7 +35,7 @@ static void send_sixteen_date(float date_1, float date_2, float date_3, float da
 /*
  * 回传模式开关 (FX 命令切换):
  *   F0  光流原始/补偿数据 (case 0)
- *   F1  PID 参数回读 (case 1, 配合 R/r/P/p/Y/y/H/V/W 命令)
+ *   F1  PID 参数回读 (case 1, 配合 R/r/P/p/Y/y/H/h/V/W 命令)
  *   F2  定位 / 高度观察 (case 2)
  *   F3  VOFA 无线链路测试 (case 3)
  *   F4  陀螺原始/校准数据 (case 4)
@@ -44,6 +44,7 @@ static void send_sixteen_date(float date_1, float date_2, float date_3, float da
  *   F7  ADC + 摇杆历史调试 (case 7)
  *   F8  光流速度闭环综合监视 (case 8): I0~I3 X轴 光流实际/目标/积分项/pitch修正,
  *                                       I4~I7 Y轴 光流实际/目标/积分项/roll 修正
+ *   F9  姿态解算总览 16 路诊断 (case 9)
  * FD  高度环监视 (case 13): I0 实际高度(cm), I1 目标高度(cm),
  *                                        I2 高度误差(cm), I3 油门修正,
  *                                        I4 目标垂直速度, I5 融合垂直速度,
@@ -55,7 +56,7 @@ static void send_sixteen_date(float date_1, float date_2, float date_3, float da
  * FL  红外位置环 PID 调参诊断 (case 21)
  * FM  X 轴位置-速度-Pitch-角速度链路诊断 (case 22)
  * FN  Y 轴位置-速度-Roll-角速度链路诊断 (case 23)
- * FP  X/Y 双轴位置-速度-角度-角速度 16 路综合诊断 (case 24)
+ * FP  X/Y/高度闭环 16 路总览诊断 (case 24)
  * FQ  小车红外灯/信标红外灯识别效果 16 路诊断 (case 25)
  * FR  0 核主循环耗时诊断 (case 26)
  * FS  高度估计 / 串级 PID 16 路诊断 (case 27)
@@ -255,6 +256,17 @@ static void set_height_pid_value(uint8 item, float value)
     Flight_Control_Set_Height_PID(kp, ki, kd);
 }
 
+static void set_height_vel_pid_value(uint8 item, float value)
+{
+    switch(item)
+    {
+        case '1': HeightVelPID.Kp = value; break;
+        case '2': HeightVelPID.Ki = value; break;
+        case '3': HeightVelPID.Kd = value; break;
+        default:  break;
+    }
+}
+
 /*
  * VOFA 调参: 光流速度闭环 PID。
  *
@@ -412,6 +424,12 @@ static void send_pid_data_back(uint8 command)
 
         case 'H':
             Flight_Control_Get_Height_PID(&value_1, &value_2, &value_3);
+            break;
+
+        case 'h':
+            value_1 = HeightVelPID.Kp;
+            value_2 = HeightVelPID.Ki;
+            value_3 = HeightVelPID.Kd;
             break;
 
         case 'V':
@@ -990,6 +1008,7 @@ void USART_PID_Adjust(void)
                 case '6': send_back_flag = 6; break;
                 case '7': send_back_flag = 7; break;
                 case '8': send_back_flag = 8; break;
+                case '9': send_back_flag = 9; break;
                 case 'A':
                 case 'a': send_back_flag = 10; break;
                 case 'B':
@@ -1042,6 +1061,14 @@ void USART_PID_Adjust(void)
                 set_height_pid_value(item, data_get);
             }
             send_back_command = 'H';
+            break;
+
+        case 'h':
+            if(has_value)
+            {
+                set_height_vel_pid_value(item, data_get);
+            }
+            send_back_command = 'h';
             break;
 
         case 'G':
@@ -1166,6 +1193,25 @@ void send_date_back(void)
                            roll_corr_deg);
             break;
         }
+
+        case 9:
+            send_sixteen_date(current_roll,
+                              current_pitch,
+                              current_yaw,
+                              Yaw_a_Pi_genrl * Rad2Ang,
+                              q0,
+                              q1,
+                              q2,
+                              q3,
+                              Roll_g_F,
+                              Pitch_g_F,
+                              Yaw_g_F,
+                              acc_norm_filtered,
+                              Roll_acc_F,
+                              Pitch_acc_F,
+                              Yaw_acc_F,
+                              (float)Check_IMU_Data_Quality());
+            break;
 
         case 10:
         {
@@ -1401,27 +1447,30 @@ void send_date_back(void)
         case 24:
         {
             PositionLoopDiag_t pos_diag = {0};
-            PMWFlowState_t pmw_flow_state = {0};
+            float fb_vx_cms = 0.0f;
+            float fb_vy_cms = 0.0f;
 
             Position_Loop_Get_Diag(&pos_diag);
-            PMW_Flow_GetState(&pmw_flow_state);
+            Velocity_Loop_Get_Diag(NULL, NULL,
+                                   &fb_vx_cms, &fb_vy_cms,
+                                   NULL, NULL, NULL);
 
-            send_sixteen_date(pos_diag.fb_x_cm,
+            send_sixteen_date(pos_diag.target_x_cm,
+                              pos_diag.target_y_cm,
                               pos_diag.vx_cmd_cms,
-                              pmw_flow_state.velocity_x_fused_cms,
-                              target_angle_pitch,
-                              current_pitch,
-                              target_pitch_rate,
-                              current_gyro_pitch,
-                              pos_diag.fb_y_cm,
                               pos_diag.vy_cmd_cms,
-                              pmw_flow_state.velocity_y_fused_cms,
+                              fb_vx_cms,
+                              fb_vy_cms,
+                              target_angle_pitch,
                               target_angle_roll,
+                              current_pitch,
                               current_roll,
+                              target_pitch_rate,
                               target_roll_rate,
+                              current_gyro_pitch,
                               current_gyro_roll,
-                              (float)pos_diag.active,
-                              0.0f);
+                              HeightManager_Get_Active_Target(),
+                              g_height_result.height_cm);
             break;
         }
 
