@@ -3,7 +3,7 @@
 
 #define SHARED_VISION_INPUT_ADDR                    0x28001000u
 #define SHARED_VISION_RESULT_ADDR                   0x28001100u
-#define SHARED_VISION_SCREEN_CTRL_ADDR              0x28001200u
+#define SHARED_VISION_SCREEN_CTRL_ADDR              0x28001300u
 #define SHARED_VISION_MAGIC                         0x56495331u
 #define SHARED_VISION_SCREEN_MAGIC                  0x56534331u
 #define CROSS_CORE_CAMERA_ASSISTANT_IMAGE_ENABLE    0U
@@ -30,6 +30,7 @@ typedef struct
     uint32 seq;
     IR_Pose_t pose;
     VisionRuntimeDiag_t diag;
+    VisionRuntimeBeaconSlot_t beacon_slots[VISION_RUNTIME_BEACON_SLOT_COUNT];
     IR_LossDebug_t loss_debug;
     uint8 lost_flag;
     uint8 reserved[3];
@@ -298,6 +299,7 @@ void CrossCoreCamera_CameraCoreTask(void)
 #endif
     SharedVisionInput_t input_snapshot;
     VisionRuntimeDiag_t diag_snapshot;
+    VisionRuntimeBeaconSlot_t beacon_slots[VISION_RUNTIME_BEACON_SLOT_COUNT] = {0};
     IR_LossDebug_t loss_debug;
 
     if(!mt9v03x_finish_flag)
@@ -321,11 +323,13 @@ void CrossCoreCamera_CameraCoreTask(void)
                                        input_snapshot.pitch_deg,
                                        input_snapshot.height_cm);
     VisionRuntime_GetDiag(&diag_snapshot);
+    VisionRuntime_GetBeaconSlots(beacon_slots, VISION_RUNTIME_BEACON_SLOT_COUNT);
     IR_Localization_GetLossDebug(&loss_debug);
 
     g_shared_vision_result->magic = SHARED_VISION_MAGIC;
     g_shared_vision_result->pose = ir_pose_estimate;
     g_shared_vision_result->diag = diag_snapshot;
+    memcpy((void *)g_shared_vision_result->beacon_slots, beacon_slots, sizeof(beacon_slots));
     g_shared_vision_result->loss_debug = loss_debug;
     g_shared_vision_result->lost_flag = ir_position_lost_flag;
     g_shared_vision_result->lost_elapsed_ms = ir_position_lost_elapsed_ms;
@@ -372,6 +376,7 @@ uint8 CrossCoreCamera_ControlCoreFetchFrame(void)
     ir_position_lost_elapsed_ms = result_snapshot.lost_elapsed_ms;
     ir_pose_update_seq = result_snapshot.pose_update_seq;
     VisionRuntime_SetDiag(&result_snapshot.diag);
+    VisionRuntime_SetBeaconSlots(result_snapshot.beacon_slots, VISION_RUNTIME_BEACON_SLOT_COUNT);
     IR_Localization_SetLossDebug(&result_snapshot.loss_debug);
     return 1U;
 #else

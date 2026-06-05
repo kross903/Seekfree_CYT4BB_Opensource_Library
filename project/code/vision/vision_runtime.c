@@ -2,6 +2,7 @@
 #include <string.h>
 
 static VisionRuntimeDiag_t s_vision_runtime_diag;
+static VisionRuntimeBeaconSlot_t s_vision_runtime_beacon_slots[VISION_RUNTIME_BEACON_SLOT_COUNT];
 
 #if CY_CORE_CM7_1
 #include "vision/beacon_detect.h"
@@ -12,6 +13,57 @@ static VisionRuntimeDiag_t s_vision_runtime_diag;
 static uint8 s_vision_binary[MT9V03X_H * MT9V03X_W];
 static uint8 s_vision_visited[MT9V03X_H * MT9V03X_W];
 static uint16 s_vision_queue[MT9V03X_H * MT9V03X_W];
+
+static void VisionRuntime_ClearBeaconSlots(void)
+{
+    memset(s_vision_runtime_beacon_slots, 0, sizeof(s_vision_runtime_beacon_slots));
+}
+
+static void VisionRuntime_UpdateBeaconSlotsFromCurrentFrame(int beacon_count,
+                                                            const BeaconResult_t *beacon_results)
+{
+    uint8 slot_count = 0U;
+    uint8 selected[BEACON_MAX_DETECTIONS] = {0};
+
+    VisionRuntime_ClearBeaconSlots();
+
+    if(beacon_count <= 0 || beacon_results == NULL)
+    {
+        return;
+    }
+
+    while(slot_count < VISION_RUNTIME_BEACON_SLOT_COUNT)
+    {
+        int best_index = -1;
+        float best_distance = 0.0f;
+        int i;
+
+        for(i = 0; i < beacon_count; ++i)
+        {
+            if(selected[i])
+            {
+                continue;
+            }
+
+            if(best_index < 0 || beacon_results[i].distance_cm < best_distance)
+            {
+                best_index = i;
+                best_distance = beacon_results[i].distance_cm;
+            }
+        }
+
+        if(best_index < 0)
+        {
+            break;
+        }
+
+        selected[best_index] = 1U;
+        s_vision_runtime_beacon_slots[slot_count].valid = 1U;
+        s_vision_runtime_beacon_slots[slot_count].x_cm = beacon_results[best_index].world_x;
+        s_vision_runtime_beacon_slots[slot_count].y_cm = beacon_results[best_index].world_y;
+        slot_count++;
+    }
+}
 
 static float VisionRuntime_NormalizedAspect(int width, int height)
 {
@@ -220,6 +272,7 @@ static void VisionRuntime_UpdateDiagFromCurrentFrame(int beacon_count,
     s_vision_runtime_diag.beacon_nearest_brightness = 0.0f;
     s_vision_runtime_diag.beacon_nearest_occupancy = 0.0f;
     s_vision_runtime_diag.beacon_nearest_aspect = 0.0f;
+    VisionRuntime_UpdateBeaconSlotsFromCurrentFrame(beacon_count, beacon_results);
 
     if(beacon_count > 0 && beacon_results != NULL)
     {
@@ -318,4 +371,31 @@ void VisionRuntime_SetDiag(const VisionRuntimeDiag_t *diag)
     }
 
     memcpy(&s_vision_runtime_diag, diag, sizeof(VisionRuntimeDiag_t));
+}
+
+void VisionRuntime_GetBeaconSlots(VisionRuntimeBeaconSlot_t *slots, uint8 max_slots)
+{
+    uint8 copy_count;
+
+    if(slots == NULL || max_slots == 0U)
+    {
+        return;
+    }
+
+    copy_count = (max_slots < VISION_RUNTIME_BEACON_SLOT_COUNT) ? max_slots : VISION_RUNTIME_BEACON_SLOT_COUNT;
+    memcpy(slots, s_vision_runtime_beacon_slots, sizeof(VisionRuntimeBeaconSlot_t) * copy_count);
+}
+
+void VisionRuntime_SetBeaconSlots(const VisionRuntimeBeaconSlot_t *slots, uint8 max_slots)
+{
+    uint8 copy_count;
+
+    memset(s_vision_runtime_beacon_slots, 0, sizeof(s_vision_runtime_beacon_slots));
+    if(slots == NULL || max_slots == 0U)
+    {
+        return;
+    }
+
+    copy_count = (max_slots < VISION_RUNTIME_BEACON_SLOT_COUNT) ? max_slots : VISION_RUNTIME_BEACON_SLOT_COUNT;
+    memcpy(s_vision_runtime_beacon_slots, slots, sizeof(VisionRuntimeBeaconSlot_t) * copy_count);
 }

@@ -22,6 +22,8 @@ typedef enum
     CORE_LINK_PROTOCOL_PARAM_ASCII = 0x02,                                      // Param payload, such as "R1=1.234"
     CORE_LINK_PROTOCOL_DRONE_STATUS = 0x10,                                     // Fixed-length drone status summary
     CORE_LINK_PROTOCOL_SCREEN_CMD   = 0x11,                                     // IPS200 mirror command stream
+    CORE_LINK_PROTOCOL_BEACON_MAP   = 0x12,                                     // Fixed-length beacon map packet
+    CORE_LINK_PROTOCOL_BEACON_MAP_UPLINK = 0x13,                                // Fixed-length car uplink beacon map packet
 }core_link_protocol_enum;
 
 typedef enum
@@ -70,6 +72,29 @@ typedef struct
     int16 fused_height_dcm;
 } core_link_drone_status_packet_struct;
 
+#define CORE_LINK_BEACON_MAP_COUNT         (5U)
+#define CORE_LINK_BEACON_MAP_PAYLOAD_LEN   (37U)
+#define CORE_LINK_BEACON_MAP_UPLINK_PAYLOAD_LEN   CORE_LINK_BEACON_MAP_PAYLOAD_LEN
+
+typedef struct
+{
+    uint8 id;
+    int16 x_mm;
+    int16 y_mm;
+    uint8 state;
+} core_link_beacon_entry_struct;
+
+typedef struct
+{
+    uint8 car_visible;
+    int16 car_x_mm;
+    int16 car_y_mm;
+    int16 car_yaw_ddeg;
+    core_link_beacon_entry_struct beacon[CORE_LINK_BEACON_MAP_COUNT];
+} core_link_beacon_map_packet_struct;
+
+typedef core_link_beacon_map_packet_struct core_link_beacon_map_uplink_packet_struct;
+
 void core_link_init             (void);                                         // Init UART4, FIFO, and parser
 void core_link_task             (void);                                         // Run receive, unpack, and dispatch in main loop
 void core_link_uart4_rx_handler (void);                                         // Call from uart4_isr to push rx bytes into FIFO
@@ -78,6 +103,7 @@ void core_link_send_frame       (uint8 protocol_id, const uint8 *payload, uint8 
 void core_link_send_text        (const char *text);                             // Send text payload frame
 void core_link_send_param_ascii (uint8 command, uint8 item, float value);       // Send ASCII param payload like "R1=1.234"
 void core_link_send_drone_status(const core_link_drone_status_packet_struct *status);
+void core_link_send_beacon_map_uplink(const core_link_beacon_map_uplink_packet_struct *packet);
 
 void core_link_on_frame_received (uint8 protocol_id, const uint8 *payload, uint8 length);       // Optional generic callback for new protocol ids
 void core_link_on_text_received  (const uint8 *text, uint8 length);                              // Optional text callback

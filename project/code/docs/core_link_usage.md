@@ -131,10 +131,21 @@
 ```c
 typedef enum
 {
-    CORE_LINK_PROTOCOL_TEXT        = 0x01,
-    CORE_LINK_PROTOCOL_PARAM_ASCII = 0x02,
+    CORE_LINK_PROTOCOL_TEXT              = 0x01,
+    CORE_LINK_PROTOCOL_PARAM_ASCII       = 0x02,
+    CORE_LINK_PROTOCOL_DRONE_STATUS      = 0x10,
+    CORE_LINK_PROTOCOL_SCREEN_CMD        = 0x11,
+    CORE_LINK_PROTOCOL_BEACON_MAP        = 0x12,
+    CORE_LINK_PROTOCOL_BEACON_MAP_UPLINK = 0x13,
 }core_link_protocol_enum;
 ```
+
+### 信标通讯补充
+
+- `0x12`：无人机下发给车端的固定长信标观测包，长度 `37` 字节  
+  字段为 `car_visible + car_x_mm + car_y_mm + car_yaw_ddeg + 5 * (id + x_mm + y_mm + state)`
+- `0x13`：车端回传给无人机的固定长地图上行包，长度同样为 `37` 字节  
+  字段布局与 `0x12` 完全一致，方向相反
 
 ### `0x01` 文本协议
 

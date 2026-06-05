@@ -177,6 +177,9 @@ static void update_monitor_view(void)
 
     if(link_tick)
     {
+        core_link_user_tick(20U);
+        core_link_user_service_beacon_link();
+
         local_screen_refresh_div ++;
         if(local_screen_refresh_div >= MONITOR_LOCAL_SCREEN_REFRESH_DIV)
         {

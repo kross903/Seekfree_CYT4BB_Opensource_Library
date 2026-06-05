@@ -21,6 +21,17 @@ static uint8                       core_link_payload_index = 0;
 static uint8                       core_link_checksum = 0;
 static uint8                       core_link_payload[CORE_LINK_PAYLOAD_MAX_LEN] = {0};
 
+static void core_link_write_i16_le(uint8 *data, int16 value)
+{
+    if(NULL == data)
+    {
+        return;
+    }
+
+    data[0] = (uint8)((uint16)value & 0xFFU);
+    data[1] = (uint8)(((uint16)value >> 8) & 0xFFU);
+}
+
 static uint8 core_link_calc_checksum (uint8 protocol_id, uint8 length, const uint8 *payload)
 {
     uint8 checksum = protocol_id ^ length;
@@ -352,6 +363,36 @@ void core_link_send_drone_status (const core_link_drone_status_packet_struct *st
     core_link_send_frame(CORE_LINK_PROTOCOL_DRONE_STATUS,
                          (const uint8 *)status,
                          (uint8)sizeof(core_link_drone_status_packet_struct));
+}
+
+void core_link_send_beacon_map_uplink(const core_link_beacon_map_uplink_packet_struct *packet)
+{
+    uint8 payload[CORE_LINK_BEACON_MAP_UPLINK_PAYLOAD_LEN] = {0};
+    uint8 i;
+
+    if(NULL == packet)
+    {
+        return;
+    }
+
+    payload[0] = packet->car_visible;
+    core_link_write_i16_le(&payload[1], packet->car_x_mm);
+    core_link_write_i16_le(&payload[3], packet->car_y_mm);
+    core_link_write_i16_le(&payload[5], packet->car_yaw_ddeg);
+
+    for(i = 0U; i < CORE_LINK_BEACON_MAP_COUNT; ++i)
+    {
+        uint8 offset = (uint8)(7U + i * 6U);
+
+        payload[offset] = packet->beacon[i].id;
+        core_link_write_i16_le(&payload[offset + 1U], packet->beacon[i].x_mm);
+        core_link_write_i16_le(&payload[offset + 3U], packet->beacon[i].y_mm);
+        payload[offset + 5U] = packet->beacon[i].state;
+    }
+
+    core_link_send_frame(CORE_LINK_PROTOCOL_BEACON_MAP_UPLINK,
+                         payload,
+                         CORE_LINK_BEACON_MAP_UPLINK_PAYLOAD_LEN);
 }
 
 __weak void core_link_on_frame_received (uint8 protocol_id, const uint8 *payload, uint8 length)

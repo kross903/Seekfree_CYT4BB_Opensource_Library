@@ -23,9 +23,9 @@
 
 if ($debugfile -eq "")
 {
-& "D:\IAR\common\bin\cspybat" -f "C:\Users\saileach\Desktop\飞跃雷区资料\CYT4BB7_Drone\Seekfree_CYT4BB_Opensource_Library\project\iar\project_config\settings\cyt4bb7_cm_7_1.Debug.general.xcl" --backend -f "C:\Users\saileach\Desktop\飞跃雷区资料\CYT4BB7_Drone\Seekfree_CYT4BB_Opensource_Library\project\iar\project_config\settings\cyt4bb7_cm_7_1.Debug.driver.xcl" 
+& "D:\IAR9\common\bin\cspybat" -f "D:\DAS\drone\work\cyt4bb7 case01\Seekfree_CYT4BB_Opensource_Library\project\iar\project_config\settings\cyt4bb7_cm_7_1.Debug.general.xcl" --backend -f "D:\DAS\drone\work\cyt4bb7 case01\Seekfree_CYT4BB_Opensource_Library\project\iar\project_config\settings\cyt4bb7_cm_7_1.Debug.driver.xcl" 
 }
 else
 {
-& "D:\IAR\common\bin\cspybat" -f "C:\Users\saileach\Desktop\飞跃雷区资料\CYT4BB7_Drone\Seekfree_CYT4BB_Opensource_Library\project\iar\project_config\settings\cyt4bb7_cm_7_1.Debug.general.xcl" --debug_file=$debugfile --backend -f "C:\Users\saileach\Desktop\飞跃雷区资料\CYT4BB7_Drone\Seekfree_CYT4BB_Opensource_Library\project\iar\project_config\settings\cyt4bb7_cm_7_1.Debug.driver.xcl" 
+& "D:\IAR9\common\bin\cspybat" -f "D:\DAS\drone\work\cyt4bb7 case01\Seekfree_CYT4BB_Opensource_Library\project\iar\project_config\settings\cyt4bb7_cm_7_1.Debug.general.xcl" --debug_file=$debugfile --backend -f "D:\DAS\drone\work\cyt4bb7 case01\Seekfree_CYT4BB_Opensource_Library\project\iar\project_config\settings\cyt4bb7_cm_7_1.Debug.driver.xcl" 
 }
