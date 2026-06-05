@@ -103,6 +103,8 @@ FU!
 | `FR!` | 8 | 0 核主循环耗时 |
 | `FS!` | 16 | 高度估计和高度串级 PID |
 | `FU!` | 16 | 光流融合状态深度诊断 |
+| `FV!` | 16 | beacon 下发槽位和坐标 |
+| `FW!` | 16 | 当前帧连通域面积降序排列 |
 
 已删除模式：`FJ!`, `FK!`, `FT!`。这些命令不再映射到 `send_back_flag`，发送后保持当前回传模式不变。
 
@@ -261,16 +263,83 @@ PMW3901 模式：
 
 ## 红外位置链路
 
-| 命令 | 重点通道 |
+### `FG!`: 红外正方形中心点
+
+| 通道 | 含义 |
 |---|---|
-| `FG!` | `I0/I1` 中心点，`I2` 视觉高度，`I4` 可追踪，`I5` 丢失标志 |
-| `FH!` | `I2` 原始检测成功，`I3` 丢失标志，`I4` 丢失计时，`I5` 有历史位姿 |
-| `FI!` | `I0/I1` 位置环输入，`I2/I3` 目标速度，`I4` 使能，`I5` 激活，`I6` 输入有效，`I7` 速度反馈可用 |
-| `FL!` | X/Y 位置误差、P 项、I 项和目标速度输出 |
-| `FM!` | X 轴位置 -> 速度 -> Pitch -> Pitch 角速度链路 |
-| `FN!` | Y 轴位置 -> 速度 -> Roll -> Roll 角速度链路 |
-| `FP!` | X/Y 位置目标、速度、姿态、角速度和高度闭环 16 路总览 |
-| `FQ!` | 连通域、筛选拒绝计数、红外中心点和最近信标候选数量 |
+| `I0` | `ir_pose_estimate.x`，前向位置 cm |
+| `I1` | `ir_pose_estimate.y`，右向位置 cm |
+| `I2` | `ir_pose_estimate.z`，视觉估计高度 cm |
+| `I3` | `ir_pose_estimate.square_side_cm`，正方形边长估计 cm |
+| `I4` | `ir_track_valid`，`1` 表示当前可追踪 |
+| `I5` | `ir_position_lost_flag`，`1` 表示已进入丢失保护 |
+| `I6` | `ir_position_lost_elapsed_ms`，丢失持续时间 ms |
+| `I7` | `ir_pose_estimate.detected_point_count`，当前检测到的点数 |
+
+### `FH!`: 红外丢失保护状态机
+
+| 通道 | 含义 |
+|---|---|
+| `I0` | `ir_pose_estimate.x`，当前前向位置 cm |
+| `I1` | `ir_pose_estimate.y`，当前右向位置 cm |
+| `I2` | `ir_loss_debug.raw_detect_valid`，原始检测是否成功 |
+| `I3` | `ir_loss_debug.lost_flag`，丢失保护标志 |
+| `I4` | `ir_loss_debug.lost_elapsed_ms`，丢失累计时间 ms |
+| `I5` | `ir_loss_debug.has_trackable_pose`，是否存在可继续跟踪的历史位姿 |
+| `I6` | `ir_loss_debug.task_5ms_count`，5ms 丢失保护任务累计次数 |
+| `I7` | `ir_loss_debug.timeout_count`，进入超时分支次数 |
+
+### `FI!`: 红外位置闭环摘要
+
+| 通道 | 含义 |
+|---|---|
+| `I0` | `pos_diag.fb_x_cm`，X 方向位置环输入 cm |
+| `I1` | `pos_diag.fb_y_cm`，Y 方向位置环输入 cm |
+| `I2` | `pos_diag.vx_cmd_cms`，X 方向目标速度 cm/s |
+| `I3` | `pos_diag.vy_cmd_cms`，Y 方向目标速度 cm/s |
+| `I4` | `pos_diag.enabled`，位置环使能标志 |
+| `I5` | `pos_diag.active`，位置环当前是否真正接入控制 |
+| `I6` | `pos_diag.ir_track_valid`，红外位置输入当前是否有效 |
+| `I7` | `pos_diag.velocity_ready`，速度反馈链是否可用 |
+
+### `FL!`: 红外位置环 PID 调参摘要
+
+| 通道 | 含义 |
+|---|---|
+| `I0` | `pos_diag.error_x_cm`，X 方向位置误差 cm |
+| `I1` | `x_p_out`，X 方向位置环 P 项输出 |
+| `I2` | `pos_diag.x_i_out`，X 方向位置环 I 项输出 |
+| `I3` | `pos_diag.vx_cmd_cms`，X 方向目标速度 cm/s |
+| `I4` | `pos_diag.error_y_cm`，Y 方向位置误差 cm |
+| `I5` | `y_p_out`，Y 方向位置环 P 项输出 |
+| `I6` | `pos_diag.y_i_out`，Y 方向位置环 I 项输出 |
+| `I7` | `pos_diag.vy_cmd_cms`，Y 方向目标速度 cm/s |
+
+### `FM!`: X 轴位置-速度-Pitch-角速度链路
+
+| 通道 | 含义 |
+|---|---|
+| `I0` | `pos_diag.fb_x_cm`，X 方向位置反馈 cm |
+| `I1` | `pos_diag.vx_cmd_cms`，X 方向目标速度 cm/s |
+| `I2` | `pmw_flow_state.velocity_x_fused_cms`，X 融合速度 cm/s |
+| `I3` | `target_angle_pitch`，X 方向对应目标 Pitch 角 deg |
+| `I4` | `current_pitch`，实际 Pitch 角 deg |
+| `I5` | `target_pitch_rate`，目标 Pitch 角速度 deg/s |
+| `I6` | `current_gyro_pitch`，实际 Pitch 角速度 deg/s |
+| `I7` | `pos_diag.active`，该链路当前是否处于位置闭环激活态 |
+
+### `FN!`: Y 轴位置-速度-Roll-角速度链路
+
+| 通道 | 含义 |
+|---|---|
+| `I0` | `pos_diag.fb_y_cm`，Y 方向位置反馈 cm |
+| `I1` | `pos_diag.vy_cmd_cms`，Y 方向目标速度 cm/s |
+| `I2` | `pmw_flow_state.velocity_y_fused_cms`，Y 融合速度 cm/s |
+| `I3` | `target_angle_roll`，Y 方向对应目标 Roll 角 deg |
+| `I4` | `current_roll`，实际 Roll 角 deg |
+| `I5` | `target_roll_rate`，目标 Roll 角速度 deg/s |
+| `I6` | `current_gyro_roll`，实际 Roll 角速度 deg/s |
+| `I7` | `pos_diag.active`，该链路当前是否处于位置闭环激活态 |
 
 ### `FP!`: X/Y/高度闭环总览
 
@@ -295,6 +364,69 @@ PMW3901 模式：
 
 X 轴速度闭环输出对应 Pitch，Y 轴速度闭环输出对应 Roll。`I4/I5` 是速度 PID 实际使用的直接反馈；该值应与融合速度 `FU I14/I15` 基本同步。
 
+### `FQ!`: 红外灯识别和筛选统计
+
+| 通道 | 含义 |
+|---|---|
+| `I0` | `vision_diag.blob_count`，当前帧总连通域数量 |
+| `I1` | `vision_diag.ir_split_count`，分到红外定位管线的连通域数量 |
+| `I2` | `vision_diag.beacon_split_count`，分到 beacon 管线的连通域数量 |
+| `I3` | `vision_diag.ir_blob_count`，最终送入红外定位候选池的数量 |
+| `I4` | `vision_diag.ir_reject_area_low_count`，因面积过小被拒绝次数 |
+| `I5` | `vision_diag.ir_reject_area_high_count`，因面积过大被拒绝次数 |
+| `I6` | `vision_diag.ir_reject_size_count`，因尺寸条件不满足被拒绝次数 |
+| `I7` | `vision_diag.ir_reject_aspect_count`，因长宽比不满足被拒绝次数 |
+| `I8` | `vision_diag.ir_reject_insert_count`，因候选插入失败被拒绝次数 |
+| `I9` | `vision_diag.ir_track_valid`，红外定位当前是否有效 |
+| `I10` | `vision_diag.ir_detected_point_count`，当前用于定位的点数 |
+| `I11` | `vision_diag.ir_x_cm`，红外中心前向位置 cm |
+| `I12` | `vision_diag.ir_y_cm`，红外中心右向位置 cm |
+| `I13` | `vision_diag.ir_square_side_cm`，红外正方形边长估计 cm |
+| `I14` | `vision_diag.ir_height_cm`，红外估计高度 cm |
+| `I15` | `vision_diag.beacon_blob_count`，最终送入 beacon 候选池的数量 |
+
+### `FV!`: beacon 下发槽位
+
+| 通道 | 含义 |
+|---|---|
+| `I0` | `vision_diag.beacon_count`，当前帧 beacon 识别结果总数 |
+| `I1` | `beacon_slots[0].valid`，slot0 是否有效 |
+| `I2` | `beacon_slots[0].x_cm`，slot0 前向坐标 cm |
+| `I3` | `beacon_slots[0].y_cm`，slot0 右向坐标 cm |
+| `I4` | `beacon_slots[1].valid`，slot1 是否有效 |
+| `I5` | `beacon_slots[1].x_cm`，slot1 前向坐标 cm |
+| `I6` | `beacon_slots[1].y_cm`，slot1 右向坐标 cm |
+| `I7` | `beacon_slots[2].valid`，slot2 是否有效 |
+| `I8` | `beacon_slots[2].x_cm`，slot2 前向坐标 cm |
+| `I9` | `beacon_slots[2].y_cm`，slot2 右向坐标 cm |
+| `I10` | `beacon_slots[3].valid`，slot3 是否有效 |
+| `I11` | `beacon_slots[3].x_cm`，slot3 前向坐标 cm |
+| `I12` | `beacon_slots[3].y_cm`，slot3 右向坐标 cm |
+| `I13` | `beacon_slots[4].valid`，slot4 是否有效 |
+| `I14` | `beacon_slots[4].x_cm`，slot4 前向坐标 cm |
+| `I15` | `beacon_slots[4].y_cm`，slot4 右向坐标 cm |
+
+### `FW!`: 当前帧连通域面积
+
+| 通道 | 含义 |
+|---|---|
+| `I0` | 当前帧面积第 1 大的连通域，单位 px |
+| `I1` | 当前帧面积第 2 大的连通域，单位 px |
+| `I2` | 当前帧面积第 3 大的连通域，单位 px |
+| `I3` | 当前帧面积第 4 大的连通域，单位 px |
+| `I4` | 当前帧面积第 5 大的连通域，单位 px |
+| `I5` | 当前帧面积第 6 大的连通域，单位 px |
+| `I6` | 当前帧面积第 7 大的连通域，单位 px |
+| `I7` | 当前帧面积第 8 大的连通域，单位 px |
+| `I8` | 当前帧面积第 9 大的连通域，单位 px |
+| `I9` | 当前帧面积第 10 大的连通域，单位 px |
+| `I10` | 当前帧面积第 11 大的连通域，单位 px |
+| `I11` | 当前帧面积第 12 大的连通域，单位 px |
+| `I12` | 当前帧面积第 13 大的连通域，单位 px |
+| `I13` | 当前帧面积第 14 大的连通域，单位 px |
+| `I14` | 当前帧面积第 15 大的连通域，单位 px |
+| `I15` | 当前帧面积第 16 大的连通域，单位 px |
+
 ## 其他常用回传
 
 | 命令 | 通道摘要 |
@@ -311,6 +443,8 @@ X 轴速度闭环输出对应 Pitch，Y 轴速度闭环输出对应 Roll。`I4/I
 | `FC!` | 速度积分位置与单帧光流位移积分位置对比 |
 | `FF!` | Roll/Pitch 角度环目标、反馈、I 项和目标角速度 |
 | `FR!` | 最近耗时、最大耗时、平均耗时、频率、超时次数和系统时钟 |
+| `FV!` | beacon 总数和 5 个下发槽位的 valid/x/y |
+| `FW!` | 当前帧前 16 大连通域面积 |
 
 ## 常用发送示例
 
@@ -325,6 +459,8 @@ FP!
 F0!
 FE!
 FR!
+FV!
+FW!
 ```
 
 速度环调参：

@@ -61,6 +61,8 @@ static void send_sixteen_date(float date_1, float date_2, float date_3, float da
  * FR  0 核主循环耗时诊断 (case 26)
  * FS  高度估计 / 串级 PID 16 路诊断 (case 27)
  * FU  光流融合状态 16 路诊断 (case 29)
+ * FV  beacon 下发槽位 16 路诊断 (case 30)
+ * FW  当前帧连通域面积排序 16 路诊断 (case 31)
  */
 static int send_back_flag = 0;
 static uint8 send_back_command = 'R';
@@ -1043,6 +1045,10 @@ void USART_PID_Adjust(void)
                 case 's': send_back_flag = 27; break;
                 case 'U':
                 case 'u': send_back_flag = 29; break;
+                case 'V':
+                case 'v': send_back_flag = 30; break;
+                case 'W':
+                case 'w': send_back_flag = 31; break;
                 default: break;
             }
 
@@ -1568,6 +1574,58 @@ void send_date_back(void)
                               pmw_flow_state.velocity_y_cms,
                               pmw_flow_state.velocity_x_fused_cms,
                               pmw_flow_state.velocity_y_fused_cms);
+            break;
+        }
+
+        case 30:
+        {
+            VisionRuntimeDiag_t vision_diag = {0};
+            VisionRuntimeBeaconSlot_t beacon_slots[VISION_RUNTIME_BEACON_SLOT_COUNT] = {0};
+
+            VisionRuntime_GetDiag(&vision_diag);
+            VisionRuntime_GetBeaconSlots(beacon_slots, VISION_RUNTIME_BEACON_SLOT_COUNT);
+
+            send_sixteen_date((float)vision_diag.beacon_count,
+                              (float)beacon_slots[0].valid,
+                              beacon_slots[0].x_cm,
+                              beacon_slots[0].y_cm,
+                              (float)beacon_slots[1].valid,
+                              beacon_slots[1].x_cm,
+                              beacon_slots[1].y_cm,
+                              (float)beacon_slots[2].valid,
+                              beacon_slots[2].x_cm,
+                              beacon_slots[2].y_cm,
+                              (float)beacon_slots[3].valid,
+                              beacon_slots[3].x_cm,
+                              beacon_slots[3].y_cm,
+                              (float)beacon_slots[4].valid,
+                              beacon_slots[4].x_cm,
+                              beacon_slots[4].y_cm);
+            break;
+        }
+
+        case 31:
+        {
+            VisionRuntimeDiag_t vision_diag = {0};
+
+            VisionRuntime_GetDiag(&vision_diag);
+
+            send_sixteen_date((float)vision_diag.blob_area_rank[0],
+                              (float)vision_diag.blob_area_rank[1],
+                              (float)vision_diag.blob_area_rank[2],
+                              (float)vision_diag.blob_area_rank[3],
+                              (float)vision_diag.blob_area_rank[4],
+                              (float)vision_diag.blob_area_rank[5],
+                              (float)vision_diag.blob_area_rank[6],
+                              (float)vision_diag.blob_area_rank[7],
+                              (float)vision_diag.blob_area_rank[8],
+                              (float)vision_diag.blob_area_rank[9],
+                              (float)vision_diag.blob_area_rank[10],
+                              (float)vision_diag.blob_area_rank[11],
+                              (float)vision_diag.blob_area_rank[12],
+                              (float)vision_diag.blob_area_rank[13],
+                              (float)vision_diag.blob_area_rank[14],
+                              (float)vision_diag.blob_area_rank[15]);
             break;
         }
 

@@ -14,6 +14,36 @@ static uint8 s_vision_binary[MT9V03X_H * MT9V03X_W];
 static uint8 s_vision_visited[MT9V03X_H * MT9V03X_W];
 static uint16 s_vision_queue[MT9V03X_H * MT9V03X_W];
 
+static void VisionRuntime_InsertBlobAreaRank(int area)
+{
+    uint8 index = 0U;
+
+    if(area <= 0)
+    {
+        return;
+    }
+
+    while(index < VISION_RUNTIME_BLOB_AREA_COUNT)
+    {
+        if(area > s_vision_runtime_diag.blob_area_rank[index])
+        {
+            uint8 move_index = (uint8)(VISION_RUNTIME_BLOB_AREA_COUNT - 1U);
+
+            while(move_index > index)
+            {
+                s_vision_runtime_diag.blob_area_rank[move_index] =
+                    s_vision_runtime_diag.blob_area_rank[move_index - 1U];
+                move_index--;
+            }
+
+            s_vision_runtime_diag.blob_area_rank[index] = area;
+            break;
+        }
+
+        index++;
+    }
+}
+
 static void VisionRuntime_ClearBeaconSlots(void)
 {
     memset(s_vision_runtime_beacon_slots, 0, sizeof(s_vision_runtime_beacon_slots));
@@ -94,14 +124,7 @@ static void VisionRuntime_Binarize(const uint8 image[MT9V03X_H][MT9V03X_W])
 
 static int VisionRuntime_GetScaledLargeAreaThreshold(void)
 {
-    int threshold = IR_Localization_GetScaledMaxBlobArea();
-
-    if(threshold < g_beacon_config.area_threshold)
-    {
-        threshold = g_beacon_config.area_threshold;
-    }
-
-    return threshold;
+    return VISION_RUNTIME_BEACON_SPLIT_AREA_THRESHOLD;
 }
 
 static void VisionRuntime_DispatchBlob(const VisionBlob_t *blob, int large_area_threshold)
@@ -222,6 +245,7 @@ static void VisionRuntime_ProcessBlobs(const uint8 image[MT9V03X_H][MT9V03X_W])
                 int height = max_row - min_row + 1;
 
                 s_vision_runtime_diag.blob_count++;
+                VisionRuntime_InsertBlobAreaRank(pixel_count);
                 memset(&blob, 0, sizeof(blob));
                 blob.centroid_row = (float)row_sum / (float)pixel_count;
                 blob.centroid_col = (float)col_sum / (float)pixel_count;
@@ -322,6 +346,7 @@ static void VisionRuntime_ProcessFrameInternal(float roll_deg,
     s_vision_runtime_diag.beacon_split_count = 0;
     s_vision_runtime_diag.ir_blob_count = 0;
     s_vision_runtime_diag.beacon_blob_count = 0;
+    memset(s_vision_runtime_diag.blob_area_rank, 0, sizeof(s_vision_runtime_diag.blob_area_rank));
     IR_Localization_BeginBlobFrame();
     BeaconDetect_BeginBlobFrame(beacon_results, BEACON_MAX_DETECTIONS);
     VisionRuntime_ProcessBlobs(mt9v03x_image);

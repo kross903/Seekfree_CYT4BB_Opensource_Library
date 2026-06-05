@@ -4,7 +4,7 @@
 
 BeaconConfig_t g_beacon_config = {
     .binary_threshold = 170,
-    .area_threshold   = 30,
+    .area_threshold   = 15,
     .min_aspect       = 0.3f,
     .max_aspect       = 6.0f,
     .min_occupancy    = 0.15f

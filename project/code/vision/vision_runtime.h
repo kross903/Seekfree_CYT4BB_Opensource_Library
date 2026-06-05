@@ -5,6 +5,8 @@
 
 #define VISION_BINARY_THRESHOLD (150)
 #define VISION_RUNTIME_BEACON_SLOT_COUNT (5U)
+#define VISION_RUNTIME_BLOB_AREA_COUNT (16U)
+#define VISION_RUNTIME_BEACON_SPLIT_AREA_THRESHOLD (17)
 
 typedef struct
 {
@@ -29,6 +31,7 @@ typedef struct
     int beacon_split_count;
     int ir_blob_count;
     int beacon_blob_count;
+    int blob_area_rank[VISION_RUNTIME_BLOB_AREA_COUNT];
     int ir_reject_area_low_count;
     int ir_reject_area_high_count;
     int ir_reject_size_count;
