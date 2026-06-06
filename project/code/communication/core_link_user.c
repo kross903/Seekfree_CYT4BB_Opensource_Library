@@ -110,6 +110,19 @@ static int16 core_link_user_deg_to_ddeg_i16(float deg)
     return (int16)((ddeg >= 0.0f) ? (ddeg + 0.5f) : (ddeg - 0.5f));
 }
 
+static uint8 core_link_user_get_uplink_car_yaw_deg(float *yaw_deg)
+{
+    if((NULL == yaw_deg)
+       || !s_core_link_user_beacon_uplink_valid
+       || (0U == s_core_link_user_beacon_uplink.car_visible))
+    {
+        return 0U;
+    }
+
+    *yaw_deg = core_link_user_wrap_angle(((float)s_core_link_user_beacon_uplink.car_yaw_ddeg) * 0.1f);
+    return 1U;
+}
+
 static uint8 core_link_user_estimate_car_yaw_deg(float *yaw_deg)
 {
     float center_x = 0.0f;
@@ -119,6 +132,8 @@ static uint8 core_link_user_estimate_car_yaw_deg(float *yaw_deg)
     float cov_yy = 0.0f;
     float heading_deg;
     float alt_heading_deg;
+    float reference_yaw_deg = 0.0f;
+    uint8 reference_yaw_valid = 0U;
     uint8 i;
 
     if(NULL == yaw_deg || !ir_pose_estimate.valid || (ir_pose_estimate.detected_point_count < 3U))
@@ -149,10 +164,17 @@ static uint8 core_link_user_estimate_car_yaw_deg(float *yaw_deg)
     heading_deg = core_link_user_wrap_angle(heading_deg);
     alt_heading_deg = core_link_user_wrap_angle(heading_deg + 180.0f);
 
-    if(s_core_link_user_car_yaw_valid)
+    reference_yaw_valid = core_link_user_get_uplink_car_yaw_deg(&reference_yaw_deg);
+    if(!reference_yaw_valid && s_core_link_user_car_yaw_valid)
     {
-        if(core_link_user_angle_distance(alt_heading_deg, s_core_link_user_car_yaw_deg)
-           < core_link_user_angle_distance(heading_deg, s_core_link_user_car_yaw_deg))
+        reference_yaw_deg = s_core_link_user_car_yaw_deg;
+        reference_yaw_valid = 1U;
+    }
+
+    if(reference_yaw_valid)
+    {
+        if(core_link_user_angle_distance(alt_heading_deg, reference_yaw_deg)
+           < core_link_user_angle_distance(heading_deg, reference_yaw_deg))
         {
             heading_deg = alt_heading_deg;
         }
