@@ -65,7 +65,7 @@ void IPM_Interface_UpdateFromIMU(float height_cm);
  * @param img_x 图像列坐标(0 ~ MT9V03X_W-1)
  * @param img_y 图像行坐标(0 ~ MT9V03X_H-1)
  * @param world_x 输出:地面X坐标(向前为正,单位cm)
- * @param world_y 输出:地面Y坐标(向右为正,单位cm)
+ * @param world_y 输出:地面Y坐标(向左为正,单位cm)
  *
  * Vision runtime 提取的连通域最终都会走到这里。
  */

@@ -197,15 +197,15 @@ Mahony 加速度修正强度由加速度模值偏差和当前最大轴角速度�
 | `I6` | `flow_comp_y_rad` |
 | `I7` | `velocity_y_raw_cms` |
 
-### `FE`: 光流传感器原始输入
+### `FE`: 光流机体系输入
 
 UP-FLOW-302 模式：
 
 | 通道 | 含义 |
 |---|---|
 | `I0` | `FLOW_SENSOR_SELECTED` |
-| `I1` | `upflow302_x` |
-| `I2` | `upflow302_y` |
+| `I1` | `pmw_flow_state.flow_delta_x_count`，后端 X 轴原始计数，前进为正 |
+| `I2` | `pmw_flow_state.flow_delta_y_count`，后端 Y 轴原始计数，左移为正 |
 | `I3` | `upflow302_valid` |
 | `I4` | `upflow302_state_flag` |
 | `I5` | `upflow302_finsh_flag` |
@@ -217,13 +217,19 @@ PMW3901 模式：
 | 通道 | 含义 |
 |---|---|
 | `I0` | `FLOW_SENSOR_SELECTED` |
-| `I1` | `flow_delta_x_count` |
-| `I2` | `flow_delta_y_count` |
+| `I1` | 映射到机体系 X 的原始位移计数，前进为正 |
+| `I2` | 映射到机体系 Y 的原始位移计数，左移为正 |
 | `I3` | `pmw_flow_state.valid` |
 | `I4` | `pmw_flow_state.dt_s` |
-| `I5` | `flow_x_rad` |
-| `I6` | `flow_y_rad` |
+| `I5` | `flow_x_rad`，机体系 X 对应角位移，前进为正 |
+| `I6` | `flow_y_rad`，机体系 Y 对应角位移，左移为正 |
 | `I7` | `tof_los_cm` |
+
+说明：
+
+- `FE!` 现在按项目语义解释，不再把原始传感器局部轴直接作为主对外语义。
+- `I1/I2` 现在直接来自光流后端状态 `pmw_flow_state.flow_delta_x/y_count`，与 `F0!`、`FP!` 使用的 X/Y 语义保持一致。
+- 对于 UP-FLOW-302，仍保留专用分支输出其链路状态位，方便判断到底是 VOFA 页问题还是传感器喂数问题。
 
 ## 高度链路
 
@@ -268,7 +274,7 @@ PMW3901 模式：
 | 通道 | 含义 |
 |---|---|
 | `I0` | `ir_pose_estimate.x`，前向位置 cm |
-| `I1` | `ir_pose_estimate.y`，右向位置 cm |
+| `I1` | `ir_pose_estimate.y`，左向位置 cm |
 | `I2` | `ir_pose_estimate.z`，视觉估计高度 cm |
 | `I3` | `ir_pose_estimate.square_side_cm`，正方形边长估计 cm |
 | `I4` | `ir_track_valid`，`1` 表示当前可追踪 |
@@ -281,7 +287,7 @@ PMW3901 模式：
 | 通道 | 含义 |
 |---|---|
 | `I0` | `ir_pose_estimate.x`，当前前向位置 cm |
-| `I1` | `ir_pose_estimate.y`，当前右向位置 cm |
+| `I1` | `ir_pose_estimate.y`，当前左向位置 cm |
 | `I2` | `ir_loss_debug.raw_detect_valid`，原始检测是否成功 |
 | `I3` | `ir_loss_debug.lost_flag`，丢失保护标志 |
 | `I4` | `ir_loss_debug.lost_elapsed_ms`，丢失累计时间 ms |
@@ -380,7 +386,7 @@ X 轴速度闭环输出对应 Pitch，Y 轴速度闭环输出对应 Roll。`I4/I
 | `I9` | `vision_diag.ir_track_valid`，红外定位当前是否有效 |
 | `I10` | `vision_diag.ir_detected_point_count`，当前用于定位的点数 |
 | `I11` | `vision_diag.ir_x_cm`，红外中心前向位置 cm |
-| `I12` | `vision_diag.ir_y_cm`，红外中心右向位置 cm |
+| `I12` | `vision_diag.ir_y_cm`，红外中心左向位置 cm |
 | `I13` | `vision_diag.ir_square_side_cm`，红外正方形边长估计 cm |
 | `I14` | `vision_diag.ir_height_cm`，红外估计高度 cm |
 | `I15` | `vision_diag.beacon_blob_count`，最终送入 beacon 候选池的数量 |
@@ -392,19 +398,19 @@ X 轴速度闭环输出对应 Pitch，Y 轴速度闭环输出对应 Roll。`I4/I
 | `I0` | `vision_diag.beacon_count`，当前帧 beacon 识别结果总数 |
 | `I1` | `beacon_slots[0].valid`，slot0 是否有效 |
 | `I2` | `beacon_slots[0].x_cm`，slot0 前向坐标 cm |
-| `I3` | `beacon_slots[0].y_cm`，slot0 右向坐标 cm |
+| `I3` | `beacon_slots[0].y_cm`，slot0 左向坐标 cm |
 | `I4` | `beacon_slots[1].valid`，slot1 是否有效 |
 | `I5` | `beacon_slots[1].x_cm`，slot1 前向坐标 cm |
-| `I6` | `beacon_slots[1].y_cm`，slot1 右向坐标 cm |
+| `I6` | `beacon_slots[1].y_cm`，slot1 左向坐标 cm |
 | `I7` | `beacon_slots[2].valid`，slot2 是否有效 |
 | `I8` | `beacon_slots[2].x_cm`，slot2 前向坐标 cm |
-| `I9` | `beacon_slots[2].y_cm`，slot2 右向坐标 cm |
+| `I9` | `beacon_slots[2].y_cm`，slot2 左向坐标 cm |
 | `I10` | `beacon_slots[3].valid`，slot3 是否有效 |
 | `I11` | `beacon_slots[3].x_cm`，slot3 前向坐标 cm |
-| `I12` | `beacon_slots[3].y_cm`，slot3 右向坐标 cm |
+| `I12` | `beacon_slots[3].y_cm`，slot3 左向坐标 cm |
 | `I13` | `beacon_slots[4].valid`，slot4 是否有效 |
 | `I14` | `beacon_slots[4].x_cm`，slot4 前向坐标 cm |
-| `I15` | `beacon_slots[4].y_cm`，slot4 右向坐标 cm |
+| `I15` | `beacon_slots[4].y_cm`，slot4 左向坐标 cm |
 
 ### `FW!`: 当前帧连通域面积
 
@@ -439,8 +445,8 @@ X 轴速度闭环输出对应 Pitch，Y 轴速度闭环输出对应 Roll。`I4/I
 | `F7!` | ADC 原始值、滤波值、归一化值和目标角 |
 | `F9!` | Mahony 姿态角、四元数、滤波角速度、滤波加速度和 IMU 健康状态 |
 | `FA!` | 当前 Roll/Pitch、水平化加速度、加速度零偏残差 |
-| `FB!` | 光流速度旋转到世界系后的速度和积分位置 |
-| `FC!` | 速度积分位置与单帧光流位移积分位置对比 |
+| `FB!` | 光流速度旋转到世界系后的速度和积分位置（X前/Y左） |
+| `FC!` | 速度积分位置与单帧光流位移积分位置对比（X前/Y左） |
 | `FF!` | Roll/Pitch 角度环目标、反馈、I 项和目标角速度 |
 | `FR!` | 最近耗时、最大耗时、平均耗时、频率、超时次数和系统时钟 |
 | `FV!` | beacon 总数和 5 个下发槽位的 valid/x/y |
@@ -534,9 +540,15 @@ FS!           // 16-channel height estimator/cascade PID diagnostic
 
 | 模块 | 当前约定 |
 |---|---|
-| 机体系/世界系 | X 向前，Y 向右，Z 向下 |
-| 光流速度后端 | `flow_comp_x` 映射机体 X；`flow_comp_y` 映射机体 Y；速度输出 X 符号为 `+1`，Y 符号为 `-1` |
-| UP-FLOW-302 | 原始 X/Y 先交换，当前 `X_SIGN = -1`，`Y_SIGN = +1` |
-| PMW3901 | 原始 X/Y 不交换，X/Y 符号均为 `+1` |
-| 红外定位 | `ir_pose_estimate.x` 为前向位置，`ir_pose_estimate.y` 为右向位置 |
+| 机体系/世界系 | X 向前，Y 向左，+Z 朝上；高度量仍按正值距离使用 |
+| 光流速度后端 | `flow_comp_x` 映射机体 X；`flow_comp_y` 映射机体 Y；速度输出 X 符号为 `+1`，Y 符号为 `+1` |
+| UP-FLOW-302 | 原始 X/Y 先交换，再映射为项目语义 X前/Y左 |
+| PMW3901 | 原始 X/Y 不交换，再映射为项目语义 X前/Y左 |
+| 红外定位 | `ir_pose_estimate.x` 为前向位置，`ir_pose_estimate.y` 为左向位置 |
 | ToF | 作为下向高度使用，并在高度管理器中做安装补偿 |
+
+## 与车项目兼容提醒
+
+- 当前无人机项目已统一为 `X前/Y左`。
+- 车项目若仍按旧语义 `X前/Y右` 解释 `core_link` 下发的 `car_y_mm / beacon_y_mm`，联调时会出现左右方向相反。
+- 本次迁移不修改链路结构体和车项目实现，只在无人机侧统一语义并补全文档。

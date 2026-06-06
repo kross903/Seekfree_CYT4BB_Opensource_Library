@@ -28,7 +28,7 @@
  * @param target_img_y 目标在图像中的Y坐标(行)
  * @param tof_height   ToF测量的高度(cm)
  * @param target_world_x 输出:目标地面X坐标(向前为正,cm)
- * @param target_world_y 输出:目标地面Y坐标(向右为正,cm)
+ * @param target_world_y 输出:目标地面Y坐标(向左为正,cm)
  */
 void Demo_ConvertTargetToWorld(int target_img_x, int target_img_y,
                                 float tof_height,
@@ -45,8 +45,8 @@ void Demo_ConvertTargetToWorld(int target_img_x, int target_img_y,
      * 输出说明：
      * - target_world_x > 0 表示目标在无人机前方
      * - target_world_x < 0 表示目标在无人机后方
-     * - target_world_y > 0 表示目标在无人机右侧
-     * - target_world_y < 0 表示目标在无人机左侧
+     * - target_world_y > 0 表示目标在无人机左侧
+     * - target_world_y < 0 表示目标在无人机右侧
      */
 }
 
@@ -81,7 +81,7 @@ void Demo_ShowBirdView(void)
  * @param marker_img_y 标记在图像中的Y坐标
  * @param tof_height   ToF高度(cm)
  * @param error_x      输出:X方向偏差(向前为正,cm)
- * @param error_y      输出:Y方向偏差(向右为正,cm)
+ * @param error_y      输出:Y方向偏差(向左为正,cm)
  */
 void Demo_CalculateHoverError(int marker_img_x, int marker_img_y,
                                float tof_height,
@@ -100,8 +100,8 @@ void Demo_CalculateHoverError(int marker_img_x, int marker_img_y,
      * 返回值说明：
      * - 如果error_x > 0，标记在前方，无人机应该前进
      * - 如果error_x < 0，标记在后方，无人机应该后退
-     * - 如果error_y > 0，标记在右侧，无人机应该右移
-     * - 如果error_y < 0，标记在左侧，无人机应该左移
+     * - 如果error_y > 0，标记在左侧，无人机应该左移
+     * - 如果error_y < 0，标记在右侧，无人机应该右移
      */
 }
 

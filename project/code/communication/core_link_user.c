@@ -217,6 +217,9 @@ static void core_link_user_build_beacon_map_downlink(core_link_beacon_map_packet
     {
         packet->car_visible = 1U;
         packet->car_x_mm = core_link_user_cm_to_mm_i16(ir_pose_estimate.x);
+        /* UAV side has migrated to X-forward / Y-left semantics.
+         * The packet layout is unchanged; downstream consumers must not assume
+         * legacy "Y-right positive" without an explicit compatibility layer. */
         packet->car_y_mm = core_link_user_cm_to_mm_i16(ir_pose_estimate.y);
         packet->car_yaw_ddeg = core_link_user_deg_to_ddeg_i16(car_yaw_deg);
     }

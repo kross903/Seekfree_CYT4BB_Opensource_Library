@@ -8,7 +8,7 @@
  * 3. 求解光线与地面(z=0平面)的交点，即为像素对应的地面物理坐标
  * 
  * 坐标系约定：
- * - 世界坐标系(NED): X向前, Y向右, Z向下
+ * - 世界坐标系: X向前, Y向左, Z向上
  * - 机体坐标系: 初始与世界对齐, roll绕X轴, pitch绕Y轴
  * - 摄像头坐标系: 正朝下时Z轴指向地面(即机体-Z方向)
  * - 图像坐标系: u向右(对应Y), v向下(对应X)
@@ -234,7 +234,7 @@ bool DroneIPM_ImageToWorld(const DroneIPM_t *ipm, int img_x, int img_y,
         return false;
     }
     
-    /* 我们使用NED坐标系，地面在Z=0，摄像头在Z=-height */
+    /* 这里 height 继续按到地面的正值距离使用，内部仍以地面交点约束做计算。 */
     /* cam_pos_world[2] = -height (负值，因为高度向上) */
     double t = -ipm->cam_pos_world[2] / ray_world[2];
     

@@ -71,7 +71,7 @@ static void init_default_pid_parameters(void)
       * 反馈: 光流 + ICM 融合后的机体水平速度 velocity_x/y_fused_cms (cm/s)。
      * 输出: 水平加速度指令 ax/ay_cmd (cm/s^2)，再换算成姿态修正角。
      * - vel_pid_x: 前向速度 (vx) -> ax_cmd -> pitch 修正
-     * - vel_pid_y: 右向速度 (vy) -> ay_cmd -> roll 修正
+     * - vel_pid_y: 左向速度 (vy) -> ay_cmd -> roll 修正
      */
 static void init_runtime_modules(void)
 {

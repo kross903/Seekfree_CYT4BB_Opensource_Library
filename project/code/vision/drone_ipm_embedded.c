@@ -8,7 +8,7 @@
  * 3. 针对正朝下摄像头优化的坐标变换
  *
  * 坐标系说明：
- * - 世界坐标系(NED): X向前, Y向右, Z向下(地面为Z=0)
+ * - 世界坐标系: X向前, Y向左, Z向上(地面仍作为参考平面)
  * - 图像坐标系: u向右, v向下, 原点左上角
  * - 摄像头正朝下时: 图像中心对应正下方地面点
  */
@@ -205,13 +205,13 @@ void DroneIPM_Embedded_Update(float roll_deg, float pitch_deg, float height)
     g_ipm.R[2][2] = cr * cp;
 
     /*
-     * 计算摄像头在世界坐标系中的位置
-     * 假设摄像头固定在机体原点，高度为height
-     * 世界坐标系地面为Z=0，摄像头在(0, 0, -height)
+ * 计算摄像头在世界坐标系中的位置。
+ * 这里 height 仍按“到地面的正值距离”处理，不把它暴露为带符号的世界 Z 坐标。
+ * 内部继续保持地面交点计算所需的符号约定，但对外 world_x/world_y 语义统一为 X前/Y左。
      */
     g_ipm.X0 = 0.0f;
     g_ipm.Y0 = 0.0f;
-    g_ipm.Z0 = -height;  /* 负值，因为向上是负Z */
+    g_ipm.Z0 = -height;
 }
 
 /**
@@ -227,7 +227,7 @@ void DroneIPM_Embedded_Update(float roll_deg, float pitch_deg, float height)
  * @param img_y 图像行坐标(0到IMAGE_HEIGHT-1)
  * @param result 输出数组[world_x, world_y]
  *               world_x: 向前为正
- *               world_y: 向右为正
+ *               world_y: 向左为正
  */
 void DroneIPM_Embedded_Image2World(sint16 img_x, sint16 img_y, float *result)
 {
@@ -270,8 +270,8 @@ void DroneIPM_Embedded_Image2World(sint16 img_x, sint16 img_y, float *result)
     }
 
     /* 计算地面交点 */
-    result[0] = g_ipm.X0 + t * ray_world[0];  /* world_x: 向前为正 */
-    result[1] = g_ipm.Y0 + t * ray_world[1];  /* world_y: 向右为正 */
+    result[0] = -(g_ipm.X0 + t * ray_world[0]);
+    result[1] = -(g_ipm.Y0 + t * ray_world[1]);
 }
 
 /**
@@ -280,7 +280,7 @@ void DroneIPM_Embedded_Image2World(sint16 img_x, sint16 img_y, float *result)
  * 这是逆透视的反向操作，用于将地面物理坐标投影到图像
  *
  * @param world_x 地面X坐标(向前为正)
- * @param world_y 地面Y坐标(向右为正)
+ * @param world_y 地面Y坐标(向左为正)
  * @param result 输出数组[img_x, img_y]
  * @return true如果点在图像范围内，false否则
  *
@@ -290,8 +290,8 @@ bool DroneIPM_Embedded_World2Image(float world_x, float world_y, int *result)
 {
     /* 步骤1: 计算地面点相对于摄像头的向量(世界坐标系) */
     float vec_world[3];
-    vec_world[0] = world_x - g_ipm.X0;
-    vec_world[1] = world_y - g_ipm.Y0;
+    vec_world[0] = (-world_x) - g_ipm.X0;
+    vec_world[1] = (-world_y) - g_ipm.Y0;
     vec_world[2] = 0.0f - g_ipm.Z0;  /* 地面Z=0 */
 
     /* 步骤2: 将向量从世界坐标系转换到机体坐标系
@@ -331,7 +331,7 @@ bool DroneIPM_Embedded_GetNadir(int *result)
  * 输出图像特点:
  * - 中心对应正下方地面点(world_x=0, world_y=0)
  * - 上方对应前方(+X)，下方对应后方(-X)
- * - 右方对应右侧(+Y)，左方对应左侧(-Y)
+ * - 右方对应右侧(-Y)，左方对应左侧(+Y)
  * - 无论无人机姿态如何，正下方始终在输出图像中心
  *
  * @param src 源图像(灰度)
@@ -352,8 +352,8 @@ void DroneIPM_Embedded_BirdView(const uint8_t *src, uint8_t *dst,
         for (int dst_x = 0; dst_x < dst_w; dst_x++) {
             /* 计算该输出像素对应的地面物理坐标 */
             /* 输出图像Y轴向下对应物理X轴向后 */
-            float world_x = (center_py - (float)dst_y) * scale;  /* 图像上方=前方 */
-            float world_y = ((float)dst_x - center_px) * scale;  /* 图像右方=右方 */
+            float world_x = ((float)dst_y - center_py) * scale;  /* 图像上方=前方 */
+            float world_y = (center_px - (float)dst_x) * scale;  /* 图像左方=左方 */
 
             /* 投影到源图像 */
             int src_pos[2];

@@ -32,10 +32,12 @@
 #define PMW_FLOW_GYRO_COMP_GAIN_MAX         (4.0f)
 /*
  * Body velocity mapping from compensated optical-flow integrals.
- * After axis verification, flow_comp_x maps to body X and flow_comp_y maps to body Y.
+ * Project convention after migration:
+ * - body X positive: forward
+ * - body Y positive: left
  */
 #define PMW_FLOW_BODY_VX_FROM_FLOW_X_SIGN   (1.0f)
-#define PMW_FLOW_BODY_VY_FROM_FLOW_Y_SIGN   (-1.0f)
+#define PMW_FLOW_BODY_VY_FROM_FLOW_Y_SIGN   (1.0f)
 #define PMW_FLOW_MIN_HEIGHT_CM              (5.0f)
 #define PMW_FLOW_MAX_HEIGHT_CM              (400.0f)
 #define PMW_FLOW_MIN_DT_S                   (FLOW_SENSOR_NOMINAL_DT_S * 0.5f)
@@ -74,7 +76,7 @@
 #define PMW_FLOW_CONFIDENCE_TOF_JUMP_SCALE  (0.80f)
 #define PMW_FLOW_CONFIDENCE_MIN_VALID_OBSERVATION (0.30f)
 #define PMW_FLOW_FUSION_IMU_X_SIGN          (1.0f)
-#define PMW_FLOW_FUSION_IMU_Y_SIGN          (1.0f)
+#define PMW_FLOW_FUSION_IMU_Y_SIGN          (-1.0f)
 #define PMW_FLOW_FUSION_IMU_DELTA_LIMIT_CMS2 PMW_FLOW_GRAVITY_CMS2
 #define PMW_FLOW_FUSION_RESIDUAL_RESET_CMS  (120.0f)
 #define PMW_FLOW_FUSION_RESET_MIN_CONFIDENCE (0.60f)
@@ -872,8 +874,8 @@ void PMW_Flow_UpdateSample(int16 flow_delta_x,
     float velocity_lpf_alpha;
     uint8 tof_jump_rejected = 0U;
     uint8 flow_observation_valid = 0U;
-    new_state.flow_delta_x_count = flow_delta_x;
-    new_state.flow_delta_y_count = flow_delta_y;
+    new_state.flow_delta_x_count = 0;
+    new_state.flow_delta_y_count = 0;
     new_state.dt_s = dt_s;
     new_state.tof_los_cm = tof_los_cm;
     new_state.roll_deg = roll_deg;
@@ -891,6 +893,9 @@ void PMW_Flow_UpdateSample(int16 flow_delta_x,
         flow_input_x = flow_delta_y;
         flow_input_y = flow_delta_x;
 #endif
+
+        new_state.flow_delta_x_count = (int16)flow_input_x;
+        new_state.flow_delta_y_count = (int16)flow_input_y;
 
         new_state.flow_x_rad = (float)flow_input_x * PMW_FLOW_RAD_PER_COUNT_X * PMW_FLOW_SENSOR_X_SIGN;
         new_state.flow_y_rad = (float)flow_input_y * PMW_FLOW_RAD_PER_COUNT_Y * PMW_FLOW_SENSOR_Y_SIGN;
@@ -969,7 +974,7 @@ void PMW_Flow_UpdateSample(int16 flow_delta_x,
 
     /* (4) 机体系速度（去旋转后）。
      *
-     * 约定：v_body_x 正 → 机体前进；v_body_y 正 → 机体右移。 */
+     * 约定：v_body_x 正 → 机体前进；v_body_y 正 → 机体左移。 */
     {
         float v_body_x = PMW_FLOW_BODY_VX_FROM_FLOW_X_SIGN * (range_used_cm * new_state.flow_comp_x_rad / dt_s);
         float v_body_y = PMW_FLOW_BODY_VY_FROM_FLOW_Y_SIGN * (range_used_cm * new_state.flow_comp_y_rad / dt_s);

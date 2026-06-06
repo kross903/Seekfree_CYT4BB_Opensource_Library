@@ -41,7 +41,7 @@ typedef struct {
     float aspect_ratio;                    /* 外接矩形宽高比 */
     float occupancy_ratio;                 /* 面积 / 外接矩形面积 */
     /* 世界域 */
-    float world_x, world_y;                /* 地面坐标(cm), X向前 Y向右 */
+    float world_x, world_y;                /* 地面坐标(cm), X向前 Y向左 */
     float distance_cm;                     /* 相对正下方原点的距离(cm) */
     float angle_deg;                       /* 方位角(度), 正前方为0 */
 } BeaconResult_t;

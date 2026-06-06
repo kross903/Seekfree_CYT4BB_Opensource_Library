@@ -273,7 +273,7 @@ static void set_height_vel_pid_value(uint8 item, float value)
  * VOFA 调参: 光流速度闭环 PID。
  *
  * axis = 0 → vel_pid_x (前向速度 vx_cms 反馈, 输出 ax_cmd_cms2)
- * axis = 1 → vel_pid_y (右向速度 vy_cms 反馈, 输出 ay_cmd_cms2)
+ * axis = 1 → vel_pid_y (左向速度 vy_cms 反馈, 输出 ay_cmd_cms2)
  *
  * item:
  *   '1' Kp, '2' Ki, '3' Kd, '4' output_limit (cm/s^2), '5' integral_limit
@@ -1312,8 +1312,8 @@ void send_date_back(void)
 
 #if FLOW_SENSOR_SELECTED == FLOW_SENSOR_UPFLOW302
             send_four_date((float)FLOW_SENSOR_SELECTED,
-                           (float)upflow302_receive.upflow302_x,
-                           (float)upflow302_receive.upflow302_y,
+                           (float)pmw_flow_state.flow_delta_x_count,
+                           (float)pmw_flow_state.flow_delta_y_count,
                            (float)upflow302_receive.upflow302_valid,
                            (float)upflow302_state_flag,
                            (float)upflow302_finsh_flag,
@@ -1322,8 +1322,8 @@ void send_date_back(void)
 #else
             send_four_date((float)FLOW_SENSOR_SELECTED,
                            (float)pmw_flow_state.flow_delta_x_count,
-                           (float)pmw_flow_state.flow_delta_y_count,
-                           (float)pmw_flow_state.valid,
+                           (float)(-pmw_flow_state.flow_delta_y_count),
+                           pmw_flow_state.valid,
                            pmw_flow_state.dt_s,
                            pmw_flow_state.flow_x_rad,
                            pmw_flow_state.flow_y_rad,

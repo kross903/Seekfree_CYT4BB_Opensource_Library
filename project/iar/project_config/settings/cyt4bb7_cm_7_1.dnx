@@ -13,7 +13,7 @@
     </Stack>
     <PlDriver>
         <FirstRun>0</FirstRun>
-        <MemConfigValue>D:\IAR\arm\config\debugger\Infineon\CYT4BB_M7.ddf</MemConfigValue>
+        <MemConfigValue>D:\IAR9\arm\config\debugger\Infineon\CYT4BB_M7.ddf</MemConfigValue>
     </PlDriver>
     <Jet>
         <JetConnSerialNo>ZF-WLFS-CMSIS-DAP:80942414-FC012CC510F8</JetConnSerialNo>
@@ -23,8 +23,8 @@
         <MultiCoreRunAll>0</MultiCoreRunAll>
     </Jet>
     <ArmDriver>
-        <EnforceMemoryConfiguration>1</EnforceMemoryConfiguration>
         <EnableCache>1</EnableCache>
+        <EnforceMemoryConfiguration>1</EnforceMemoryConfiguration>
     </ArmDriver>
     <Exceptions>
         <StopOnUncaught>_ 0</StopOnUncaught>
@@ -33,8 +33,8 @@
     <SWOManager>
         <SamplingDivider>8192</SamplingDivider>
         <OverrideClock>0</OverrideClock>
-        <CpuClock>0</CpuClock>
-        <SwoClock>0</SwoClock>
+        <CpuClock>1398101057</CpuClock>
+        <SwoClock>1381319470</SwoClock>
         <DataLogMode>0</DataLogMode>
         <ItmPortsEnabled>63</ItmPortsEnabled>
         <ItmTermIOPorts>1</ItmTermIOPorts>

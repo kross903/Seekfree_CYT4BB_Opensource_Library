@@ -8,8 +8,8 @@
  * - 确保正下方的成像始终在现实图像的中间
  * 
  * 坐标系定义：
- * - 世界坐标系：X向前，Y向右，Z向下（NED坐标系）
- * - 机体坐标系：与世界坐标系对齐时，X向前，Y向右，Z向下
+ * - 世界坐标系：X向前，Y向左，Z向上
+ * - 机体坐标系：与世界坐标系对齐时，X向前，Y向左，Z向上
  * - 图像坐标系：原点在图像左上角，u向右，v向下
  * 
  * 角度定义：
@@ -159,7 +159,7 @@ void DroneIPM_SetOutputScale(DroneIPM_t *ipm, double scale,
  * @param img_x 图像X坐标(列)
  * @param img_y 图像Y坐标(行)
  * @param world_x 输出:地面物理X坐标(向前为正)
- * @param world_y 输出:地面物理Y坐标(向右为正)
+ * @param world_y 输出:地面物理Y坐标(向左为正)
  * @return true成功，false失败(如光线与地面平行)
  */
 bool DroneIPM_ImageToWorld(const DroneIPM_t *ipm, int img_x, int img_y,

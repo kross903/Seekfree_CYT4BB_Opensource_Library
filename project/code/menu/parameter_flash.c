@@ -141,7 +141,7 @@ ParameterConfig param_config[] = {
     PARAM_CFG("Height Int Limit",       34,  &HeightPID.integral_limit,         0.0f,  1000.0f,   5.0f,    PARAM_GROUP_HEIGHT,  PARAM_OBJECT_HEIGHT, PARAM_ITEM_INTEGRAL_LIMIT),
 
     /* 速度环 X (vel_pid_x): 前向速度 vx_cms -> pitch 修正
-     * 速度环 Y (vel_pid_y): 右向速度 vy_cms -> roll  修正
+     * 速度环 Y (vel_pid_y): 左向速度 vy_cms -> roll  修正
      * Output Limit / Integral Limit 单位: deg，速度环输出限幅只由 PID 内部 output_limit 决定。 */
     PARAM_CFG("Vel X Kp",               35,  &vel_pid_x.Kp,                    -10.0f,   10.0f,   0.01f,  PARAM_GROUP_VELOCITY, PARAM_OBJECT_VEL_X,  PARAM_ITEM_KP),
     PARAM_CFG("Vel X Ki",               36,  &vel_pid_x.Ki,                    -10.0f,   10.0f,   0.001f, PARAM_GROUP_VELOCITY, PARAM_OBJECT_VEL_X,  PARAM_ITEM_KI),

@@ -128,7 +128,7 @@ void DroneIPM_Embedded_Update(float roll_deg, float pitch_deg, float height);
  * @brief 图像坐标到地面坐标(逆透视)
  * @param img_x 图像列坐标
  * @param img_y 图像行坐标
- * @param result 输出[world_x, world_y]
+ * @param result 输出[world_x, world_y]，其中 X向前为正，Y向左为正
  */
 void DroneIPM_Embedded_Image2World(sint16 img_x, sint16 img_y, float *result);
 
