@@ -4,8 +4,8 @@
 
 #define VELOCITY_LOOP_DT_S             0.00025f
 #define VEL_LOOP_GRAVITY_CMS2          981.0f
-#define VEL_LOOP_PITCH_SIGN            (+1.0f)
-#define VEL_LOOP_ROLL_SIGN             (+1.0f)
+#define VEL_LOOP_PITCH_SIGN            (1.0f)
+#define VEL_LOOP_ROLL_SIGN             (-1.0f)
 
 PID_Controller vel_pid_x;
 PID_Controller vel_pid_y;
@@ -130,7 +130,7 @@ void Velocity_Loop_Update_Attitude_Target(uint8 velocity_ready,
                                     fb_vy_cms,
                                     VELOCITY_LOOP_DT_S);
 
-        pitch_corr = -(ax_cmd_cms2 / VEL_LOOP_GRAVITY_CMS2) * RAD2DEG;
+        pitch_corr = (ax_cmd_cms2 / VEL_LOOP_GRAVITY_CMS2) * RAD2DEG;
         roll_corr  = (ay_cmd_cms2 / VEL_LOOP_GRAVITY_CMS2) * RAD2DEG;
 
         pitch_corr *= VEL_LOOP_PITCH_SIGN;

@@ -1,14 +1,3 @@
-﻿/**
- * @file ir_target_localization.c
- * @brief 红外目标板定位
- *
- * 接收 vision_frame_pipeline 提取出的小光斑连通域，完成候选门限、
- * 矩形几何筛选、三点补全、中心滤波和丢失保护。
- *
- * 说明:
- * - 当前仅重命名文件和目录，函数前缀仍保留 IR_Localization_ 以降低迁移风险。
- */
-
 #include "vision/detection/ir_target_localization.h"
 #include "common/project_headfile.h"
 #include <math.h>
@@ -29,16 +18,14 @@ volatile uint32 ir_pose_update_seq = 0;
 volatile uint8 ir_position_lost_flag = 1U;
 volatile uint16 ir_position_lost_elapsed_ms = IR_POSITION_LOST_HOLD_MS;
 
-/* ====================== 候选门限与几何参数 ====================== */
-
 #define IR_THREE_POINT_MIN_SIDE_CM          (2.0f)
 #define IR_CENTER_KALMAN_Q                  (0.20f)
 #define IR_CENTER_KALMAN_R                  (4.0f)
 #define IR_CENTER_KALMAN_INITIAL_P          (10.0f)
 #define IR_BLOB_MIN_AREA_PX                 (1)
-#define IR_BLOB_MAX_AREA_PX                 (5)
-#define IR_BLOB_MAX_WIDTH_PX                (5)
-#define IR_BLOB_MAX_HEIGHT_PX               (5)
+#define IR_BLOB_MAX_AREA_PX                 (50)
+#define IR_BLOB_MAX_WIDTH_PX                (15)
+#define IR_BLOB_MAX_HEIGHT_PX               (15)
 #define IR_BLOB_MAX_ASPECT_RATIO            (6.0f)
 #define IR_BLOB_REF_HEIGHT_CM               (100.0f)
 #define IR_LAMP_BOARD_HEIGHT_CM             (12.0f)
@@ -116,8 +103,6 @@ static uint8 select_square_points_from_candidates(const IR_Candidate_t candidate
 static uint8 IR_Localization_ProcessPoints(IR_Point2D_t img_pts[IR_SQUARE_POINT_COUNT],
                                            uint8 detected_point_count,
                                            IR_Pose_t *out_pose);
-
-/* ====================== 中心点滤波与通用数学工具 ====================== */
 
 static void ir_center_kalman_reset_axis(IR_Kalman1D_t *kf)
 {
@@ -208,8 +193,6 @@ static int ir_round_to_int(float value)
 {
     return (int)(value + 0.5f);
 }
-
-/* ====================== 高度自适应小光斑门限 ====================== */
 
 static void ir_get_blob_gate(IR_BlobGate_t *gate)
 {
@@ -310,8 +293,6 @@ static uint8 IR_Localization_InsertCandidate(const VisionBlob_t *blob, const IR_
 
     return 0U;
 }
-
-/* ====================== 红外矩形几何评分与三点补全 ====================== */
 
 static float world_point_distance_cm(const IR_WorldPoint_t *a, const IR_WorldPoint_t *b)
 {
@@ -667,8 +648,6 @@ static uint8 select_square_points_from_candidates(const IR_Candidate_t candidate
     return 1U;
 }
 
-/* ====================== 跟踪保持与丢失保护 ====================== */
-
 static void IR_Localization_ClearPose(void)
 {
     memset(&ir_pose_estimate, 0, sizeof(ir_pose_estimate));
@@ -786,8 +765,6 @@ void IR_Localization_Init(void)
     ir_pose_update_seq = 0;
     IR_Localization_ResetLossDebug();
 }
-
-/* ====================== 对外运行时入口 ====================== */
 
 void IR_Localization_Task_5ms(void)
 {
@@ -918,8 +895,6 @@ static uint8 IR_Localization_ProcessPoints(IR_Point2D_t img_pts[IR_SQUARE_POINT_
 
     return 1;
 }
-
-/* ====================== VisionRuntime 连通域适配入口 ====================== */
 
 void IR_Localization_BeginBlobFrame(void)
 {

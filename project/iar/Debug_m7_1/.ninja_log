@@ -523,3 +523,11 @@
 21	1488	8024607900245256	D:/DAS/drone/work/cyt4bb7 case01/Seekfree_CYT4BB_Opensource_Library/project/iar/Debug_m7_1/Obj/app_port_10978391902961066234.dir/drone_ipm_embedded.o	8ba66a50f09544bd
 1490	3987	8024607925262968	D:/DAS/drone/work/cyt4bb7 case01/Seekfree_CYT4BB_Opensource_Library/project/iar/project_config/Debug_m7_1/Exe/cyt4bb7_cm_7_1.out	cff14766a0046e35
 3991	4035	8024607925960084	D:/DAS/drone/work/cyt4bb7 case01/Seekfree_CYT4BB_Opensource_Library/project/iar/project_config/Debug_m7_1/Exe/cyt4bb7_cm_7_1.hex	361a5f5888ffd882
+22	1955	8024804411404980	D:/DAS/drone/work/cyt4bb7 case01/Seekfree_CYT4BB_Opensource_Library/project/iar/Debug_m7_1/Obj/app_port_10978391902961066234.dir/beacon_detect.o	86368e856471c96f
+43	2032	8024804412128463	D:/DAS/drone/work/cyt4bb7 case01/Seekfree_CYT4BB_Opensource_Library/project/iar/Debug_m7_1/Obj/app_port_10978391902961066234.dir/cross_core_camera.o	17abb2c3e63fe403
+74	2036	8024804412128463	D:/DAS/drone/work/cyt4bb7 case01/Seekfree_CYT4BB_Opensource_Library/project/iar/Debug_m7_1/Obj/app_port_10978391902961066234.dir/ipm_interface.o	e6f2ea84a734cdd6
+99	2073	8024804412644224	D:/DAS/drone/work/cyt4bb7 case01/Seekfree_CYT4BB_Opensource_Library/project/iar/Debug_m7_1/Obj/user_8514941877209965082.dir/main_cm7_1.o	407e98d4054b2f7c
+59	2104	8024804412931712	D:/DAS/drone/work/cyt4bb7 case01/Seekfree_CYT4BB_Opensource_Library/project/iar/Debug_m7_1/Obj/app_port_10978391902961066234.dir/drone_ipm_embedded.o	8ba66a50f09544bd
+87	2144	8024804413270467	D:/DAS/drone/work/cyt4bb7 case01/Seekfree_CYT4BB_Opensource_Library/project/iar/Debug_m7_1/Obj/app_port_10978391902961066234.dir/ir_localization.o	343c2007681c16ab
+2148	4111	8024804432977956	D:/DAS/drone/work/cyt4bb7 case01/Seekfree_CYT4BB_Opensource_Library/project/iar/project_config/Debug_m7_1/Exe/cyt4bb7_cm_7_1.out	cff14766a0046e35
+4115	4159	8024804433699124	D:/DAS/drone/work/cyt4bb7 case01/Seekfree_CYT4BB_Opensource_Library/project/iar/project_config/Debug_m7_1/Exe/cyt4bb7_cm_7_1.hex	361a5f5888ffd882

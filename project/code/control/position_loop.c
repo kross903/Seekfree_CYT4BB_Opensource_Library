@@ -1,4 +1,4 @@
-﻿#include "control/position_loop.h"
+#include "control/position_loop.h"
 #include "vision/detection/ir_target_localization.h"
 
 #define POSITION_LOOP_TARGET_X_CM      (0.0f)
@@ -6,8 +6,8 @@
 /* Visual position input now uses X-forward positive, Y-left positive.
  * PID_Calculate() uses error = target - current, so the loop output must flip
  * sign to keep a front/left target commanding positive front/left velocity. */
-#define POSITION_LOOP_VX_SIGN          (-1.0f)
-#define POSITION_LOOP_VY_SIGN          (-1.0f)
+#define POSITION_LOOP_VX_SIGN          (1.0f)
+#define POSITION_LOOP_VY_SIGN          (1.0f)
 #define POSITION_LOOP_DEADZONE_CM      (3.0f)
 #define POSITION_LOOP_PREDICT_RELEASE_EPS_CM (1.0f)
 #define POSITION_LOOP_DT_S             0.00025f
