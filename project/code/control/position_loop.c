@@ -1,5 +1,5 @@
-#include "control/position_loop.h"
-#include "vision/ir_localization.h"
+﻿#include "control/position_loop.h"
+#include "vision/detection/ir_target_localization.h"
 
 #define POSITION_LOOP_TARGET_X_CM      (0.0f)
 #define POSITION_LOOP_TARGET_Y_CM      (0.0f)

@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="UTF-8"?>
+﻿<?xml version="1.0" encoding="UTF-8"?>
 <project>
     <fileVersion>4</fileVersion>
     <configuration>
@@ -1441,7 +1441,7 @@
             <name>$PROJ_DIR$\..\..\code\common\battery_monitor.c</name>
         </file>
         <file>
-            <name>$PROJ_DIR$\..\..\code\vision\beacon_detect.c</name>
+            <name>$PROJ_DIR$\..\..\code\vision\detection\beacon_detection.c</name>
         </file>
         <file>
             <name>$PROJ_DIR$\..\..\code\control\ControlMath.c</name>
@@ -1471,10 +1471,7 @@
             <name>$PROJ_DIR$\..\..\code\communication\cross_core_camera.h</name>
         </file>
         <file>
-            <name>$PROJ_DIR$\..\..\code\vision\drone_ipm.c</name>
-        </file>
-        <file>
-            <name>$PROJ_DIR$\..\..\code\vision\drone_ipm_embedded.c</name>
+            <name>$PROJ_DIR$\..\..\code\vision\projection\ground_projection_ipm_core.c</name>
         </file>
         <file>
             <name>$PROJ_DIR$\..\..\code\communication\dshot600.c</name>
@@ -1513,13 +1510,10 @@
             <name>$PROJ_DIR$\..\..\code\icm\icm42688.c</name>
         </file>
         <file>
-            <name>$PROJ_DIR$\..\..\code\vision\ipm_demo.c</name>
+            <name>$PROJ_DIR$\..\..\code\vision\projection\ground_projection.c</name>
         </file>
         <file>
-            <name>$PROJ_DIR$\..\..\code\vision\ipm_interface.c</name>
-        </file>
-        <file>
-            <name>$PROJ_DIR$\..\..\code\vision\ir_localization.c</name>
+            <name>$PROJ_DIR$\..\..\code\vision\detection\ir_target_localization.c</name>
         </file>
         <file>
             <name>$PROJ_DIR$\..\..\code\menu\key.c</name>
@@ -1603,7 +1597,7 @@
             <name>$PROJ_DIR$\..\..\code\control\velocity_loop.h</name>
         </file>
         <file>
-            <name>$PROJ_DIR$\..\..\code\vision\vision_runtime.c</name>
+            <name>$PROJ_DIR$\..\..\code\vision\pipeline\vision_frame_pipeline.c</name>
         </file>
         <file>
             <name>$PROJ_DIR$\..\..\code\communication\vofa.c</name>

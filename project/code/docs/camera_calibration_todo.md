@@ -1,4 +1,4 @@
-# 相机标定与去畸变后续代办
+﻿# 相机标定与去畸变后续代办
 
 本文档用于提醒后续处理无人机视觉链路中的相机内参、畸变、外参和 IPM 标定问题。当前无人机工程视觉链路可以运行，但相机标定仍较粗略，后续如果要提升视觉定位精度，应优先补齐本文件中的事项。
 
@@ -9,7 +9,9 @@
 ```text
 MT9V03X 图像
   ↓
-IR_Localization_Process() / BeaconDetect_Process()
+VisionRuntime_ProcessFrameWithPose()
+  ↓
+IR_Localization_AppendBlob() / BeaconDetect_AppendBlob()
   ↓
 IPM_Image2World()
   ↓
@@ -22,15 +24,16 @@ IPM_Image2World()
 2. 镜头畸变尚未补偿。
 3. 相机相对机体的安装外参尚未系统标定。
 4. 当前 IPM 主要依赖 FOV、高度、roll、pitch 的近似模型。
-5. `ir_localization.c` 和 `beacon_detect.c` 不应直接承担标定职责。
+5. `detection/ir_target_localization.c` 和 `detection/beacon_detection.c` 不应直接承担标定职责。
+6. `projection/camera_calibration.c/.h` 已建立占位参数和点去畸变入口，但尚未填入实测标定结果。
 
 ## 推荐目标结构
 
-后续建议新增统一标定模块：
+当前已建立统一标定模块，后续重点是填入实测参数和去畸变查表：
 
 ```text
 project/code/vision/
-├── camera_calibration.c/.h
+├── projection/camera_calibration.c/.h
 │   ├── 相机内参 fx / fy / cx / cy
 │   ├── 畸变参数 k1 / k2 / p1 / p2 / k3
 │   ├── 相机安装外参
@@ -39,18 +42,18 @@ project/code/vision/
 ├── camera_undistort_table.h
 │   └── 离线生成的去畸变查表
 │
-├── ipm_interface.c/.h
+├── projection/ground_projection.c/.h
 │   ├── IPM_Interface_UpdateFromIMU()
 │   ├── IPM_Image2World()
 │   └── 统一调用标定和 IPM
 │
-├── drone_ipm_embedded.c/.h
+├── projection/ground_projection_ipm_core.c/.h
 │   └── 像素射线到地面坐标的数学转换
 │
-├── ir_localization.c/.h
+├── detection/ir_target_localization.c/.h
 │   └── 只负责红外正方形目标识别
 │
-└── beacon_detect.c/.h
+└── detection/beacon_detection.c/.h
     └── 只负责多个亮点 / 信标识别
 ```
 
@@ -65,14 +68,14 @@ IPM 模块：图像点转地面坐标
 
 ## 第一阶段：集中相机标定参数
 
-建议新增：
+当前已完成：
 
 ```text
-project/code/vision/camera_calibration.h
-project/code/vision/camera_calibration.c
+project/code/vision/projection/camera_calibration.h
+project/code/vision/projection/camera_calibration.c
 ```
 
-先集中存放以下参数：
+当前已集中存放以下参数，默认值保持直通/占位行为：
 
 ```c
 #define CAMERA_FX    0.0f
@@ -98,7 +101,7 @@ project/code/vision/camera_calibration.c
 说明：
 
 - 一开始可以先填近似值或 0 值。
-- 不要把这些参数散落到 `ir_localization.c`、`beacon_detect.c`、`mt9v03x.c` 中。
+- 不要把这些参数散落到 `detection/ir_target_localization.c`、`detection/beacon_detection.c`、`mt9v03x.c` 中。
 - 摄像头驱动只负责采图，不负责视觉标定。
 
 ## 第二阶段：完成内参标定
@@ -213,7 +216,7 @@ ToF 高度与相机光心高度之间的差值
 5. 逐步修正 pitch / roll / yaw / 图像中心 / FOV / 高度偏差。
 ```
 
-外参应在 `ipm_interface.c` 或 `drone_ipm_embedded.c` 的更新流程中统一使用，而不是写在识别算法里。
+外参应在 `projection/ground_projection.c` 或 `projection/ground_projection_ipm_core.c` 的更新流程中统一使用，而不是写在识别算法里。
 
 ## 第五阶段：改造 IPM 接口
 
@@ -237,7 +240,7 @@ CameraCalibration_UndistortPoint()
 输出 world_x / world_y
 ```
 
-这样 `ir_localization.c` 和 `beacon_detect.c` 不需要关心相机标定细节。
+这样 `detection/ir_target_localization.c` 和 `detection/beacon_detection.c` 不需要关心相机标定细节。
 
 ## 第六阶段：验证指标
 
@@ -259,7 +262,7 @@ BeaconDetect 的距离和角度是否更可信
 
 1. 不要直接搬 `Unicycle_Beacon_2025/code/mapping_table.h`。
 2. 不要把去畸变逻辑写进 `mt9v03x.c` 摄像头驱动。
-3. 不要把内参/外参散落到 `ir_localization.c` 和 `beacon_detect.c`。
+3. 不要把内参/外参散落到 `detection/ir_target_localization.c` 和 `detection/beacon_detection.c`。
 4. 不要一开始就整图去畸变，优先只对识别到的点去畸变。
 5. 不要在未验证坐标精度前，把新的视觉坐标直接接入位置环。
 6. 不要同时大改视觉识别、IPM、位置环控制链路。
@@ -267,12 +270,12 @@ BeaconDetect 的距离和角度是否更可信
 ## 推荐执行顺序
 
 ```text
-1. 新增 camera_calibration.c/.h，集中参数。
-2. 固定相机曝光、增益、分辨率。
-3. 采集棋盘格图像。
-4. 用 OpenCV 标定内参和畸变。
+1. 固定相机曝光、增益、分辨率。
+2. 采集棋盘格图像。
+3. 用 OpenCV 标定内参和畸变。
+4. 将实测参数写入 camera_calibration.h。
 5. 生成去畸变点查表。
-6. 在 IPM_Image2World() 前统一调用去畸变。
+6. 在 CameraCalibration_UndistortPoint() 中接入查表或点去畸变公式。
 7. 测试静态地面坐标误差。
 8. 标定相机安装外参。
 9. 复测不同高度和姿态下的坐标稳定性。
@@ -284,7 +287,7 @@ BeaconDetect 的距离和角度是否更可信
 认为本事项完成时，应至少满足：
 
 ```text
-camera_calibration.c/.h 已建立
+projection/camera_calibration.c/.h 已建立
 内参和畸变参数来自实际摄像头标定
 IPM_Image2World() 统一使用标定结果
 IR_Localization 和 BeaconDetect 不再各自处理标定细节

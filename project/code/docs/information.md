@@ -58,11 +58,13 @@
 - `project/code/vision`
   - 放视觉、红外定位、IPM、灯塔检测等模块。
   - 典型模块：
-    - `beacon_detect.c/.h`
-    - `drone_ipm.c/.h`
-    - `drone_ipm_embedded.c/.h`
-    - `ipm_interface.c/.h`
-    - `ir_localization.c/.h`
+    - `pipeline/vision_frame_pipeline.c/.h`
+    - `detection/beacon_detection.c/.h`
+    - `projection/camera_calibration.c/.h`
+    - `reference/drone_ipm.c/.h`
+    - `projection/ground_projection_ipm_core.c/.h`
+    - `projection/ground_projection.c/.h`
+    - `detection/ir_target_localization.c/.h`
 
 - `project/code/information_for_ai`
   - 放 AI 约束说明和项目结构说明。

@@ -1,4 +1,4 @@
-#ifndef PROJECT_HEADFILE_H_
+﻿#ifndef PROJECT_HEADFILE_H_
 #define PROJECT_HEADFILE_H_
 
 #include "zf_common_headfile.h"
@@ -60,11 +60,11 @@
 #include "pmw/pmw_flow.h"
 
 // ==================================================== Vision ====================================================
-#include "vision/beacon_detect.h"
-#include "vision/drone_ipm.h"
-#include "vision/drone_ipm_embedded.h"
-#include "vision/ipm_interface.h"
-#include "vision/ir_localization.h"
-#include "vision/vision_runtime.h"
+#include "vision/detection/beacon_detection.h"
+#include "vision/detection/ir_target_localization.h"
+#include "vision/pipeline/vision_frame_pipeline.h"
+#include "vision/projection/camera_calibration.h"
+#include "vision/projection/ground_projection.h"
+#include "vision/projection/ground_projection_ipm_core.h"
 
 #endif
