@@ -1,5 +1,5 @@
 #include "control/position_loop.h"
-#include "vision/ir_localization.h"
+#include "vision/vehicle_marker_localization.h"
 
 #define POSITION_LOOP_TARGET_X_CM      (0.0f)
 #define POSITION_LOOP_TARGET_Y_CM      (0.0f)
@@ -93,11 +93,11 @@ static float position_loop_apply_deadzone(float error_cm)
 
 static uint8 position_loop_get_raw_ir_track_valid(void)
 {
-    IR_LossDebug_t ir_loss_debug = {0};
+    VehicleMarkerLossDebug_t ir_loss_debug = {0};
 
-    IR_Localization_GetLossDebug(&ir_loss_debug);
+    VehicleMarkerLocalization_GetLossDebug(&ir_loss_debug);
 
-    return (uint8)((ir_loss_debug.raw_detect_valid && ir_pose_estimate.valid && !ir_position_lost_flag) ? 1U : 0U);
+    return (uint8)((ir_loss_debug.raw_detect_valid && g_vehicle_marker_pose.valid && !g_vehicle_marker_position_lost_flag) ? 1U : 0U);
 }
 
 static uint8 position_loop_start_predict_hold(void)
@@ -222,8 +222,8 @@ void Position_Loop_Update_Velocity_Target(uint8 velocity_ready,
     if(raw_ir_track_valid)
     {
         position_input_valid = 1U;
-        position_input_x_cm = ir_pose_estimate.x;
-        position_input_y_cm = ir_pose_estimate.y;
+        position_input_x_cm = g_vehicle_marker_pose.x;
+        position_input_y_cm = g_vehicle_marker_pose.y;
         g_position_loop_last_pose_valid = 1U;
         g_position_loop_last_x_cm = position_input_x_cm;
         g_position_loop_last_y_cm = position_input_y_cm;

@@ -1519,7 +1519,7 @@
             <name>$PROJ_DIR$\..\..\code\vision\ipm_interface.c</name>
         </file>
         <file>
-            <name>$PROJ_DIR$\..\..\code\vision\ir_localization.c</name>
+            <name>$PROJ_DIR$\..\..\code\vision\vehicle_marker_localization.c</name>
         </file>
         <file>
             <name>$PROJ_DIR$\..\..\code\menu\key.c</name>

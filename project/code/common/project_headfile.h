@@ -64,7 +64,7 @@
 #include "vision/drone_ipm.h"
 #include "vision/drone_ipm_embedded.h"
 #include "vision/ipm_interface.h"
-#include "vision/ir_localization.h"
+#include "vision/vehicle_marker_localization.h"
 #include "vision/vision_runtime.h"
 
 #endif

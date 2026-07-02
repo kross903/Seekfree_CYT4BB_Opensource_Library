@@ -136,15 +136,15 @@ static uint8 core_link_user_estimate_car_yaw_deg(float *yaw_deg)
     uint8 reference_yaw_valid = 0U;
     uint8 i;
 
-    if(NULL == yaw_deg || !ir_pose_estimate.valid || (ir_pose_estimate.detected_point_count < 3U))
+    if(NULL == yaw_deg || !g_vehicle_marker_pose.valid || (g_vehicle_marker_pose.detected_point_count < 3U))
     {
         return 0U;
     }
 
     for(i = 0U; i < IR_SQUARE_POINT_COUNT; ++i)
     {
-        center_x += ir_pose_estimate.world_pts[i].x;
-        center_y += ir_pose_estimate.world_pts[i].y;
+        center_x += g_vehicle_marker_pose.world_pts[i].x;
+        center_y += g_vehicle_marker_pose.world_pts[i].y;
     }
 
     center_x *= 0.25f;
@@ -152,8 +152,8 @@ static uint8 core_link_user_estimate_car_yaw_deg(float *yaw_deg)
 
     for(i = 0U; i < IR_SQUARE_POINT_COUNT; ++i)
     {
-        float dx = ir_pose_estimate.world_pts[i].x - center_x;
-        float dy = ir_pose_estimate.world_pts[i].y - center_y;
+        float dx = g_vehicle_marker_pose.world_pts[i].x - center_x;
+        float dy = g_vehicle_marker_pose.world_pts[i].y - center_y;
 
         cov_xx += dx * dx;
         cov_xy += dx * dy;
@@ -233,16 +233,16 @@ static void core_link_user_build_beacon_map_downlink(core_link_beacon_map_packet
     VisionRuntime_GetDiag(&diag);
     VisionRuntime_GetBeaconSlots(slots, VISION_RUNTIME_BEACON_SLOT_COUNT);
 
-    car_visible = (uint8)((ir_pose_estimate.valid && !ir_position_lost_flag) ? 1U : 0U);
+    car_visible = (uint8)((g_vehicle_marker_pose.valid && !g_vehicle_marker_position_lost_flag) ? 1U : 0U);
     yaw_valid = core_link_user_estimate_car_yaw_deg(&car_yaw_deg);
     if(car_visible && yaw_valid)
     {
         packet->car_visible = 1U;
-        packet->car_x_mm = core_link_user_cm_to_mm_i16(ir_pose_estimate.x);
+        packet->car_x_mm = core_link_user_cm_to_mm_i16(g_vehicle_marker_pose.x);
         /* UAV side has migrated to X-forward / Y-left semantics.
          * The packet layout is unchanged; downstream consumers must not assume
          * legacy "Y-right positive" without an explicit compatibility layer. */
-        packet->car_y_mm = core_link_user_cm_to_mm_i16(ir_pose_estimate.y);
+        packet->car_y_mm = core_link_user_cm_to_mm_i16(g_vehicle_marker_pose.y);
         packet->car_yaw_ddeg = core_link_user_deg_to_ddeg_i16(car_yaw_deg);
     }
 

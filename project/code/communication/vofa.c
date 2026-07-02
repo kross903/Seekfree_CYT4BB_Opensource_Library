@@ -1101,8 +1101,8 @@ void send_date_back(void)
         return;
     }
 
-    IR_Localization_ServiceLostProtection();
-    ir_track_valid = (uint8)((ir_pose_estimate.valid && !ir_position_lost_flag) ? 1U : 0U);
+    VehicleMarkerLocalization_ServiceLostProtection();
+    ir_track_valid = (uint8)((g_vehicle_marker_pose.valid && !g_vehicle_marker_position_lost_flag) ? 1U : 0U);
 
     switch(send_back_flag)
     {
@@ -1127,8 +1127,8 @@ void send_date_back(void)
             break;
 
         case 2:
-            send_four_date(ir_pose_estimate.x, g_height_result.height_cm,
-                           ir_pose_estimate.z, tof_height_true_filt * 100.0f,
+            send_four_date(g_vehicle_marker_pose.x, g_height_result.height_cm,
+                           g_vehicle_marker_pose.z, tof_height_true_filt * 100.0f,
                            0, current_roll,
                            current_pitch, current_yaw);
             break;
@@ -1349,23 +1349,23 @@ void send_date_back(void)
         }
 
         case 16:
-            send_four_date(ir_pose_estimate.x,
-                           ir_pose_estimate.y,
-                           ir_pose_estimate.z,
-                           ir_pose_estimate.square_side_cm,
+            send_four_date(g_vehicle_marker_pose.x,
+                           g_vehicle_marker_pose.y,
+                           g_vehicle_marker_pose.z,
+                           g_vehicle_marker_pose.square_side_cm,
                            (float)ir_track_valid,
-                           (float)ir_position_lost_flag,
-                           (float)ir_position_lost_elapsed_ms,
-                           (float)ir_pose_estimate.detected_point_count);
+                           (float)g_vehicle_marker_position_lost_flag,
+                           (float)g_vehicle_marker_position_lost_elapsed_ms,
+                           (float)g_vehicle_marker_pose.detected_point_count);
             break;
 
         case 17:
         {
-            IR_LossDebug_t ir_loss_debug = {0};
-            IR_Localization_GetLossDebug(&ir_loss_debug);
+            VehicleMarkerLossDebug_t ir_loss_debug = {0};
+            VehicleMarkerLocalization_GetLossDebug(&ir_loss_debug);
 
-            send_four_date(ir_pose_estimate.x,
-                           ir_pose_estimate.y,
+            send_four_date(g_vehicle_marker_pose.x,
+                           g_vehicle_marker_pose.y,
                            (float)ir_loss_debug.raw_detect_valid,
                            (float)ir_loss_debug.lost_flag,
                            (float)ir_loss_debug.lost_elapsed_ms,

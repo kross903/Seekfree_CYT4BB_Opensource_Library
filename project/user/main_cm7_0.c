@@ -1,49 +1,49 @@
 /*********************************************************************************************************************
-* CYT4BB Opensourec Library ���� CYT4BB ��Դ�⣩��һ�����ڹٷ� SDK �ӿڵĵ�������Դ��
-* Copyright (c) 2022 SEEKFREE ��ɿƼ�
+* CYT4BB Opensourec Library 即（ CYT4BB 开源库）是一个基于官方 SDK 接口的第三方开源库
+* Copyright (c) 2022 SEEKFREE 逐飞科技
 *
-* ���ļ��� CYT4BB ��Դ���һ����
+* 本文件是 CYT4BB 开源库的一部分
 *
-* CYT4BB ��Դ�� ���������
-* �����Ը���������������ᷢ���� GPL��GNU General Public License���� GNUͨ�ù�������֤��������
-* �� GPL �ĵ�3�棨�� GPL3.0������ѡ��ģ��κκ����İ汾�����·�����/���޸���
+* CYT4BB 开源库 是免费软件
+* 您可以根据自由软件基金会发布的 GPL（GNU General Public License，即 GNU通用公共许可证）的条款
+* 即 GPL 的第3版（即 GPL3.0）或（您选择的）任何后来的版本，重新发布和/或修改它
 *
-* ����Դ��ķ�����ϣ�����ܷ������ã�����δ�������κεı�֤
-* ����û�������������Ի��ʺ��ض���;�ı�֤
-* ����ϸ����μ� GPL
+* 本开源库的发布是希望它能发挥作用，但并未对其作任何的保证
+* 甚至没有隐含的适销性或适合特定用途的保证
+* 更多细节请参见 GPL
 *
-* ��Ӧ�����յ�����Դ���ͬʱ�յ�һ�� GPL �ĸ���
-* ���û�У������<https://www.gnu.org/licenses/>
+* 您应该在收到本开源库的同时收到一份 GPL 的副本
+* 如果没有，请参阅<https://www.gnu.org/licenses/>
 *
-* ����ע����
-* ����Դ��ʹ�� GPL3.0 ��Դ����֤Э�� ������������Ϊ���İ汾
-* ��������Ӣ�İ��� libraries/doc �ļ����µ� GPL3_permission_statement.txt �ļ���
-* ����֤������ libraries �ļ����� �����ļ����µ� LICENSE �ļ�
-* ��ӭ��λʹ�ò����������� ���޸�����ʱ���뱣����ɿƼ��İ�Ȩ����������������
+* 额外注明：
+* 本开源库使用 GPL3.0 开源许可证协议 以上许可申明为译文版本
+* 许可申明英文版在 libraries/doc 文件夹下的 GPL3_permission_statement.txt 文件中
+* 许可证副本在 libraries 文件夹下 即该文件夹下的 LICENSE 文件
+* 欢迎各位使用并传播本程序 但修改内容时必须保留逐飞科技的版权声明（即本声明）
 *
-* �ļ�����          main_cm7_0
-* ��˾����          �ɶ���ɿƼ����޹�˾
-* �汾��Ϣ          �鿴 libraries/doc �ļ����� version �ļ� �汾˵��
-* ��������          IAR 9.40.1
-* ����ƽ̨          CYT4BB
-* ��������          https://seekfree.taobao.com/
+* 文件名称          main_cm7_0
+* 公司名称          成都逐飞科技有限公司
+* 版本信息          查看 libraries/doc 文件夹内 version 文件 版本说明
+* 开发环境          IAR 9.40.1
+* 适用平台          CYT4BB
+* 店铺链接          https://seekfree.taobao.com/
 *
-* �޸ļ�¼
-* ����              ����                ��ע
+* 修改记录
+* 日期              作者                备注
 * 2024-1-4       pudding            first version
 ********************************************************************************************************************/
 
 #include "../code/common/project_headfile.h"
 
-// ���µĹ��̻��߹����ƶ���λ�����ִ�����²���
-// ��һ�� �ر��������д򿪵��ļ�
-// �ڶ��� project->clean  �ȴ��·�����������
+// 打开新的工程或者工程移动了位置务必执行以下操作
+// 第一步 关闭上面所有打开的文件
+// 第二步 project->clean  等待下方进度条走完
 
-// �������ǿ�Դ��չ��� ��������ֲ���߲��Ը���������
-// �������ǿ�Դ��չ��� ��������ֲ���߲��Ը���������
-// �������ǿ�Դ��չ��� ��������ֲ���߲��Ը���������
+// 本例程是开源库空工程 可用作移植或者测试各类内外设
+// 本例程是开源库空工程 可用作移植或者测试各类内外设
+// 本例程是开源库空工程 可用作移植或者测试各类内外设
 
-// **************************** �������� ****************************
+// **************************** 代码区域 ****************************
 #define MONITOR_LOCAL_SCREEN_REFRESH_DIV    (5U)
 
 static monitor_page_enum g_monitor_page = MONITOR_PAGE_DATA;
@@ -56,22 +56,22 @@ static void build_monitor_runtime_snapshot(MonitorRuntimeSnapshot *snapshot)
         return;
     }
 
-    IR_Localization_ServiceLostProtection();
-    ir_track_valid = (uint8)((ir_pose_estimate.valid && !ir_position_lost_flag) ? 1U : 0U);
+    VehicleMarkerLocalization_ServiceLostProtection();
+    ir_track_valid = (uint8)((g_vehicle_marker_pose.valid && !g_vehicle_marker_position_lost_flag) ? 1U : 0U);
 
     snapshot->control_mode = control_mode;
     snapshot->armed = (uint8)(armed ? 1U : 0U);
     snapshot->low_voltage = (uint8)(low_voltage_protect_flag ? 1U : 0U);
     snapshot->has_nearest = ir_track_valid;
-    snapshot->voltage = car_bat_voltage;  /* С����ɻ����õ�أ�ֱ����ʾС���ϵ�ʵ���ѹ�� */
+    snapshot->voltage = car_bat_voltage;  /* 小车回传电压值，直接用于小车监视页显示。 */
     snapshot->target_throttle = (int32)Flight_Control_Get_Target_Throttle();
     snapshot->base_throttle = (int32)base_throttle;
     snapshot->roll = current_roll;
     snapshot->pitch = current_pitch;
     snapshot->yaw = current_yaw;
     snapshot->beacon_count = ir_track_valid ? IR_SQUARE_POINT_COUNT : 0;
-    snapshot->nearest_x = ir_track_valid ? ir_pose_estimate.x : 0.0f;
-    snapshot->nearest_y = ir_track_valid ? ir_pose_estimate.y : 0.0f;
+    snapshot->nearest_x = ir_track_valid ? g_vehicle_marker_pose.x : 0.0f;
+    snapshot->nearest_y = ir_track_valid ? g_vehicle_marker_pose.y : 0.0f;
     snapshot->tof_height_cm = tof_height_true_filt * 100.0f;
     snapshot->fused_height_cm = g_height_result.height_cm;
     snapshot->fused_velocity_cms = g_height_result.velocity_cms;
@@ -88,7 +88,9 @@ static void service_monitor_telemetry(void)
     USART_PID_Adjust();
     send_date_back();
 }
+
 volatile uint8 Car_Copy_Screen_Flag = 0;
+
 static uint8 drone_car_link_task(void)
 {
     uint8 link_tick = 0;
@@ -237,31 +239,28 @@ static void initialize_control_core_modules(void)
     flash_init();
     Device_Init();
 
-    IR_Localization_Init();
+    VehicleMarkerLocalization_Init();
     HeightManager_Init(100.0f);
 }
 
 int main(void)
 {
-    clock_init(SYSTEM_CLOCK_250M); 	// ʱ�����ü�ϵͳ��ʼ��<��ر���>
-    debug_init();                       // ���Դ�����Ϣ��ʼ��
-    // �˴���д�û����� ���������ʼ�������
-        
-    initialize_control_core_modules();
-    
+    clock_init(SYSTEM_CLOCK_250M); 	// 时钟配置及系统初始化<务必保留>
+    debug_init();                       // 调试串口信息初始化
+    // 此处编写用户代码 例如外设初始化代码等
 
-    // �˴���д�û����� ���������ʼ�������
+    initialize_control_core_modules();
+
+    // 此处编写用户代码 例如外设初始化代码等
     while(true)
     {
-        // �˴���д��Ҫѭ��ִ�еĴ���
+        // 此处编写需要循环执行的代码
 
+        menu_open();
+        run_monitor_view_loop();
 
-    menu_open();
-    run_monitor_view_loop();
-    
-      
-        // �˴���д��Ҫѭ��ִ�еĴ���
+        // 此处编写需要循环执行的代码
     }
 }
 
-// **************************** �������� ****************************
+// **************************** 代码区域 ****************************

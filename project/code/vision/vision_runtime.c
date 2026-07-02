@@ -7,7 +7,7 @@ static VisionRuntimeBeaconSlot_t s_vision_runtime_beacon_slots[VISION_RUNTIME_BE
 #if CY_CORE_CM7_1
 #include "vision/beacon_detect.h"
 #include "vision/ipm_interface.h"
-#include "vision/ir_localization.h"
+#include "vision/vehicle_marker_localization.h"
 #include "zf_device_mt9v03x.h"
 
 static uint8 s_vision_binary[MT9V03X_H * MT9V03X_W];
@@ -145,7 +145,7 @@ static void VisionRuntime_DispatchBlob(const VisionBlob_t *blob, int large_area_
     else
     {
         s_vision_runtime_diag.ir_split_count++;
-        if(IR_Localization_AppendBlob(blob))
+        if(VehicleMarkerLocalization_AppendBlob(blob))
         {
             s_vision_runtime_diag.ir_blob_count++;
         }
@@ -269,23 +269,23 @@ static void VisionRuntime_ProcessBlobs(const uint8 image[MT9V03X_H][MT9V03X_W])
 static void VisionRuntime_UpdateDiagFromCurrentFrame(int beacon_count,
                                                      const BeaconResult_t *beacon_results)
 {
-    IR_LossDebug_t ir_loss_debug = {0};
+    VehicleMarkerLossDebug_t ir_loss_debug = {0};
     int nearest_index = -1;
 
-    IR_Localization_GetLossDebug(&ir_loss_debug);
-    IR_Localization_GetBlobRejectDebug(&s_vision_runtime_diag.ir_reject_area_low_count,
+    VehicleMarkerLocalization_GetLossDebug(&ir_loss_debug);
+    VehicleMarkerLocalization_GetBlobRejectDebug(&s_vision_runtime_diag.ir_reject_area_low_count,
                                        &s_vision_runtime_diag.ir_reject_area_high_count,
                                        &s_vision_runtime_diag.ir_reject_size_count,
                                        &s_vision_runtime_diag.ir_reject_aspect_count,
                                        &s_vision_runtime_diag.ir_reject_insert_count);
 
     s_vision_runtime_diag.ir_raw_detect_valid = ir_loss_debug.raw_detect_valid;
-    s_vision_runtime_diag.ir_track_valid = (uint8)((ir_pose_estimate.valid && !ir_position_lost_flag) ? 1U : 0U);
-    s_vision_runtime_diag.ir_detected_point_count = ir_pose_estimate.detected_point_count;
-    s_vision_runtime_diag.ir_x_cm = ir_pose_estimate.x;
-    s_vision_runtime_diag.ir_y_cm = ir_pose_estimate.y;
-    s_vision_runtime_diag.ir_square_side_cm = ir_pose_estimate.square_side_cm;
-    s_vision_runtime_diag.ir_height_cm = ir_pose_estimate.z;
+    s_vision_runtime_diag.ir_track_valid = (uint8)((g_vehicle_marker_pose.valid && !g_vehicle_marker_position_lost_flag) ? 1U : 0U);
+    s_vision_runtime_diag.ir_detected_point_count = g_vehicle_marker_pose.detected_point_count;
+    s_vision_runtime_diag.ir_x_cm = g_vehicle_marker_pose.x;
+    s_vision_runtime_diag.ir_y_cm = g_vehicle_marker_pose.y;
+    s_vision_runtime_diag.ir_square_side_cm = g_vehicle_marker_pose.square_side_cm;
+    s_vision_runtime_diag.ir_height_cm = g_vehicle_marker_pose.z;
 
     s_vision_runtime_diag.beacon_count = beacon_count;
     s_vision_runtime_diag.beacon_has_nearest = 0U;
@@ -325,7 +325,7 @@ static void VisionRuntime_ProcessFrameInternal(float roll_deg,
     static BeaconResult_t beacon_results[BEACON_MAX_DETECTIONS];
     int beacon_count = 0;
 
-    IR_Localization_ServiceLostProtection();
+    VehicleMarkerLocalization_ServiceLostProtection();
 
     if(!mt9v03x_finish_flag)
     {
@@ -347,10 +347,10 @@ static void VisionRuntime_ProcessFrameInternal(float roll_deg,
     s_vision_runtime_diag.ir_blob_count = 0;
     s_vision_runtime_diag.beacon_blob_count = 0;
     memset(s_vision_runtime_diag.blob_area_rank, 0, sizeof(s_vision_runtime_diag.blob_area_rank));
-    IR_Localization_BeginBlobFrame();
+    VehicleMarkerLocalization_BeginBlobFrame();
     BeaconDetect_BeginBlobFrame(beacon_results, BEACON_MAX_DETECTIONS);
     VisionRuntime_ProcessBlobs(mt9v03x_image);
-    (void)IR_Localization_EndBlobFrame(&ir_pose_estimate);
+    (void)VehicleMarkerLocalization_EndBlobFrame(&g_vehicle_marker_pose);
     beacon_count = BeaconDetect_EndBlobFrame();
     VisionRuntime_UpdateDiagFromCurrentFrame(beacon_count, beacon_results);
 }

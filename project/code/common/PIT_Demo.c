@@ -323,7 +323,7 @@ void Flight_Fly_Test_Clear_Safety_Latch(void)
 
 void PIT_KeyVoltage_Task_5ms(void)
 {
-    IR_Localization_Task_5ms();
+    VehicleMarkerLocalization_Task5ms();
     key_scanner();
     key_scan();
     BatteryMonitor_Task_5ms();

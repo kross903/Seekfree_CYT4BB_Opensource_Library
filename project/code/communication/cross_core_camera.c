@@ -28,10 +28,10 @@ typedef struct
 {
     uint32 magic;
     uint32 seq;
-    IR_Pose_t pose;
+    VehicleMarkerPose_t pose;
     VisionRuntimeDiag_t diag;
     VisionRuntimeBeaconSlot_t beacon_slots[VISION_RUNTIME_BEACON_SLOT_COUNT];
-    IR_LossDebug_t loss_debug;
+    VehicleMarkerLossDebug_t loss_debug;
     uint8 lost_flag;
     uint8 reserved[3];
     uint16 lost_elapsed_ms;
@@ -108,7 +108,7 @@ static void CrossCoreCamera_AgeVisionLossTimer(void)
 
     if(!CrossCoreCamera_DwtInit() || SystemCoreClock == 0U)
     {
-        IR_Localization_Task_5ms();
+        VehicleMarkerLocalization_Task5ms();
         return;
     }
 
@@ -134,7 +134,7 @@ static void CrossCoreCamera_AgeVisionLossTimer(void)
 
     for(i = 0U; i < tick_count; i++)
     {
-        IR_Localization_Task_5ms();
+        VehicleMarkerLocalization_Task5ms();
     }
 }
 
@@ -159,14 +159,14 @@ static void CrossCoreCamera_CameraCoreDrawVisionScreen(const VisionRuntimeDiag_t
     ips200_show_string(0U, 0U, "RAW IMG CM7_1");
     ips200_set_color(RGB565_WHITE, RGB565_BLACK);
     ips200_show_string(0U, 152U, "IR:");
-    ips200_show_string(32U, 152U, ir_position_lost_flag ? "LOST " : "OK   ");
+    ips200_show_string(32U, 152U, g_vehicle_marker_position_lost_flag ? "LOST " : "OK   ");
     ips200_show_string(96U, 152U, "PTS:");
     ips200_show_int(136U, 152U, diag != NULL ? diag->ir_detected_point_count : 0, 1U);
 
     ips200_show_string(0U, 176U, "X:");
-    ips200_show_float(32U, 176U, ir_pose_estimate.x, 4U, 1U);
+    ips200_show_float(32U, 176U, g_vehicle_marker_pose.x, 4U, 1U);
     ips200_show_string(120U, 176U, "Y:");
-    ips200_show_float(152U, 176U, ir_pose_estimate.y, 4U, 1U);
+    ips200_show_float(152U, 176U, g_vehicle_marker_pose.y, 4U, 1U);
     ips200_show_string(0U, 200U, "K4 BACK");
 }
 
@@ -265,7 +265,7 @@ void CrossCoreCamera_CameraCoreInit(void)
 {
 #if CY_CORE_CM7_1
     (void)mt9v03x_init();
-    IR_Localization_Init();
+    VehicleMarkerLocalization_Init();
     BeaconDetect_Init();
     IPM_Interface_Init();
     ipc_communicate_init(IPC_PORT_2, CrossCoreCamera_CameraCoreIpcCallback);
@@ -300,7 +300,7 @@ void CrossCoreCamera_CameraCoreTask(void)
     SharedVisionInput_t input_snapshot;
     VisionRuntimeDiag_t diag_snapshot;
     VisionRuntimeBeaconSlot_t beacon_slots[VISION_RUNTIME_BEACON_SLOT_COUNT] = {0};
-    IR_LossDebug_t loss_debug;
+    VehicleMarkerLossDebug_t loss_debug;
 
     if(!mt9v03x_finish_flag)
     {
@@ -324,16 +324,16 @@ void CrossCoreCamera_CameraCoreTask(void)
                                        input_snapshot.height_cm);
     VisionRuntime_GetDiag(&diag_snapshot);
     VisionRuntime_GetBeaconSlots(beacon_slots, VISION_RUNTIME_BEACON_SLOT_COUNT);
-    IR_Localization_GetLossDebug(&loss_debug);
+    VehicleMarkerLocalization_GetLossDebug(&loss_debug);
 
     g_shared_vision_result->magic = SHARED_VISION_MAGIC;
-    g_shared_vision_result->pose = ir_pose_estimate;
+    g_shared_vision_result->pose = g_vehicle_marker_pose;
     g_shared_vision_result->diag = diag_snapshot;
     memcpy((void *)g_shared_vision_result->beacon_slots, beacon_slots, sizeof(beacon_slots));
     g_shared_vision_result->loss_debug = loss_debug;
-    g_shared_vision_result->lost_flag = ir_position_lost_flag;
-    g_shared_vision_result->lost_elapsed_ms = ir_position_lost_elapsed_ms;
-    g_shared_vision_result->pose_update_seq = ir_pose_update_seq;
+    g_shared_vision_result->lost_flag = g_vehicle_marker_position_lost_flag;
+    g_shared_vision_result->lost_elapsed_ms = g_vehicle_marker_position_lost_elapsed_ms;
+    g_shared_vision_result->pose_update_seq = g_vehicle_marker_pose_update_seq;
     g_shared_vision_result->seq++;
     CrossCoreCamera_CleanResult();
     (void)ipc_send_data(CROSS_CORE_VISION_IPC_RESULT_READY);
@@ -371,13 +371,13 @@ uint8 CrossCoreCamera_ControlCoreFetchFrame(void)
 
     last_seq = result_snapshot.seq;
     s_vision_ipc_result_pending = 0U;
-    ir_pose_estimate = result_snapshot.pose;
-    ir_position_lost_flag = result_snapshot.lost_flag;
-    ir_position_lost_elapsed_ms = result_snapshot.lost_elapsed_ms;
-    ir_pose_update_seq = result_snapshot.pose_update_seq;
+    g_vehicle_marker_pose = result_snapshot.pose;
+    g_vehicle_marker_position_lost_flag = result_snapshot.lost_flag;
+    g_vehicle_marker_position_lost_elapsed_ms = result_snapshot.lost_elapsed_ms;
+    g_vehicle_marker_pose_update_seq = result_snapshot.pose_update_seq;
     VisionRuntime_SetDiag(&result_snapshot.diag);
     VisionRuntime_SetBeaconSlots(result_snapshot.beacon_slots, VISION_RUNTIME_BEACON_SLOT_COUNT);
-    IR_Localization_SetLossDebug(&result_snapshot.loss_debug);
+    VehicleMarkerLocalization_SetLossDebug(&result_snapshot.loss_debug);
     return 1U;
 #else
     return 0U;
