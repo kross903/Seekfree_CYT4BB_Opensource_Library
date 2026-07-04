@@ -2,6 +2,7 @@
 #define VEHICLE_MARKER_LOCALIZATION_H_
 
 #include "zf_common_headfile.h"
+#include "vision/vision_runtime.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -12,7 +13,7 @@ extern "C" {
 #define VEHICLE_MARKER_MODE_CHEVRON     (1)// V型标志定位模式
 
 #ifndef VEHICLE_MARKER_MODE
-#define VEHICLE_MARKER_MODE VEHICLE_MARKER_MODE_FOUR_POINT
+#define VEHICLE_MARKER_MODE VEHICLE_MARKER_MODE_CHEVRON
 #endif
 
 // ==================== 配置参数 ====================
@@ -57,6 +58,21 @@ typedef struct
 
 typedef struct
 {
+    uint8 valid;
+    uint8 left_valid;
+    uint8 right_valid;
+    VehicleMarkerPoint2D_t apex_img;
+    VehicleMarkerPoint2D_t left_tip_img;
+    VehicleMarkerPoint2D_t right_tip_img;
+    VehicleMarkerPoint2D_t left_line_start_img;
+    VehicleMarkerPoint2D_t left_line_end_img;
+    VehicleMarkerPoint2D_t right_line_start_img;
+    VehicleMarkerPoint2D_t right_line_end_img;
+    float heading_deg;
+} VehicleMarkerChevronDebug_t;
+
+typedef struct
+{
     uint8 raw_detect_valid;
     uint8 has_trackable_pose;
     uint8 lost_flag;
@@ -75,14 +91,14 @@ void VehicleMarkerLocalization_Task5ms(void);
 void VehicleMarkerLocalization_ServiceLostProtection(void);
 void VehicleMarkerLocalization_GetLossDebug(VehicleMarkerLossDebug_t *debug);
 void VehicleMarkerLocalization_SetLossDebug(const VehicleMarkerLossDebug_t *debug);
+void VehicleMarkerLocalization_GetChevronDebug(VehicleMarkerChevronDebug_t *debug);
 void VehicleMarkerLocalization_GetBlobRejectDebug(int *area_low_count,
                                                   int *area_high_count,
                                                   int *size_count,
                                                   int *aspect_count,
                                                   int *insert_count);
-int VehicleMarkerLocalization_GetScaledMaxBlobArea(void);
 void VehicleMarkerLocalization_BeginBlobFrame(void);
-uint8 VehicleMarkerLocalization_AppendBlob(const VisionBlob_t *blob);
+uint8 VehicleMarkerLocalization_AppendBlob(const VisionBlob_t *blob, const VisionContour_t *contour);
 uint8 VehicleMarkerLocalization_EndBlobFrame(VehicleMarkerPose_t *out_pose);
 
 uint8 VehicleMarkerLocalization_Process(const uint8 image[MT9V03X_H][MT9V03X_W],

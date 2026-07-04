@@ -141,16 +141,16 @@ static uint8 core_link_user_estimate_car_yaw_deg(float *yaw_deg)
         return 0U;
     }
 
-    for(i = 0U; i < IR_SQUARE_POINT_COUNT; ++i)
+    for(i = 0U; i < g_vehicle_marker_pose.detected_point_count; ++i)
     {
         center_x += g_vehicle_marker_pose.world_pts[i].x;
         center_y += g_vehicle_marker_pose.world_pts[i].y;
     }
 
-    center_x *= 0.25f;
-    center_y *= 0.25f;
+    center_x /= (float)g_vehicle_marker_pose.detected_point_count;
+    center_y /= (float)g_vehicle_marker_pose.detected_point_count;
 
-    for(i = 0U; i < IR_SQUARE_POINT_COUNT; ++i)
+    for(i = 0U; i < g_vehicle_marker_pose.detected_point_count; ++i)
     {
         float dx = g_vehicle_marker_pose.world_pts[i].x - center_x;
         float dy = g_vehicle_marker_pose.world_pts[i].y - center_y;

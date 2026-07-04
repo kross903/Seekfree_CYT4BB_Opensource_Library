@@ -1444,13 +1444,13 @@
             <name>$PROJ_DIR$\..\..\code\vision\beacon_detect.c</name>
         </file>
         <file>
+            <name>$PROJ_DIR$\..\..\code\communication\comm_mux.c</name>
+        </file>
+        <file>
             <name>$PROJ_DIR$\..\..\code\control\ControlMath.c</name>
         </file>
         <file>
             <name>$PROJ_DIR$\..\..\code\control\ControlMath.h</name>
-        </file>
-        <file>
-            <name>$PROJ_DIR$\..\..\code\communication\comm_mux.c</name>
         </file>
         <file>
             <name>$PROJ_DIR$\..\..\code\communication\core_link.c</name>
@@ -1517,9 +1517,6 @@
         </file>
         <file>
             <name>$PROJ_DIR$\..\..\code\vision\ipm_interface.c</name>
-        </file>
-        <file>
-            <name>$PROJ_DIR$\..\..\code\vision\vehicle_marker_localization.c</name>
         </file>
         <file>
             <name>$PROJ_DIR$\..\..\code\menu\key.c</name>
@@ -1595,6 +1592,12 @@
         </file>
         <file>
             <name>$PROJ_DIR$\..\..\code\control\throttle_runtime.h</name>
+        </file>
+        <file>
+            <name>$PROJ_DIR$\..\..\code\vision\vehicle_marker_localization.c</name>
+        </file>
+        <file>
+            <name>$PROJ_DIR$\..\..\code\vision\vehicle_marker_localization.h</name>
         </file>
         <file>
             <name>$PROJ_DIR$\..\..\code\control\velocity_loop.c</name>

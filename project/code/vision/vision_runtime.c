@@ -127,13 +127,69 @@ static int VisionRuntime_GetScaledLargeAreaThreshold(void)
     return VISION_RUNTIME_BEACON_SPLIT_AREA_THRESHOLD;
 }
 
-static void VisionRuntime_DispatchBlob(const VisionBlob_t *blob, int large_area_threshold)
+static uint8 VisionRuntime_IsBoundaryPixel(int row, int col)
+{
+    int dr = 0;
+    int dc = 0;
+
+    for(dr = -1; dr <= 1; dr++)
+    {
+        for(dc = -1; dc <= 1; dc++)
+        {
+            int next_row = 0;
+            int next_col = 0;
+            int next_index = 0;
+
+            if(dr == 0 && dc == 0)
+            {
+                continue;
+            }
+
+            next_row = row + dr;
+            next_col = col + dc;
+            if(next_row < 0 || next_row >= MT9V03X_H ||
+               next_col < 0 || next_col >= MT9V03X_W)
+            {
+                return 1U;
+            }
+
+            next_index = next_row * MT9V03X_W + next_col;
+            if(s_vision_binary[next_index] == 0U)
+            {
+                return 1U;
+            }
+        }
+    }
+
+    return 0U;
+}
+
+static void VisionRuntime_DispatchBlob(const VisionBlob_t *blob,
+                                       const VisionContour_t *contour,
+                                       int large_area_threshold)
 {
     if(blob == NULL)
     {
         return;
     }
 
+#if VEHICLE_MARKER_MODE == VEHICLE_MARKER_MODE_CHEVRON
+    if(blob->area > large_area_threshold)
+    {
+        s_vision_runtime_diag.beacon_split_count++;
+        if(BeaconDetect_AppendBlob(blob))
+        {
+            s_vision_runtime_diag.beacon_blob_count++;
+            return;
+        }
+    }
+
+    s_vision_runtime_diag.ir_split_count++;
+    if(VehicleMarkerLocalization_AppendBlob(blob, contour))
+    {
+        s_vision_runtime_diag.ir_blob_count++;
+    }
+#else
     if(blob->area > large_area_threshold)
     {
         s_vision_runtime_diag.beacon_split_count++;
@@ -145,11 +201,12 @@ static void VisionRuntime_DispatchBlob(const VisionBlob_t *blob, int large_area_
     else
     {
         s_vision_runtime_diag.ir_split_count++;
-        if(VehicleMarkerLocalization_AppendBlob(blob))
+        if(VehicleMarkerLocalization_AppendBlob(blob, contour))
         {
             s_vision_runtime_diag.ir_blob_count++;
         }
     }
+#endif
 }
 
 static void VisionRuntime_ProcessBlobs(const uint8 image[MT9V03X_H][MT9V03X_W])
@@ -241,12 +298,16 @@ static void VisionRuntime_ProcessBlobs(const uint8 image[MT9V03X_H][MT9V03X_W])
             if(pixel_count > 0)
             {
                 VisionBlob_t blob;
+                VisionContour_t contour;
                 int width = max_col - min_col + 1;
                 int height = max_row - min_row + 1;
+                int boundary_count = 0;
+                int i = 0;
 
                 s_vision_runtime_diag.blob_count++;
                 VisionRuntime_InsertBlobAreaRank(pixel_count);
                 memset(&blob, 0, sizeof(blob));
+                memset(&contour, 0, sizeof(contour));
                 blob.centroid_row = (float)row_sum / (float)pixel_count;
                 blob.centroid_col = (float)col_sum / (float)pixel_count;
                 blob.area = pixel_count;
@@ -258,9 +319,43 @@ static void VisionRuntime_ProcessBlobs(const uint8 image[MT9V03X_H][MT9V03X_W])
                 blob.aspect_ratio = VisionRuntime_NormalizedAspect(width, height);
                 blob.occupancy_ratio = (width > 0 && height > 0) ?
                                        ((float)pixel_count / (float)(width * height)) : 0.0f;
+                for(i = 0; i < rear; ++i)
+                {
+                    int current_index = (int)s_vision_queue[i];
+                    int current_row = current_index / MT9V03X_W;
+                    int current_col = current_index % MT9V03X_W;
+
+                    if(!VisionRuntime_IsBoundaryPixel(current_row, current_col))
+                    {
+                        continue;
+                    }
+
+                    if(boundary_count < (int)VISION_RUNTIME_CONTOUR_MAX_POINTS)
+                    {
+                        contour.point_x[boundary_count] = (uint16)current_col;
+                        contour.point_y[boundary_count] = (uint16)current_row;
+                    }
+                    boundary_count++;
+                }
+                contour.point_count = (uint16)((boundary_count > (int)VISION_RUNTIME_CONTOUR_MAX_POINTS) ?
+                                               VISION_RUNTIME_CONTOUR_MAX_POINTS : boundary_count);
+                if(boundary_count > 0)
+                {
+                    float perimeter = (float)boundary_count;
+
+                    blob.circularity = (4.0f * 3.14159265f * (float)pixel_count) / (perimeter * perimeter);
+                    if(blob.circularity > 1.0f)
+                    {
+                        blob.circularity = 1.0f;
+                    }
+                }
+                else
+                {
+                    blob.circularity = 0.0f;
+                }
                 IPM_Image2World((int)blob.centroid_col, (int)blob.centroid_row,
                                 &blob.world_x, &blob.world_y);
-                VisionRuntime_DispatchBlob(&blob, large_area_threshold);
+                VisionRuntime_DispatchBlob(&blob, &contour, large_area_threshold);
             }
         }
     }
@@ -347,10 +442,16 @@ static void VisionRuntime_ProcessFrameInternal(float roll_deg,
     s_vision_runtime_diag.ir_blob_count = 0;
     s_vision_runtime_diag.beacon_blob_count = 0;
     memset(s_vision_runtime_diag.blob_area_rank, 0, sizeof(s_vision_runtime_diag.blob_area_rank));
+#if VEHICLE_MARKER_MODE == VEHICLE_MARKER_MODE_CHEVRON
     VehicleMarkerLocalization_BeginBlobFrame();
+#endif
     BeaconDetect_BeginBlobFrame(beacon_results, BEACON_MAX_DETECTIONS);
     VisionRuntime_ProcessBlobs(mt9v03x_image);
+#if VEHICLE_MARKER_MODE == VEHICLE_MARKER_MODE_CHEVRON
     (void)VehicleMarkerLocalization_EndBlobFrame(&g_vehicle_marker_pose);
+#else
+    (void)VehicleMarkerLocalization_Process(mt9v03x_image, &g_vehicle_marker_pose);
+#endif
     beacon_count = BeaconDetect_EndBlobFrame();
     VisionRuntime_UpdateDiagFromCurrentFrame(beacon_count, beacon_results);
 }

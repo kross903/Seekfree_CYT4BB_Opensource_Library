@@ -7,6 +7,7 @@
 #define VISION_RUNTIME_BEACON_SLOT_COUNT (5U)
 #define VISION_RUNTIME_BLOB_AREA_COUNT (16U)
 #define VISION_RUNTIME_BEACON_SPLIT_AREA_THRESHOLD (17)
+#define VISION_RUNTIME_CONTOUR_MAX_POINTS (640U)
 
 typedef struct
 {
@@ -20,9 +21,17 @@ typedef struct
     float average_brightness;
     float aspect_ratio;
     float occupancy_ratio;
+    float circularity;
     float world_x;
     float world_y;
 } VisionBlob_t;
+
+typedef struct
+{
+    uint16 point_count;
+    uint16 point_x[VISION_RUNTIME_CONTOUR_MAX_POINTS];
+    uint16 point_y[VISION_RUNTIME_CONTOUR_MAX_POINTS];
+} VisionContour_t;
 
 typedef struct
 {

@@ -1429,7 +1429,28 @@
     <group>
         <name>app_port</name>
         <file>
+            <name>$PROJ_DIR$\..\..\code\vision\beacon_detect.c</name>
+        </file>
+        <file>
             <name>$PROJ_DIR$\..\..\code\communication\cross_core_camera.c</name>
+        </file>
+        <file>
+            <name>$PROJ_DIR$\..\..\code\vision\drone_ipm_embedded.c</name>
+        </file>
+        <file>
+            <name>$PROJ_DIR$\..\..\code\vision\ipm_interface.c</name>
+        </file>
+        <file>
+            <name>$PROJ_DIR$\..\..\code\vision\ir_localization.c</name>
+        </file>
+        <file>
+            <name>$PROJ_DIR$\..\..\code\vision\vehicle_marker_localization.c</name>
+        </file>
+        <file>
+            <name>$PROJ_DIR$\..\..\code\vision\vehicle_marker_localization.h</name>
+        </file>
+        <file>
+            <name>$PROJ_DIR$\..\..\code\vision\vision_runtime.c</name>
         </file>
     </group>
     <group>

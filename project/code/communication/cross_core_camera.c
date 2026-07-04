@@ -123,10 +123,10 @@ static void CrossCoreCamera_AgeVisionLossTimer(void)
     elapsed_ms = (uint32)(((uint64)(now_cycle - last_cycle) * 1000ULL) / (uint64)SystemCoreClock);
     last_cycle = now_cycle;
     elapsed_ms += residual_ms;
-    tick_count = elapsed_ms / IR_POSITION_LOST_TASK_PERIOD_MS;
-    residual_ms = elapsed_ms % IR_POSITION_LOST_TASK_PERIOD_MS;
+    tick_count = elapsed_ms / VEHICLE_MARKER_TASK_PERIOD_MS;
+    residual_ms = elapsed_ms % VEHICLE_MARKER_TASK_PERIOD_MS;
 
-    max_tick_count = (IR_POSITION_LOST_HOLD_MS / IR_POSITION_LOST_TASK_PERIOD_MS) + 1U;
+    max_tick_count = (VEHICLE_MARKER_POSITION_LOST_HOLD_MS / VEHICLE_MARKER_TASK_PERIOD_MS) + 1U;
     if(tick_count > max_tick_count)
     {
         tick_count = max_tick_count;
@@ -154,6 +154,70 @@ static void CrossCoreCamera_CameraCoreDrawVisionScreen(const VisionRuntimeDiag_t
     uint16 image_h = MT9V03X_H;
 
     ips200_show_gray_image(0U, image_y, mt9v03x_image[0], MT9V03X_W, MT9V03X_H, image_w, image_h, 0U);
+    {
+        VehicleMarkerChevronDebug_t chevron_debug = {0};
+
+        VehicleMarkerLocalization_GetChevronDebug(&chevron_debug);
+        if(chevron_debug.valid)
+        {
+            if(chevron_debug.left_valid)
+            {
+                ips200_draw_line((uint16)chevron_debug.left_line_start_img.u,
+                                 (uint16)(chevron_debug.left_line_start_img.v + image_y),
+                                 (uint16)chevron_debug.left_line_end_img.u,
+                                 (uint16)(chevron_debug.left_line_end_img.v + image_y),
+                                 RGB565_GREEN);
+                for(int dy = -1; dy <= 1; dy++)
+                {
+                    for(int dx = -1; dx <= 1; dx++)
+                    {
+                        int px = (int)chevron_debug.left_tip_img.u + dx;
+                        int py = (int)chevron_debug.left_tip_img.v + (int)image_y + dy;
+
+                        if(px >= 0 && px < (int)MT9V03X_W && py >= 0 && py < 320)
+                        {
+                            ips200_draw_point((uint16)px, (uint16)py, RGB565_BLUE);
+                        }
+                    }
+                }
+            }
+            if(chevron_debug.right_valid)
+            {
+                ips200_draw_line((uint16)chevron_debug.right_line_start_img.u,
+                                 (uint16)(chevron_debug.right_line_start_img.v + image_y),
+                                 (uint16)chevron_debug.right_line_end_img.u,
+                                 (uint16)(chevron_debug.right_line_end_img.v + image_y),
+                                 RGB565_GREEN);
+                for(int dy = -1; dy <= 1; dy++)
+                {
+                    for(int dx = -1; dx <= 1; dx++)
+                    {
+                        int px = (int)chevron_debug.right_tip_img.u + dx;
+                        int py = (int)chevron_debug.right_tip_img.v + (int)image_y + dy;
+
+                        if(px >= 0 && px < (int)MT9V03X_W && py >= 0 && py < 320)
+                        {
+                            ips200_draw_point((uint16)px, (uint16)py, RGB565_BLUE);
+                        }
+                    }
+                }
+            }
+
+            for(int dy = -1; dy <= 1; dy++)
+            {
+                for(int dx = -1; dx <= 1; dx++)
+                {
+                    int px = (int)chevron_debug.apex_img.u + dx;
+                    int py = (int)chevron_debug.apex_img.v + (int)image_y + dy;
+
+                    if(px >= 0 && px < (int)MT9V03X_W && py >= 0 && py < 320)
+                    {
+                        ips200_draw_point((uint16)px, (uint16)py, RGB565_RED);
+                    }
+                }
+            }
+        }
+    }
 
     ips200_set_color(RGB565_YELLOW, RGB565_BLACK);
     ips200_show_string(0U, 0U, "RAW IMG CM7_1");

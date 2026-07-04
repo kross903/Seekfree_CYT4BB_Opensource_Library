@@ -69,7 +69,7 @@ static void build_monitor_runtime_snapshot(MonitorRuntimeSnapshot *snapshot)
     snapshot->roll = current_roll;
     snapshot->pitch = current_pitch;
     snapshot->yaw = current_yaw;
-    snapshot->beacon_count = ir_track_valid ? IR_SQUARE_POINT_COUNT : 0;
+    snapshot->beacon_count = ir_track_valid ? g_vehicle_marker_pose.detected_point_count : 0;
     snapshot->nearest_x = ir_track_valid ? g_vehicle_marker_pose.x : 0.0f;
     snapshot->nearest_y = ir_track_valid ? g_vehicle_marker_pose.y : 0.0f;
     snapshot->tof_height_cm = tof_height_true_filt * 100.0f;
@@ -141,7 +141,7 @@ static void update_monitor_view(void)
 
     if(CommMux_UpdateFromSwitch())
     {
-        Vofa_ClearRxState();
+        Vofa_ClearRxState();//清除旧状态，避免对新模式的干扰
     }
 
     CrossCoreCamera_ControlCorePublishInput(current_roll,
