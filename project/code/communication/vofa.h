@@ -15,12 +15,29 @@
 #define UART_RX_PIN             (UART1_RX_P04_0)
 
 // ==================== 模块对外接口 ====================
+typedef struct
+{
+    uint8 comm_mode;
+    uint8 is_vofa_mode;
+    int send_back_flag;
+    uint8 send_back_command;
+    uint8 packet_ready;
+    uint8 packet_queue_count;
+    float loop_last_us;
+    float loop_max_us;
+    float loop_avg_us;
+    float loop_freq_hz;
+    uint32 loop_count;
+    uint32 loop_overrun_count;
+} VofaDiag_t;
+
 void Init_uart(void);
 void Send_test(void);
 void uart_rx_interrupt_handler(void);
 void USART_PID_Adjust(void);
 void send_date_back(void);
 void Vofa_ClearRxState(void);
+void Vofa_GetDiag(VofaDiag_t *diag);
 void Vofa_MainLoopProfile_Begin(void);
 void Vofa_MainLoopProfile_End(void);
 

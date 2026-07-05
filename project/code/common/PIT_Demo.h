@@ -87,6 +87,8 @@ uint8 Flight_Fly_Test_Get_Output_Enable(void);
 void Flight_Fly_Test_Get_Target(float *roll, float *pitch, float *yaw);
 uint8 Flight_Fly_Test_Get_Safety_Latched(void);
 void Flight_Fly_Test_Clear_Safety_Latch(void);
+void Flight_Fly_Test_Set_Confirm_State(uint8 state);
+uint8 Flight_Fly_Test_Get_Confirm_State(void);
 
 void PIT_KeyVoltage_Task_5ms(void);
 void PIT_Adc_Task_5ms(void);

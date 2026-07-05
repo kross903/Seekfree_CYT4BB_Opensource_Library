@@ -702,6 +702,27 @@ void Vofa_ClearRxState(void)
     uart_rx_interrupt(UART_INDEX, 1);
 }
 
+void Vofa_GetDiag(VofaDiag_t *diag)
+{
+    if(diag == NULL)
+    {
+        return;
+    }
+
+    diag->comm_mode = (uint8)CommMux_GetMode();
+    diag->is_vofa_mode = CommMux_IsVofaMode();
+    diag->send_back_flag = send_back_flag;
+    diag->send_back_command = send_back_command;
+    diag->packet_ready = vofa_packet_ready;
+    diag->packet_queue_count = vofa_packet_queue_count;
+    diag->loop_last_us = vofa_loop_last_us;
+    diag->loop_max_us = vofa_loop_max_us;
+    diag->loop_avg_us = vofa_loop_avg_us;
+    diag->loop_freq_hz = vofa_loop_freq_hz;
+    diag->loop_count = vofa_loop_count;
+    diag->loop_overrun_count = vofa_loop_overrun_count;
+}
+
 void Send_test(void)
 {
     uint8 rx_buffer[VOFA_PACKET_MAX_LEN] = {0};

@@ -4,6 +4,7 @@ static volatile uint8 fly_test_active = 0U;
 static volatile uint16 fly_test_throttle = FLY_TEST_THROTTLE_DEFAULT;
 static volatile uint8 fly_test_output_enabled = 0U;
 static volatile uint8 fly_test_safety_latched = 0U;
+static volatile uint8 fly_test_confirm_state = FLY_TEST_CONFIRM_IDLE;
 static volatile float fly_test_target_roll = 0.0f;
 static volatile float fly_test_target_pitch = 0.0f;
 static volatile float fly_test_target_yaw = 0.0f;
@@ -29,6 +30,7 @@ void MenuFlyTest_Start(void)
         fly_test_throttle = FLY_TEST_THROTTLE_DEFAULT;
         fly_test_output_enabled = 0U;
         fly_test_safety_latched = 0U;
+        fly_test_confirm_state = FLY_TEST_CONFIRM_IDLE;
         fly_test_target_roll = 0.0f;
         fly_test_target_pitch = 0.0f;
         fly_test_target_yaw = 0.0f;
@@ -42,6 +44,7 @@ void MenuFlyTest_Stop(void)
     fly_test_active = 0U;
     fly_test_output_enabled = 0U;
     fly_test_throttle = FLY_TEST_THROTTLE_DEFAULT;
+    fly_test_confirm_state = FLY_TEST_CONFIRM_IDLE;
 }
 
 uint8 MenuFlyTest_IsActive(void)
@@ -62,6 +65,10 @@ uint16 MenuFlyTest_GetThrottle(void)
 void MenuFlyTest_SetOutputEnable(uint8 enable)
 {
     fly_test_output_enabled = enable ? 1U : 0U;
+    if(!fly_test_output_enabled)
+    {
+        fly_test_confirm_state = FLY_TEST_CONFIRM_IDLE;
+    }
 }
 
 uint8 MenuFlyTest_GetOutputEnable(void)
@@ -105,4 +112,19 @@ uint8 MenuFlyTest_GetSafetyLatched(void)
 void MenuFlyTest_ClearSafetyLatch(void)
 {
     fly_test_safety_latched = 0U;
+}
+
+void MenuFlyTest_SetConfirmState(uint8 state)
+{
+    if(state > FLY_TEST_CONFIRM_ON)
+    {
+        state = FLY_TEST_CONFIRM_IDLE;
+    }
+
+    fly_test_confirm_state = state;
+}
+
+uint8 MenuFlyTest_GetConfirmState(void)
+{
+    return fly_test_confirm_state;
 }

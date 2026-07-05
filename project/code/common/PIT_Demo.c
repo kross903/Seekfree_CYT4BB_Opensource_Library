@@ -128,6 +128,14 @@ static uint8 check_fly_test_attitude_safety(void)
                    (current_pitch < -FLY_TEST_ATTITUDE_SAFE_DEG));
 }
 
+static uint8 check_menu_test_attitude_safety(void)
+{
+    return (uint8)((current_roll > SAFE_MAX_ANGLE_ROLL) ||
+                   (current_roll < -SAFE_MAX_ANGLE_ROLL) ||
+                   (current_pitch > SAFE_MAX_ANGLE_PITCH) ||
+                   (current_pitch < -SAFE_MAX_ANGLE_PITCH));
+}
+
 static float limit_fly_test_attitude_output(float output)
 {
     if(output > FLY_TEST_ATTITUDE_OUTPUT_LIMIT)
@@ -232,6 +240,7 @@ void Flight_Fly_Test_Start(void)
 void Flight_Fly_Test_Stop(void)
 {
     MenuFlyTest_SetOutputEnable(0U);
+    MenuFlyTest_SetConfirmState(FLY_TEST_CONFIRM_IDLE);
     MenuFlyTest_Stop();
     Angle_Loop_Reset_Rate_Cmd_Lpf();
     Rate_Loop_Reset_Output();
@@ -264,15 +273,17 @@ void Flight_Fly_Test_Set_Output_Enable(uint8 enable)
     if(!enable)
     {
         MenuFlyTest_SetOutputEnable(0U);
+        MenuFlyTest_SetConfirmState(FLY_TEST_CONFIRM_IDLE);
         Angle_Loop_Reset_Rate_Cmd_Lpf();
         Rate_Loop_Reset_Output();
         clear_motor_throttle_state();
         return;
     }
 
-    if(emergency_stop_triggered)
+    if(emergency_stop_triggered || low_voltage_protect_flag)
     {
         MenuFlyTest_SetOutputEnable(0U);
+        MenuFlyTest_SetConfirmState(FLY_TEST_CONFIRM_IDLE);
         clear_motor_throttle_state();
         return;
     }
@@ -281,6 +292,7 @@ void Flight_Fly_Test_Set_Output_Enable(uint8 enable)
     {
         MenuFlyTest_SetSafetyLatched(1U);
         MenuFlyTest_SetOutputEnable(0U);
+        MenuFlyTest_SetConfirmState(FLY_TEST_CONFIRM_IDLE);
         clear_motor_throttle_state();
         return;
     }
@@ -297,6 +309,7 @@ void Flight_Fly_Test_Set_Output_Enable(uint8 enable)
     PID_Reset(&gyro_pid_yaw);
     clear_motor_throttle_state();
     MenuFlyTest_SetOutputEnable(1U);
+    MenuFlyTest_SetConfirmState(FLY_TEST_CONFIRM_ON);
 }
 
 uint8 Flight_Fly_Test_Get_Output_Enable(void)
@@ -317,6 +330,16 @@ uint8 Flight_Fly_Test_Get_Safety_Latched(void)
 void Flight_Fly_Test_Clear_Safety_Latch(void)
 {
     MenuFlyTest_ClearSafetyLatch();
+}
+
+void Flight_Fly_Test_Set_Confirm_State(uint8 state)
+{
+    MenuFlyTest_SetConfirmState(state);
+}
+
+uint8 Flight_Fly_Test_Get_Confirm_State(void)
+{
+    return MenuFlyTest_GetConfirmState();
 }
 
 // ==================== PIT periodic tasks ====================
@@ -400,7 +423,7 @@ static uint8 control_task_handle_motor_test(void)
         return 0U;
     }
 
-    if(emergency_stop_triggered)
+    if(emergency_stop_triggered || low_voltage_protect_flag || check_menu_test_attitude_safety())
     {
         MenuMotorTest_SetOutputEnable(0U);
         Angle_Loop_Reset_Rate_Cmd_Lpf();
@@ -426,9 +449,10 @@ static uint8 control_task_handle_fly_test(void)
         return 0U;
     }
 
-    if(emergency_stop_triggered)
+    if(emergency_stop_triggered || low_voltage_protect_flag)
     {
         MenuFlyTest_SetOutputEnable(0U);
+        MenuFlyTest_SetConfirmState(FLY_TEST_CONFIRM_IDLE);
         Angle_Loop_Reset_Rate_Cmd_Lpf();
         Rate_Loop_Reset_Output();
         clear_motor_throttle_state();
@@ -437,6 +461,10 @@ static uint8 control_task_handle_fly_test(void)
 
     if(!MenuFlyTest_GetOutputEnable())
     {
+        if(MenuFlyTest_GetConfirmState() == FLY_TEST_CONFIRM_ON)
+        {
+            MenuFlyTest_SetConfirmState(FLY_TEST_CONFIRM_IDLE);
+        }
         Angle_Loop_Reset_Rate_Cmd_Lpf();
         Rate_Loop_Reset_Output();
         clear_motor_throttle_state();
@@ -447,6 +475,7 @@ static uint8 control_task_handle_fly_test(void)
     {
         MenuFlyTest_SetSafetyLatched(1U);
         MenuFlyTest_SetOutputEnable(0U);
+        MenuFlyTest_SetConfirmState(FLY_TEST_CONFIRM_IDLE);
         Angle_Loop_Reset_Rate_Cmd_Lpf();
         Rate_Loop_Reset_Output();
         clear_motor_throttle_state();
