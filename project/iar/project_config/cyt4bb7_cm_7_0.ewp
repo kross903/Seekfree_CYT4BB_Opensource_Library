@@ -1232,6 +1232,12 @@
             <name>$PROJ_DIR$\..\..\code\motor_hardware\motor_hardware.h</name>
         </file>
         <file>
+            <name>$PROJ_DIR$\..\..\code\motor_hardware\small_driver_uart_control.c</name>
+        </file>
+        <file>
+            <name>$PROJ_DIR$\..\..\code\motor_hardware\small_driver_uart_control.h</name>
+        </file>
+        <file>
             <name>$PROJ_DIR$\..\..\code\control\motor_mixer.c</name>
         </file>
         <file>
