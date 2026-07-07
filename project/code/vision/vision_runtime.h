@@ -79,5 +79,7 @@ void VisionRuntime_GetDiag(VisionRuntimeDiag_t *diag);
 void VisionRuntime_SetDiag(const VisionRuntimeDiag_t *diag);
 void VisionRuntime_GetBeaconSlots(VisionRuntimeBeaconSlot_t *slots, uint8 max_slots);
 void VisionRuntime_SetBeaconSlots(const VisionRuntimeBeaconSlot_t *slots, uint8 max_slots);
+const uint8 *VisionRuntime_GetBinaryImage(void);
+const uint8 *VisionRuntime_GetBinaryDisplayImage(void);
 
 #endif /* VISION_RUNTIME_H_ */

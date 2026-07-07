@@ -215,6 +215,11 @@ void menu_execute_function(Menu* menu)
     while(1)
     {
         core_link_user_poll();
+#if CY_CORE_CM7_0
+        (void)CrossCoreCamera_ControlCoreService(current_roll,
+                                                 current_pitch,
+                                                 tof_height_true_filt * 100.0f);
+#endif
         item->function();
 
         if(g_menu_exit_flag || menu_is_monitor_view())
@@ -228,7 +233,7 @@ void menu_execute_function(Menu* menu)
             break;
         }
 
-        system_delay_ms(50);
+        system_delay_ms(5);
     }
 
     if(!g_menu_exit_flag && !menu_is_monitor_view())

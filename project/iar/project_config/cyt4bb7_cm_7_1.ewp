@@ -1133,13 +1133,16 @@
             <name>$PROJ_DIR$\..\..\code\vision\ipm_interface.c</name>
         </file>
         <file>
-            <name>$PROJ_DIR$\..\..\code\vision\ir_localization.c</name>
-        </file>
-        <file>
             <name>$PROJ_DIR$\..\..\code\vision\vehicle_marker_localization.c</name>
         </file>
         <file>
             <name>$PROJ_DIR$\..\..\code\vision\vehicle_marker_localization.h</name>
+        </file>
+        <file>
+            <name>$PROJ_DIR$\..\..\code\vision\vision_overlay.c</name>
+        </file>
+        <file>
+            <name>$PROJ_DIR$\..\..\code\vision\vision_overlay.h</name>
         </file>
         <file>
             <name>$PROJ_DIR$\..\..\code\vision\vision_runtime.c</name>

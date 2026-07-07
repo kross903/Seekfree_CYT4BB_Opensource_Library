@@ -29,7 +29,7 @@
         <EnableCache>1</EnableCache>
     </ArmDriver>
     <DebugChecksum>
-        <Checksum>3265768368</Checksum>
+        <Checksum>2164185058</Checksum>
     </DebugChecksum>
     <Exceptions>
         <StopOnUncaught>_ 0</StopOnUncaught>
@@ -96,7 +96,8 @@
         <mode>0</mode>
     </DisassembleMode>
     <Breakpoints2>
-        <Count>0</Count>
+        <Bp0>_ 1 "EMUL_CODE" "{$PROJ_DIR$\..\..\code\menu\menu.c}.235.1" 0 0 1 "" 0 "" 0</Bp0>
+        <Count>1</Count>
     </Breakpoints2>
     <Aliases>
         <Count>0</Count>
