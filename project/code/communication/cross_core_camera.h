@@ -15,6 +15,7 @@ void CrossCoreCamera_ControlCoreTask(void);
 uint8 CrossCoreCamera_ControlCoreService(float roll_deg, float pitch_deg, float height_cm);
 void CrossCoreCamera_ControlCorePublishInput(float roll_deg, float pitch_deg, float height_cm);
 uint32 CrossCoreCamera_ControlCoreResultPending(void);
+uint8 CrossCoreCamera_ControlCoreRequestAssistantSnapshot(void);
 uint8 CrossCoreCamera_ControlCoreSendAssistantFrame(void);
 void CrossCoreCamera_ControlCoreRequestVisionScreen(uint8 enable);
 void CrossCoreCamera_ControlCoreSetVisionDisplayMode(uint8 mode);

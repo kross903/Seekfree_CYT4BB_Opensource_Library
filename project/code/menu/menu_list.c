@@ -99,6 +99,9 @@ void icm_init_menu()
 #define TEST_VALUE_X            132U
 #define TEST_RIGHT_VALUE_X      188U
 #define TEST_ROW_Y(row)         ((uint16)(56U + (uint16)(row) * 20U))
+#define VISION_VIEW_STATUS_Y    224U
+#define VISION_VIEW_SNAPSHOT_WAIT_TICKS 120U
+#define VISION_VIEW_SNAPSHOT_WAIT_MS    5U
 
 #define MOTOR_TEST_CONFIRM_IDLE 0U
 #define MOTOR_TEST_CONFIRM_WAIT 1U
@@ -134,6 +137,53 @@ static void test_page_show_float(uint16 y, const char *label, float value, uint8
     ips200_set_color(RGB565_WHITE, RGB565_BLACK);
     ips200_show_string(TEST_PAGE_X, y, (char *)label);
     ips200_show_float(TEST_VALUE_X, y, value, digits, point_digits);
+}
+
+static void vision_view_show_status(const char *text, uint16 color)
+{
+    ips200_set_color(RGB565_WHITE, RGB565_BLACK);
+    ips200_show_string(0U, VISION_VIEW_STATUS_Y, "                              ");
+    ips200_set_color(color, RGB565_BLACK);
+    ips200_show_string(0U, VISION_VIEW_STATUS_Y, (char *)text);
+    ips200_set_color(RGB565_WHITE, RGB565_BLACK);
+}
+
+static void vision_view_send_snapshot(void)
+{
+    uint8 wait_count = 0U;
+    uint8 sent = 0U;
+
+    if(!CommMux_IsAssistantImageMode())
+    {
+        vision_view_show_status("DIP TO ASSISTANT FIRST", RGB565_YELLOW);
+        return;
+    }
+
+    if(!CrossCoreCamera_ControlCoreRequestAssistantSnapshot())
+    {
+        vision_view_show_status("SNAP REQUEST FAILED", RGB565_RED);
+        return;
+    }
+
+    vision_view_show_status("SNAP SENDING...", RGB565_YELLOW);
+    while(wait_count < VISION_VIEW_SNAPSHOT_WAIT_TICKS)
+    {
+        core_link_user_poll();
+        (void)CrossCoreCamera_ControlCoreService(current_roll,
+                                                 current_pitch,
+                                                 tof_height_true_filt * 100.0f);
+        if(CrossCoreCamera_ControlCoreSendAssistantFrame())
+        {
+            sent = 1U;
+            break;
+        }
+
+        system_delay_ms(VISION_VIEW_SNAPSHOT_WAIT_MS);
+        wait_count++;
+    }
+
+    vision_view_show_status(sent ? "SNAP SENT" : "SNAP TIMEOUT",
+                            sent ? RGB565_GREEN : RGB565_RED);
 }
 
 static uint8 test_all_motor_output_zero(void)
@@ -320,8 +370,8 @@ static void vision_view_page(void)
         ips200_clear();
         ips200_show_string(20U, 72U, "CM7_1 Vision View");
         ips200_show_string(20U, 96U, "Waiting image...");
-        ips200_show_string(20U, 120U, "K1:Image K4:Back");
-        ips200_show_string(20U, 144U, "DIP: VOFA / Assistant");
+        ips200_show_string(20U, 120U, "K1 IMG K3 SEND");
+        ips200_show_string(20U, 144U, "K4 BACK DIP ASSIST");
         CrossCoreCamera_ControlCoreSetVisionDisplayMode(display_mode);
         CrossCoreCamera_ControlCoreRequestVisionScreen(1U);
         request_sent = 1U;
@@ -337,6 +387,13 @@ static void vision_view_page(void)
                        CROSS_CORE_CAMERA_VISION_DISPLAY_RAW;
         CrossCoreCamera_ControlCoreSetVisionDisplayMode(display_mode);
         key_flag = 0;
+        return;
+    }
+
+    if(key_flag == Button_3)
+    {
+        key_flag = 0;
+        vision_view_send_snapshot();
         return;
     }
 
