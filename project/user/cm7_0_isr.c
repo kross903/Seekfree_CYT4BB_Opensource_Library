@@ -40,6 +40,7 @@
 #include "../code/common/PIT_Demo.h"
 #include "../code/communication/core_link.h"
 #include "../code/control/height_manager.h"
+#include "../code/motor_hardware/small_driver_uart_control.h"
 #include "../code/pmw/flow_sensor_config.h"
 
 // **************************** PIT中断函数 ****************************
@@ -241,17 +242,13 @@ void uart5_isr (void)
 
 void uart6_isr (void)
 {
-    if(uart_isr_mask(UART_6))            // 串口6接收中断
+    if(uart_isr_mask(UART_6))            // UART6 RX interrupt
     {
-
-        
-       
+        uart_control_callback();
+        return;
     }
-    else                                // 串口6发送中断
+    else                                // UART6 TX interrupt
     {
-      
-        
-        
     }
 }
 // **************************** 串口中断函数 ****************************

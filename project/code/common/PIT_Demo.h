@@ -19,7 +19,8 @@
 // ==================== 电机输出协议选择 ====================
 // 0 = 标准 PWM（旧电调，200Hz，计数器值 2000~4000）
 // 1 = DShot600（新电调，GPIO 模拟时序，值域 0 / 300~2047）
-#define MOTOR_OUTPUT_PROTOCOL       1
+// 2 = 4in1 UART (UART_6 P03_0/P03_1, 0~10000)
+#define MOTOR_OUTPUT_PROTOCOL       2
 
 // ==================== 安全限制参数 ====================
 #define MOTOR_OUTPUT_SCALE_MAX      2000U

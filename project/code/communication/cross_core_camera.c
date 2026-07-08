@@ -8,7 +8,7 @@
 #define SHARED_VISION_SCREEN_MAGIC                  0x56534331u
 #define CROSS_CORE_CAMERA_ASSISTANT_IMAGE_ENABLE    0U
 #define CROSS_CORE_CAMERA_ASSISTANT_FRAME_DIVIDER   10U
-#define CROSS_CORE_CAMERA_SCREEN_FRAME_DIVIDER      5U
+#define CROSS_CORE_CAMERA_SCREEN_FRAME_DIVIDER      2U
 #define CROSS_CORE_VISION_IPC_RESULT_READY          0x56495352u
 #define CROSS_CORE_CAMERA_DWT_LAR_UNLOCK            0xC5ACCE55UL
 
@@ -46,7 +46,8 @@ typedef struct
     uint32 active_seq;
     uint8 requested_owner;
     uint8 active_owner;
-    uint8 reserved[2];
+    uint8 display_mode;
+    uint8 assistant_stream_enable;
 } SharedVisionScreenCtrl_t;
 
 static volatile SharedVisionInput_t *const g_shared_vision_input =
@@ -56,7 +57,29 @@ static volatile SharedVisionResult_t *const g_shared_vision_result =
 static volatile SharedVisionScreenCtrl_t *const g_shared_vision_screen_ctrl =
     (volatile SharedVisionScreenCtrl_t *)SHARED_VISION_SCREEN_CTRL_ADDR;
 
+#pragma location = 0x2802bf80
+__no_init uint8 g_cross_core_camera_image_copy[MT9V03X_H][MT9V03X_W];
+
+#pragma location = 0x28037c55
+__no_init uint8 g_cross_core_camera_image_fresh_flag;
+
 #if CY_CORE_CM7_1
+static uint8 CrossCoreCamera_CameraCoreAcquireFrame(void)
+{
+    SCB_CleanInvalidateDCache_by_Addr(&g_cross_core_camera_image_fresh_flag, 1);
+    if(g_cross_core_camera_image_fresh_flag == 0U)
+    {
+        return 0U;
+    }
+
+    SCB_CleanInvalidateDCache_by_Addr(g_cross_core_camera_image_copy[0], MT9V03X_IMAGE_SIZE);
+    memcpy(mt9v03x_image[0], g_cross_core_camera_image_copy[0], MT9V03X_IMAGE_SIZE);
+    g_cross_core_camera_image_fresh_flag = 0U;
+    SCB_CleanInvalidateDCache_by_Addr(&g_cross_core_camera_image_fresh_flag, 1);
+    mt9v03x_finish_flag = 1U;
+    return 1U;
+}
+
 static void CrossCoreCamera_CleanInput(void)
 {
     SCB_CleanDCache_by_Addr((void *)g_shared_vision_input, sizeof(SharedVisionInput_t));
@@ -147,13 +170,62 @@ static void CrossCoreCamera_SetCameraCoreScreenActive(uint8 active)
     CrossCoreCamera_CleanScreenCtrl();
 }
 
+static void CrossCoreCamera_CameraCoreUpdateAssistantImageConfig(uint8 display_mode)
+{
+    if(display_mode == CROSS_CORE_CAMERA_VISION_DISPLAY_RAW)
+    {
+        seekfree_assistant_camera_information_config(SEEKFREE_ASSISTANT_MT9V03X,
+                                                     mt9v03x_image[0],
+                                                     MT9V03X_W,
+                                                     MT9V03X_H);
+    }
+    else
+    {
+        seekfree_assistant_camera_information_config(SEEKFREE_ASSISTANT_BINARY,
+                                                     (void *)VisionRuntime_GetBinaryDisplayImage(),
+                                                     MT9V03X_W,
+                                                     MT9V03X_H);
+    }
+}
+
 static void CrossCoreCamera_CameraCoreDrawVisionScreen(const VisionRuntimeDiag_t *diag)
 {
     uint16 image_y = 20U;
     uint16 image_w = MT9V03X_W;
     uint16 image_h = MT9V03X_H;
+    uint8 display_mode = g_shared_vision_screen_ctrl->display_mode;
+    const uint8 *binary_display_image = VisionRuntime_GetBinaryDisplayImage();
+    VisionRuntimeBeaconSlot_t beacon_slots[VISION_RUNTIME_BEACON_SLOT_COUNT] = {0};
+    uint8 beacon_count = 0U;
+    uint8 has_vehicle = 0U;
 
-    ips200_show_gray_image(0U, image_y, mt9v03x_image[0], MT9V03X_W, MT9V03X_H, image_w, image_h, 0U);
+    if(display_mode == CROSS_CORE_CAMERA_VISION_DISPLAY_RAW)
+    {
+        ips200_show_gray_image(0U, image_y, mt9v03x_image[0], MT9V03X_W, MT9V03X_H, image_w, image_h, 0U);
+    }
+    else if(binary_display_image != NULL)
+    {
+        ips200_show_gray_image(0U, image_y, (uint8 *)binary_display_image, MT9V03X_W, MT9V03X_H, image_w, image_h, 0U);
+    }
+    else
+    {
+        ips200_show_gray_image(0U, image_y, mt9v03x_image[0], MT9V03X_W, MT9V03X_H, image_w, image_h, 0U);
+    }
+    VisionRuntime_GetBeaconSlots(beacon_slots, VISION_RUNTIME_BEACON_SLOT_COUNT);
+    for(uint8 i = 0U; i < VISION_RUNTIME_BEACON_SLOT_COUNT; i++)
+    {
+        if(!beacon_slots[i].valid)
+        {
+            continue;
+        }
+
+        beacon_count++;
+        VisionOverlay_DrawWorldPoint4x4(beacon_slots[i].x_cm,
+                                        beacon_slots[i].y_cm,
+                                        RGB565_RED,
+                                        image_y);
+    }
+
     {
         VehicleMarkerChevronDebug_t chevron_debug = {0};
 
@@ -167,19 +239,10 @@ static void CrossCoreCamera_CameraCoreDrawVisionScreen(const VisionRuntimeDiag_t
                                  (uint16)chevron_debug.left_line_end_img.u,
                                  (uint16)(chevron_debug.left_line_end_img.v + image_y),
                                  RGB565_GREEN);
-                for(int dy = -1; dy <= 1; dy++)
-                {
-                    for(int dx = -1; dx <= 1; dx++)
-                    {
-                        int px = (int)chevron_debug.left_tip_img.u + dx;
-                        int py = (int)chevron_debug.left_tip_img.v + (int)image_y + dy;
-
-                        if(px >= 0 && px < (int)MT9V03X_W && py >= 0 && py < 320)
-                        {
-                            ips200_draw_point((uint16)px, (uint16)py, RGB565_BLUE);
-                        }
-                    }
-                }
+                VisionOverlay_DrawImagePoint4x4((int)chevron_debug.left_tip_img.u,
+                                                (int)chevron_debug.left_tip_img.v,
+                                                RGB565_BLUE,
+                                                image_y);
             }
             if(chevron_debug.right_valid)
             {
@@ -188,50 +251,69 @@ static void CrossCoreCamera_CameraCoreDrawVisionScreen(const VisionRuntimeDiag_t
                                  (uint16)chevron_debug.right_line_end_img.u,
                                  (uint16)(chevron_debug.right_line_end_img.v + image_y),
                                  RGB565_GREEN);
-                for(int dy = -1; dy <= 1; dy++)
-                {
-                    for(int dx = -1; dx <= 1; dx++)
-                    {
-                        int px = (int)chevron_debug.right_tip_img.u + dx;
-                        int py = (int)chevron_debug.right_tip_img.v + (int)image_y + dy;
-
-                        if(px >= 0 && px < (int)MT9V03X_W && py >= 0 && py < 320)
-                        {
-                            ips200_draw_point((uint16)px, (uint16)py, RGB565_BLUE);
-                        }
-                    }
-                }
+                VisionOverlay_DrawImagePoint4x4((int)chevron_debug.right_tip_img.u,
+                                                (int)chevron_debug.right_tip_img.v,
+                                                RGB565_BLUE,
+                                                image_y);
             }
 
-            for(int dy = -1; dy <= 1; dy++)
-            {
-                for(int dx = -1; dx <= 1; dx++)
-                {
-                    int px = (int)chevron_debug.apex_img.u + dx;
-                    int py = (int)chevron_debug.apex_img.v + (int)image_y + dy;
-
-                    if(px >= 0 && px < (int)MT9V03X_W && py >= 0 && py < 320)
-                    {
-                        ips200_draw_point((uint16)px, (uint16)py, RGB565_RED);
-                    }
-                }
-            }
+            VisionOverlay_DrawImagePoint4x4((int)chevron_debug.apex_img.u,
+                                            (int)chevron_debug.apex_img.v,
+                                            RGB565_RED,
+                                            image_y);
         }
     }
 
-    ips200_set_color(RGB565_YELLOW, RGB565_BLACK);
-    ips200_show_string(0U, 0U, "RAW IMG CM7_1");
-    ips200_set_color(RGB565_WHITE, RGB565_BLACK);
-    ips200_show_string(0U, 152U, "IR:");
-    ips200_show_string(32U, 152U, g_vehicle_marker_position_lost_flag ? "LOST " : "OK   ");
-    ips200_show_string(96U, 152U, "PTS:");
-    ips200_show_int(136U, 152U, diag != NULL ? diag->ir_detected_point_count : 0, 1U);
+    has_vehicle = (uint8)((g_vehicle_marker_pose.valid && !g_vehicle_marker_position_lost_flag) ? 1U : 0U);
+    if(diag != NULL && diag->beacon_count >= 0)
+    {
+        beacon_count = (uint8)diag->beacon_count;
+    }
 
-    ips200_show_string(0U, 176U, "X:");
-    ips200_show_float(32U, 176U, g_vehicle_marker_pose.x, 4U, 1U);
-    ips200_show_string(120U, 176U, "Y:");
-    ips200_show_float(152U, 176U, g_vehicle_marker_pose.y, 4U, 1U);
-    ips200_show_string(0U, 200U, "K4 BACK");
+    ips200_set_color(RGB565_YELLOW, RGB565_BLACK);
+    ips200_show_string(0U, 0U, (display_mode == CROSS_CORE_CAMERA_VISION_DISPLAY_RAW) ? "RAW IMG CM7_1" : "BIN IMG CM7_1");
+    ips200_set_color(RGB565_WHITE, RGB565_BLACK);
+    ips200_show_string(0U, 152U, "B:");
+    ips200_show_int(16U, 152U, beacon_count, 1U);
+    ips200_show_string(56U, 152U, "MODE:");
+#if VEHICLE_MARKER_MODE == VEHICLE_MARKER_MODE_CHEVRON
+    ips200_show_string(104U, 152U, "CHEV");
+#else
+    ips200_show_string(104U, 152U, "4PT ");
+#endif
+
+    ips200_show_string(0U, 176U, "CAR:");
+    ips200_show_string(32U, 176U, has_vehicle ? "YES" : "NO ");
+    ips200_show_string(88U, 176U, "VALID:");
+    ips200_show_int(136U, 176U, g_vehicle_marker_pose.valid ? 1 : 0, 1U);
+    ips200_show_string(0U, 200U, "K1 IMG  K4 BACK");
+}
+
+static void CrossCoreCamera_CameraCoreServiceAssistantStream(void)
+{
+    static uint8 assistant_frame_divider = 0U;
+    uint8 display_mode = CROSS_CORE_CAMERA_VISION_DISPLAY_BINARY;
+
+    CrossCoreCamera_InvalidateScreenCtrl();
+    if(g_shared_vision_screen_ctrl->magic != SHARED_VISION_SCREEN_MAGIC ||
+       g_shared_vision_screen_ctrl->assistant_stream_enable == 0U)
+    {
+        assistant_frame_divider = 0U;
+        return;
+    }
+
+    display_mode = (g_shared_vision_screen_ctrl->display_mode == CROSS_CORE_CAMERA_VISION_DISPLAY_RAW) ?
+                   CROSS_CORE_CAMERA_VISION_DISPLAY_RAW : CROSS_CORE_CAMERA_VISION_DISPLAY_BINARY;
+
+    assistant_frame_divider++;
+    if(assistant_frame_divider < CROSS_CORE_CAMERA_ASSISTANT_FRAME_DIVIDER)
+    {
+        return;
+    }
+
+    assistant_frame_divider = 0U;
+    CrossCoreCamera_CameraCoreUpdateAssistantImageConfig(display_mode);
+    seekfree_assistant_camera_send();
 }
 
 static void CrossCoreCamera_CameraCoreServiceVisionScreen(const VisionRuntimeDiag_t *diag)
@@ -289,6 +371,22 @@ static void CrossCoreCamera_CameraCoreIpcCallback(uint32 ipc_data)
 #endif
 
 #if CY_CORE_CM7_0
+static uint8 s_cross_core_camera_capture_ready = 0U;
+
+static void CrossCoreCamera_ControlCorePublishFrame(void)
+{
+    SCB_CleanInvalidateDCache_by_Addr(&g_cross_core_camera_image_fresh_flag, 1);
+    if(g_cross_core_camera_image_fresh_flag != 0U)
+    {
+        return;
+    }
+
+    memcpy(g_cross_core_camera_image_copy[0], mt9v03x_image[0], MT9V03X_IMAGE_SIZE);
+    SCB_CleanInvalidateDCache_by_Addr(g_cross_core_camera_image_copy[0], MT9V03X_IMAGE_SIZE);
+    g_cross_core_camera_image_fresh_flag = 1U;
+    SCB_CleanInvalidateDCache_by_Addr(&g_cross_core_camera_image_fresh_flag, 1);
+}
+
 static void CrossCoreCamera_CleanInput(void)
 {
     SCB_CleanDCache_by_Addr((void *)g_shared_vision_input, sizeof(SharedVisionInput_t));
@@ -328,15 +426,12 @@ static void CrossCoreCamera_ControlCoreIpcCallback(uint32 ipc_data)
 void CrossCoreCamera_CameraCoreInit(void)
 {
 #if CY_CORE_CM7_1
-    (void)mt9v03x_init();
     VehicleMarkerLocalization_Init();
     BeaconDetect_Init();
     IPM_Interface_Init();
     ipc_communicate_init(IPC_PORT_2, CrossCoreCamera_CameraCoreIpcCallback);
-#if CROSS_CORE_CAMERA_ASSISTANT_IMAGE_ENABLE
     seekfree_assistant_interface_init(SEEKFREE_ASSISTANT_DEBUG_UART);
-    seekfree_assistant_camera_information_config(SEEKFREE_ASSISTANT_MT9V03X, mt9v03x_image[0], MT9V03X_W, MT9V03X_H);
-#endif
+    CrossCoreCamera_CameraCoreUpdateAssistantImageConfig(CROSS_CORE_CAMERA_VISION_DISPLAY_RAW);
     g_shared_vision_input->magic = SHARED_VISION_MAGIC;
     g_shared_vision_input->seq = 0U;
     g_shared_vision_input->roll_deg = 0.0f;
@@ -349,6 +444,8 @@ void CrossCoreCamera_CameraCoreInit(void)
     g_shared_vision_screen_ctrl->active_seq = 0U;
     g_shared_vision_screen_ctrl->requested_owner = CROSS_CORE_CAMERA_SCREEN_OWNER_NONE;
     g_shared_vision_screen_ctrl->active_owner = CROSS_CORE_CAMERA_SCREEN_OWNER_NONE;
+    g_shared_vision_screen_ctrl->display_mode = CROSS_CORE_CAMERA_VISION_DISPLAY_BINARY;
+    g_shared_vision_screen_ctrl->assistant_stream_enable = 0U;
     CrossCoreCamera_CleanInput();
     CrossCoreCamera_CleanResult();
     CrossCoreCamera_CleanScreenCtrl();
@@ -358,24 +455,32 @@ void CrossCoreCamera_CameraCoreInit(void)
 void CrossCoreCamera_CameraCoreTask(void)
 {
 #if CY_CORE_CM7_1
-#if CROSS_CORE_CAMERA_ASSISTANT_IMAGE_ENABLE
+#if 0
+    // 调试助手图传分频计数，仅在开启图传时参与工作。
     static uint8 assistant_frame_divider = 0U;
 #endif
+    // 本帧输入快照：由 0 核发布的姿态与高度信息。
     SharedVisionInput_t input_snapshot;
+    // 本帧视觉诊断信息：用于屏幕显示和跨核回传。
     VisionRuntimeDiag_t diag_snapshot;
+    // 本帧信标结果槽位：用于把 1 核识别结果同步给 0 核。
     VisionRuntimeBeaconSlot_t beacon_slots[VISION_RUNTIME_BEACON_SLOT_COUNT] = {0};
+    // 小车定位丢失调试信息。
     VehicleMarkerLossDebug_t loss_debug;
 
-    if(!mt9v03x_finish_flag)
+    if(!CrossCoreCamera_CameraCoreAcquireFrame())
     {
         CrossCoreCamera_CameraCoreServiceVisionScreen(NULL);
         return;
     }
 
+    // 按时间推进“小车位置丢失保护”计时，避免长时间无更新时状态失真。
     CrossCoreCamera_AgeVisionLossTimer();
 
+    // 从共享内存读取 0 核发布的姿态与高度输入。
     CrossCoreCamera_InvalidateInput();
     input_snapshot = *g_shared_vision_input;
+    // 若共享区尚未初始化，则使用默认姿态和默认高度兜底。
     if(input_snapshot.magic != SHARED_VISION_MAGIC)
     {
         input_snapshot.roll_deg = 0.0f;
@@ -383,13 +488,16 @@ void CrossCoreCamera_CameraCoreTask(void)
         input_snapshot.height_cm = 100.0f;
     }
 
+    // 执行本帧完整视觉处理：信标识别 + 小车标志识别。
     VisionRuntime_ProcessFrameWithPose(input_snapshot.roll_deg,
                                        input_snapshot.pitch_deg,
                                        input_snapshot.height_cm);
+    // 读取本帧诊断、小车丢失调试信息和信标槽位结果。
     VisionRuntime_GetDiag(&diag_snapshot);
     VisionRuntime_GetBeaconSlots(beacon_slots, VISION_RUNTIME_BEACON_SLOT_COUNT);
     VehicleMarkerLocalization_GetLossDebug(&loss_debug);
 
+    // 将 1 核本帧结果写回共享区，供 0 核读取并参与控制/显示。
     g_shared_vision_result->magic = SHARED_VISION_MAGIC;
     g_shared_vision_result->pose = g_vehicle_marker_pose;
     g_shared_vision_result->diag = diag_snapshot;
@@ -399,11 +507,15 @@ void CrossCoreCamera_CameraCoreTask(void)
     g_shared_vision_result->lost_elapsed_ms = g_vehicle_marker_position_lost_elapsed_ms;
     g_shared_vision_result->pose_update_seq = g_vehicle_marker_pose_update_seq;
     g_shared_vision_result->seq++;
+    // 写回共享结果前清缓存，并通过 IPC 通知 0 核“新结果已就绪”。
     CrossCoreCamera_CleanResult();
     (void)ipc_send_data(CROSS_CORE_VISION_IPC_RESULT_READY);
+    // 按请求刷新 1 核视觉调试屏幕。
     CrossCoreCamera_CameraCoreServiceVisionScreen(&diag_snapshot);
+    CrossCoreCamera_CameraCoreServiceAssistantStream();
 
-#if CROSS_CORE_CAMERA_ASSISTANT_IMAGE_ENABLE
+#if 0
+    // 按分频发送图像到上位机调试助手，避免每帧都发造成带宽压力。
     assistant_frame_divider++;
     if(assistant_frame_divider >= CROSS_CORE_CAMERA_ASSISTANT_FRAME_DIVIDER)
     {
@@ -412,6 +524,7 @@ void CrossCoreCamera_CameraCoreTask(void)
     }
 #endif
 #endif
+
 }
 
 uint8 CrossCoreCamera_ControlCoreFetchFrame(void)
@@ -449,6 +562,30 @@ uint8 CrossCoreCamera_ControlCoreFetchFrame(void)
 }
 
 #if CY_CORE_CM7_0
+void CrossCoreCamera_ControlCoreTask(void)
+{
+    if(!s_cross_core_camera_capture_ready)
+    {
+        return;
+    }
+
+    if(mt9v03x_finish_flag)
+    {
+        mt9v03x_finish_flag = 0U;
+        CrossCoreCamera_ControlCorePublishFrame();
+    }
+}
+
+uint8 CrossCoreCamera_ControlCoreService(float roll_deg, float pitch_deg, float height_cm)
+{
+    uint8 camera_new_frame = 0U;
+
+    CrossCoreCamera_ControlCoreTask();
+    CrossCoreCamera_ControlCorePublishInput(roll_deg, pitch_deg, height_cm);
+    camera_new_frame = CrossCoreCamera_ControlCoreFetchFrame();
+    return camera_new_frame;
+}
+
 void CrossCoreCamera_ControlCorePublishInput(float roll_deg, float pitch_deg, float height_cm)
 {
     g_shared_vision_input->magic = SHARED_VISION_MAGIC;
@@ -485,6 +622,8 @@ uint32 seekfree_assistant_receive(uint8 *buff, uint32 length)
 void CrossCoreCamera_ControlCoreAssistantInit(void)
 {
     ipc_communicate_init(IPC_PORT_1, CrossCoreCamera_ControlCoreIpcCallback);
+    s_cross_core_camera_capture_ready = (mt9v03x_init() == 0U) ? 1U : 0U;
+    g_cross_core_camera_image_fresh_flag = 0U;
     g_shared_vision_input->magic = SHARED_VISION_MAGIC;
     g_shared_vision_input->seq = 0U;
     g_shared_vision_input->roll_deg = 0.0f;
@@ -497,9 +636,12 @@ void CrossCoreCamera_ControlCoreAssistantInit(void)
     g_shared_vision_screen_ctrl->active_seq = 0U;
     g_shared_vision_screen_ctrl->requested_owner = CROSS_CORE_CAMERA_SCREEN_OWNER_NONE;
     g_shared_vision_screen_ctrl->active_owner = CROSS_CORE_CAMERA_SCREEN_OWNER_NONE;
+    g_shared_vision_screen_ctrl->display_mode = CROSS_CORE_CAMERA_VISION_DISPLAY_BINARY;
+    g_shared_vision_screen_ctrl->assistant_stream_enable = 0U;
     CrossCoreCamera_CleanInput();
     CrossCoreCamera_CleanResult();
     CrossCoreCamera_CleanScreenCtrl();
+    SCB_CleanInvalidateDCache_by_Addr(&g_cross_core_camera_image_fresh_flag, 1);
     seekfree_assistant_interface_init(SEEKFREE_ASSISTANT_CUSTOM);
 }
 
@@ -518,12 +660,78 @@ void CrossCoreCamera_ControlCoreRequestVisionScreen(uint8 enable)
         g_shared_vision_screen_ctrl->request_seq = 0U;
         g_shared_vision_screen_ctrl->active_seq = 0U;
         g_shared_vision_screen_ctrl->active_owner = CROSS_CORE_CAMERA_SCREEN_OWNER_NONE;
+        g_shared_vision_screen_ctrl->display_mode = CROSS_CORE_CAMERA_VISION_DISPLAY_BINARY;
+        g_shared_vision_screen_ctrl->assistant_stream_enable = 0U;
     }
 
     g_shared_vision_screen_ctrl->requested_owner = enable ? CROSS_CORE_CAMERA_SCREEN_OWNER_VISION
                                                           : CROSS_CORE_CAMERA_SCREEN_OWNER_NONE;
     g_shared_vision_screen_ctrl->request_seq++;
     CrossCoreCamera_CleanScreenCtrl();
+}
+
+void CrossCoreCamera_ControlCoreSetVisionDisplayMode(uint8 mode)
+{
+    CrossCoreCamera_InvalidateScreenCtrl();
+    if(g_shared_vision_screen_ctrl->magic != SHARED_VISION_SCREEN_MAGIC)
+    {
+        g_shared_vision_screen_ctrl->magic = SHARED_VISION_SCREEN_MAGIC;
+        g_shared_vision_screen_ctrl->request_seq = 0U;
+        g_shared_vision_screen_ctrl->active_seq = 0U;
+        g_shared_vision_screen_ctrl->requested_owner = CROSS_CORE_CAMERA_SCREEN_OWNER_NONE;
+        g_shared_vision_screen_ctrl->active_owner = CROSS_CORE_CAMERA_SCREEN_OWNER_NONE;
+        g_shared_vision_screen_ctrl->assistant_stream_enable = 0U;
+    }
+
+    if(mode != CROSS_CORE_CAMERA_VISION_DISPLAY_RAW)
+    {
+        mode = CROSS_CORE_CAMERA_VISION_DISPLAY_BINARY;
+    }
+
+    g_shared_vision_screen_ctrl->display_mode = mode;
+    g_shared_vision_screen_ctrl->request_seq++;
+    CrossCoreCamera_CleanScreenCtrl();
+}
+
+uint8 CrossCoreCamera_ControlCoreGetVisionDisplayMode(void)
+{
+    CrossCoreCamera_InvalidateScreenCtrl();
+    if(g_shared_vision_screen_ctrl->magic != SHARED_VISION_SCREEN_MAGIC)
+    {
+        return CROSS_CORE_CAMERA_VISION_DISPLAY_BINARY;
+    }
+
+    return (g_shared_vision_screen_ctrl->display_mode == CROSS_CORE_CAMERA_VISION_DISPLAY_RAW) ?
+           CROSS_CORE_CAMERA_VISION_DISPLAY_RAW : CROSS_CORE_CAMERA_VISION_DISPLAY_BINARY;
+}
+
+void CrossCoreCamera_ControlCoreSetVisionAssistantStream(uint8 enable)
+{
+    CrossCoreCamera_InvalidateScreenCtrl();
+    if(g_shared_vision_screen_ctrl->magic != SHARED_VISION_SCREEN_MAGIC)
+    {
+        g_shared_vision_screen_ctrl->magic = SHARED_VISION_SCREEN_MAGIC;
+        g_shared_vision_screen_ctrl->request_seq = 0U;
+        g_shared_vision_screen_ctrl->active_seq = 0U;
+        g_shared_vision_screen_ctrl->requested_owner = CROSS_CORE_CAMERA_SCREEN_OWNER_NONE;
+        g_shared_vision_screen_ctrl->active_owner = CROSS_CORE_CAMERA_SCREEN_OWNER_NONE;
+        g_shared_vision_screen_ctrl->display_mode = CROSS_CORE_CAMERA_VISION_DISPLAY_BINARY;
+    }
+
+    g_shared_vision_screen_ctrl->assistant_stream_enable = enable ? 1U : 0U;
+    g_shared_vision_screen_ctrl->request_seq++;
+    CrossCoreCamera_CleanScreenCtrl();
+}
+
+uint8 CrossCoreCamera_ControlCoreGetVisionAssistantStream(void)
+{
+    CrossCoreCamera_InvalidateScreenCtrl();
+    if(g_shared_vision_screen_ctrl->magic != SHARED_VISION_SCREEN_MAGIC)
+    {
+        return 0U;
+    }
+
+    return g_shared_vision_screen_ctrl->assistant_stream_enable ? 1U : 0U;
 }
 
 uint8 CrossCoreCamera_ControlCoreIsVisionScreenActive(void)

@@ -311,14 +311,22 @@ static void vofa_status_page(void)
 static void vision_view_page(void)
 {
     static uint8 request_sent = 0U;
+    static uint8 display_mode = CROSS_CORE_CAMERA_VISION_DISPLAY_BINARY;
+    static CommMuxMode_t previous_comm_mode = COMM_MUX_MODE_VOFA;
     uint8 wait_count = 0U;
 
     if(!request_sent)
     {
+        display_mode = CROSS_CORE_CAMERA_VISION_DISPLAY_BINARY;
+        previous_comm_mode = CommMux_GetMode();
+        CommMux_SetMode(COMM_MUX_MODE_ASSISTANT_IMAGE);
         ips200_clear();
         ips200_show_string(20U, 72U, "CM7_1 Vision View");
         ips200_show_string(20U, 96U, "Waiting image...");
-        ips200_show_string(20U, 120U, "K4:Back");
+        ips200_show_string(20U, 120U, "K1:Image K4:Back");
+        ips200_show_string(20U, 144U, "Assistant: DEBUG UART");
+        CrossCoreCamera_ControlCoreSetVisionDisplayMode(display_mode);
+        CrossCoreCamera_ControlCoreSetVisionAssistantStream(1U);
         CrossCoreCamera_ControlCoreRequestVisionScreen(1U);
         request_sent = 1U;
         key_flag = 0;
@@ -326,8 +334,19 @@ static void vision_view_page(void)
 
     core_link_user_poll();
 
+    if(key_flag == Button_1)
+    {
+        display_mode = (display_mode == CROSS_CORE_CAMERA_VISION_DISPLAY_RAW) ?
+                       CROSS_CORE_CAMERA_VISION_DISPLAY_BINARY :
+                       CROSS_CORE_CAMERA_VISION_DISPLAY_RAW;
+        CrossCoreCamera_ControlCoreSetVisionDisplayMode(display_mode);
+        key_flag = 0;
+        return;
+    }
+
     if(key_flag == Button_4)
     {
+        CrossCoreCamera_ControlCoreSetVisionAssistantStream(0U);
         CrossCoreCamera_ControlCoreRequestVisionScreen(0U);
         while(CrossCoreCamera_ControlCoreIsVisionScreenActive() && wait_count < 20U)
         {
@@ -339,6 +358,7 @@ static void vision_view_page(void)
         ips200_set_dir(IPS200_PORTAIT);
         ips200_init(IPS200_TYPE_SPI);
         ips200_set_font(IPS200_8X16_FONT);
+        CommMux_SetMode(previous_comm_mode);
         request_sent = 0U;
         key_flag = Button_4;
         return;

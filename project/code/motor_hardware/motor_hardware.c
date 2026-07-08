@@ -1,6 +1,7 @@
 #include "motor_hardware/motor_hardware.h"
 #include "common/PIT_Demo.h"
 #include "communication/dshot600.h"
+#include "motor_hardware/small_driver_uart_control.h"
 
 #define MOTOR_PWM_FREQ_HZ              200U
 #define MOTOR_PWM_CH1                  TCPWM_CH09_P05_0
@@ -22,6 +23,18 @@
 #define MOTOR_HW_COMP_M4_SCALE         1.00f
 
 static uint8 motor_pwm_initialized = 0U;
+
+#if MOTOR_OUTPUT_PROTOCOL == 2
+static int16 throttle_to_uart_duty(uint16 throttle)
+{
+    if(throttle > MOTOR_OUTPUT_SCALE_MAX)
+    {
+        throttle = MOTOR_OUTPUT_SCALE_MAX;
+    }
+
+    return (int16)((uint32)throttle * PWM_DUTY_MAX / MOTOR_OUTPUT_SCALE_MAX);
+}
+#endif
 
 static uint16 throttle_to_pwm_duty(uint16 throttle)
 {
@@ -93,8 +106,10 @@ void MotorHardware_InitOnce(void)
     pwm_init(MOTOR_PWM_CH2, MOTOR_PWM_FREQ_HZ, MOTOR_PWM_DUTY_MIN);
     pwm_init(MOTOR_PWM_CH3, MOTOR_PWM_FREQ_HZ, MOTOR_PWM_DUTY_MIN);
     pwm_init(MOTOR_PWM_CH4, MOTOR_PWM_FREQ_HZ, MOTOR_PWM_DUTY_MIN);
-#else
+#elif MOTOR_OUTPUT_PROTOCOL == 1
     dshot_init();
+#else
+    small_driver_uart_init();
 #endif
     motor_pwm_initialized = 1U;
 }
@@ -111,8 +126,10 @@ void MotorHardware_WriteOutput(const volatile uint16 motor_throttle[4],
         pwm_set_duty(MOTOR_PWM_CH2, MOTOR_PWM_DUTY_MIN);
         pwm_set_duty(MOTOR_PWM_CH3, MOTOR_PWM_DUTY_MIN);
         pwm_set_duty(MOTOR_PWM_CH4, MOTOR_PWM_DUTY_MIN);
-#else
+#elif MOTOR_OUTPUT_PROTOCOL == 1
         dshot_set_all_throttle(0U, 0U, 0U, 0U);
+#else
+        small_driver_set_duty(0, 0, 0, 0);
 #endif
         return;
     }
@@ -122,12 +139,19 @@ void MotorHardware_WriteOutput(const volatile uint16 motor_throttle[4],
     pwm_set_duty(MOTOR_PWM_CH2, throttle_to_pwm_duty(apply_motor_hw_compensation(1U, motor_throttle[1], bypass_compensation)));
     pwm_set_duty(MOTOR_PWM_CH3, throttle_to_pwm_duty(apply_motor_hw_compensation(2U, motor_throttle[2], bypass_compensation)));
     pwm_set_duty(MOTOR_PWM_CH4, throttle_to_pwm_duty(apply_motor_hw_compensation(3U, motor_throttle[3], bypass_compensation)));
-#else
+#elif MOTOR_OUTPUT_PROTOCOL == 1
     dshot_set_all_throttle(
         throttle_to_dshot(apply_motor_hw_compensation(0U, motor_throttle[0], bypass_compensation)),
         throttle_to_dshot(apply_motor_hw_compensation(1U, motor_throttle[1], bypass_compensation)),
         throttle_to_dshot(apply_motor_hw_compensation(2U, motor_throttle[2], bypass_compensation)),
         throttle_to_dshot(apply_motor_hw_compensation(3U, motor_throttle[3], bypass_compensation))
+    );
+#else
+    small_driver_set_duty(
+        throttle_to_uart_duty(apply_motor_hw_compensation(0U, motor_throttle[0], bypass_compensation)),
+        throttle_to_uart_duty(apply_motor_hw_compensation(1U, motor_throttle[1], bypass_compensation)),
+        throttle_to_uart_duty(apply_motor_hw_compensation(2U, motor_throttle[2], bypass_compensation)),
+        throttle_to_uart_duty(apply_motor_hw_compensation(3U, motor_throttle[3], bypass_compensation))
     );
 #endif
 }

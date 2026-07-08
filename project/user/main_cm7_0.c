@@ -144,10 +144,9 @@ static void update_monitor_view(void)
         Vofa_ClearRxState();//清除旧状态，避免对新模式的干扰
     }
 
-    CrossCoreCamera_ControlCorePublishInput(current_roll,
-                                            current_pitch,
-                                            tof_height_true_filt * 100.0f);
-    camera_new_frame = CrossCoreCamera_ControlCoreFetchFrame();
+    camera_new_frame = CrossCoreCamera_ControlCoreService(current_roll,
+                                                          current_pitch,
+                                                          tof_height_true_filt * 100.0f);
     if(CommMux_IsAssistantImageMode())
     {
         if(camera_new_frame)

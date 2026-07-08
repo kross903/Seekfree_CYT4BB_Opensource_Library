@@ -103,14 +103,19 @@ static void vehicle_marker_center_kalman_update(float raw_x, float raw_y,
     }
 }
 
-static void vehicle_marker_binarize_image(const uint8 *src, uint8 *dst,
-                                          int width, int height, uint8 threshold)
+static void vehicle_marker_copy_binary_image(const uint8 *src, uint8 *dst,
+                                             int pixel_count)
 {
     int i = 0;
 
-    for(i = 0; i < width * height; i++)
+    if(src == NULL || dst == NULL)
     {
-        dst[i] = (src[i] >= threshold) ? 255 : 0;
+        return;
+    }
+
+    for(i = 0; i < pixel_count; i++)
+    {
+        dst[i] = src[i];
     }
 }
 
@@ -339,6 +344,11 @@ typedef struct
     VehicleMarkerWorldPoint_t world;
     float score;
 } VehicleMarkerCandidate_t;
+
+static uint8 vehicle_marker_find_points_binary_with_count(
+    const uint8 *binary_image,
+    VehicleMarkerPoint2D_t out_pts[VEHICLE_MARKER_POINT_COUNT],
+    uint8 *out_point_count);
 
 static float vehicle_marker_clamp_float(float value, float min_value, float max_value)
 {
@@ -884,6 +894,21 @@ static uint8 vehicle_marker_find_points_with_count(
     VehicleMarkerPoint2D_t out_pts[VEHICLE_MARKER_POINT_COUNT],
     uint8 *out_point_count)
 {
+    if(image == NULL)
+    {
+        return 0U;
+    }
+
+    return vehicle_marker_find_points_binary_with_count((const uint8 *)image,
+                                                        out_pts,
+                                                        out_point_count);
+}
+
+static uint8 vehicle_marker_find_points_binary_with_count(
+    const uint8 *binary_image,
+    VehicleMarkerPoint2D_t out_pts[VEHICLE_MARKER_POINT_COUNT],
+    uint8 *out_point_count)
+{
     VehicleMarkerCandidate_t candidates[VEHICLE_MARKER_MAX_CANDIDATES];
     VehicleMarkerBlobGate_t blob_gate;
     static uint8 visited[MT9V03X_H * MT9V03X_W];
@@ -891,11 +916,14 @@ static uint8 vehicle_marker_find_points_with_count(
     int y = 0;
     int x = 0;
 
-    vehicle_marker_binarize_image((const uint8 *)image,
-                                  g_vehicle_marker_binary_image,
-                                  MT9V03X_W,
-                                  MT9V03X_H,
-                                  VEHICLE_MARKER_THRESHOLD);
+    if(binary_image == NULL)
+    {
+        return 0U;
+    }
+
+    vehicle_marker_copy_binary_image(binary_image,
+                                     g_vehicle_marker_binary_image,
+                                     MT9V03X_W * MT9V03X_H);
     vehicle_marker_get_blob_gate(&blob_gate);
 
     memset(visited, 0, sizeof(visited));
@@ -1020,8 +1048,28 @@ uint8 VehicleMarkerLocalization_FindPoints(
     return vehicle_marker_find_points_with_count(image, out_pts, &point_count);
 }
 
+uint8 VehicleMarkerLocalization_FindPointsBinary(
+    const uint8 *binary_image,
+    VehicleMarkerPoint2D_t out_pts[VEHICLE_MARKER_POINT_COUNT])
+{
+    uint8 point_count = 0U;
+
+    return vehicle_marker_find_points_binary_with_count(binary_image, out_pts, &point_count);
+}
+
 uint8 VehicleMarkerLocalization_Process(const uint8 image[MT9V03X_H][MT9V03X_W],
                                         VehicleMarkerPose_t *out_pose)
+{
+    if(image == NULL)
+    {
+        return vehicle_marker_process_fail(out_pose);
+    }
+
+    return VehicleMarkerLocalization_ProcessBinary((const uint8 *)image, out_pose);
+}
+
+uint8 VehicleMarkerLocalization_ProcessBinary(const uint8 *binary_image,
+                                              VehicleMarkerPose_t *out_pose)
 {
     VehicleMarkerPoint2D_t img_pts[VEHICLE_MARKER_POINT_COUNT];
     VehicleMarkerWorldPoint_t world_pts[VEHICLE_MARKER_POINT_COUNT];
@@ -1039,7 +1087,7 @@ uint8 VehicleMarkerLocalization_Process(const uint8 image[MT9V03X_H][MT9V03X_W],
 
     s_vehicle_marker_debug_process_count++;
 
-    if(!vehicle_marker_find_points_with_count(image, img_pts, &detected_point_count))
+    if(!vehicle_marker_find_points_binary_with_count(binary_image, img_pts, &detected_point_count))
     {
         return vehicle_marker_process_fail(out_pose);
     }
@@ -1185,6 +1233,7 @@ uint8 VehicleMarkerLocalization_EndBlobFrame(VehicleMarkerPose_t *out_pose)
 #define VEHICLE_MARKER_CHEVRON_SCORE_CIRCULARITY_WEIGHT    (3.0f)
 #define VEHICLE_MARKER_CHEVRON_MIN_CONTOUR_POINTS          (8U)
 #define VEHICLE_MARKER_CHEVRON_POINT_EPS                   (1e-4f)
+#define VEHICLE_MARKER_CHEVRON_GROUP_MAX_POINTS            (VISION_RUNTIME_CONTOUR_MAX_POINTS + 1U)
 
 typedef struct
 {
@@ -1214,6 +1263,9 @@ typedef struct
 } VehicleMarkerChevronCandidate_t;
 
 static VehicleMarkerChevronCandidate_t s_vehicle_marker_chevron_candidate = {0};
+static VehicleMarkerWorldPoint_t s_vehicle_marker_chevron_world_pts[VISION_RUNTIME_CONTOUR_MAX_POINTS];
+static VehicleMarkerWorldPoint_t s_vehicle_marker_chevron_left_pts[VEHICLE_MARKER_CHEVRON_GROUP_MAX_POINTS];
+static VehicleMarkerWorldPoint_t s_vehicle_marker_chevron_right_pts[VEHICLE_MARKER_CHEVRON_GROUP_MAX_POINTS];
 static volatile uint32 s_vehicle_marker_chevron_reject_area_low_count = 0U;
 static volatile uint32 s_vehicle_marker_chevron_reject_area_high_count = 0U;
 static volatile uint32 s_vehicle_marker_chevron_reject_size_count = 0U;
@@ -1775,9 +1827,6 @@ uint8 VehicleMarkerLocalization_AppendBlob(const VisionBlob_t *blob, const Visio
 
 static uint8 vehicle_marker_chevron_process_candidate(VehicleMarkerPose_t *out_pose)
 {
-    VehicleMarkerWorldPoint_t world_pts[VISION_RUNTIME_CONTOUR_MAX_POINTS];
-    VehicleMarkerWorldPoint_t left_pts[VISION_RUNTIME_CONTOUR_MAX_POINTS];
-    VehicleMarkerWorldPoint_t right_pts[VISION_RUNTIME_CONTOUR_MAX_POINTS];
     VehicleMarkerWorldPoint_t apex = {0};
     VehicleMarkerWorldPoint_t left_tip = {0};
     VehicleMarkerWorldPoint_t right_tip = {0};
@@ -1839,8 +1888,8 @@ static uint8 vehicle_marker_chevron_process_candidate(VehicleMarkerPose_t *out_p
             break;
         }
 
-        world_pts[point_count].x = world_x;
-        world_pts[point_count].y = world_y;
+        s_vehicle_marker_chevron_world_pts[point_count].x = world_x;
+        s_vehicle_marker_chevron_world_pts[point_count].y = world_y;
         centroid_x += world_x;
         centroid_y += world_y;
         point_count++;
@@ -1858,7 +1907,8 @@ static uint8 vehicle_marker_chevron_process_candidate(VehicleMarkerPose_t *out_p
     {
         for(j = (uint16)(i + 1U); j < point_count; j++)
         {
-            float dist_sq = vehicle_marker_chevron_point_distance_sq(&world_pts[i], &world_pts[j]);
+            float dist_sq = vehicle_marker_chevron_point_distance_sq(&s_vehicle_marker_chevron_world_pts[i],
+                                                                     &s_vehicle_marker_chevron_world_pts[j]);
 
             if(dist_sq > best_pair_dist_sq)
             {
@@ -1868,12 +1918,14 @@ static uint8 vehicle_marker_chevron_process_candidate(VehicleMarkerPose_t *out_p
             }
         }
     }
-    pair_a = world_pts[pair_i];
-    pair_b = world_pts[pair_j];
+    pair_a = s_vehicle_marker_chevron_world_pts[pair_i];
+    pair_b = s_vehicle_marker_chevron_world_pts[pair_j];
 
     for(i = 0U; i < point_count; i++)
     {
-        float dist_sq = vehicle_marker_chevron_point_to_line_distance_sq(&world_pts[i], &pair_a, &pair_b);
+        float dist_sq = vehicle_marker_chevron_point_to_line_distance_sq(&s_vehicle_marker_chevron_world_pts[i],
+                                                                         &pair_a,
+                                                                         &pair_b);
 
         if(dist_sq > best_apex_dist_sq)
         {
@@ -1881,7 +1933,7 @@ static uint8 vehicle_marker_chevron_process_candidate(VehicleMarkerPose_t *out_p
             apex_index = i;
         }
     }
-    apex = world_pts[apex_index];
+    apex = s_vehicle_marker_chevron_world_pts[apex_index];
 
     axis_x = centroid.x - apex.x;
     axis_y = centroid.y - apex.y;
@@ -1899,25 +1951,39 @@ static uint8 vehicle_marker_chevron_process_candidate(VehicleMarkerPose_t *out_p
 
     for(i = 0U; i < point_count; i++)
     {
-        float side = axis_x * (world_pts[i].y - apex.y) - axis_y * (world_pts[i].x - apex.x);
+        float side = axis_x * (s_vehicle_marker_chevron_world_pts[i].y - apex.y) -
+                     axis_y * (s_vehicle_marker_chevron_world_pts[i].x - apex.x);
 
         if(side >= 0.0f)
         {
-            left_pts[left_count++] = world_pts[i];
+            if(left_count >= VISION_RUNTIME_CONTOUR_MAX_POINTS)
+            {
+                return 0U;
+            }
+            s_vehicle_marker_chevron_left_pts[left_count++] = s_vehicle_marker_chevron_world_pts[i];
         }
         else
         {
-            right_pts[right_count++] = world_pts[i];
+            if(right_count >= VISION_RUNTIME_CONTOUR_MAX_POINTS)
+            {
+                return 0U;
+            }
+            s_vehicle_marker_chevron_right_pts[right_count++] = s_vehicle_marker_chevron_world_pts[i];
         }
     }
 
-    left_pts[left_count++] = apex;
-    right_pts[right_count++] = apex;
+    if(left_count >= VEHICLE_MARKER_CHEVRON_GROUP_MAX_POINTS ||
+       right_count >= VEHICLE_MARKER_CHEVRON_GROUP_MAX_POINTS)
+    {
+        return 0U;
+    }
+    s_vehicle_marker_chevron_left_pts[left_count++] = apex;
+    s_vehicle_marker_chevron_right_pts[right_count++] = apex;
 
     left_fit_ok = 0U;
     right_fit_ok = 0U;
-    vehicle_marker_chevron_fit_line(left_pts, left_count, &left_fit);
-    vehicle_marker_chevron_fit_line(right_pts, right_count, &right_fit);
+    vehicle_marker_chevron_fit_line(s_vehicle_marker_chevron_left_pts, left_count, &left_fit);
+    vehicle_marker_chevron_fit_line(s_vehicle_marker_chevron_right_pts, right_count, &right_fit);
     left_fit_ok = left_fit.valid;
     right_fit_ok = right_fit.valid;
     if(!left_fit_ok || !right_fit_ok)
@@ -1925,7 +1991,7 @@ static uint8 vehicle_marker_chevron_process_candidate(VehicleMarkerPose_t *out_p
         return 0U;
     }
 
-    if(!vehicle_marker_chevron_fit_group(left_pts,
+    if(!vehicle_marker_chevron_fit_group(s_vehicle_marker_chevron_left_pts,
                                          left_count,
                                          &apex,
                                          &left_tip,
@@ -1937,7 +2003,7 @@ static uint8 vehicle_marker_chevron_process_candidate(VehicleMarkerPose_t *out_p
         return 0U;
     }
 
-    if(!vehicle_marker_chevron_fit_group(right_pts,
+    if(!vehicle_marker_chevron_fit_group(s_vehicle_marker_chevron_right_pts,
                                          right_count,
                                          &apex,
                                          &right_tip,
@@ -2031,10 +2097,34 @@ uint8 VehicleMarkerLocalization_FindPoints(
     return 0U;
 }
 
+uint8 VehicleMarkerLocalization_FindPointsBinary(
+    const uint8 *binary_image,
+    VehicleMarkerPoint2D_t out_pts[VEHICLE_MARKER_POINT_COUNT])
+{
+    (void)binary_image;
+    if(out_pts != NULL)
+    {
+        memset(out_pts, 0, sizeof(VehicleMarkerPoint2D_t) * VEHICLE_MARKER_POINT_COUNT);
+    }
+    return 0U;
+}
+
 uint8 VehicleMarkerLocalization_Process(const uint8 image[MT9V03X_H][MT9V03X_W],
                                         VehicleMarkerPose_t *out_pose)
 {
     (void)image;
+    vehicle_marker_set_position_lost();
+    if(out_pose != NULL)
+    {
+        vehicle_marker_copy_pose(out_pose);
+    }
+    return 0U;
+}
+
+uint8 VehicleMarkerLocalization_ProcessBinary(const uint8 *binary_image,
+                                              VehicleMarkerPose_t *out_pose)
+{
+    (void)binary_image;
     vehicle_marker_set_position_lost();
     if(out_pose != NULL)
     {

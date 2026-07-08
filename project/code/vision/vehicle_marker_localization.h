@@ -103,9 +103,13 @@ uint8 VehicleMarkerLocalization_EndBlobFrame(VehicleMarkerPose_t *out_pose);
 
 uint8 VehicleMarkerLocalization_Process(const uint8 image[MT9V03X_H][MT9V03X_W],
                                         VehicleMarkerPose_t *out_pose);
+uint8 VehicleMarkerLocalization_ProcessBinary(const uint8 *binary_image,
+                                              VehicleMarkerPose_t *out_pose);
 
 uint8 VehicleMarkerLocalization_FindPoints(const uint8 image[MT9V03X_H][MT9V03X_W],
                                            VehicleMarkerPoint2D_t out_pts[VEHICLE_MARKER_POINT_COUNT]);
+uint8 VehicleMarkerLocalization_FindPointsBinary(const uint8 *binary_image,
+                                                 VehicleMarkerPoint2D_t out_pts[VEHICLE_MARKER_POINT_COUNT]);
 
 const uint8 *VehicleMarkerLocalization_GetBinaryImage(void);
 

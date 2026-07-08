@@ -3,6 +3,8 @@
 
 static VisionRuntimeDiag_t s_vision_runtime_diag;
 static VisionRuntimeBeaconSlot_t s_vision_runtime_beacon_slots[VISION_RUNTIME_BEACON_SLOT_COUNT];
+static uint8 s_vision_binary[MT9V03X_H * MT9V03X_W];
+static uint8 s_vision_binary_display[MT9V03X_H * MT9V03X_W];
 
 #if CY_CORE_CM7_1
 #include "vision/beacon_detect.h"
@@ -10,7 +12,6 @@ static VisionRuntimeBeaconSlot_t s_vision_runtime_beacon_slots[VISION_RUNTIME_BE
 #include "vision/vehicle_marker_localization.h"
 #include "zf_device_mt9v03x.h"
 
-static uint8 s_vision_binary[MT9V03X_H * MT9V03X_W];
 static uint8 s_vision_visited[MT9V03X_H * MT9V03X_W];
 static uint16 s_vision_queue[MT9V03X_H * MT9V03X_W];
 
@@ -118,7 +119,16 @@ static void VisionRuntime_Binarize(const uint8 image[MT9V03X_H][MT9V03X_W])
 
     for(index = 0; index < (MT9V03X_H * MT9V03X_W); index++)
     {
-        s_vision_binary[index] = (((const uint8 *)image)[index] >= VISION_BINARY_THRESHOLD) ? 1U : 0U;
+        if(((const uint8 *)image)[index] >= VISION_BINARY_THRESHOLD)
+        {
+            s_vision_binary[index] = 1U;
+            s_vision_binary_display[index] = 255U;
+        }
+        else
+        {
+            s_vision_binary[index] = 0U;
+            s_vision_binary_display[index] = 0U;
+        }
     }
 }
 
@@ -455,7 +465,8 @@ static void VisionRuntime_ProcessFrameInternal(float roll_deg,
 #if VEHICLE_MARKER_MODE == VEHICLE_MARKER_MODE_CHEVRON
     (void)VehicleMarkerLocalization_EndBlobFrame(&g_vehicle_marker_pose);
 #else
-    (void)VehicleMarkerLocalization_Process(mt9v03x_image, &g_vehicle_marker_pose);
+    (void)VehicleMarkerLocalization_ProcessBinary(VisionRuntime_GetBinaryImage(),
+                                                  &g_vehicle_marker_pose);
 #endif
     beacon_count = BeaconDetect_EndBlobFrame();
     VisionRuntime_UpdateDiagFromCurrentFrame(beacon_count, beacon_results);
@@ -483,6 +494,16 @@ void VisionRuntime_ProcessFrameWithPose(float roll_deg, float pitch_deg, float h
     (void)height_cm;
 }
 #endif
+
+const uint8 *VisionRuntime_GetBinaryImage(void)
+{
+    return s_vision_binary;
+}
+
+const uint8 *VisionRuntime_GetBinaryDisplayImage(void)
+{
+    return s_vision_binary_display;
+}
 
 void VisionRuntime_GetDiag(VisionRuntimeDiag_t *diag)
 {
