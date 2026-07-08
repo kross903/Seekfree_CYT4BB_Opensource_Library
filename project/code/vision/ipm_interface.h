@@ -72,6 +72,12 @@ void IPM_Interface_UpdateFromIMU(float height_cm);
 void IPM_Image2World(int img_x, int img_y, float *world_x, float *world_y);
 
 /**
+ * @brief 浮点图像坐标转换为地面物理坐标
+ * @return 1 成功，0 无效点或无法与地面相交
+ */
+uint8 IPM_Image2WorldF(float img_x, float img_y, float *world_x, float *world_y);
+
+/**
  * @brief 地面物理坐标转换为图像坐标
  * @param world_x 地面X坐标(cm)
  * @param world_y 地面Y坐标(cm)
@@ -118,6 +124,12 @@ void IPM_DisplayBirdView(const uint8 src_img[MT9V03X_H][MT9V03X_W],
  */
 void IPM_DrawCenterMark(uint8 *img, int w, int h);
 
+/**
+ * @brief 生成整图调试去畸变图。无离线映射表时输出与输入相同。
+ */
+void IPM_GenerateUndistortedDebugImage(const uint8 src_img[MT9V03X_H][MT9V03X_W],
+                                       uint8 dst_img[MT9V03X_H][MT9V03X_W]);
+
 /* ====================== 状态获取函数 ====================== */
 
 /**
@@ -143,4 +155,3 @@ void IPM_TestCorners(float *results);
 #endif
 
 #endif /* _IPM_INTERFACE_H_ */
-

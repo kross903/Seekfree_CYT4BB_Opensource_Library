@@ -260,6 +260,10 @@ static uint8 IR_Localization_InsertCandidate(const VisionBlob_t *blob, const IR_
     {
         return 0U;
     }
+    if(!blob->world_valid)
+    {
+        return 0U;
+    }
 
     candidate.img.u = blob->centroid_col;
     candidate.img.v = blob->centroid_row;
@@ -827,7 +831,10 @@ static uint8 IR_Localization_ProcessPoints(IR_Point2D_t img_pts[IR_SQUARE_POINT_
         float world_x = 0.0f;
         float world_y = 0.0f;
 
-        IPM_Image2World((int)img_pts[i].u, (int)img_pts[i].v, &world_x, &world_y);
+        if(!IPM_Image2WorldF(img_pts[i].u, img_pts[i].v, &world_x, &world_y))
+        {
+            return IR_Localization_ProcessFail(out_pose);
+        }
 
         world_pts[i].x = world_x;
         world_pts[i].y = world_y;

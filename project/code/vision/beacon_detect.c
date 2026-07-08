@@ -56,6 +56,10 @@ uint8 BeaconDetect_AppendBlob(const VisionBlob_t *blob)
     {
         return 0U;
     }
+    if(!blob->world_valid)
+    {
+        return 0U;
+    }
 
     if(blob->aspect_ratio < g_beacon_config.min_aspect ||
        blob->aspect_ratio > g_beacon_config.max_aspect)

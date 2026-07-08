@@ -353,9 +353,14 @@ static void VisionRuntime_ProcessBlobs(const uint8 image[MT9V03X_H][MT9V03X_W])
                 {
                     blob.circularity = 0.0f;
                 }
-                IPM_Image2World((int)blob.centroid_col, (int)blob.centroid_row,
-                                &blob.world_x, &blob.world_y);
-                VisionRuntime_DispatchBlob(&blob, &contour, large_area_threshold);
+                blob.world_valid = IPM_Image2WorldF(blob.centroid_col,
+                                                    blob.centroid_row,
+                                                    &blob.world_x,
+                                                    &blob.world_y);
+                if(blob.world_valid)
+                {
+                    VisionRuntime_DispatchBlob(&blob, &contour, large_area_threshold);
+                }
             }
         }
     }

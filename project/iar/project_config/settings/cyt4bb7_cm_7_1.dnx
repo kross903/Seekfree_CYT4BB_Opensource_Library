@@ -11,13 +11,20 @@
         <LimitSize>0</LimitSize>
         <ByteLimit>50</ByteLimit>
     </Stack>
+    <DisassembleMode>
+        <mode>0</mode>
+    </DisassembleMode>
+    <Breakpoints2>
+        <Count>0</Count>
+    </Breakpoints2>
+    <Aliases>
+        <Count>0</Count>
+        <SuppressDialog>0</SuppressDialog>
+    </Aliases>
     <PlDriver>
-        <FirstRun>0</FirstRun>
-        <MemConfigValue>D:\APP\iar\arm\config\debugger\Infineon\CYT4BB_M7.ddf</MemConfigValue>
+        <MemConfigValue>D:\IAR\arm\config\debugger\Infineon\CYT4BB_M7.ddf</MemConfigValue>
     </PlDriver>
     <Jet>
-        <JetConnSerialNo>ZF-WLFS-CMSIS-DAP:80942414-FC012CC510F8</JetConnSerialNo>
-        <JetConnFoundProbes />
         <DisableInterrupts>0</DisableInterrupts>
         <LeaveRunning>0</LeaveRunning>
         <MultiCoreRunAll>0</MultiCoreRunAll>
@@ -26,36 +33,4 @@
         <EnableCache>1</EnableCache>
         <EnforceMemoryConfiguration>1</EnforceMemoryConfiguration>
     </ArmDriver>
-    <Exceptions>
-        <StopOnUncaught>_ 0</StopOnUncaught>
-        <StopOnThrow>_ 0</StopOnThrow>
-    </Exceptions>
-    <SWOManager>
-        <SamplingDivider>8192</SamplingDivider>
-        <OverrideClock>0</OverrideClock>
-        <CpuClock>1398101057</CpuClock>
-        <SwoClock>1381319470</SwoClock>
-        <DataLogMode>0</DataLogMode>
-        <ItmPortsEnabled>63</ItmPortsEnabled>
-        <ItmTermIOPorts>1</ItmTermIOPorts>
-        <ItmLogPorts>0</ItmLogPorts>
-        <ItmLogFile>$PROJ_DIR$\ITM.log</ItmLogFile>
-        <PowerForcePC>1</PowerForcePC>
-        <PowerConnectPC>1</PowerConnectPC>
-    </SWOManager>
-    <DisassembleMode>
-        <mode>0</mode>
-    </DisassembleMode>
-    <Breakpoints2>
-        <Bp0>_ 1 "EMUL_CODE" "{$PROJ_DIR$\..\..\code\common\All_Init.c}.73.26" 0 0 1 "" 0 "" 0</Bp0>
-        <Count>1</Count>
-    </Breakpoints2>
-    <TermIOLog>
-        <LoggingEnabled>_ 0</LoggingEnabled>
-        <LogFile>_ ""</LogFile>
-    </TermIOLog>
-    <Aliases>
-        <Count>0</Count>
-        <SuppressDialog>0</SuppressDialog>
-    </Aliases>
 </settings>

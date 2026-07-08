@@ -35,6 +35,7 @@
 #endif
 
 #include <math.h>
+#include "vision/camera_calibration.h"
 
 /* ====================== 配置参数 ====================== */
 
@@ -133,6 +134,12 @@ void DroneIPM_Embedded_Update(float roll_deg, float pitch_deg, float height);
 void DroneIPM_Embedded_Image2World(sint16 img_x, sint16 img_y, float *result);
 
 /**
+ * @brief 浮点图像坐标到地面坐标(逆透视)
+ * @return 1 成功，0 无效点或光线不与地面相交
+ */
+uint8 DroneIPM_Embedded_Image2WorldF(float img_x, float img_y, float *result);
+
+/**
  * @brief 地面坐标到图像坐标(正透视)
  * @param world_x 地面X坐标
  * @param world_y 地面Y坐标
@@ -172,4 +179,3 @@ static inline void fast_sincos(float angle_rad, float *s, float *c)
 }
 
 #endif /* _DRONE_IPM_EMBEDDED_H_ */
-

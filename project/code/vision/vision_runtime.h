@@ -24,6 +24,7 @@ typedef struct
     float circularity;
     float world_x;
     float world_y;
+    uint8 world_valid;
 } VisionBlob_t;
 
 typedef struct

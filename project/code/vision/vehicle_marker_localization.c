@@ -464,7 +464,7 @@ static uint8 vehicle_marker_region_is_small_light_candidate(const VehicleMarkerR
     return 1U;
 }
 
-static void vehicle_marker_insert_candidate(
+static uint8 vehicle_marker_insert_candidate(
     VehicleMarkerCandidate_t candidates[VEHICLE_MARKER_MAX_CANDIDATES],
     uint8 *candidate_count,
     const VehicleMarkerRegion_t *region,
@@ -485,7 +485,10 @@ static void vehicle_marker_insert_candidate(
     area_error = fabsf((float)region->count - gate->expected_area) / gate->expected_area;
     candidate.score = area_error * 20.0f + (aspect_ratio - 1.0f) * 10.0f;
 
-    IPM_Image2World((int)candidate.img.u, (int)candidate.img.v, &world_x, &world_y);
+    if(!IPM_Image2WorldF(candidate.img.u, candidate.img.v, &world_x, &world_y))
+    {
+        return 0U;
+    }
     candidate.world.x = world_x;
     candidate.world.y = world_y;
 
@@ -493,7 +496,7 @@ static void vehicle_marker_insert_candidate(
     {
         candidates[*candidate_count] = candidate;
         (*candidate_count)++;
-        return;
+        return 1U;
     }
 
     for(i = 0; i < VEHICLE_MARKER_MAX_CANDIDATES; i++)
@@ -508,7 +511,10 @@ static void vehicle_marker_insert_candidate(
     if(replace_index >= 0 && candidate.score < worst_score)
     {
         candidates[replace_index] = candidate;
+        return 1U;
     }
+
+    return 0U;
 }
 
 static float vehicle_marker_world_point_distance_cm(const VehicleMarkerWorldPoint_t *a,
@@ -988,7 +994,7 @@ static uint8 vehicle_marker_find_points_with_count(
 
                 if(vehicle_marker_region_is_small_light_candidate(&region, &blob_gate))
                 {
-                    vehicle_marker_insert_candidate(candidates, &candidate_count, &region, &blob_gate);
+                    (void)vehicle_marker_insert_candidate(candidates, &candidate_count, &region, &blob_gate);
                 }
             }
         }
@@ -1045,7 +1051,10 @@ uint8 VehicleMarkerLocalization_Process(const uint8 image[MT9V03X_H][MT9V03X_W],
         float world_x = 0.0f;
         float world_y = 0.0f;
 
-        IPM_Image2World((int)img_pts[i].u, (int)img_pts[i].v, &world_x, &world_y);
+        if(!IPM_Image2WorldF(img_pts[i].u, img_pts[i].v, &world_x, &world_y))
+        {
+            return vehicle_marker_process_fail(out_pose);
+        }
         world_pts[i].x = world_x;
         world_pts[i].y = world_y;
     }
@@ -1740,6 +1749,11 @@ uint8 VehicleMarkerLocalization_AppendBlob(const VisionBlob_t *blob, const Visio
         s_vehicle_marker_chevron_reject_size_count++;
         return 0U;
     }
+    if(!blob->world_valid)
+    {
+        s_vehicle_marker_chevron_reject_size_count++;
+        return 0U;
+    }
 
     vehicle_marker_chevron_get_gate(&gate);
     if(!vehicle_marker_chevron_blob_pass(blob, &gate))
@@ -1776,7 +1790,8 @@ static uint8 vehicle_marker_chevron_process_candidate(VehicleMarkerPose_t *out_p
     VehicleMarkerWorldPoint_t centroid = {0};
     VehicleMarkerChevronLine_t left_fit;
     VehicleMarkerChevronLine_t right_fit;
-    uint16 point_count = s_vehicle_marker_chevron_candidate.contour.point_count;
+    uint16 input_point_count = s_vehicle_marker_chevron_candidate.contour.point_count;
+    uint16 point_count = 0U;
     uint16 left_count = 0U;
     uint16 right_count = 0U;
     uint16 i = 0U;
@@ -1801,19 +1816,38 @@ static uint8 vehicle_marker_chevron_process_candidate(VehicleMarkerPose_t *out_p
     uint8 left_fit_ok = 0U;
     uint8 right_fit_ok = 0U;
 
-    if(point_count < VEHICLE_MARKER_CHEVRON_MIN_CONTOUR_POINTS)
+    if(input_point_count < VEHICLE_MARKER_CHEVRON_MIN_CONTOUR_POINTS)
     {
         return 0U;
     }
 
-    for(i = 0U; i < point_count; i++)
+    for(i = 0U; i < input_point_count; i++)
     {
-        IPM_Image2World((int)s_vehicle_marker_chevron_candidate.contour.point_x[i],
-                        (int)s_vehicle_marker_chevron_candidate.contour.point_y[i],
-                        &world_pts[i].x,
-                        &world_pts[i].y);
-        centroid_x += world_pts[i].x;
-        centroid_y += world_pts[i].y;
+        float world_x = 0.0f;
+        float world_y = 0.0f;
+
+        if(!IPM_Image2WorldF((float)s_vehicle_marker_chevron_candidate.contour.point_x[i],
+                             (float)s_vehicle_marker_chevron_candidate.contour.point_y[i],
+                             &world_x,
+                             &world_y))
+        {
+            continue;
+        }
+
+        if(point_count >= VISION_RUNTIME_CONTOUR_MAX_POINTS)
+        {
+            break;
+        }
+
+        world_pts[point_count].x = world_x;
+        world_pts[point_count].y = world_y;
+        centroid_x += world_x;
+        centroid_y += world_y;
+        point_count++;
+    }
+    if(point_count < VEHICLE_MARKER_CHEVRON_MIN_CONTOUR_POINTS)
+    {
+        return 0U;
     }
     centroid_x /= (float)point_count;
     centroid_y /= (float)point_count;

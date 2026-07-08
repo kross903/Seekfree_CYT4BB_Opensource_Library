@@ -15,6 +15,7 @@
 
 #include "drone_ipm_embedded.h"
 #include "common/project_headfile.h"
+#include "vision/camera_calibration.h"
 #include <string.h>
 
 /*
@@ -32,6 +33,16 @@ static const float H_half = (float)IMAGE_HEIGHT / 2.0f;
 
 static void DroneIPM_Embedded_PixelToRayBody(float img_x, float img_y, float ray_body[3])
 {
+#if CAMERA_CALIBRATION_ENABLE
+    if(CameraCalibration_PixelToBodyRay(img_x, img_y, ray_body))
+    {
+        return;
+    }
+
+    ray_body[0] = 0.0f;
+    ray_body[1] = 0.0f;
+    ray_body[2] = -1.0f;
+#else
 #if DRONE_IPM_CAMERA_PROJECTION == DRONE_IPM_CAMERA_PROJECTION_FISHEYE_EQUIDISTANT
     float du = img_x - W_half;
     float dv = img_y - H_half;
@@ -62,6 +73,7 @@ static void DroneIPM_Embedded_PixelToRayBody(float img_x, float img_y, float ray
     ray_body[0] = v_n;
     ray_body[1] = u_n;
     ray_body[2] = 1.0f;
+#endif
 #endif
 }
 
@@ -125,6 +137,7 @@ static bool DroneIPM_Embedded_RayBodyToPixel(const float ray_body[3], int *resul
 void DroneIPM_Embedded_Init(void)
 {
     memset(&g_ipm, 0, sizeof(g_ipm));
+    CameraCalibration_Init();
 
 #if DRONE_IPM_CAMERA_PROJECTION == DRONE_IPM_CAMERA_PROJECTION_FISHEYE_EQUIDISTANT
     {
@@ -231,8 +244,25 @@ void DroneIPM_Embedded_Update(float roll_deg, float pitch_deg, float height)
  */
 void DroneIPM_Embedded_Image2World(sint16 img_x, sint16 img_y, float *result)
 {
+    if(!DroneIPM_Embedded_Image2WorldF((float)img_x, (float)img_y, result))
+    {
+        result[0] = 9999.0f;
+        result[1] = 9999.0f;
+    }
+}
+
+uint8 DroneIPM_Embedded_Image2WorldF(float img_x, float img_y, float *result)
+{
     float ray_body[3];
-    DroneIPM_Embedded_PixelToRayBody((float)img_x, (float)img_y, ray_body);
+    float camera_x = g_ipm.X0 + CAMERA_OFFSET_X_CM;
+    float camera_y = g_ipm.Y0 + CAMERA_OFFSET_Y_CM;
+    float camera_z = g_ipm.Z0 + CAMERA_OFFSET_Z_CM;
+    DroneIPM_Embedded_PixelToRayBody(img_x, img_y, ray_body);
+
+    if(result == NULL || ray_body[2] <= 0.0f)
+    {
+        return 0U;
+    }
 
     /* 步骤3: 将光线变换到世界坐标系
      * ray_world = R * ray_body
@@ -254,24 +284,19 @@ void DroneIPM_Embedded_Image2World(sint16 img_x, sint16 img_y, float *result)
      * 解得: t = -Z0 / ray_world[2]
      */
     if (fabsf(ray_world[2]) < 1e-6f) {
-        /* 光线与地面平行，返回很大的值表示无穷远 */
-        result[0] = 9999.0f;
-        result[1] = 9999.0f;
-        return;
+        return 0U;
     }
 
-    float t = -g_ipm.Z0 / ray_world[2];
+    float t = -camera_z / ray_world[2];
 
     if (t < 0.0f) {
-        /* 交点在摄像头后方，无效 */
-        result[0] = 9999.0f;
-        result[1] = 9999.0f;
-        return;
+        return 0U;
     }
 
     /* 计算地面交点 */
-    result[0] = -(g_ipm.X0 + t * ray_world[0]);
-    result[1] = -(g_ipm.Y0 + t * ray_world[1]);
+    result[0] = -(camera_x + t * ray_world[0]);
+    result[1] = -(camera_y + t * ray_world[1]);
+    return 1U;
 }
 
 /**
@@ -289,10 +314,13 @@ void DroneIPM_Embedded_Image2World(sint16 img_x, sint16 img_y, float *result)
 bool DroneIPM_Embedded_World2Image(float world_x, float world_y, int *result)
 {
     /* 步骤1: 计算地面点相对于摄像头的向量(世界坐标系) */
+    float camera_x = g_ipm.X0 + CAMERA_OFFSET_X_CM;
+    float camera_y = g_ipm.Y0 + CAMERA_OFFSET_Y_CM;
+    float camera_z = g_ipm.Z0 + CAMERA_OFFSET_Z_CM;
     float vec_world[3];
-    vec_world[0] = (-world_x) - g_ipm.X0;
-    vec_world[1] = (-world_y) - g_ipm.Y0;
-    vec_world[2] = 0.0f - g_ipm.Z0;  /* 地面Z=0 */
+    vec_world[0] = (-world_x) - camera_x;
+    vec_world[1] = (-world_y) - camera_y;
+    vec_world[2] = 0.0f - camera_z;  /* 地面Z=0 */
 
     /* 步骤2: 将向量从世界坐标系转换到机体坐标系
      * vec_body = R^T * vec_world (R的转置)
@@ -308,7 +336,23 @@ bool DroneIPM_Embedded_World2Image(float world_x, float world_y, int *result)
                   g_ipm.R[1][2] * vec_world[1] +
                   g_ipm.R[2][2] * vec_world[2];
 
+#if CAMERA_CALIBRATION_ENABLE
+    {
+        float img_x = 0.0f;
+        float img_y = 0.0f;
+
+        if(!CameraCalibration_BodyRayToPixel(vec_body, &img_x, &img_y))
+        {
+            return false;
+        }
+
+        result[0] = (int)(img_x + 0.5f);
+        result[1] = (int)(img_y + 0.5f);
+        return true;
+    }
+#else
     return DroneIPM_Embedded_RayBodyToPixel(vec_body, result);
+#endif
 }
 
 /**
@@ -447,4 +491,3 @@ void DroneIPM_Embedded_BirdViewFast(const uint8_t *src, uint8_t *dst,
     DroneIPM_Embedded_BirdView(src, dst, dst_w, dst_h, 0.5f);
 #endif
 }
-

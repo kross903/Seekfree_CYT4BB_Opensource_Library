@@ -1124,6 +1124,21 @@
             <name>$PROJ_DIR$\..\..\code\vision\beacon_detect.c</name>
         </file>
         <file>
+            <name>$PROJ_DIR$\..\..\code\vision\camera_calibration.c</name>
+        </file>
+        <file>
+            <name>$PROJ_DIR$\..\..\code\vision\camera_calibration.h</name>
+        </file>
+        <file>
+            <name>$PROJ_DIR$\..\..\code\vision\camera_calibration_params.h</name>
+        </file>
+        <file>
+            <name>$PROJ_DIR$\..\..\code\vision\camera_ray_table.h</name>
+        </file>
+        <file>
+            <name>$PROJ_DIR$\..\..\code\vision\camera_undistort_rect_map.h</name>
+        </file>
+        <file>
             <name>$PROJ_DIR$\..\..\code\communication\cross_core_camera.c</name>
         </file>
         <file>

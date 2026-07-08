@@ -7,6 +7,7 @@
 
 #include "ipm_interface.h"
 #include "common/project_headfile.h"
+#include "vision/camera_calibration.h"
 
 /*
  * 模块定位:
@@ -83,9 +84,38 @@ void IPM_Interface_UpdateFromIMU(float height_cm)
 void IPM_Image2World(int img_x, int img_y, float *world_x, float *world_y)
 {
     float result[2];
-    DroneIPM_Embedded_Image2World((sint16)img_x, (sint16)img_y, result);
+    if(!DroneIPM_Embedded_Image2WorldF((float)img_x, (float)img_y, result))
+    {
+        result[0] = 9999.0f;
+        result[1] = 9999.0f;
+    }
+    if(world_x != NULL)
+    {
+        *world_x = result[0];
+    }
+    if(world_y != NULL)
+    {
+        *world_y = result[1];
+    }
+}
+
+uint8 IPM_Image2WorldF(float img_x, float img_y, float *world_x, float *world_y)
+{
+    float result[2];
+
+    if(world_x == NULL || world_y == NULL)
+    {
+        return 0U;
+    }
+
+    if(!DroneIPM_Embedded_Image2WorldF(img_x, img_y, result))
+    {
+        return 0U;
+    }
+
     *world_x = result[0];
     *world_y = result[1];
+    return 1U;
 }
 
 /**
@@ -189,6 +219,36 @@ void IPM_DrawCenterMark(uint8 *img, int w, int h)
     }
 }
 
+void IPM_GenerateUndistortedDebugImage(const uint8 src_img[MT9V03X_H][MT9V03X_W],
+                                       uint8 dst_img[MT9V03X_H][MT9V03X_W])
+{
+    int y = 0;
+    int x = 0;
+
+    if(src_img == NULL || dst_img == NULL)
+    {
+        return;
+    }
+
+    for(y = 0; y < MT9V03X_H; y++)
+    {
+        for(x = 0; x < MT9V03X_W; x++)
+        {
+            int sx = 0;
+            int sy = 0;
+
+            if(CameraCalibration_RectifiedPixelToSource(x, y, &sx, &sy))
+            {
+                dst_img[y][x] = src_img[sy][sx];
+            }
+            else
+            {
+                dst_img[y][x] = 0U;
+            }
+        }
+    }
+}
+
 /* ====================== 调试函数 ====================== */
 
 /**
@@ -242,4 +302,3 @@ void IPM_TestCorners(float *results)
         results[i * 2 + 1] = wy;
     }
 }
-
