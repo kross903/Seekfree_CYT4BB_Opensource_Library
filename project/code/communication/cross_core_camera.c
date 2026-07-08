@@ -680,8 +680,6 @@ uint8 CrossCoreCamera_ControlCoreSendAssistantFrame(void)
 {
     static uint32 last_sent_seq = 0U;
     uint32 image_seq = 0U;
-    uint8 display_mode = CROSS_CORE_CAMERA_VISION_DISPLAY_BINARY;
-    seekfree_assistant_image_type_enum image_type = SEEKFREE_ASSISTANT_BINARY;
 
     if(!CommMux_IsAssistantImageMode())
     {
@@ -702,13 +700,8 @@ uint8 CrossCoreCamera_ControlCoreSendAssistantFrame(void)
         return 0U;
     }
 
-    display_mode = (g_shared_vision_screen_ctrl->assistant_image_display_mode == CROSS_CORE_CAMERA_VISION_DISPLAY_RAW) ?
-                   CROSS_CORE_CAMERA_VISION_DISPLAY_RAW : CROSS_CORE_CAMERA_VISION_DISPLAY_BINARY;
-    image_type = (display_mode == CROSS_CORE_CAMERA_VISION_DISPLAY_RAW) ?
-                 SEEKFREE_ASSISTANT_MT9V03X : SEEKFREE_ASSISTANT_BINARY;
-
     SCB_InvalidateDCache_by_Addr(g_cross_core_camera_assistant_image[0], MT9V03X_IMAGE_SIZE);
-    seekfree_assistant_camera_information_config(image_type,
+    seekfree_assistant_camera_information_config(SEEKFREE_ASSISTANT_MT9V03X,
                                                  g_cross_core_camera_assistant_image[0],
                                                  MT9V03X_W,
                                                  MT9V03X_H);
