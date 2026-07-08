@@ -67,10 +67,10 @@ static void motor_mixer_update_with_base(volatile uint16 motor_throttle_out[4],
     thrust_base_comp = thrust_base / tilt_cos;
 
 
-    motor_output[3] = thrust_base_comp - roll_output - pitch_output + yaw_output;
-    motor_output[2] = thrust_base_comp - roll_output + pitch_output - yaw_output;
-    motor_output[1] = thrust_base_comp + roll_output - pitch_output - yaw_output;
-    motor_output[0] = thrust_base_comp + roll_output + pitch_output + yaw_output;
+    motor_output[3] = thrust_base_comp + roll_output + pitch_output + yaw_output;
+    motor_output[2] = thrust_base_comp + roll_output - pitch_output - yaw_output;
+    motor_output[1] = thrust_base_comp - roll_output - pitch_output + yaw_output;
+    motor_output[0] = thrust_base_comp - roll_output + pitch_output - yaw_output;
 
     for(i = 0U; i < 4U; i++)
     {
