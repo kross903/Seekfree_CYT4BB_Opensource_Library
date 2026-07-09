@@ -6,6 +6,13 @@
 #define CROSS_CORE_CAMERA_VISION_DISPLAY_BINARY  0U
 #define CROSS_CORE_CAMERA_VISION_DISPLAY_RAW     1U
 
+#define CROSS_CORE_CAMERA_VISION_STATUS_IDLE                 0U
+#define CROSS_CORE_CAMERA_VISION_STATUS_SENDING              1U
+#define CROSS_CORE_CAMERA_VISION_STATUS_SENT                 2U
+#define CROSS_CORE_CAMERA_VISION_STATUS_TIMEOUT              3U
+#define CROSS_CORE_CAMERA_VISION_STATUS_REQUEST_FAILED       4U
+#define CROSS_CORE_CAMERA_VISION_STATUS_ASSISTANT_REQUIRED   5U
+
 void CrossCoreCamera_CameraCoreInit(void);
 void CrossCoreCamera_CameraCoreTask(void);
 uint8 CrossCoreCamera_ControlCoreFetchFrame(void);
@@ -20,6 +27,7 @@ uint8 CrossCoreCamera_ControlCoreSendAssistantFrame(void);
 void CrossCoreCamera_ControlCoreRequestVisionScreen(uint8 enable);
 void CrossCoreCamera_ControlCoreSetVisionDisplayMode(uint8 mode);
 uint8 CrossCoreCamera_ControlCoreGetVisionDisplayMode(void);
+void CrossCoreCamera_ControlCoreSetVisionStatus(uint8 status);
 void CrossCoreCamera_ControlCoreSetVisionAssistantStream(uint8 enable);
 uint8 CrossCoreCamera_ControlCoreGetVisionAssistantStream(void);
 uint8 CrossCoreCamera_ControlCoreIsVisionScreenActive(void);

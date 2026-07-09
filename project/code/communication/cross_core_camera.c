@@ -51,7 +51,8 @@ typedef struct
     uint8 assistant_stream_enable;
     uint8 assistant_image_display_mode;
     uint8 assistant_image_ready;
-    uint8 reserved[2];
+    uint8 vision_status;
+    uint8 reserved;
 } SharedVisionScreenCtrl_t;
 
 static volatile SharedVisionInput_t *const g_shared_vision_input =
@@ -205,12 +206,49 @@ static void CrossCoreCamera_CameraCorePublishAssistantSnapshot(void)
     CrossCoreCamera_CleanScreenCtrl();
 }
 
+static const char *CrossCoreCamera_CameraCoreVisionStatusText(uint8 status)
+{
+    switch(status)
+    {
+        case CROSS_CORE_CAMERA_VISION_STATUS_SENDING:
+            return "SNAP SENDING...";
+        case CROSS_CORE_CAMERA_VISION_STATUS_SENT:
+            return "SNAP SENT";
+        case CROSS_CORE_CAMERA_VISION_STATUS_TIMEOUT:
+            return "SNAP TIMEOUT";
+        case CROSS_CORE_CAMERA_VISION_STATUS_REQUEST_FAILED:
+            return "SNAP REQUEST FAILED";
+        case CROSS_CORE_CAMERA_VISION_STATUS_ASSISTANT_REQUIRED:
+            return "DIP TO ASSISTANT FIRST";
+        default:
+            return "READY";
+    }
+}
+
+static uint16 CrossCoreCamera_CameraCoreVisionStatusColor(uint8 status)
+{
+    switch(status)
+    {
+        case CROSS_CORE_CAMERA_VISION_STATUS_SENT:
+            return RGB565_GREEN;
+        case CROSS_CORE_CAMERA_VISION_STATUS_TIMEOUT:
+        case CROSS_CORE_CAMERA_VISION_STATUS_REQUEST_FAILED:
+            return RGB565_RED;
+        case CROSS_CORE_CAMERA_VISION_STATUS_SENDING:
+        case CROSS_CORE_CAMERA_VISION_STATUS_ASSISTANT_REQUIRED:
+            return RGB565_YELLOW;
+        default:
+            return RGB565_WHITE;
+    }
+}
+
 static void CrossCoreCamera_CameraCoreDrawVisionScreen(const VisionRuntimeDiag_t *diag)
 {
     uint16 image_y = 20U;
     uint16 image_w = MT9V03X_W;
     uint16 image_h = MT9V03X_H;
     uint8 display_mode = g_shared_vision_screen_ctrl->display_mode;
+    uint8 vision_status = g_shared_vision_screen_ctrl->vision_status;
     const uint8 *binary_display_image = VisionRuntime_GetBinaryDisplayImage();
     VisionRuntimeBeaconSlot_t beacon_slots[VISION_RUNTIME_BEACON_SLOT_COUNT] = {0};
     uint8 beacon_count = 0U;
@@ -304,6 +342,10 @@ static void CrossCoreCamera_CameraCoreDrawVisionScreen(const VisionRuntimeDiag_t
     ips200_show_string(88U, 176U, "VALID:");
     ips200_show_int(136U, 176U, g_vehicle_marker_pose.valid ? 1 : 0, 1U);
     ips200_show_string(0U, 200U, "K1 IMG K3 SEND K4 BACK");
+    ips200_show_string(0U, 224U, "                              ");
+    ips200_set_color(CrossCoreCamera_CameraCoreVisionStatusColor(vision_status), RGB565_BLACK);
+    ips200_show_string(0U, 224U, (char *)CrossCoreCamera_CameraCoreVisionStatusText(vision_status));
+    ips200_set_color(RGB565_WHITE, RGB565_BLACK);
 }
 
 static void CrossCoreCamera_CameraCoreServiceVisionScreen(const VisionRuntimeDiag_t *diag)
@@ -438,6 +480,7 @@ void CrossCoreCamera_CameraCoreInit(void)
     g_shared_vision_screen_ctrl->assistant_stream_enable = 0U;
     g_shared_vision_screen_ctrl->assistant_image_display_mode = CROSS_CORE_CAMERA_VISION_DISPLAY_BINARY;
     g_shared_vision_screen_ctrl->assistant_image_ready = 0U;
+    g_shared_vision_screen_ctrl->vision_status = CROSS_CORE_CAMERA_VISION_STATUS_IDLE;
     CrossCoreCamera_CleanInput();
     CrossCoreCamera_CleanResult();
     CrossCoreCamera_CleanScreenCtrl();
@@ -636,6 +679,7 @@ void CrossCoreCamera_ControlCoreAssistantInit(void)
     g_shared_vision_screen_ctrl->assistant_stream_enable = 0U;
     g_shared_vision_screen_ctrl->assistant_image_display_mode = CROSS_CORE_CAMERA_VISION_DISPLAY_BINARY;
     g_shared_vision_screen_ctrl->assistant_image_ready = 0U;
+    g_shared_vision_screen_ctrl->vision_status = CROSS_CORE_CAMERA_VISION_STATUS_IDLE;
     CrossCoreCamera_CleanInput();
     CrossCoreCamera_CleanResult();
     CrossCoreCamera_CleanScreenCtrl();
@@ -662,6 +706,7 @@ uint8 CrossCoreCamera_ControlCoreRequestAssistantSnapshot(void)
         g_shared_vision_screen_ctrl->active_owner = CROSS_CORE_CAMERA_SCREEN_OWNER_NONE;
         g_shared_vision_screen_ctrl->display_mode = CROSS_CORE_CAMERA_VISION_DISPLAY_BINARY;
         g_shared_vision_screen_ctrl->assistant_image_display_mode = CROSS_CORE_CAMERA_VISION_DISPLAY_RAW;
+        g_shared_vision_screen_ctrl->vision_status = CROSS_CORE_CAMERA_VISION_STATUS_IDLE;
     }
 
     g_shared_vision_screen_ctrl->assistant_stream_enable = 1U;
@@ -721,6 +766,7 @@ void CrossCoreCamera_ControlCoreRequestVisionScreen(uint8 enable)
         g_shared_vision_screen_ctrl->assistant_stream_enable = 0U;
         g_shared_vision_screen_ctrl->assistant_image_display_mode = CROSS_CORE_CAMERA_VISION_DISPLAY_BINARY;
         g_shared_vision_screen_ctrl->assistant_image_ready = 0U;
+        g_shared_vision_screen_ctrl->vision_status = CROSS_CORE_CAMERA_VISION_STATUS_IDLE;
     }
 
     g_shared_vision_screen_ctrl->requested_owner = enable ? CROSS_CORE_CAMERA_SCREEN_OWNER_VISION
@@ -744,6 +790,7 @@ void CrossCoreCamera_ControlCoreSetVisionDisplayMode(uint8 mode)
         g_shared_vision_screen_ctrl->assistant_stream_enable = 0U;
         g_shared_vision_screen_ctrl->assistant_image_display_mode = CROSS_CORE_CAMERA_VISION_DISPLAY_BINARY;
         g_shared_vision_screen_ctrl->assistant_image_ready = 0U;
+        g_shared_vision_screen_ctrl->vision_status = CROSS_CORE_CAMERA_VISION_STATUS_IDLE;
     }
 
     if(mode != CROSS_CORE_CAMERA_VISION_DISPLAY_RAW)
@@ -768,6 +815,34 @@ uint8 CrossCoreCamera_ControlCoreGetVisionDisplayMode(void)
            CROSS_CORE_CAMERA_VISION_DISPLAY_RAW : CROSS_CORE_CAMERA_VISION_DISPLAY_BINARY;
 }
 
+void CrossCoreCamera_ControlCoreSetVisionStatus(uint8 status)
+{
+    if(status > CROSS_CORE_CAMERA_VISION_STATUS_ASSISTANT_REQUIRED)
+    {
+        status = CROSS_CORE_CAMERA_VISION_STATUS_IDLE;
+    }
+
+    CrossCoreCamera_InvalidateScreenCtrl();
+    if(g_shared_vision_screen_ctrl->magic != SHARED_VISION_SCREEN_MAGIC)
+    {
+        g_shared_vision_screen_ctrl->magic = SHARED_VISION_SCREEN_MAGIC;
+        g_shared_vision_screen_ctrl->request_seq = 0U;
+        g_shared_vision_screen_ctrl->active_seq = 0U;
+        g_shared_vision_screen_ctrl->assistant_image_seq = 0U;
+        g_shared_vision_screen_ctrl->assistant_snapshot_request_seq = 0U;
+        g_shared_vision_screen_ctrl->requested_owner = CROSS_CORE_CAMERA_SCREEN_OWNER_NONE;
+        g_shared_vision_screen_ctrl->active_owner = CROSS_CORE_CAMERA_SCREEN_OWNER_NONE;
+        g_shared_vision_screen_ctrl->display_mode = CROSS_CORE_CAMERA_VISION_DISPLAY_BINARY;
+        g_shared_vision_screen_ctrl->assistant_stream_enable = 0U;
+        g_shared_vision_screen_ctrl->assistant_image_display_mode = CROSS_CORE_CAMERA_VISION_DISPLAY_BINARY;
+        g_shared_vision_screen_ctrl->assistant_image_ready = 0U;
+    }
+
+    g_shared_vision_screen_ctrl->vision_status = status;
+    g_shared_vision_screen_ctrl->request_seq++;
+    CrossCoreCamera_CleanScreenCtrl();
+}
+
 void CrossCoreCamera_ControlCoreSetVisionAssistantStream(uint8 enable)
 {
     CrossCoreCamera_InvalidateScreenCtrl();
@@ -783,6 +858,7 @@ void CrossCoreCamera_ControlCoreSetVisionAssistantStream(uint8 enable)
         g_shared_vision_screen_ctrl->display_mode = CROSS_CORE_CAMERA_VISION_DISPLAY_BINARY;
         g_shared_vision_screen_ctrl->assistant_image_display_mode = CROSS_CORE_CAMERA_VISION_DISPLAY_BINARY;
         g_shared_vision_screen_ctrl->assistant_image_ready = 0U;
+        g_shared_vision_screen_ctrl->vision_status = CROSS_CORE_CAMERA_VISION_STATUS_IDLE;
     }
 
     g_shared_vision_screen_ctrl->assistant_stream_enable = enable ? 1U : 0U;
