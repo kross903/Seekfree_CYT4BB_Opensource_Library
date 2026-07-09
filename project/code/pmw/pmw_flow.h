@@ -38,6 +38,12 @@ typedef struct
     float velocity_y_fused_residual_cms;
     float flow_confidence;
     float flow_fusion_alpha;
+    float kalman_k_x;
+    float kalman_k_y;
+    float kalman_p_x;
+    float kalman_p_y;
+    float kalman_r_x;
+    float kalman_r_y;
     float flow_residual_norm_cms;
     float velocity_x_world_cms;
     float velocity_y_world_cms;

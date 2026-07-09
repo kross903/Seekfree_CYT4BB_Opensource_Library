@@ -63,6 +63,7 @@ static void send_sixteen_date(float date_1, float date_2, float date_3, float da
  * FU  光流融合状态 16 路诊断 (case 29)
  * FV  beacon 下发槽位 16 路诊断 (case 30)
  * FW  当前帧连通域面积排序 16 路诊断 (case 31)
+ * FX  光流 Kalman 融合 16 路诊断 (case 32)
  */
 static int send_back_flag = 0;
 static uint8 send_back_command = 'R';
@@ -1070,6 +1071,8 @@ void USART_PID_Adjust(void)
                 case 'v': send_back_flag = 30; break;
                 case 'W':
                 case 'w': send_back_flag = 31; break;
+                case 'X':
+                case 'x': send_back_flag = 32; break;
                 default: break;
             }
 
@@ -1647,6 +1650,31 @@ void send_date_back(void)
                               (float)vision_diag.blob_area_rank[13],
                               (float)vision_diag.blob_area_rank[14],
                               (float)vision_diag.blob_area_rank[15]);
+            break;
+        }
+
+        case 32:
+        {
+            PMWFlowState_t pmw_flow_state = {0};
+
+            PMW_Flow_GetState(&pmw_flow_state);
+
+            send_sixteen_date((float)pmw_flow_state.valid,
+                              (float)pmw_flow_state.fused_velocity_valid,
+                              (float)pmw_flow_state.flow_used,
+                              (float)pmw_flow_state.acc_used,
+                              pmw_flow_state.flow_confidence,
+                              pmw_flow_state.flow_residual_norm_cms,
+                              pmw_flow_state.kalman_k_x,
+                              pmw_flow_state.kalman_k_y,
+                              pmw_flow_state.kalman_p_x,
+                              pmw_flow_state.kalman_p_y,
+                              pmw_flow_state.kalman_r_x,
+                              pmw_flow_state.kalman_r_y,
+                              pmw_flow_state.velocity_x_cms,
+                              pmw_flow_state.velocity_y_cms,
+                              pmw_flow_state.velocity_x_fused_cms,
+                              pmw_flow_state.velocity_y_fused_cms);
             break;
         }
 

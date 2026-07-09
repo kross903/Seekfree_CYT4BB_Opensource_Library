@@ -154,7 +154,7 @@ uint8 Flight_Control_Is_Throttle_Safe(float throttle);
  */
 #define FLIGHT_TAKEOFF_CAPTURE_DURATION_S   3.0f
 #define FLIGHT_TAKEOFF_RAMP_DURATION_S      3.0f
-#define FLIGHT_TAKEOFF_RAMP_TARGET_THROTTLE 570.0f   // 内部范围 [0,2000]，770≈38.5% 油门；根据悬停实际重量微调
+#define FLIGHT_TAKEOFF_RAMP_TARGET_THROTTLE 750.0f   // 内部范围 [0,2000]，770≈38.5% 油门；根据悬停实际重量微调
 #define FLIGHT_TAKEOFF_SAMPLE_HZ            500U
 
 typedef enum
