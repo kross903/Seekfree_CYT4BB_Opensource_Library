@@ -3,8 +3,9 @@
 
 #include "zf_common_headfile.h"
 
-#define BATTERY_ADC_TO_VOLTAGE_SCALE       0.00820715f
-#define BATTERY_ADC_CHANNEL                ADC1_CH24_P14_4
+/* E1 母板官方电池分压检测：P07_5，12 位 ADC 满量程对应约 36.3 V。 */
+#define BATTERY_ADC_TO_VOLTAGE_SCALE       (36.3f / 4096.0f)
+#define BATTERY_ADC_CHANNEL                ADC0_CH21_P07_5
 
 #define BATTERY_SERIES_CELLS               4.0f
 #define BATTERY_NOMINAL_VOLTAGE            14.8f

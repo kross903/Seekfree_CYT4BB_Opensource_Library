@@ -364,7 +364,7 @@ static const char *ui_monitor_mode_text(uint8 control_mode)
 
 static const char *ui_monitor_hint_text(uint8 armed)
 {
-    return armed ? "K1:+100 K2:-100 K3:KEEP" : "K1:PREV K2:NEXT K3:ARM";
+    return armed ? "ANY KEY: EMERGENCY STOP" : "K1:PREV K2:NEXT K3:ARM";
 }
 
 static void ui_monitor_fill_view_hud(const MonitorRuntimeSnapshot *snapshot, MonitorViewHudData *data)
@@ -413,7 +413,7 @@ static void ui_monitor_draw_view_layout(void)
     ips200_show_string(0U, UI_MONITOR_HEIGHT_Y, "ROLL:");
     ips200_show_string(120U, UI_MONITOR_HEIGHT_Y, "PITCH:");
     ips200_show_string(0U, UI_MONITOR_IR_Y, "BCN:");
-    ips200_show_string(0U, UI_MONITOR_HINT_BOTTOM_Y, "K4:STOP HOLD K4:MENU");
+    ips200_show_string(0U, UI_MONITOR_HINT_BOTTOM_Y, "HOLD K4:MENU WHEN STOPPED");
     ips200_set_color(RGB565_WHITE, RGB565_BLACK);
 }
 
@@ -496,6 +496,39 @@ static void screen_monitor_request_stop(void)
     Flight_Runtime_Emergency_Stop(EMERGENCY_STOP_REASON_MANUAL_BUTTON);
 }
 
+static uint8 s_monitor_estop_wait_release = 0U;
+
+static uint8 screen_monitor_any_key_state_active(void)
+{
+    return (uint8)((key_get_state(KEY_1) != KEY_RELEASE) ||
+                   (key_get_state(KEY_2) != KEY_RELEASE) ||
+                   (key_get_state(KEY_3) != KEY_RELEASE) ||
+                   (key_get_state(KEY_4) != KEY_RELEASE));
+}
+
+static uint8 screen_monitor_handle_armed_estop_key(void)
+{
+    if(s_monitor_estop_wait_release)
+    {
+        key_flag = 0U;
+        if(!screen_monitor_any_key_state_active())
+        {
+            s_monitor_estop_wait_release = 0U;
+        }
+        return 1U;
+    }
+
+    if(armed && key_flag >= Button_1 && key_flag <= Button_4)
+    {
+        key_flag = 0U;
+        s_monitor_estop_wait_release = 1U;
+        screen_monitor_request_stop();
+        return 1U;
+    }
+
+    return 0U;
+}
+
 static void screen_monitor_arm_with_initial_target(void)
 {
     Flight_Runtime_Clear_Emergency_Stop_Latch();
@@ -548,7 +581,7 @@ uint8 screen_monitor_handle_input(monitor_page_enum *page,
                                   const MonitorRuntimeSnapshot *snapshot,
                                   float throttle_step)
 {
-    uint8 remote_exit_requested = core_link_user_consume_monitor_exit_request();
+    uint8 remote_exit_requested = 0U;
 
     if(throttle_step < 50.0f)
     {
@@ -559,6 +592,15 @@ uint8 screen_monitor_handle_input(monitor_page_enum *page,
     {
         return 0U;
     }
+
+    /* 已解锁后，Flight View 的任意实体按键都只执行急停。
+     * 急停后等待本次按键真正释放，避免长按事件被再次解释为菜单操作。 */
+    if(screen_monitor_handle_armed_estop_key())
+    {
+        return 1U;
+    }
+
+    remote_exit_requested = core_link_user_consume_monitor_exit_request();
 
     /* ?? KEY_4?????????????? */
     if((key_get_state(KEY_4) == KEY_LONG_PRESS) || remote_exit_requested)
