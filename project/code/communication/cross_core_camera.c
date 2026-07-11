@@ -72,6 +72,8 @@ __no_init uint8 g_cross_core_camera_assistant_image[MT9V03X_H][MT9V03X_W];
 __no_init uint8 g_cross_core_camera_image_fresh_flag;
 
 #if CY_CORE_CM7_1
+static uint8 s_vision_undistorted_image[MT9V03X_H][MT9V03X_W];
+
 static uint8 CrossCoreCamera_CameraCoreAcquireFrame(void)
 {
     SCB_CleanInvalidateDCache_by_Addr(&g_cross_core_camera_image_fresh_flag, 1);
@@ -258,6 +260,12 @@ static void CrossCoreCamera_CameraCoreDrawVisionScreen(const VisionRuntimeDiag_t
     {
         ips200_show_gray_image(0U, image_y, mt9v03x_image[0], MT9V03X_W, MT9V03X_H, image_w, image_h, 0U);
     }
+    else if(display_mode == CROSS_CORE_CAMERA_VISION_DISPLAY_UNDISTORT)
+    {
+        IPM_GenerateUndistortedDebugImage(mt9v03x_image, s_vision_undistorted_image);
+        ips200_show_gray_image(0U, image_y, s_vision_undistorted_image[0],
+                               MT9V03X_W, MT9V03X_H, image_w, image_h, 0U);
+    }
     else if(binary_display_image != NULL)
     {
         ips200_show_gray_image(0U, image_y, (uint8 *)binary_display_image, MT9V03X_W, MT9V03X_H, image_w, image_h, 0U);
@@ -326,7 +334,18 @@ static void CrossCoreCamera_CameraCoreDrawVisionScreen(const VisionRuntimeDiag_t
     }
 
     ips200_set_color(RGB565_YELLOW, RGB565_BLACK);
-    ips200_show_string(0U, 0U, (display_mode == CROSS_CORE_CAMERA_VISION_DISPLAY_RAW) ? "RAW IMG CM7_1" : "BIN IMG CM7_1");
+    if(display_mode == CROSS_CORE_CAMERA_VISION_DISPLAY_RAW)
+    {
+        ips200_show_string(0U, 0U, "RAW IMG CM7_1");
+    }
+    else if(display_mode == CROSS_CORE_CAMERA_VISION_DISPLAY_UNDISTORT)
+    {
+        ips200_show_string(0U, 0U, "UNDISTORT CM7_1");
+    }
+    else
+    {
+        ips200_show_string(0U, 0U, "BIN IMG CM7_1");
+    }
     ips200_set_color(RGB565_WHITE, RGB565_BLACK);
     ips200_show_string(0U, 152U, "B:");
     ips200_show_int(16U, 152U, beacon_count, 1U);
@@ -793,7 +812,8 @@ void CrossCoreCamera_ControlCoreSetVisionDisplayMode(uint8 mode)
         g_shared_vision_screen_ctrl->vision_status = CROSS_CORE_CAMERA_VISION_STATUS_IDLE;
     }
 
-    if(mode != CROSS_CORE_CAMERA_VISION_DISPLAY_RAW)
+    if(mode != CROSS_CORE_CAMERA_VISION_DISPLAY_RAW &&
+       mode != CROSS_CORE_CAMERA_VISION_DISPLAY_UNDISTORT)
     {
         mode = CROSS_CORE_CAMERA_VISION_DISPLAY_BINARY;
     }
@@ -811,8 +831,15 @@ uint8 CrossCoreCamera_ControlCoreGetVisionDisplayMode(void)
         return CROSS_CORE_CAMERA_VISION_DISPLAY_BINARY;
     }
 
-    return (g_shared_vision_screen_ctrl->display_mode == CROSS_CORE_CAMERA_VISION_DISPLAY_RAW) ?
-           CROSS_CORE_CAMERA_VISION_DISPLAY_RAW : CROSS_CORE_CAMERA_VISION_DISPLAY_BINARY;
+    if(g_shared_vision_screen_ctrl->display_mode == CROSS_CORE_CAMERA_VISION_DISPLAY_RAW)
+    {
+        return CROSS_CORE_CAMERA_VISION_DISPLAY_RAW;
+    }
+    if(g_shared_vision_screen_ctrl->display_mode == CROSS_CORE_CAMERA_VISION_DISPLAY_UNDISTORT)
+    {
+        return CROSS_CORE_CAMERA_VISION_DISPLAY_UNDISTORT;
+    }
+    return CROSS_CORE_CAMERA_VISION_DISPLAY_BINARY;
 }
 
 void CrossCoreCamera_ControlCoreSetVisionStatus(uint8 status)

@@ -374,9 +374,18 @@ static void vision_view_page(void)
 
     if(key_flag == Button_1)
     {
-        display_mode = (display_mode == CROSS_CORE_CAMERA_VISION_DISPLAY_RAW) ?
-                       CROSS_CORE_CAMERA_VISION_DISPLAY_BINARY :
-                       CROSS_CORE_CAMERA_VISION_DISPLAY_RAW;
+        if(display_mode == CROSS_CORE_CAMERA_VISION_DISPLAY_RAW)
+        {
+            display_mode = CROSS_CORE_CAMERA_VISION_DISPLAY_UNDISTORT;
+        }
+        else if(display_mode == CROSS_CORE_CAMERA_VISION_DISPLAY_UNDISTORT)
+        {
+            display_mode = CROSS_CORE_CAMERA_VISION_DISPLAY_BINARY;
+        }
+        else
+        {
+            display_mode = CROSS_CORE_CAMERA_VISION_DISPLAY_RAW;
+        }
         CrossCoreCamera_ControlCoreSetVisionDisplayMode(display_mode);
         key_flag = 0;
         return;
