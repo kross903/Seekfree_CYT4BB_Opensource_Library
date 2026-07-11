@@ -317,8 +317,13 @@ void Flight_Control_Get_Target_Angle(float *roll, float *pitch, float *yaw)
  * 解锁飞控主链路。
  * 如果当前模式合法则继续保留，并在下一次油门爬坡前清空运行态油门和 PID 历史量。
  */
-void Flight_Control_Arm(void)
+uint8 Flight_Control_Arm(FlightArmRejectReason *reason)
 {
+    if(!Flight_Safety_Can_Arm(reason))
+    {
+        return 0U;
+    }
+
     armed = 1;
     /*
      * [2026-03-10]
@@ -336,6 +341,7 @@ void Flight_Control_Arm(void)
     gpio_set_level(LED3, GPIO_HIGH);
     Flight_Control_Reset_All_PID();
     sync_runtime_snapshot();
+    return 1U;
 }
 
 /* 立即失锁，并清空缓存输出状态。 */
@@ -508,6 +514,8 @@ static void takeoff_reset_state(void)
 
 uint8 Flight_Takeoff_Start(void)
 {
+    FlightArmRejectReason reject_reason;
+
     /* 仅在角度闭环模式、且流程处于 IDLE 时才接受启动。 */
     if(control_mode != CONTROL_MODE_ANGLE)
     {
@@ -518,6 +526,10 @@ uint8 Flight_Takeoff_Start(void)
         return 0U;
     }
     if(g_takeoff_state != FLIGHT_TAKEOFF_IDLE)
+    {
+        return 0U;
+    }
+    if(!Flight_Safety_Can_Arm(&reject_reason))
     {
         return 0U;
     }
@@ -597,8 +609,11 @@ uint8 Flight_Takeoff_Tick_250us(void)
                 target_angle_yaw = current_yaw;
 
                 /* 采样完成 -> 自动解锁并进入 ramp 阶段。Arm() 内部会重置所有 PID 与油门状态。 */
-                Flight_Runtime_Clear_Emergency_Stop_Latch();
-                Flight_Control_Arm();
+                if(!Flight_Control_Arm(NULL))
+                {
+                    takeoff_reset_state();
+                    return 0U;
+                }
 
                 g_takeoff_tick_in_state = 0U;
                 g_takeoff_state = FLIGHT_TAKEOFF_RAMP;

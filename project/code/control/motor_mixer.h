@@ -16,5 +16,6 @@ void Motor_Mixer_Update_BaseOnly(volatile uint16 motor_throttle_out[4],
                                  float base_throttle_input,
                                  float roll_deg,
                                  float pitch_deg);
+uint8 Motor_Mixer_HasInvalidOutput(void);
 
 #endif

@@ -1,8 +1,6 @@
 #include "common/project_headfile.h"
 #include <math.h>
 
-extern volatile float car_bat_voltage;
-
 #define CORE_LINK_USER_KEY_QUEUE_SIZE       (8U)
 #define CORE_LINK_USER_KEY_ACTIVE_THRESHOLD (0.5f)
 #define CORE_LINK_USER_SCREEN_SWITCH_THRESHOLD (0.5f)
@@ -527,9 +525,9 @@ void core_link_on_param_received (const core_link_param_packet_struct *param)
     if('B' == param->command && 'V' == param->item)
     {
         /* 小车发来的电池电压，单位 V。小车与飞机共用同一块电池，直接用于监视页显示。 */
-        if(param->value >= 9.0f && param->value <= 12.6f)
+        if(param->value >= 10.0f && param->value <= 18.0f)
         {
-            car_bat_voltage = param->value;
+            BatteryMonitor_SetRemoteVoltage(param->value);
         }
         return;
     }

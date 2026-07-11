@@ -2,6 +2,7 @@
 #define FLIGHT_CONTROL_H_
 
 #include "control/pid_controller.h"
+#include "common/flight_safety.h"
 #include "zf_common_typedef.h"
 
 /*********************************************************************************************************************
@@ -113,7 +114,7 @@ void Flight_Control_Get_Target_Angle(float *roll, float *pitch, float *yaw);
  * 慢速模块如果需要切换飞控激活状态、控制模式或油门目标，
  * 建议统一从这里进入。
  */
-void Flight_Control_Arm(void);
+uint8 Flight_Control_Arm(FlightArmRejectReason *reason);
 void Flight_Control_Disarm(void);
 
 void Flight_Control_Set_Mode(uint8 mode);

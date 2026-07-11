@@ -4,10 +4,12 @@
 #include "control/ControlMath.h"
 #include "control/rate_loop.h"
 #include "control/height_manager.h"
+#include <math.h>
 
 #define MOTOR_MIXER_TILT_THRUST_COMP_MAX       1.30f
 
 float motor_output[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+static uint8 s_invalid_output = 0U;
 
 static uint16 motor_mixer_output_limit_max(void)
 {
@@ -22,6 +24,11 @@ static uint16 motor_mixer_output_limit_max(void)
 uint16 Motor_Mixer_Limit_Output(float output)
 {
     uint16 output_limit = motor_mixer_output_limit_max();
+
+    if(!isfinite(output))
+    {
+        return 0U;
+    }
 
     if(output > output_limit)
     {
@@ -56,6 +63,7 @@ static void motor_mixer_update_with_base(volatile uint16 motor_throttle_out[4],
     float tilt_cos;
     float thrust_base_comp;
 
+    s_invalid_output = 0U;
     roll_rad = roll_deg * DEG2RAD;
     pitch_rad = pitch_deg * DEG2RAD;
     tilt_cos = cosf(roll_rad) * cosf(pitch_rad);
@@ -65,8 +73,6 @@ static void motor_mixer_update_with_base(volatile uint16 motor_throttle_out[4],
     }
 
     thrust_base_comp = thrust_base / tilt_cos;
-
-
     motor_output[3] = thrust_base_comp + roll_output + pitch_output + yaw_output;
     motor_output[2] = thrust_base_comp + roll_output - pitch_output - yaw_output;
     motor_output[1] = thrust_base_comp - roll_output - pitch_output + yaw_output;
@@ -74,6 +80,11 @@ static void motor_mixer_update_with_base(volatile uint16 motor_throttle_out[4],
 
     for(i = 0U; i < 4U; i++)
     {
+        if(!isfinite(motor_output[i]))
+        {
+            motor_output[i] = 0.0f;
+            s_invalid_output = 1U;
+        }
         motor_throttle_out[i] = motor_mixer_flight_limit(motor_output[i], armed_state, thrust_base_comp);
     }
 }
@@ -96,6 +107,11 @@ void Motor_Mixer_Update(volatile uint16 motor_throttle_out[4],
                                  thrust_base,
                                  roll_deg,
                                  pitch_deg);
+}
+
+uint8 Motor_Mixer_HasInvalidOutput(void)
+{
+    return s_invalid_output;
 }
 
 void Motor_Mixer_Update_BaseOnly(volatile uint16 motor_throttle_out[4],

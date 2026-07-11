@@ -32,13 +32,14 @@ float icm42688_acc_inv = 1, icm42688_gyro_inv = 1;
 
 static const float k_icm42688_sensor_to_body[3][3] = {
     /* fixed install compensation:
-     * roll  = +2.85 deg
-     * pitch = -0.50 deg
+     * roll  = +0.54 deg
+     * pitch = +3.20 deg
      * yaw   =  0.00 deg
      */
-    {0.999961923f, -0.000433895f, -0.008715742f},
-    {0.000000000f,  0.998763128f, -0.049721374f},
-    {0.008726535f,  0.049719481f,  0.998725098f},
+    { 0.9997265, -0.0000000,  0.0233853},
+    { 0.0009793,  0.9991229, -0.0418642},
+    {-0.0233648,  0.0418757,  0.9988496},
+
 };
 
 static void ICM42688_ApplyInstallMatrix(float x_in, float y_in, float z_in,

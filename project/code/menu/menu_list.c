@@ -197,14 +197,12 @@ static uint8 test_attitude_within_limit(float roll_limit, float pitch_limit)
 static uint8 test_motor_output_safe(void)
 {
     return (uint8)((!emergency_stop_triggered) &&
-                   (!low_voltage_protect_flag) &&
                    test_attitude_within_limit(SAFE_MAX_ANGLE_ROLL, SAFE_MAX_ANGLE_PITCH));
 }
 
 static uint8 test_fly_output_safe(void)
 {
     return (uint8)((!emergency_stop_triggered) &&
-                   (!low_voltage_protect_flag) &&
                    test_attitude_within_limit(FLY_TEST_ATTITUDE_SAFE_DEG, FLY_TEST_ATTITUDE_SAFE_DEG));
 }
 
@@ -250,9 +248,12 @@ static const char *test_control_mode_name(uint8 mode)
 
 static void preflight_page(void)
 {
+    BatteryStatus battery_status;
     uint8 imu_ok = (uint8)((Check_IMU_Data_Quality() == 0) && !icm_calibration_flag);
     uint8 angle_ok = test_attitude_within_limit(SAFE_MAX_ANGLE_ROLL, SAFE_MAX_ANGLE_PITCH);
     uint8 motor_zero = test_all_motor_output_zero();
+
+    BatteryMonitor_GetStatus(&battery_status);
 
     test_page_show_text(TEST_ROW_Y(0U), "IMU:", imu_ok ? "OK   " : (icm_calibration_flag ? "CAL  " : "BAD  "),
                         imu_ok ? RGB565_GREEN : RGB565_RED);
@@ -265,7 +266,7 @@ static void preflight_page(void)
     test_page_show_text(TEST_ROW_Y(4U), "MOTOR OUT:", motor_zero ? "ZERO " : "HOT  ",
                         motor_zero ? RGB565_GREEN : RGB565_RED);
     test_page_show_text(TEST_ROW_Y(5U), "MODE:", test_control_mode_name(Flight_Control_Get_Mode()), RGB565_CYAN);
-    test_page_show_float(TEST_ROW_Y(6U), "BAT V:", car_bat_voltage, 2U, 2U);
+    test_page_show_float(TEST_ROW_Y(6U), "BAT V:", battery_status.local_filtered_voltage_v, 2U, 2U);
     test_page_show_int(TEST_ROW_Y(7U), "TGT THR:", (int32)Flight_Control_Get_Target_Throttle(), 4U);
     test_page_show_int(TEST_ROW_Y(8U), "BASE THR:", (int32)base_throttle, 4U);
     test_page_show_text(TEST_ROW_Y(10U), "K4:", "BACK ", RGB565_WHITE);

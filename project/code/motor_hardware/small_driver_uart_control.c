@@ -2,6 +2,55 @@
 
 small_device_value_struct motor_value;      // 定义通讯参数结构体
 
+#define SMALL_DRIVER_FRAME_LEN          11U
+#define SMALL_DRIVER_SERVICE_PERIOD_US  500U
+
+static uint8 s_pending_frame[SMALL_DRIVER_FRAME_LEN] = {0};
+static uint8 s_pending_valid = 0U;
+static SmallDriverUartDiag s_uart_diag = {0};
+
+static void small_driver_build_duty_frame(uint8 frame[SMALL_DRIVER_FRAME_LEN],
+                                          int16 motor_duty_1,
+                                          int16 motor_duty_2,
+                                          int16 motor_duty_3,
+                                          int16 motor_duty_4)
+{
+    int16 duty[4];
+    uint8 i;
+
+    duty[0] = motor_duty_1;
+    duty[1] = motor_duty_2;
+    duty[2] = motor_duty_3;
+    duty[3] = motor_duty_4;
+    frame[0] = 0xA5U;
+    frame[1] = 0x01U;
+
+    for(i = 0U; i < 4U; i++)
+    {
+        frame[i * 2U + 2U] = (uint8)(((uint16)duty[i] >> 8) & 0xFFU);
+        frame[i * 2U + 3U] = (uint8)((uint16)duty[i] & 0xFFU);
+    }
+
+    frame[10] = 0U;
+    for(i = 0U; i < 10U; i++)
+    {
+        frame[10] += frame[i];
+    }
+}
+
+static void small_driver_queue_frame(const uint8 frame[SMALL_DRIVER_FRAME_LEN])
+{
+    if(s_pending_valid)
+    {
+        s_uart_diag.overwritten_frame_count++;
+    }
+    memcpy(s_pending_frame, frame, SMALL_DRIVER_FRAME_LEN);
+    s_pending_valid = 1U;
+    s_uart_diag.pending = 1U;
+    s_uart_diag.pending_age_us = 0U;
+    s_uart_diag.queued_frame_count++;
+}
+
 
 //-------------------------------------------------------------------------------------------------------------------
 // 函数简介     无刷驱动 串口接收回调函数
@@ -72,34 +121,71 @@ void uart_control_callback(void)
 //-------------------------------------------------------------------------------------------------------------------
 void small_driver_set_duty(int16 motor_duty_1, int16 motor_duty_2, int16 motor_duty_3, int16 motor_duty_4)
 {
-    motor_value.send_data_buffer[0] = 0xA5;                                         // 配置帧头
+    small_driver_build_duty_frame(motor_value.send_data_buffer,
+                                  motor_duty_1,
+                                  motor_duty_2,
+                                  motor_duty_3,
+                                  motor_duty_4);
+    small_driver_queue_frame(motor_value.send_data_buffer);
+}
 
-    motor_value.send_data_buffer[1] = 0X01;                                         // 配置功能字
+void small_driver_service_tx(void)
+{
+    volatile stc_SCB_t *uart = get_scb_module(SMALL_DRIVER_UART);
+    uint32 copied;
 
-    motor_value.send_data_buffer[2] = (uint8)((motor_duty_1 & 0xFF00) >> 8);        // 拆分 电机1占空比 的高八位
-
-    motor_value.send_data_buffer[3] = (uint8)(motor_duty_1 & 0x00FF);               // 拆分 电机1占空比 的低八位
-
-    motor_value.send_data_buffer[4] = (uint8)((motor_duty_2 & 0xFF00) >> 8);        // 拆分 电机2占空比 的高八位
-
-    motor_value.send_data_buffer[5] = (uint8)(motor_duty_2 & 0x00FF);               // 拆分 电机2占空比 的低八位
-
-    motor_value.send_data_buffer[6] = (uint8)((motor_duty_3 & 0xFF00) >> 8);        // 拆分 电机3占空比 的高八位
-
-    motor_value.send_data_buffer[7] = (uint8)(motor_duty_3 & 0x00FF);               // 拆分 电机3占空比 的低八位
-
-    motor_value.send_data_buffer[8] = (uint8)((motor_duty_4 & 0xFF00) >> 8);        // 拆分 电机4占空比 的高八位
-
-    motor_value.send_data_buffer[9] = (uint8)(motor_duty_4 & 0x00FF);               // 拆分 电机4占空比 的低八位
-
-    motor_value.send_data_buffer[10] = 0;                                           // 和校验清除
-
-    for(int i = 0; i < 10; i ++)
+    if(!s_pending_valid)
     {
-        motor_value.send_data_buffer[10] += motor_value.send_data_buffer[i];        // 计算校验位
+        return;
     }
 
-    uart_write_buffer(SMALL_DRIVER_UART, motor_value.send_data_buffer, 11);                     // 发送设置占空比的 字节包 数据
+    if(!Cy_SCB_UART_IsTxComplete(uart))
+    {
+        uint32 next_age_us = (uint32)s_uart_diag.pending_age_us + SMALL_DRIVER_SERVICE_PERIOD_US;
+        s_uart_diag.pending_age_us = (uint16)((next_age_us > 0xFFFFU) ? 0xFFFFU : next_age_us);
+        if(s_uart_diag.pending_age_us > s_uart_diag.max_pending_age_us)
+        {
+            s_uart_diag.max_pending_age_us = s_uart_diag.pending_age_us;
+        }
+        return;
+    }
+
+    copied = Cy_SCB_UART_PutArray(uart, s_pending_frame, SMALL_DRIVER_FRAME_LEN);
+    if(copied != SMALL_DRIVER_FRAME_LEN)
+    {
+        Cy_SCB_UART_ClearTxFifo(uart);
+        s_uart_diag.fifo_error_count++;
+        return;
+    }
+
+    s_pending_valid = 0U;
+    s_uart_diag.pending = 0U;
+    s_uart_diag.pending_age_us = 0U;
+    s_uart_diag.sent_frame_count++;
+}
+
+void small_driver_force_zero(void)
+{
+    uint8 zero_frame[SMALL_DRIVER_FRAME_LEN];
+
+    small_driver_build_duty_frame(zero_frame, 0, 0, 0, 0);
+    small_driver_queue_frame(zero_frame);
+    s_uart_diag.zero_frame_count++;
+}
+
+void small_driver_get_diag(SmallDriverUartDiag *diag)
+{
+    if(diag != NULL)
+    {
+        uint32 irq_state = __get_PRIMASK();
+
+        __disable_irq();
+        *diag = s_uart_diag;
+        if(irq_state == 0U)
+        {
+            __enable_irq();
+        }
+    }
 }
 
 //-------------------------------------------------------------------------------------------------------------------
@@ -146,7 +232,7 @@ void small_driver_get_speed(void)
 //-------------------------------------------------------------------------------------------------------------------
 void small_driver_init(void)
 {
-    memset(motor_value.send_data_buffer, 0, 11);                             // 清除缓冲区数据
+    memset(motor_value.send_data_buffer, 0, SMALL_DRIVER_FRAME_LEN);         // 清除缓冲区数据
 
     memset(motor_value.receive_data_buffer, 0, 11);                          // 清除缓冲区数据
 
@@ -155,6 +241,9 @@ void small_driver_init(void)
     motor_value.receive_data_count          = 0;
 
     motor_value.sum_check_data              = 0;
+    memset(s_pending_frame, 0, sizeof(s_pending_frame));
+    memset(&s_uart_diag, 0, sizeof(s_uart_diag));
+    s_pending_valid = 0U;
 }
 
 
@@ -173,7 +262,8 @@ void small_driver_uart_init(void)
 
     small_driver_init();                                                                        // 结构体参数初始化
 
-    small_driver_set_duty(0, 0, 0, 0);                                                          // 设置0占空比
+    small_driver_force_zero();                                                                  // 设置0占空比
+    small_driver_service_tx();
 
     small_driver_get_speed();                                                                   // 获取实时速度数据
 }

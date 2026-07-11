@@ -197,8 +197,8 @@ static uint8 CameraCalibration_TablePixelToRay(float img_x, float img_y, float r
 {
     int x0 = (int)floorf(img_x);
     int y0 = (int)floorf(img_y);
-    int x1 = x0 + 1;
-    int y1 = y0 + 1;
+    int x1 = 0;
+    int y1 = 0;
     float tx = img_x - (float)x0;
     float ty = img_y - (float)y0;
     float inv_q = 1.0f / (float)(1L << CAMERA_RAY_TABLE_Q);
@@ -207,10 +207,15 @@ static uint8 CameraCalibration_TablePixelToRay(float img_x, float img_y, float r
     float rz = 0.0f;
     float len = 0.0f;
 
-    if(ray_body == NULL || x0 < 0 || y0 < 0 || x1 >= MT9V03X_W || y1 >= MT9V03X_H)
+    if(ray_body == NULL ||
+       img_x < 0.0f || img_x > ((float)MT9V03X_W - 1.0f) ||
+       img_y < 0.0f || img_y > ((float)MT9V03X_H - 1.0f))
     {
         return 0U;
     }
+
+    x1 = (x0 + 1 < MT9V03X_W) ? (x0 + 1) : x0;
+    y1 = (y0 + 1 < MT9V03X_H) ? (y0 + 1) : y0;
 
     if(camera_ray_table_valid[y0][x0] == 0U ||
        camera_ray_table_valid[y0][x1] == 0U ||

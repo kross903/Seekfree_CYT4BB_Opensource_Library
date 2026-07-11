@@ -50,6 +50,7 @@ static monitor_page_enum g_monitor_page = MONITOR_PAGE_DATA;
 
 static void build_monitor_runtime_snapshot(MonitorRuntimeSnapshot *snapshot)
 {
+    BatteryStatus battery_status;
     uint8 ir_track_valid = 0U;
     if(snapshot == NULL)
     {
@@ -57,13 +58,14 @@ static void build_monitor_runtime_snapshot(MonitorRuntimeSnapshot *snapshot)
     }
 
     VehicleMarkerLocalization_ServiceLostProtection();
+    BatteryMonitor_GetStatus(&battery_status);
     ir_track_valid = (uint8)((g_vehicle_marker_pose.valid && !g_vehicle_marker_position_lost_flag) ? 1U : 0U);
 
     snapshot->control_mode = control_mode;
     snapshot->armed = (uint8)(armed ? 1U : 0U);
     snapshot->low_voltage = (uint8)(low_voltage_protect_flag ? 1U : 0U);
     snapshot->has_nearest = ir_track_valid;
-    snapshot->voltage = car_bat_voltage;  /* 小车回传电压值，直接用于小车监视页显示。 */
+    snapshot->voltage = battery_status.local_filtered_voltage_v;
     snapshot->target_throttle = (int32)Flight_Control_Get_Target_Throttle();
     snapshot->base_throttle = (int32)base_throttle;
     snapshot->roll = current_roll;

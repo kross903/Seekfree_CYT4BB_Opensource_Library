@@ -1,6 +1,7 @@
 #include "communication/vofa.h"
 #include "communication/comm_mux.h"
 #include "common/project_headfile.h"
+#include "motor_hardware/small_driver_uart_control.h"
 #include <math.h>
 #include <string.h>
 
@@ -32,39 +33,7 @@ static void send_sixteen_date(float date_1, float date_2, float date_3, float da
                               float date_9, float date_10, float date_11, float date_12,
                               float date_13, float date_14, float date_15, float date_16);
 
-/*
- * 回传模式开关 (FX 命令切换):
- *   F0  光流原始/补偿数据 (case 0)
- *   F1  PID 参数回读 (case 1, 配合 R/r/P/p/Y/y/H/h/V/W 命令)
- *   F2  定位 / 高度观察 (case 2)
- *   F3  VOFA 无线链路测试 (case 3)
- *   F4  陀螺原始/校准数据 (case 4)
- *   F5  加速度原始/校准数据 (case 5)
- *   F6  Roll/Pitch 角度+角速度环监视 (case 6)
- *   F7  ADC + 摇杆历史调试 (case 7)
- *   F8  光流速度闭环综合监视 (case 8): I0~I3 X轴 光流实际/目标/积分项/pitch修正,
- *                                       I4~I7 Y轴 光流实际/目标/积分项/roll 修正
- *   F9  姿态解算总览 16 路诊断 (case 9)
- * FD  高度环监视 (case 13): I0 实际高度(cm), I1 目标高度(cm),
- *                                        I2 高度误差(cm), I3 油门修正,
- *                                        I4 目标垂直速度, I5 融合垂直速度,
- *                                        I6 速度误差, I7 base_throttle
- * FE  光流原始输入诊断 (case 14)
- * FG  红外正方形中心点与丢失保护诊断 (case 16)
- * FH  红外丢失保护状态机诊断 (case 17)
- * FI  红外位置闭环诊断 (case 18)
- * FL  红外位置环 PID 调参诊断 (case 21)
- * FM  X 轴位置-速度-Pitch-角速度链路诊断 (case 22)
- * FN  Y 轴位置-速度-Roll-角速度链路诊断 (case 23)
- * FP  X/Y/高度闭环 16 路总览诊断 (case 24)
- * FQ  小车红外灯/信标红外灯识别效果 16 路诊断 (case 25)
- * FR  0 核主循环耗时诊断 (case 26)
- * FS  高度估计 / 串级 PID 16 路诊断 (case 27)
- * FU  光流融合状态 16 路诊断 (case 29)
- * FV  beacon 下发槽位 16 路诊断 (case 30)
- * FW  当前帧连通域面积排序 16 路诊断 (case 31)
- * FX  光流 Kalman 融合 16 路诊断 (case 32)
- */
+/* 保留的回传模式：F2/F3/F4/F6/F8/FA/FD/FI/FU/FY/FZ。 */
 static int send_back_flag = 0;
 static uint8 send_back_command = 'R';
 
@@ -91,7 +60,6 @@ static void vofa_loop_profiler_init(void)
     }
 
     DWT->LAR = VOFA_DWT_LAR_UNLOCK;
-    DWT->CYCCNT = 0U;
     DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
     vofa_loop_profiler_ready = 1U;
 }
@@ -390,14 +358,13 @@ static void set_pmw_flow_gyro_gain_value(uint8 item, float value)
     }
 }
 
-    float roll = 0.0f;
-    float pitch = 0.0f;
-    float yaw = 0.0f;
 static void send_pid_data_back(uint8 command)
 {
     float value_1 = 0.0f;
     float value_2 = 0.0f;
     float value_3 = 0.0f;
+    float value_4 = 0.0f;
+    float value_5 = 0.0f;
 
     switch(command)
     {
@@ -407,7 +374,9 @@ static void send_pid_data_back(uint8 command)
 
         case 'r':
             Flight_Control_Get_Gyro_PID(AXIS_ROLL, &value_1, &value_2, &value_3);
-            break;
+            Flight_Control_Get_Gyro_Limits(AXIS_ROLL, &value_4, &value_5);
+            send_four_date(value_1, value_2, value_3, value_4, value_5, 0, 0, 0);
+            return;
 
         case 'P':
             Flight_Control_Get_Angle_PID(AXIS_PITCH, &value_1, &value_2, &value_3);
@@ -415,7 +384,9 @@ static void send_pid_data_back(uint8 command)
 
         case 'p':
             Flight_Control_Get_Gyro_PID(AXIS_PITCH, &value_1, &value_2, &value_3);
-            break;
+            Flight_Control_Get_Gyro_Limits(AXIS_PITCH, &value_4, &value_5);
+            send_four_date(value_1, value_2, value_3, value_4, value_5, 0, 0, 0);
+            return;
 
         case 'Y':
             Flight_Control_Get_Angle_PID(AXIS_YAW, &value_1, &value_2, &value_3);
@@ -423,7 +394,9 @@ static void send_pid_data_back(uint8 command)
 
         case 'y':
             Flight_Control_Get_Gyro_PID(AXIS_YAW, &value_1, &value_2, &value_3);
-            break;
+            Flight_Control_Get_Gyro_Limits(AXIS_YAW, &value_4, &value_5);
+            send_four_date(value_1, value_2, value_3, value_4, value_5, 0, 0, 0);
+            return;
 
         case 'H':
             Flight_Control_Get_Height_PID(&value_1, &value_2, &value_3);
@@ -494,14 +467,6 @@ static void send_pid_data_back(uint8 command)
                            current_roll, current_pitch);
             return;
         }
-
-        case 'T':
-            Flight_Control_Get_Target_Angle(&roll, &pitch, &yaw);
-            send_four_date(current_roll, current_pitch, current_yaw, icm42688_acc_x,
-                icm42688_acc_y, icm42688_acc_z,
-                roll, pitch);
-
-            return;
 
         case 'G':
         {
@@ -907,6 +872,7 @@ void USART_PID_Adjust(void)
     uint8 has_value = 0;
     uint8 command = 0;
     uint8 item = 0;
+    uint8 reply_command = 0U;
 
     if(!CommMux_IsVofaMode())
     {
@@ -930,6 +896,7 @@ void USART_PID_Adjust(void)
                 set_angle_pid_value(AXIS_ROLL, item, data_get);
             }
             send_back_command = 'R';
+            reply_command = 'R';
             break;
 
         case 'r':
@@ -938,6 +905,7 @@ void USART_PID_Adjust(void)
                 set_gyro_pid_value(AXIS_ROLL, item, data_get);
             }
             send_back_command = 'r';
+            reply_command = 'r';
             break;
 
         case 'P':
@@ -946,6 +914,7 @@ void USART_PID_Adjust(void)
                 set_angle_pid_value(AXIS_PITCH, item, data_get);
             }
             send_back_command = 'P';
+            reply_command = 'P';
             break;
 
         case 'p':
@@ -954,6 +923,7 @@ void USART_PID_Adjust(void)
                 set_gyro_pid_value(AXIS_PITCH, item, data_get);
             }
             send_back_command = 'p';
+            reply_command = 'p';
             break;
 
         case 'Y':
@@ -962,6 +932,7 @@ void USART_PID_Adjust(void)
                 set_angle_pid_value(AXIS_YAW, item, data_get);
             }
             send_back_command = 'Y';
+            reply_command = 'Y';
             break;
 
         case 'y':
@@ -970,6 +941,7 @@ void USART_PID_Adjust(void)
                 set_gyro_pid_value(AXIS_YAW, item, data_get);
             }
             send_back_command = 'y';
+            reply_command = 'y';
             break;
 
         case 'S':
@@ -978,6 +950,7 @@ void USART_PID_Adjust(void)
                 Flight_Control_Set_Throttle(data_get);
             }
             send_back_command = 'S';
+            reply_command = 'S';
             break;
 
         case 'B':
@@ -986,6 +959,7 @@ void USART_PID_Adjust(void)
                 set_hover_angle_compensation_value(item, data_get);
             }
             send_back_command = 'B';
+            reply_command = 'B';
             break;
 
         case 'V':
@@ -994,6 +968,7 @@ void USART_PID_Adjust(void)
                 set_vel_pid_value(0U, item, data_get);
             }
             send_back_command = 'V';
+            reply_command = 'V';
             break;
 
         case 'W':
@@ -1002,6 +977,7 @@ void USART_PID_Adjust(void)
                 set_vel_pid_value(1U, item, data_get);
             }
             send_back_command = 'W';
+            reply_command = 'W';
             break;
 
         case 'I':
@@ -1010,6 +986,7 @@ void USART_PID_Adjust(void)
                 set_pos_pid_value(0U, item, data_get);
             }
             send_back_command = 'I';
+            reply_command = 'I';
             break;
 
         case 'J':
@@ -1018,61 +995,29 @@ void USART_PID_Adjust(void)
                 set_pos_pid_value(1U, item, data_get);
             }
             send_back_command = 'J';
+            reply_command = 'J';
             break;
 
         case 'F':
             switch(item)
             {
-                case '0': send_back_flag = 0; break;
-                case '1': send_back_flag = 1; break;
                 case '2': send_back_flag = 2; break;
                 case '3': send_back_flag = 3; break;
                 case '4': send_back_flag = 4; break;
-                case '5': send_back_flag = 5; break;
                 case '6': send_back_flag = 6; break;
-                case '7': send_back_flag = 7; break;
                 case '8': send_back_flag = 8; break;
-                case '9': send_back_flag = 9; break;
                 case 'A':
                 case 'a': send_back_flag = 10; break;
-                case 'B':
-                case 'b': send_back_flag = 11; break;
-                case 'C':
-                case 'c': send_back_flag = 12; break;
                 case 'D':
                 case 'd': send_back_flag = 13; break;
-                case 'E':
-                case 'e': send_back_flag = 14; break;
-                case 'F':
-                case 'f': send_back_flag = 15; break;
-                case 'G':
-                case 'g': send_back_flag = 16; break;
-                case 'H':
-                case 'h': send_back_flag = 17; break;
                 case 'I':
                 case 'i': send_back_flag = 18; break;
-                case 'L':
-                case 'l': send_back_flag = 21; break;
-                case 'M':
-                case 'm': send_back_flag = 22; break;
-                case 'N':
-                case 'n': send_back_flag = 23; break;
-                case 'P':
-                case 'p': send_back_flag = 24; break;
-                case 'Q':
-                case 'q': send_back_flag = 25; break;
-                case 'R':
-                case 'r': send_back_flag = 26; break;
-                case 'S':
-                case 's': send_back_flag = 27; break;
                 case 'U':
                 case 'u': send_back_flag = 29; break;
-                case 'V':
-                case 'v': send_back_flag = 30; break;
-                case 'W':
-                case 'w': send_back_flag = 31; break;
-                case 'X':
-                case 'x': send_back_flag = 32; break;
+                case 'Y':
+                case 'y': send_back_flag = 33; break;
+                case 'Z':
+                case 'z': send_back_flag = 34; break;
                 default: break;
             }
 
@@ -1091,6 +1036,7 @@ void USART_PID_Adjust(void)
                 set_height_pid_value(item, data_get);
             }
             send_back_command = 'H';
+            reply_command = 'H';
             break;
 
         case 'h':
@@ -1099,6 +1045,7 @@ void USART_PID_Adjust(void)
                 set_height_vel_pid_value(item, data_get);
             }
             send_back_command = 'h';
+            reply_command = 'h';
             break;
 
         case 'G':
@@ -1107,6 +1054,7 @@ void USART_PID_Adjust(void)
                 set_pmw_flow_gyro_gain_value(item, data_get);
             }
             send_back_command = 'G';
+            reply_command = 'G';
             break;
 
         default:
@@ -1114,90 +1062,99 @@ void USART_PID_Adjust(void)
     }
 
     clear_active_vofa_packet();
+    if(reply_command != 0U)
+    {
+        send_pid_data_back(reply_command);
+    }
 }
 
 void send_date_back(void)
 {
-    uint8 ir_track_valid = 0U;
-
     if(!CommMux_IsVofaMode())
     {
         return;
     }
 
-    VehicleMarkerLocalization_ServiceLostProtection();
-    ir_track_valid = (uint8)((g_vehicle_marker_pose.valid && !g_vehicle_marker_position_lost_flag) ? 1U : 0U);
-
     switch(send_back_flag)
     {
-        case 0:
+        case 2:
         {
+            PositionLoopDiag_t pos_diag = {0};
             PMWFlowState_t pmw_flow_state = {0};
-            PMW_Flow_GetState(&pmw_flow_state);
+            float target_vx_cms = 0.0f;
+            float target_vy_cms = 0.0f;
 
-            send_four_date(pmw_flow_state.flow_x_rad,
-                           pmw_flow_state.gyro_flow_y_delta_rad,
-                           pmw_flow_state.flow_comp_x_rad,
-                           pmw_flow_state.velocity_x_raw_cms,
-                           pmw_flow_state.flow_y_rad,
-                           pmw_flow_state.gyro_flow_x_delta_rad,
-                           pmw_flow_state.flow_comp_y_rad,
-                           pmw_flow_state.velocity_y_raw_cms);
+            Position_Loop_Get_Diag(&pos_diag);
+            PMW_Flow_GetState(&pmw_flow_state);
+            Velocity_Loop_Get_Target_Velocity(&target_vx_cms, &target_vy_cms);
+
+            send_sixteen_date(target_angle_roll,
+                              current_roll,
+                              target_angle_pitch,
+                              current_pitch,
+                              target_angle_yaw,
+                              current_yaw,
+                              HeightManager_Get_Active_Target(),
+                              g_height_result.height_cm,
+                              target_vx_cms,
+                              pmw_flow_state.velocity_x_fused_cms,
+                              target_vy_cms,
+                              pmw_flow_state.velocity_y_fused_cms,
+                              pos_diag.target_x_cm,
+                              pos_diag.fb_x_cm,
+                              pos_diag.target_y_cm,
+                              pos_diag.fb_y_cm);
             break;
         }
 
-        case 1:
-            send_pid_data_back(send_back_command);
-            break;
-
-        case 2:
-            send_four_date(g_vehicle_marker_pose.x, g_height_result.height_cm,
-                           g_vehicle_marker_pose.z, tof_height_true_filt * 100.0f,
-                           0, current_roll,
-                           current_pitch, current_yaw);
-            break;
-
         case 3:
-            send_four_date(build_vofa_test_channel(), current_roll,
-                           current_pitch, current_yaw,
-                           g_height_result.height_cm, (float)dl1b_distance_mm,
-                           (float)dl1b_finsh_flag, 0);
+            send_four_date(build_vofa_test_channel(), 0, 0, 0, 0, 0, 0, 0);
             break;
 
         case 4:
-            send_four_date((float)icm42688_gyro_x_r, (float)icm42688_gyro_y_r,
-                           (float)icm42688_gyro_z_r, icm42688_gyro_x,
-                           icm42688_gyro_y, icm42688_gyro_z,
-                           0.0f, 0.0f);
-            break;
-
-        case 5:
-            send_four_date((float)icm42688_acc_x_r, (float)icm42688_acc_y_r,
-                           (float)icm42688_acc_z_r, icm42688_acc_x,
-                           icm42688_acc_y, icm42688_acc_z,
-                           acc, acc_norm_filtered);
+            send_sixteen_date((float)icm42688_gyro_x_r,
+                              (float)icm42688_gyro_y_r,
+                              (float)icm42688_gyro_z_r,
+                              icm42688_gyro_x,
+                              icm42688_gyro_y,
+                              icm42688_gyro_z,
+                              (float)icm42688_acc_x_r,
+                              (float)icm42688_acc_y_r,
+                              (float)icm42688_acc_z_r,
+                              icm42688_acc_x,
+                              icm42688_acc_y,
+                              icm42688_acc_z,
+                              acc,
+                              acc_norm_filtered,
+                              (float)Check_IMU_Data_Quality(),
+                              (float)icm_calibration_flag);
             break;
 
         case 6:
-            send_four_date(current_roll, target_angle_roll,
-                           current_gyro_roll, target_roll_rate,
-                           current_pitch, target_angle_pitch,
-                           current_gyro_pitch, target_pitch_rate);
-            break;
-
-        case 7:
-            send_four_date((float)adc_x, (float)adc_y,
-                           (float)adc_x_filtered, (float)adc_y_filtered,
-                           adc_x_nomalize, adc_y_nomalize,
-                           target_angle_roll, target_angle_pitch);
+            send_sixteen_date(target_angle_roll,
+                              current_roll,
+                              target_roll_rate,
+                              current_gyro_roll,
+                              roll_output,
+                              target_angle_pitch,
+                              current_pitch,
+                              target_pitch_rate,
+                              current_gyro_pitch,
+                              pitch_output,
+                              target_angle_yaw,
+                              current_yaw,
+                              target_yaw_rate,
+                              current_gyro_yaw,
+                              yaw_output,
+                              base_throttle);
             break;
 
         case 8:
         {
             /*
              * F8 - 速度环监视。
-             * 左半 (I0~I3) X 轴: 速度环滤波反馈 / 目标速度 / 积分输出 / 总输出；
-             * 右半 (I4~I7) Y 轴: 速度环滤波反馈 / 目标速度 / 积分输出 / 总输出。
+             * 左半 (I0~I3) X 轴: 目标速度 / 融合反馈 / 积分输出 / Pitch 修正；
+             * 右半 (I4~I7) Y 轴: 目标速度 / 融合反馈 / 积分输出 / Roll 修正。
              */
             float vx_target_cms = 0.0f;
             float vy_target_cms = 0.0f;
@@ -1213,35 +1170,16 @@ void send_date_back(void)
                                    &fb_vx_cms, &fb_vy_cms,
                                    &x_i_out, &y_i_out, NULL);
 
-            send_four_date(fb_vx_cms,
-                           vx_target_cms,
+            send_four_date(vx_target_cms,
+                           fb_vx_cms,
                            x_i_out,
                            pitch_corr_deg,
-                           fb_vy_cms,
                            vy_target_cms,
+                           fb_vy_cms,
                            y_i_out,
                            roll_corr_deg);
             break;
         }
-
-        case 9:
-            send_sixteen_date(current_roll,
-                              current_pitch,
-                              current_yaw,
-                              Yaw_a_Pi_genrl * Rad2Ang,
-                              q0,
-                              q1,
-                              q2,
-                              q3,
-                              Roll_g_F,
-                              Pitch_g_F,
-                              Yaw_g_F,
-                              acc_norm_filtered,
-                              Roll_acc_F,
-                              Pitch_acc_F,
-                              Yaw_acc_F,
-                              (float)Check_IMU_Data_Quality());
-            break;
 
         case 10:
         {
@@ -1251,56 +1189,22 @@ void send_date_back(void)
 
             Body_To_RollPitch_Level_Frame(Roll_acc_F, Pitch_acc_F, Yaw_acc_F,
                                           &ax_level_mg, &ay_level_mg, &az_level_mg);
+            (void)az_level_mg;
 
-            send_four_date(current_roll,
-                           current_pitch,
-                           ax_level_mg,
+            send_four_date(ax_level_mg,
                            ay_level_mg,
-                           az_level_mg,
+                           acc_level_x_bias_mg,
                            acc_level_y_bias_mg,
                            ax_level_mg - acc_level_x_bias_mg,
-                           ay_level_mg - acc_level_y_bias_mg);
-            break;
-        }
-
-        case 11:
-        {
-            PMWFlowState_t pmw_flow_state = {0};
-            PMW_Flow_GetState(&pmw_flow_state);
-
-            send_four_date(pmw_flow_state.velocity_x_cms,
-                           pmw_flow_state.velocity_y_cms,
-                           pmw_flow_state.yaw_deg,
-                           pmw_flow_state.velocity_x_world_cms,
-                           pmw_flow_state.velocity_y_world_cms,
-                           pmw_flow_state.position_x_world_cm,
-                           pmw_flow_state.position_y_world_cm,
-                           (float)pmw_flow_state.fused_velocity_valid);
-            break;
-        }
-
-        case 12:
-        {
-            PMWFlowState_t pmw_flow_state = {0};
-            PMW_Flow_GetState(&pmw_flow_state);
-
-            send_four_date(pmw_flow_state.position_x_world_cm,
-                           pmw_flow_state.position_y_world_cm,
-                           pmw_flow_state.flow_position_x_world_cm,
-                           pmw_flow_state.flow_position_y_world_cm,
-                           pmw_flow_state.flow_delta_x_world_cm,
-                           pmw_flow_state.flow_delta_y_world_cm,
-                           pmw_flow_state.yaw_deg,
-                           (float)pmw_flow_state.flow_position_valid);
+                           ay_level_mg - acc_level_y_bias_mg,
+                           X_V_F,
+                           Y_V_F);
             break;
         }
 
         case 13:
         {
-            /* FD: I0 height, I1 target, I2 height error, I3 throttle correction,
-             *     I4 target vz, I5 fused vz, I6 velocity error, I7 base throttle.
-             */
-            HeightManagerDiag_t height_diag;
+            HeightManagerDiag_t height_diag = {0};
             float actual_cm;
             float target_cm;
             float error_cm;
@@ -1318,240 +1222,9 @@ void send_date_back(void)
             {
                 error_cm = -40.0f;
             }
-            send_four_date(actual_cm,
-                           target_cm,
-                           error_cm,
-                           HeightSpeedPID_output,
-                           height_diag.target_velocity_cms,
-                           g_height_result.velocity_cms,
-                           height_diag.velocity_error_cms,
-                           base_throttle);
-            break;
-        }
-
-        case 14:
-        {
-            PMWFlowState_t pmw_flow_state = {0};
-            PMW_Flow_GetState(&pmw_flow_state);
-
-#if FLOW_SENSOR_SELECTED == FLOW_SENSOR_UPFLOW302
-            send_four_date((float)FLOW_SENSOR_SELECTED,
-                           (float)pmw_flow_state.flow_delta_x_count,
-                           (float)pmw_flow_state.flow_delta_y_count,
-                           (float)upflow302_receive.upflow302_valid,
-                           (float)upflow302_state_flag,
-                           (float)upflow302_finsh_flag,
-                           (float)upflow302_receive.upflow302_us,
-                           pmw_flow_state.dt_s);
-#else
-            send_four_date((float)FLOW_SENSOR_SELECTED,
-                           (float)pmw_flow_state.flow_delta_x_count,
-                           (float)(-pmw_flow_state.flow_delta_y_count),
-                           pmw_flow_state.valid,
-                           pmw_flow_state.dt_s,
-                           pmw_flow_state.flow_x_rad,
-                           pmw_flow_state.flow_y_rad,
-                           pmw_flow_state.tof_los_cm);
-#endif
-            break;
-        }
-
-        case 15:
-        {
-            float roll_i_out = angle_pid_roll.Ki * angle_pid_roll.integral;
-            float pitch_i_out = angle_pid_pitch.Ki * angle_pid_pitch.integral;
-
-            send_four_date(target_angle_roll,
-                           current_roll,
-                           roll_i_out,
-                           target_roll_rate,
-                           target_angle_pitch,
-                           current_pitch,
-                           pitch_i_out,
-                           target_pitch_rate);
-            break;
-        }
-
-        case 16:
-            send_four_date(g_vehicle_marker_pose.x,
-                           g_vehicle_marker_pose.y,
-                           g_vehicle_marker_pose.z,
-                           g_vehicle_marker_pose.square_side_cm,
-                           (float)ir_track_valid,
-                           (float)g_vehicle_marker_position_lost_flag,
-                           (float)g_vehicle_marker_position_lost_elapsed_ms,
-                           (float)g_vehicle_marker_pose.detected_point_count);
-            break;
-
-        case 17:
-        {
-            VehicleMarkerLossDebug_t ir_loss_debug = {0};
-            VehicleMarkerLocalization_GetLossDebug(&ir_loss_debug);
-
-            send_four_date(g_vehicle_marker_pose.x,
-                           g_vehicle_marker_pose.y,
-                           (float)ir_loss_debug.raw_detect_valid,
-                           (float)ir_loss_debug.lost_flag,
-                           (float)ir_loss_debug.lost_elapsed_ms,
-                           (float)ir_loss_debug.has_trackable_pose,
-                           (float)ir_loss_debug.task_5ms_count,
-                           (float)ir_loss_debug.timeout_count);
-            break;
-        }
-
-        case 18:
-        {
-            PositionLoopDiag_t pos_diag = {0};
-            Position_Loop_Get_Diag(&pos_diag);
-
-            send_four_date(pos_diag.fb_x_cm,
-                           pos_diag.fb_y_cm,
-                           pos_diag.vx_cmd_cms,
-                           pos_diag.vy_cmd_cms,
-                           (float)pos_diag.enabled,
-                           (float)pos_diag.active,
-                           (float)pos_diag.ir_track_valid,
-                           (float)pos_diag.velocity_ready);
-            break;
-        }
-
-        case 21:
-        {
-            PositionLoopDiag_t pos_diag = {0};
-            float x_p_out = 0.0f;
-            float y_p_out = 0.0f;
-
-            Position_Loop_Get_Diag(&pos_diag);
-            x_p_out = pos_pid_x.Kp * pos_diag.error_x_cm;
-            y_p_out = pos_pid_y.Kp * pos_diag.error_y_cm;
-
-            send_four_date(pos_diag.error_x_cm,
-                           x_p_out,
-                           pos_diag.x_i_out,
-                           pos_diag.vx_cmd_cms,
-                           pos_diag.error_y_cm,
-                           y_p_out,
-                           pos_diag.y_i_out,
-                           pos_diag.vy_cmd_cms);
-            break;
-        }
-
-        case 22:
-        {
-            PositionLoopDiag_t pos_diag = {0};
-            PMWFlowState_t pmw_flow_state = {0};
-
-            Position_Loop_Get_Diag(&pos_diag);
-            PMW_Flow_GetState(&pmw_flow_state);
-
-            send_four_date(pos_diag.fb_x_cm,
-                           pos_diag.vx_cmd_cms,
-                           pmw_flow_state.velocity_x_fused_cms,
-                           target_angle_pitch,
-                           current_pitch,
-                           target_pitch_rate,
-                           current_gyro_pitch,
-                           (float)pos_diag.active);
-            break;
-        }
-
-        case 23:
-        {
-            PositionLoopDiag_t pos_diag = {0};
-            PMWFlowState_t pmw_flow_state = {0};
-
-            Position_Loop_Get_Diag(&pos_diag);
-            PMW_Flow_GetState(&pmw_flow_state);
-
-            send_four_date(pos_diag.fb_y_cm,
-                           pos_diag.vy_cmd_cms,
-                           pmw_flow_state.velocity_y_fused_cms,
-                           target_angle_roll,
-                           current_roll,
-                           target_roll_rate,
-                           current_gyro_roll,
-                           (float)pos_diag.active);
-            break;
-        }
-
-        case 24:
-        {
-            PositionLoopDiag_t pos_diag = {0};
-            float fb_vx_cms = 0.0f;
-            float fb_vy_cms = 0.0f;
-
-            Position_Loop_Get_Diag(&pos_diag);
-            Velocity_Loop_Get_Diag(NULL, NULL,
-                                   &fb_vx_cms, &fb_vy_cms,
-                                   NULL, NULL, NULL);
-
-            send_sixteen_date(pos_diag.target_x_cm,
-                              pos_diag.target_y_cm,
-                              pos_diag.vx_cmd_cms,
-                              pos_diag.vy_cmd_cms,
-                              fb_vx_cms,
-                              fb_vy_cms,
-                              target_angle_pitch,
-                              target_angle_roll,
-                              current_pitch,
-                              current_roll,
-                              target_pitch_rate,
-                              target_roll_rate,
-                              current_gyro_pitch,
-                              current_gyro_roll,
-                              HeightManager_Get_Active_Target(),
-                              g_height_result.height_cm);
-            break;
-        }
-
-        case 25:
-        {
-            VisionRuntimeDiag_t vision_diag = {0};
-
-            VisionRuntime_GetDiag(&vision_diag);
-
-            send_sixteen_date((float)vision_diag.blob_count,
-                              (float)vision_diag.ir_split_count,
-                              (float)vision_diag.beacon_split_count,
-                              (float)vision_diag.ir_blob_count,
-                              (float)vision_diag.ir_reject_area_low_count,
-                              (float)vision_diag.ir_reject_area_high_count,
-                              (float)vision_diag.ir_reject_size_count,
-                              (float)vision_diag.ir_reject_aspect_count,
-                              (float)vision_diag.ir_reject_insert_count,
-                              (float)vision_diag.ir_track_valid,
-                              (float)vision_diag.ir_detected_point_count,
-                              vision_diag.ir_x_cm,
-                              vision_diag.ir_y_cm,
-                              vision_diag.ir_square_side_cm,
-                              vision_diag.ir_height_cm,
-                              (float)vision_diag.beacon_blob_count);
-            break;
-        }
-
-        case 26:
-            send_four_date(vofa_loop_last_us,
-                           vofa_loop_max_us,
-                           vofa_loop_avg_us,
-                           vofa_loop_freq_hz,
-                           (float)vofa_loop_count,
-                           (float)vofa_loop_overrun_count,
-                           VOFA_LOOP_OVERRUN_US,
-                           (float)SystemCoreClock);
-            break;
-
-        case 27:
-        {
-            HeightManagerDiag_t height_diag;
-            float actual_cm;
-            float target_cm;
-
-            HeightManager_Get_Diag(&height_diag);
-            actual_cm = g_height_result.height_cm;
-            target_cm = HeightManager_Get_Active_Target();
-
-            send_sixteen_date(actual_cm,
-                              target_cm,
+            send_sixteen_date(target_cm,
+                              actual_cm,
+                              error_cm,
                               height_diag.tof_median_cm,
                               height_diag.tof_height_filt_cm,
                               height_diag.tof_velocity_cms,
@@ -1560,12 +1233,40 @@ void send_date_back(void)
                               height_diag.target_velocity_cms,
                               height_diag.velocity_error_cms,
                               height_diag.velocity_pid_output,
+                              base_throttle,
                               height_diag.acc_z_level_mg,
-                              height_diag.gravity_bias_mg,
-                              height_diag.acc_z_cms2,
                               (float)height_diag.tof_valid,
                               (float)height_diag.acc_used,
                               (float)height_diag.cascade_enabled);
+            break;
+        }
+
+        case 18:
+        {
+            PositionLoopDiag_t pos_diag = {0};
+            float x_p_out;
+            float y_p_out;
+
+            Position_Loop_Get_Diag(&pos_diag);
+            x_p_out = pos_pid_x.Kp * pos_diag.error_x_cm;
+            y_p_out = pos_pid_y.Kp * pos_diag.error_y_cm;
+
+            send_sixteen_date(pos_diag.target_x_cm,
+                              pos_diag.fb_x_cm,
+                              pos_diag.error_x_cm,
+                              x_p_out,
+                              pos_diag.x_i_out,
+                              pos_diag.vx_cmd_cms,
+                              pos_diag.target_y_cm,
+                              pos_diag.fb_y_cm,
+                              pos_diag.error_y_cm,
+                              y_p_out,
+                              pos_diag.y_i_out,
+                              pos_diag.vy_cmd_cms,
+                              (float)pos_diag.enabled,
+                              (float)pos_diag.active,
+                              (float)pos_diag.ir_track_valid,
+                              (float)pos_diag.velocity_ready);
             break;
         }
 
@@ -1573,108 +1274,78 @@ void send_date_back(void)
         {
             PMWFlowState_t pmw_flow_state = {0};
             uint8 tof_source = 0U;
-            float fb_vx_cms = 0.0f;
-            float fb_vy_cms = 0.0f;
 
             PMW_Flow_GetState(&pmw_flow_state);
             PMW_Flow_Get_TOF_Status(NULL, NULL, &tof_source);
-            Velocity_Loop_Get_Diag(NULL, NULL,
-                                   &fb_vx_cms, &fb_vy_cms,
-                                   NULL, NULL, NULL);
 
-            send_sixteen_date((float)pmw_flow_state.valid,
-                              (float)pmw_flow_state.flow_used,
-                              (float)pmw_flow_state.acc_used,
-                              (float)pmw_flow_state.fused_velocity_valid,
-                              (float)tof_source,
-                              pmw_flow_state.range_cm,
+            send_sixteen_date((float)pmw_flow_state.flow_delta_x_count,
+                              (float)pmw_flow_state.flow_delta_y_count,
+                              (float)pmw_flow_state.valid,
                               pmw_flow_state.dt_s,
-                              pmw_flow_state.flow_confidence,
-                              pmw_flow_state.flow_fusion_alpha,
-                              pmw_flow_state.flow_residual_norm_cms,
-                              fb_vx_cms,
-                              fb_vy_cms,
+                              pmw_flow_state.range_cm,
+                              (float)tof_source,
                               pmw_flow_state.velocity_x_cms,
                               pmw_flow_state.velocity_y_cms,
                               pmw_flow_state.velocity_x_fused_cms,
-                              pmw_flow_state.velocity_y_fused_cms);
-            break;
-        }
-
-        case 30:
-        {
-            VisionRuntimeDiag_t vision_diag = {0};
-            VisionRuntimeBeaconSlot_t beacon_slots[VISION_RUNTIME_BEACON_SLOT_COUNT] = {0};
-
-            VisionRuntime_GetDiag(&vision_diag);
-            VisionRuntime_GetBeaconSlots(beacon_slots, VISION_RUNTIME_BEACON_SLOT_COUNT);
-
-            send_sixteen_date((float)vision_diag.beacon_count,
-                              (float)beacon_slots[0].valid,
-                              beacon_slots[0].x_cm,
-                              beacon_slots[0].y_cm,
-                              (float)beacon_slots[1].valid,
-                              beacon_slots[1].x_cm,
-                              beacon_slots[1].y_cm,
-                              (float)beacon_slots[2].valid,
-                              beacon_slots[2].x_cm,
-                              beacon_slots[2].y_cm,
-                              (float)beacon_slots[3].valid,
-                              beacon_slots[3].x_cm,
-                              beacon_slots[3].y_cm,
-                              (float)beacon_slots[4].valid,
-                              beacon_slots[4].x_cm,
-                              beacon_slots[4].y_cm);
-            break;
-        }
-
-        case 31:
-        {
-            VisionRuntimeDiag_t vision_diag = {0};
-
-            VisionRuntime_GetDiag(&vision_diag);
-
-            send_sixteen_date((float)vision_diag.blob_area_rank[0],
-                              (float)vision_diag.blob_area_rank[1],
-                              (float)vision_diag.blob_area_rank[2],
-                              (float)vision_diag.blob_area_rank[3],
-                              (float)vision_diag.blob_area_rank[4],
-                              (float)vision_diag.blob_area_rank[5],
-                              (float)vision_diag.blob_area_rank[6],
-                              (float)vision_diag.blob_area_rank[7],
-                              (float)vision_diag.blob_area_rank[8],
-                              (float)vision_diag.blob_area_rank[9],
-                              (float)vision_diag.blob_area_rank[10],
-                              (float)vision_diag.blob_area_rank[11],
-                              (float)vision_diag.blob_area_rank[12],
-                              (float)vision_diag.blob_area_rank[13],
-                              (float)vision_diag.blob_area_rank[14],
-                              (float)vision_diag.blob_area_rank[15]);
-            break;
-        }
-
-        case 32:
-        {
-            PMWFlowState_t pmw_flow_state = {0};
-
-            PMW_Flow_GetState(&pmw_flow_state);
-
-            send_sixteen_date((float)pmw_flow_state.valid,
-                              (float)pmw_flow_state.fused_velocity_valid,
+                              pmw_flow_state.velocity_y_fused_cms,
+                              pmw_flow_state.flow_confidence,
+                              pmw_flow_state.flow_residual_norm_cms,
+                              pmw_flow_state.flow_fusion_alpha,
                               (float)pmw_flow_state.flow_used,
                               (float)pmw_flow_state.acc_used,
-                              pmw_flow_state.flow_confidence,
-                              pmw_flow_state.flow_residual_norm_cms,
-                              pmw_flow_state.kalman_k_x,
-                              pmw_flow_state.kalman_k_y,
-                              pmw_flow_state.kalman_p_x,
-                              pmw_flow_state.kalman_p_y,
-                              pmw_flow_state.kalman_r_x,
-                              pmw_flow_state.kalman_r_y,
-                              pmw_flow_state.velocity_x_cms,
-                              pmw_flow_state.velocity_y_cms,
-                              pmw_flow_state.velocity_x_fused_cms,
-                              pmw_flow_state.velocity_y_fused_cms);
+                              (float)pmw_flow_state.fused_velocity_valid);
+            break;
+        }
+
+        case 33:
+        {
+            FlightRealtimeDiag realtime_diag = {0};
+
+            FlightRealtime_GetDiag(&realtime_diag);
+            send_sixteen_date(realtime_diag.control_last_us,
+                              realtime_diag.control_max_us,
+                              realtime_diag.control_interval_min_us,
+                              realtime_diag.control_interval_max_us,
+                              (float)realtime_diag.control_execution_overrun_count,
+                              (float)realtime_diag.control_delayed_entry_count,
+                              (float)realtime_diag.control_count,
+                              realtime_diag.motor_last_us,
+                              realtime_diag.motor_max_us,
+                              (float)realtime_diag.motor_execution_overrun_count,
+                              (float)realtime_diag.motor_count,
+                              vofa_loop_last_us,
+                              vofa_loop_max_us,
+                              vofa_loop_avg_us,
+                              (float)vofa_loop_overrun_count,
+                              (float)vofa_loop_count);
+            break;
+        }
+
+        case 34:
+        {
+            BatteryStatus battery_status = {0};
+            MotorHardwareVoltageCompDiag motor_diag = {0};
+            SmallDriverUartDiag uart_diag = {0};
+
+            BatteryMonitor_GetStatus(&battery_status);
+            MotorHardware_GetVoltageCompDiag(&motor_diag);
+            small_driver_get_diag(&uart_diag);
+            send_sixteen_date(battery_status.local_raw_voltage_v,
+                              battery_status.local_filtered_voltage_v,
+                              battery_status.remote_voltage_v,
+                              battery_status.compensation_gain,
+                              (float)battery_status.local_valid,
+                              (float)battery_status.remote_valid,
+                              (float)battery_status.low_warning,
+                              motor_diag.compensated_output[0],
+                              motor_diag.compensated_output[1],
+                              motor_diag.compensated_output[2],
+                              motor_diag.compensated_output[3],
+                              (float)motor_diag.saturation_mask,
+                              (float)motor_diag.invalid_output,
+                              (float)uart_diag.overwritten_frame_count,
+                              (float)uart_diag.max_pending_age_us,
+                              (float)uart_diag.fifo_error_count);
             break;
         }
 

@@ -58,6 +58,21 @@ extern volatile float pos_fusion_r_tof;
 extern volatile float pos_fusion_r_fused;
 extern volatile float pos_fusion_residual;
 extern volatile uint8 pos_fusion_fault;
+
+typedef struct
+{
+    float control_last_us;
+    float control_max_us;
+    float control_interval_min_us;
+    float control_interval_max_us;
+    float motor_last_us;
+    float motor_max_us;
+    uint32 control_count;
+    uint32 control_execution_overrun_count;
+    uint32 control_delayed_entry_count;
+    uint32 motor_count;
+    uint32 motor_execution_overrun_count;
+} FlightRealtimeDiag;
 // ==================== Flight-runtime interface ====================
 /*
  * [2026-03-10]
@@ -97,5 +112,10 @@ void PIT_OpticalFlow_Task(void);
 void PIT_PMW3901_Task_20ms(void);
 void PIT_Control_Task_250us(void);
 void PIT_Motor_Task_500us(void);
+void FlightRealtime_ControlBegin(void);
+void FlightRealtime_ControlEnd(void);
+void FlightRealtime_MotorBegin(void);
+void FlightRealtime_MotorEnd(void);
+void FlightRealtime_GetDiag(FlightRealtimeDiag *diag);
 
 #endif

@@ -18,7 +18,7 @@
 
 /*
  * 陀螺去旋转增益（按轴独立）。
- * 来源：F0! 光流数据.csv 上对 flow_x_rad ~ gyro_y_delta_rad、
+ * 来源：历史光流标定数据中对 flow_x_rad ~ gyro_y_delta_rad、
  *       flow_y_rad ~ gyro_x_delta_rad 做最小二乘回归，斜率分别 ≈ 1.43 / 1.32，
  *       说明默认 K=1 时陀螺补偿不足，flow_comp 残留约 30~40% 同向旋转分量。
  * 这里把 K_X / K_Y 提取为可调增益：

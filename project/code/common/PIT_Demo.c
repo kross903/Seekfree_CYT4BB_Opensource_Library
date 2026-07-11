@@ -12,6 +12,7 @@
 #include "menu/menu_motor_test.h"
 #include "motor_hardware/motor_hardware.h"
 #include "pmw/optical_flow_feed.h"
+#include <math.h>
 
 // ==================== Configuration constants ====================
 
@@ -20,6 +21,11 @@
 #define CONTROL_DT_MS                  0.25f
 
 #define ADC_INPUT_LPF_ALPHA            0.20f
+
+#define FLIGHT_REALTIME_DWT_LAR_UNLOCK 0xC5ACCE55UL
+#define CONTROL_PERIOD_US              250U
+#define MOTOR_PERIOD_US                500U
+#define CONTROL_DELAY_THRESHOLD_US     313U
 
 /*
  * 真位置闭环参数。
@@ -91,6 +97,178 @@ volatile float pos_fusion_r_fused  = 0.0f;
 volatile float pos_fusion_residual = 0.0f;
 volatile uint8 pos_fusion_fault    = 0U;
 
+static uint8 s_realtime_ready = 0U;
+static uint32 s_control_start_cycle = 0U;
+static uint32 s_control_last_entry_cycle = 0U;
+static uint32 s_control_last_cycles = 0U;
+static uint32 s_control_max_cycles = 0U;
+static uint32 s_control_interval_min_cycles = 0xFFFFFFFFU;
+static uint32 s_control_interval_max_cycles = 0U;
+static uint32 s_control_count = 0U;
+static uint32 s_control_execution_overrun_count = 0U;
+static uint32 s_control_delayed_entry_count = 0U;
+static uint32 s_motor_start_cycle = 0U;
+static uint32 s_motor_last_cycles = 0U;
+static uint32 s_motor_max_cycles = 0U;
+static uint32 s_motor_count = 0U;
+static uint32 s_motor_execution_overrun_count = 0U;
+
+static void flight_realtime_init(void)
+{
+    if(s_realtime_ready)
+    {
+        return;
+    }
+
+    CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+    if((DWT->CTRL & DWT_CTRL_NOCYCCNT_Msk) != 0U)
+    {
+        return;
+    }
+    DWT->LAR = FLIGHT_REALTIME_DWT_LAR_UNLOCK;
+    DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
+    s_realtime_ready = 1U;
+}
+
+static uint32 flight_realtime_us_to_cycles(uint32 time_us)
+{
+    return (uint32)(((uint64)SystemCoreClock * time_us) / 1000000ULL);
+}
+
+static float flight_realtime_cycles_to_us(uint32 cycles)
+{
+    if(!s_realtime_ready || SystemCoreClock == 0U)
+    {
+        return 0.0f;
+    }
+    return ((float)cycles * 1000000.0f) / (float)SystemCoreClock;
+}
+
+void FlightRealtime_ControlBegin(void)
+{
+    uint32 now;
+
+    flight_realtime_init();
+    if(!s_realtime_ready)
+    {
+        return;
+    }
+
+    now = DWT->CYCCNT;
+    if(s_control_last_entry_cycle != 0U)
+    {
+        uint32 interval = now - s_control_last_entry_cycle;
+        if(interval < s_control_interval_min_cycles)
+        {
+            s_control_interval_min_cycles = interval;
+        }
+        if(interval > s_control_interval_max_cycles)
+        {
+            s_control_interval_max_cycles = interval;
+        }
+        if(interval > flight_realtime_us_to_cycles(CONTROL_DELAY_THRESHOLD_US))
+        {
+            s_control_delayed_entry_count++;
+        }
+    }
+    s_control_last_entry_cycle = now;
+    s_control_start_cycle = now;
+}
+
+void FlightRealtime_ControlEnd(void)
+{
+    uint32 elapsed;
+
+    if(!s_realtime_ready)
+    {
+        return;
+    }
+    elapsed = DWT->CYCCNT - s_control_start_cycle;
+    s_control_last_cycles = elapsed;
+    if(elapsed > s_control_max_cycles)
+    {
+        s_control_max_cycles = elapsed;
+    }
+    if(elapsed > flight_realtime_us_to_cycles(CONTROL_PERIOD_US))
+    {
+        s_control_execution_overrun_count++;
+    }
+    s_control_count++;
+}
+
+void FlightRealtime_MotorBegin(void)
+{
+    flight_realtime_init();
+    if(s_realtime_ready)
+    {
+        s_motor_start_cycle = DWT->CYCCNT;
+    }
+}
+
+void FlightRealtime_MotorEnd(void)
+{
+    uint32 elapsed;
+
+    if(!s_realtime_ready)
+    {
+        return;
+    }
+    elapsed = DWT->CYCCNT - s_motor_start_cycle;
+    s_motor_last_cycles = elapsed;
+    if(elapsed > s_motor_max_cycles)
+    {
+        s_motor_max_cycles = elapsed;
+    }
+    if(elapsed > flight_realtime_us_to_cycles(MOTOR_PERIOD_US))
+    {
+        s_motor_execution_overrun_count++;
+    }
+    s_motor_count++;
+}
+
+void FlightRealtime_GetDiag(FlightRealtimeDiag *diag)
+{
+    uint32 irq_state;
+    uint32 control_last_cycles;
+    uint32 control_max_cycles;
+    uint32 control_interval_min_cycles;
+    uint32 control_interval_max_cycles;
+    uint32 motor_last_cycles;
+    uint32 motor_max_cycles;
+
+    if(diag == NULL)
+    {
+        return;
+    }
+
+    irq_state = __get_PRIMASK();
+    __disable_irq();
+    control_last_cycles = s_control_last_cycles;
+    control_max_cycles = s_control_max_cycles;
+    control_interval_min_cycles = s_control_interval_min_cycles;
+    control_interval_max_cycles = s_control_interval_max_cycles;
+    motor_last_cycles = s_motor_last_cycles;
+    motor_max_cycles = s_motor_max_cycles;
+    diag->control_count = s_control_count;
+    diag->control_execution_overrun_count = s_control_execution_overrun_count;
+    diag->control_delayed_entry_count = s_control_delayed_entry_count;
+    diag->motor_count = s_motor_count;
+    diag->motor_execution_overrun_count = s_motor_execution_overrun_count;
+    if(irq_state == 0U)
+    {
+        __enable_irq();
+    }
+
+    diag->control_last_us = flight_realtime_cycles_to_us(control_last_cycles);
+    diag->control_max_us = flight_realtime_cycles_to_us(control_max_cycles);
+    diag->control_interval_min_us = (control_interval_min_cycles == 0xFFFFFFFFU)
+                                      ? 0.0f
+                                      : flight_realtime_cycles_to_us(control_interval_min_cycles);
+    diag->control_interval_max_us = flight_realtime_cycles_to_us(control_interval_max_cycles);
+    diag->motor_last_us = flight_realtime_cycles_to_us(motor_last_cycles);
+    diag->motor_max_us = flight_realtime_cycles_to_us(motor_max_cycles);
+}
+
 // ==================== Motor output and motor-test state ====================
 
 // ==================== Motor output helpers ====================
@@ -122,7 +300,8 @@ static uint8 check_attitude_safety(void)
 
 static uint8 check_fly_test_attitude_safety(void)
 {
-    return (uint8)((current_roll > FLY_TEST_ATTITUDE_SAFE_DEG) ||
+    return (uint8)(!isfinite(current_roll) || !isfinite(current_pitch) ||
+                   (current_roll > FLY_TEST_ATTITUDE_SAFE_DEG) ||
                    (current_roll < -FLY_TEST_ATTITUDE_SAFE_DEG) ||
                    (current_pitch > FLY_TEST_ATTITUDE_SAFE_DEG) ||
                    (current_pitch < -FLY_TEST_ATTITUDE_SAFE_DEG));
@@ -130,7 +309,8 @@ static uint8 check_fly_test_attitude_safety(void)
 
 static uint8 check_menu_test_attitude_safety(void)
 {
-    return (uint8)((current_roll > SAFE_MAX_ANGLE_ROLL) ||
+    return (uint8)(!isfinite(current_roll) || !isfinite(current_pitch) ||
+                   (current_roll > SAFE_MAX_ANGLE_ROLL) ||
                    (current_roll < -SAFE_MAX_ANGLE_ROLL) ||
                    (current_pitch > SAFE_MAX_ANGLE_PITCH) ||
                    (current_pitch < -SAFE_MAX_ANGLE_PITCH));
@@ -280,7 +460,7 @@ void Flight_Fly_Test_Set_Output_Enable(uint8 enable)
         return;
     }
 
-    if(emergency_stop_triggered || low_voltage_protect_flag)
+    if(emergency_stop_triggered)
     {
         MenuFlyTest_SetOutputEnable(0U);
         MenuFlyTest_SetConfirmState(FLY_TEST_CONFIRM_IDLE);
@@ -423,7 +603,7 @@ static uint8 control_task_handle_motor_test(void)
         return 0U;
     }
 
-    if(emergency_stop_triggered || low_voltage_protect_flag || check_menu_test_attitude_safety())
+    if(emergency_stop_triggered || check_menu_test_attitude_safety())
     {
         MenuMotorTest_SetOutputEnable(0U);
         Angle_Loop_Reset_Rate_Cmd_Lpf();
@@ -449,7 +629,7 @@ static uint8 control_task_handle_fly_test(void)
         return 0U;
     }
 
-    if(emergency_stop_triggered || low_voltage_protect_flag)
+    if(emergency_stop_triggered)
     {
         MenuFlyTest_SetOutputEnable(0U);
         MenuFlyTest_SetConfirmState(FLY_TEST_CONFIRM_IDLE);
@@ -542,6 +722,12 @@ static uint8 control_task_handle_manual_mode(void)
     if(control_mode != CONTROL_MODE_MANUAL)
     {
         return 0U;
+    }
+
+    if(!isfinite(base_throttle))
+    {
+        Flight_Runtime_Emergency_Stop(EMERGENCY_STOP_REASON_INVALID_CONTROL);
+        return 1U;
     }
 
     if((base_throttle > 0.0f) && (base_throttle < SAFE_MIN_THROTTLE))
@@ -637,6 +823,10 @@ static void control_task_update_inner_loops(void)
                        base_throttle,
                        current_roll,
                        current_pitch);
+    if(Motor_Mixer_HasInvalidOutput())
+    {
+        Flight_Runtime_Emergency_Stop(EMERGENCY_STOP_REASON_INVALID_CONTROL);
+    }
 }
 
 void PIT_Control_Task_250us(void)

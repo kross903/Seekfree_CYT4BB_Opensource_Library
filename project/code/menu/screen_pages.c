@@ -499,8 +499,10 @@ static void screen_monitor_request_stop(void)
 static void screen_monitor_arm_with_initial_target(void)
 {
     Flight_Runtime_Clear_Emergency_Stop_Latch();
-    Flight_Control_Arm();
-    Flight_Control_Set_Throttle(MONITOR_ARM_START_THROTTLE);
+    if(Flight_Control_Arm(NULL))
+    {
+        Flight_Control_Set_Throttle(MONITOR_ARM_START_THROTTLE);
+    }
 }
 
 static void screen_monitor_switch_page(monitor_page_enum *page, int8 direction)
@@ -603,6 +605,7 @@ uint8 screen_monitor_handle_input(monitor_page_enum *page,
         {
             /* 角度闭环模式：走自动水平标定 + 起飞爬坡流程，不走立即解锁分支。
              * 采样阶段保持 disarmed，状态机到 RAMP 时自行 Arm。 */
+            Flight_Runtime_Clear_Emergency_Stop_Latch();
             Flight_Takeoff_Start();
         }
         else if(!armed)

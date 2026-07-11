@@ -54,13 +54,17 @@ void pit0_ch0_isr(void)
 void pit0_ch1_isr(void)
 {
     pit_isr_flag_clear(PIT_CH1);
+    FlightRealtime_ControlBegin();
     PIT_Control_Task_250us();
+    FlightRealtime_ControlEnd();
 }
 
 void pit0_ch2_isr(void)
 {
     pit_isr_flag_clear(PIT_CH2);
+    FlightRealtime_MotorBegin();
     PIT_Motor_Task_500us();
+    FlightRealtime_MotorEnd();
 }
 
 
