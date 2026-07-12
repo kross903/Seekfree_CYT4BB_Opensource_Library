@@ -33,7 +33,7 @@ static void send_sixteen_date(float date_1, float date_2, float date_3, float da
                               float date_9, float date_10, float date_11, float date_12,
                               float date_13, float date_14, float date_15, float date_16);
 
-/* 保留的回传模式：F2/F3/F4/F6/F8/FA/FD/FI/FU/FY/FZ。 */
+/* 保留的回传模式：F2/F3/F4/F6/F8/FA/FC/FD/FI/FU/FY/FZ。 */
 static int send_back_flag = 0;
 static uint8 send_back_command = 'R';
 
@@ -45,6 +45,12 @@ static volatile float vofa_loop_avg_us = 0.0f;
 static volatile float vofa_loop_freq_hz = 0.0f;
 static volatile uint32 vofa_loop_count = 0U;
 static volatile uint32 vofa_loop_overrun_count = 0U;
+static uint32 f2_last_cycle = 0U;
+static uint32 f2_frame_sequence = 0U;
+static uint8 f2_timing_initialized = 0U;
+static uint32 fc_last_cycle = 0U;
+static uint32 fc_frame_sequence = 0U;
+static uint8 fc_timing_initialized = 0U;
 
 static void vofa_loop_profiler_init(void)
 {
@@ -1001,13 +1007,25 @@ void USART_PID_Adjust(void)
         case 'F':
             switch(item)
             {
-                case '2': send_back_flag = 2; break;
+                case '2':
+                    send_back_flag = 2;
+                    f2_last_cycle = 0U;
+                    f2_frame_sequence = 0U;
+                    f2_timing_initialized = 0U;
+                    break;
                 case '3': send_back_flag = 3; break;
                 case '4': send_back_flag = 4; break;
                 case '6': send_back_flag = 6; break;
                 case '8': send_back_flag = 8; break;
                 case 'A':
                 case 'a': send_back_flag = 10; break;
+                case 'C':
+                case 'c':
+                    send_back_flag = 35;
+                    fc_last_cycle = 0U;
+                    fc_frame_sequence = 0U;
+                    fc_timing_initialized = 0U;
+                    break;
                 case 'D':
                 case 'd': send_back_flag = 13; break;
                 case 'I':
@@ -1083,27 +1101,50 @@ void send_date_back(void)
             PMWFlowState_t pmw_flow_state = {0};
             float target_vx_cms = 0.0f;
             float target_vy_cms = 0.0f;
+            float frame_interval_ms = 0.0f;
+            uint32 now_cycle = 0U;
 
             Position_Loop_Get_Diag(&pos_diag);
             PMW_Flow_GetState(&pmw_flow_state);
             Velocity_Loop_Get_Target_Velocity(&target_vx_cms, &target_vy_cms);
 
+            vofa_loop_profiler_init();
+            if(vofa_loop_profiler_ready && SystemCoreClock > 0U)
+            {
+                now_cycle = DWT->CYCCNT;
+                if(f2_timing_initialized)
+                {
+                    frame_interval_ms = ((float)(now_cycle - f2_last_cycle) * 1000.0f) /
+                                        (float)SystemCoreClock;
+                }
+                else
+                {
+                    f2_timing_initialized = 1U;
+                }
+                f2_last_cycle = now_cycle;
+            }
+
             send_sixteen_date(target_angle_roll,
                               current_roll,
                               target_angle_pitch,
                               current_pitch,
-                              target_angle_yaw,
-                              current_yaw,
-                              HeightManager_Get_Active_Target(),
-                              g_height_result.height_cm,
+                              target_roll_rate,
+                              current_gyro_roll,
+                              target_pitch_rate,
+                              current_gyro_pitch,
                               target_vx_cms,
                               pmw_flow_state.velocity_x_fused_cms,
                               target_vy_cms,
                               pmw_flow_state.velocity_y_fused_cms,
-                              pos_diag.target_x_cm,
-                              pos_diag.fb_x_cm,
-                              pos_diag.target_y_cm,
-                              pos_diag.fb_y_cm);
+                              pos_diag.error_x_cm,
+                              pos_diag.error_y_cm,
+                              (float)f2_frame_sequence,
+                              frame_interval_ms);
+            f2_frame_sequence++;
+            if(f2_frame_sequence >= 1000000U)
+            {
+                f2_frame_sequence = 0U;
+            }
             break;
         }
 
@@ -1112,6 +1153,10 @@ void send_date_back(void)
             break;
 
         case 4:
+        {
+            ICM_Health_t imu_health = {0};
+
+            ICM_GetHealth(&imu_health);
             send_sixteen_date((float)icm42688_gyro_x_r,
                               (float)icm42688_gyro_y_r,
                               (float)icm42688_gyro_z_r,
@@ -1126,9 +1171,10 @@ void send_date_back(void)
                               icm42688_acc_z,
                               acc,
                               acc_norm_filtered,
-                              (float)Check_IMU_Data_Quality(),
-                              (float)icm_calibration_flag);
+                              (float)imu_health.fault_mask,
+                              (float)imu_health.attitude_valid);
             break;
+        }
 
         case 6:
             send_sixteen_date(target_angle_roll,
@@ -1146,7 +1192,7 @@ void send_date_back(void)
                               target_yaw_rate,
                               current_gyro_yaw,
                               yaw_output,
-                              base_throttle);
+                              yaw_angle_error_deg);
             break;
 
         case 8:
@@ -1199,6 +1245,58 @@ void send_date_back(void)
                            ay_level_mg - acc_level_y_bias_mg,
                            X_V_F,
                            Y_V_F);
+            break;
+        }
+
+        case 35:
+        {
+            ICM_Health_t imu_health = {0};
+            float raw_acc_norm_count;
+            float frame_interval_ms = 0.0f;
+            uint32 now_cycle = 0U;
+
+            ICM_GetHealth(&imu_health);
+            raw_acc_norm_count = sqrtf((float)icm42688_acc_x_r * (float)icm42688_acc_x_r +
+                                       (float)icm42688_acc_y_r * (float)icm42688_acc_y_r +
+                                       (float)icm42688_acc_z_r * (float)icm42688_acc_z_r);
+
+            vofa_loop_profiler_init();
+            if(vofa_loop_profiler_ready && SystemCoreClock > 0U)
+            {
+                now_cycle = DWT->CYCCNT;
+                if(fc_timing_initialized)
+                {
+                    frame_interval_ms = ((float)(now_cycle - fc_last_cycle) * 1000.0f) /
+                                        (float)SystemCoreClock;
+                }
+                else
+                {
+                    fc_timing_initialized = 1U;
+                }
+                fc_last_cycle = now_cycle;
+            }
+
+            send_sixteen_date((float)icm42688_acc_x_r,
+                              (float)icm42688_acc_y_r,
+                              (float)icm42688_acc_z_r,
+                              raw_acc_norm_count,
+                              icm42688_acc_x,
+                              icm42688_acc_y,
+                              icm42688_acc_z,
+                              acc_norm_filtered,
+                              icm42688_gyro_x,
+                              icm42688_gyro_y,
+                              icm42688_gyro_z,
+                              (float)ICM_IsStill(),
+                              (float)imu_health.fault_mask,
+                              (float)imu_health.sample_sequence,
+                              (float)fc_frame_sequence,
+                              frame_interval_ms);
+            fc_frame_sequence++;
+            if(fc_frame_sequence >= 1000000U)
+            {
+                fc_frame_sequence = 0U;
+            }
             break;
         }
 

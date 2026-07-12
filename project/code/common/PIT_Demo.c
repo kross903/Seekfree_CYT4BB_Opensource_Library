@@ -75,11 +75,7 @@ volatile float target_angle_roll = 0.0f;
 volatile float target_angle_pitch = 0.0f;
 volatile float target_angle_yaw = 0.0f;
 
-/*
- * IMU 安装角补偿关闭（0/0/0）：飞行前的自动水平标定流程（Flight_Takeoff_Start）
- * 会在起飞前采样 3s 的 pitch/roll 并作为目标角度，等价于动态的地面标定，
- * 因此不再需要这组静态的安装角偏置。
- */
+/* IMU 安装误差由 icm42688.c 的传感器到机体旋转矩阵统一补偿。 */
 float current_roll = 0.0f;
 float current_pitch = 0.0f;
 float current_yaw = 0.0f;
@@ -401,7 +397,7 @@ uint16 Flight_Motor_Test_Get_Output_Limit(void)
 void Flight_Fly_Test_Start(void)
 {
     MenuMotorTest_Stop();
-    Flight_Takeoff_Abort();
+    Flight_Takeoff_AbortAt("FLY TEST START", __FILE__, __LINE__);
     Velocity_Loop_Set_Enabled(0U);
     Position_Loop_Set_Enabled(0U);
     Throttle_Runtime_Reset_Throttle_State();
@@ -526,6 +522,7 @@ uint8 Flight_Fly_Test_Get_Confirm_State(void)
 
 void PIT_KeyVoltage_Task_5ms(void)
 {
+    Flight_Safety_Tick_5ms();
     VehicleMarkerLocalization_Task5ms();
     key_scanner();
     key_scan();
@@ -579,6 +576,11 @@ static uint8 control_task_handle_imu_calibration(void)
 static void control_task_update_sensor_feedback(void)
 {
     get_ICM_data();
+    ICM_VisionYaw_Update(g_vehicle_marker_pose.heading_deg,
+                         (uint8)(g_vehicle_marker_pose.valid &&
+                                 !g_vehicle_marker_position_lost_flag &&
+                                 g_vehicle_marker_pose.detected_point_count >= 3U),
+                         g_vehicle_marker_pose_update_seq);
     Get_Attitude_Angle(&current_roll, &current_pitch, &current_yaw);
     Get_Angular_Rate(&current_gyro_roll, &current_gyro_pitch, &current_gyro_yaw);
     PMW_Flow_AccumulateGyro(icm42688_gyro_x, icm42688_gyro_y, CONTROL_DT_S);
@@ -704,6 +706,35 @@ static uint8 control_task_handle_disarmed(void)
     return 0U;
 }
 
+static uint8 control_task_handle_takeoff_base_only(void)
+{
+    uint16 equal_output;
+
+    if(!Flight_Takeoff_Requires_BaseOnly_Output())
+    {
+        return 0U;
+    }
+
+    /* 零等待、软起转和怠速保持阶段禁止姿态差动与高度 PID 参与。 */
+    Angle_Loop_Reset_Rate_Cmd_Lpf();
+    Rate_Loop_Reset_Output();
+    PID_Reset(&angle_pid_roll);
+    PID_Reset(&angle_pid_pitch);
+    PID_Reset(&angle_pid_yaw);
+    PID_Reset(&gyro_pid_roll);
+    PID_Reset(&gyro_pid_pitch);
+    PID_Reset(&gyro_pid_yaw);
+    Velocity_Loop_Set_Enabled(0U);
+    Position_Loop_Set_Enabled(0U);
+
+    equal_output = Motor_Mixer_Limit_Output(Flight_Takeoff_Get_Commanded_Base_Throttle());
+    motor_throttle[0] = equal_output;
+    motor_throttle[1] = equal_output;
+    motor_throttle[2] = equal_output;
+    motor_throttle[3] = equal_output;
+    return 1U;
+}
+
 static void control_task_update_cruise_throttle(uint8 takeoff_active)
 {
     if(!takeoff_active)
@@ -726,7 +757,10 @@ static uint8 control_task_handle_manual_mode(void)
 
     if(!isfinite(base_throttle))
     {
-        Flight_Runtime_Emergency_Stop(EMERGENCY_STOP_REASON_INVALID_CONTROL);
+        Flight_Runtime_Emergency_StopAt(EMERGENCY_STOP_REASON_INVALID_CONTROL,
+                                        "BASE THROTTLE NAN",
+                                        __FILE__,
+                                        __LINE__);
         return 1U;
     }
 
@@ -825,7 +859,10 @@ static void control_task_update_inner_loops(void)
                        current_pitch);
     if(Motor_Mixer_HasInvalidOutput())
     {
-        Flight_Runtime_Emergency_Stop(EMERGENCY_STOP_REASON_INVALID_CONTROL);
+        Flight_Runtime_Emergency_StopAt(EMERGENCY_STOP_REASON_INVALID_CONTROL,
+                                        "MIXER OUTPUT NAN",
+                                        __FILE__,
+                                        __LINE__);
     }
 }
 
@@ -860,6 +897,11 @@ void PIT_Control_Task_250us(void)
     }
 
     if(control_task_handle_disarmed())
+    {
+        return;
+    }
+
+    if(control_task_handle_takeoff_base_only())
     {
         return;
     }

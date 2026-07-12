@@ -39,6 +39,11 @@
 #define UI_MONITOR_NEAREST_Y         144U
 #define UI_MONITOR_HEIGHT_Y          168U
 #define UI_MONITOR_IR_Y              192U
+#define UI_MONITOR_DIAG_STATUS_Y     224U
+#define UI_MONITOR_DIAG_REASON_Y     244U
+#define UI_MONITOR_DIAG_FILE_Y       254U
+#define UI_MONITOR_DIAG_LINE_Y       264U
+#define UI_MONITOR_DIAG_STATE_Y      274U
 #define UI_MONITOR_HINT_TOP_Y        288U
 #define UI_MONITOR_HINT_BOTTOM_Y     304U
 #define MONITOR_ARM_START_THROTTLE   400.0f
@@ -74,6 +79,28 @@ static void ui_show_padded_text(uint16 x, uint16 y, const char *text, uint8 widt
 
     ips200_set_color(color, RGB565_BLACK);
     ips200_show_string(x, y, buffer);
+}
+
+static void ui_show_small_padded_text(uint16 y, const char *text, uint16 color)
+{
+    char buffer[41];
+    uint8 i;
+
+    for(i = 0U; i < 40U; i++)
+    {
+        buffer[i] = ' ';
+    }
+    buffer[40] = '\0';
+    if(text != NULL)
+    {
+        for(i = 0U; i < 40U && text[i] != '\0'; i++)
+        {
+            buffer[i] = text[i];
+        }
+    }
+
+    ips200_set_color(color, RGB565_BLACK);
+    ips200_show_string(0U, y, buffer);
 }
 
 /* ===================== 通用菜单页面 ===================== */
@@ -340,7 +367,9 @@ void ui_origin_show_saved(void)
 typedef struct
 {
     const char *mode_text;
-    const char *hint_text;
+    const char *hint_top_text;
+    const char *hint_bottom_text;
+    uint16 hint_color;
     uint8 armed;
     uint8 low_voltage;
     uint8 has_nearest;
@@ -355,6 +384,10 @@ typedef struct
     float tof_height_cm;
     float fused_height_cm;
     float fused_velocity_cms;
+    uint32 imu_fault_mask;
+    uint8 takeoff_state;
+    float takeoff_progress;
+    FlightTakeoffDiag takeoff_diag;
 } MonitorViewHudData;
 
 static const char *ui_monitor_mode_text(uint8 control_mode)
@@ -362,9 +395,56 @@ static const char *ui_monitor_mode_text(uint8 control_mode)
     return (control_mode == CONTROL_MODE_ANGLE) ? "ANGLE" : "MANUAL";
 }
 
-static const char *ui_monitor_hint_text(uint8 armed)
+static const char *ui_monitor_takeoff_phase_text(uint8 takeoff_state)
 {
-    return armed ? "ANY KEY: EMERGENCY STOP" : "K1:PREV K2:NEXT K3:ARM";
+    switch((flight_takeoff_state_enum)takeoff_state)
+    {
+        case FLIGHT_TAKEOFF_ARM_DELAY:     return "STARTING: ARM DELAY";
+        case FLIGHT_TAKEOFF_MOTOR_SPINUP:  return "STARTING: MOTOR SPIN";
+        case FLIGHT_TAKEOFF_IDLE_HOLD:     return "STARTING: IDLE HOLD";
+        case FLIGHT_TAKEOFF_LIFTOFF_RAMP:  return "STARTING: LIFTOFF";
+        case FLIGHT_TAKEOFF_HEIGHT_BLEND:  return "STARTING: HEIGHT BLEND";
+        case FLIGHT_TAKEOFF_IDLE:
+        default:                           return "ANY KEY = EMERGENCY STOP";
+    }
+}
+
+static const char *ui_monitor_hint_top_text(uint8 armed,
+                                            uint8 control_mode,
+                                            uint8 tof_ready,
+                                            uint8 rearm_inhibit_active,
+                                            uint8 takeoff_state,
+                                            uint32 imu_fault_mask)
+{
+    if(armed) return ui_monitor_takeoff_phase_text(takeoff_state);
+    if(rearm_inhibit_active) return "ESTOP LOCK - WAIT 2S";
+    if(imu_fault_mask != 0U) return "IMU FAULT - CHECK F4";
+    if(control_mode == CONTROL_MODE_ANGLE && !tof_ready) return "TOF WAIT - CHECK FD";
+    return "K3: START  K1/K2: PAGE";
+}
+
+static const char *ui_monitor_hint_bottom_text(uint8 armed,
+                                               uint8 control_mode,
+                                               uint8 tof_ready,
+                                               uint8 rearm_inhibit_active,
+                                               uint32 imu_fault_mask)
+{
+    if(armed) return "ANY KEY = EMERGENCY STOP";
+    if(rearm_inhibit_active) return "KEY3 DISABLED TEMPORARILY";
+    if(imu_fault_mask != 0U) return "DO NOT ARM  HOLD K4:MENU";
+    if(control_mode == CONTROL_MODE_ANGLE && !tof_ready) return "WAIT VALID TOF FRAME";
+    return "HOLD K4:MENU WHEN STOPPED";
+}
+
+static uint16 ui_monitor_hint_color(uint8 armed,
+                                    uint8 control_mode,
+                                    uint8 tof_ready,
+                                    uint8 rearm_inhibit_active,
+                                    uint32 imu_fault_mask)
+{
+    if(armed || rearm_inhibit_active || imu_fault_mask != 0U) return RGB565_RED;
+    if(control_mode == CONTROL_MODE_ANGLE && !tof_ready) return RGB565_YELLOW;
+    return RGB565_WHITE;
 }
 
 static void ui_monitor_fill_view_hud(const MonitorRuntimeSnapshot *snapshot, MonitorViewHudData *data)
@@ -375,7 +455,22 @@ static void ui_monitor_fill_view_hud(const MonitorRuntimeSnapshot *snapshot, Mon
     }
 
     data->mode_text = ui_monitor_mode_text(snapshot->control_mode);
-    data->hint_text = ui_monitor_hint_text(snapshot->armed);
+    data->hint_top_text = ui_monitor_hint_top_text(snapshot->armed,
+                                                   snapshot->control_mode,
+                                                   snapshot->tof_ready,
+                                                   snapshot->rearm_inhibit_active,
+                                                   snapshot->takeoff_state,
+                                                   snapshot->imu_fault_mask);
+    data->hint_bottom_text = ui_monitor_hint_bottom_text(snapshot->armed,
+                                                         snapshot->control_mode,
+                                                         snapshot->tof_ready,
+                                                         snapshot->rearm_inhibit_active,
+                                                         snapshot->imu_fault_mask);
+    data->hint_color = ui_monitor_hint_color(snapshot->armed,
+                                             snapshot->control_mode,
+                                             snapshot->tof_ready,
+                                             snapshot->rearm_inhibit_active,
+                                             snapshot->imu_fault_mask);
     data->armed = snapshot->armed;
     data->low_voltage = snapshot->low_voltage;
     data->has_nearest = snapshot->has_nearest;
@@ -390,6 +485,10 @@ static void ui_monitor_fill_view_hud(const MonitorRuntimeSnapshot *snapshot, Mon
     data->tof_height_cm = snapshot->tof_height_cm;
     data->fused_height_cm = snapshot->fused_height_cm;
     data->fused_velocity_cms = snapshot->fused_velocity_cms;
+    data->imu_fault_mask = snapshot->imu_fault_mask;
+    data->takeoff_state = snapshot->takeoff_state;
+    data->takeoff_progress = Flight_Takeoff_Get_Progress();
+    Flight_Takeoff_GetDiag(&data->takeoff_diag);
 }
 
 static void ui_monitor_draw_view_layout(void)
@@ -413,7 +512,86 @@ static void ui_monitor_draw_view_layout(void)
     ips200_show_string(0U, UI_MONITOR_HEIGHT_Y, "ROLL:");
     ips200_show_string(120U, UI_MONITOR_HEIGHT_Y, "PITCH:");
     ips200_show_string(0U, UI_MONITOR_IR_Y, "BCN:");
-    ips200_show_string(0U, UI_MONITOR_HINT_BOTTOM_Y, "HOLD K4:MENU WHEN STOPPED");
+    ips200_show_string(120U, UI_MONITOR_IR_Y, "IMU:");
+    ips200_set_color(RGB565_WHITE, RGB565_BLACK);
+}
+
+static const char *ui_monitor_takeoff_state_name(uint8 takeoff_state)
+{
+    switch((flight_takeoff_state_enum)takeoff_state)
+    {
+        case FLIGHT_TAKEOFF_ARM_DELAY:     return "ARM DELAY";
+        case FLIGHT_TAKEOFF_MOTOR_SPINUP:  return "MOTOR SPIN";
+        case FLIGHT_TAKEOFF_IDLE_HOLD:     return "IDLE HOLD";
+        case FLIGHT_TAKEOFF_LIFTOFF_RAMP:  return "LIFTOFF";
+        case FLIGHT_TAKEOFF_HEIGHT_BLEND:  return "HEIGHT BLEND";
+        case FLIGHT_TAKEOFF_IDLE:
+        default:                           return "IDLE";
+    }
+}
+
+static const char *ui_path_basename(const char *path)
+{
+    const char *basename = path;
+
+    if(path == NULL)
+    {
+        return "UNKNOWN";
+    }
+    while(*path != '\0')
+    {
+        if(*path == '/' || *path == '\\')
+        {
+            basename = path + 1;
+        }
+        path++;
+    }
+    return basename;
+}
+
+static void ui_monitor_draw_takeoff_diag(const MonitorViewHudData *data)
+{
+    char text[48];
+    uint8 starting;
+
+    starting = (uint8)(data->takeoff_state != FLIGHT_TAKEOFF_IDLE);
+    ips200_set_font(IPS200_8X16_FONT);
+    if(starting)
+    {
+        ui_show_padded_text(0U, UI_MONITOR_DIAG_STATUS_Y, "STARTING", 30U, RGB565_GREEN);
+
+        ips200_set_font(IPS200_6X8_FONT);
+        snprintf(text, sizeof(text), "PHASE:%s", ui_monitor_takeoff_state_name(data->takeoff_state));
+        ui_show_small_padded_text(UI_MONITOR_DIAG_REASON_Y, text, RGB565_GREEN);
+        snprintf(text, sizeof(text), "PROGRESS:%3ld%%", (long)(data->takeoff_progress * 100.0f));
+        ui_show_small_padded_text(UI_MONITOR_DIAG_FILE_Y, text, RGB565_WHITE);
+        ui_show_small_padded_text(UI_MONITOR_DIAG_LINE_Y, "", RGB565_WHITE);
+        ui_show_small_padded_text(UI_MONITOR_DIAG_STATE_Y, "", RGB565_WHITE);
+    }
+    else if(data->takeoff_diag.stopped)
+    {
+        ui_show_padded_text(0U, UI_MONITOR_DIAG_STATUS_Y, "STOP", 30U, RGB565_RED);
+
+        ips200_set_font(IPS200_6X8_FONT);
+        snprintf(text, sizeof(text), "REASON:%s", data->takeoff_diag.reason);
+        ui_show_small_padded_text(UI_MONITOR_DIAG_REASON_Y, text, RGB565_RED);
+        snprintf(text, sizeof(text), "FILE:%s", ui_path_basename(data->takeoff_diag.file));
+        ui_show_small_padded_text(UI_MONITOR_DIAG_FILE_Y, text, RGB565_WHITE);
+        snprintf(text, sizeof(text), "LINE:%lu", (unsigned long)data->takeoff_diag.line);
+        ui_show_small_padded_text(UI_MONITOR_DIAG_LINE_Y, text, RGB565_WHITE);
+        snprintf(text, sizeof(text), "STATE:%s", ui_monitor_takeoff_state_name(data->takeoff_diag.state));
+        ui_show_small_padded_text(UI_MONITOR_DIAG_STATE_Y, text, RGB565_WHITE);
+    }
+    else
+    {
+        ui_show_padded_text(0U, UI_MONITOR_DIAG_STATUS_Y, "", 30U, RGB565_WHITE);
+        ips200_set_font(IPS200_6X8_FONT);
+        ui_show_small_padded_text(UI_MONITOR_DIAG_REASON_Y, "", RGB565_WHITE);
+        ui_show_small_padded_text(UI_MONITOR_DIAG_FILE_Y, "", RGB565_WHITE);
+        ui_show_small_padded_text(UI_MONITOR_DIAG_LINE_Y, "", RGB565_WHITE);
+        ui_show_small_padded_text(UI_MONITOR_DIAG_STATE_Y, "", RGB565_WHITE);
+    }
+    ips200_set_font(IPS200_8X16_FONT);
     ips200_set_color(RGB565_WHITE, RGB565_BLACK);
 }
 
@@ -456,7 +634,15 @@ static void ui_monitor_draw_view_hud(const MonitorViewHudData *data)
     ips200_show_float(UI_MONITOR_LEFT_VALUE_X, UI_MONITOR_HEIGHT_Y, data->roll, 4U, 1U);
     ips200_show_float(UI_MONITOR_RIGHT_VALUE_X, UI_MONITOR_HEIGHT_Y, data->pitch, 4U, 1U);
     ips200_show_int(UI_MONITOR_LEFT_VALUE_X, UI_MONITOR_IR_Y, data->beacon_count, 2U);
-    ui_show_padded_text(0U, UI_MONITOR_HINT_TOP_Y, data->hint_text, 28U, RGB565_WHITE);
+    ui_show_padded_text(UI_MONITOR_RIGHT_VALUE_X,
+                        UI_MONITOR_IR_Y,
+                        (data->imu_fault_mask == 0U) ? "OK" : "BAD",
+                        4U,
+                        (data->imu_fault_mask == 0U) ? RGB565_GREEN : RGB565_RED);
+    ips200_set_color(RGB565_WHITE, RGB565_BLACK);
+    ui_monitor_draw_takeoff_diag(data);
+    ui_show_padded_text(0U, UI_MONITOR_HINT_TOP_Y, data->hint_top_text, 28U, data->hint_color);
+    ui_show_padded_text(0U, UI_MONITOR_HINT_BOTTOM_Y, data->hint_bottom_text, 28U, data->hint_color);
 }
 
 static void ui_monitor_show_view_page(const MonitorRuntimeSnapshot *snapshot, uint8 draw_layout)
@@ -529,10 +715,15 @@ static uint8 screen_monitor_handle_armed_estop_key(void)
     return 0U;
 }
 
-static void screen_monitor_arm_with_initial_target(void)
+static void screen_monitor_start_flight(void)
 {
-    Flight_Runtime_Clear_Emergency_Stop_Latch();
-    if(Flight_Control_Arm(NULL))
+    if(!Flight_Runtime_Clear_Emergency_Stop_Latch())
+    {
+        Flight_Takeoff_RecordStopAt("ESTOP LOCK ACTIVE", __FILE__, __LINE__);
+        return;
+    }
+    Flight_Takeoff_Start();
+    if(armed && control_mode != CONTROL_MODE_ANGLE)
     {
         Flight_Control_Set_Throttle(MONITOR_ARM_START_THROTTLE);
     }
@@ -602,10 +793,17 @@ uint8 screen_monitor_handle_input(monitor_page_enum *page,
 
     remote_exit_requested = core_link_user_consume_monitor_exit_request();
 
-    /* ?? KEY_4?????????????? */
+    /* 退出 Flight View：已解锁先急停；未解锁直接返回菜单，不写入急停锁存。 */
     if((key_get_state(KEY_4) == KEY_LONG_PRESS) || remote_exit_requested)
     {
-        screen_monitor_request_stop();
+        if(armed)
+        {
+            screen_monitor_request_stop();
+        }
+        else if(Flight_Takeoff_Is_Active())
+        {
+            Flight_Takeoff_AbortAt("K4 EXIT CANCEL", __FILE__, __LINE__);
+        }
         if(key_get_state(KEY_4) == KEY_LONG_PRESS)
         {
             key_clear_state(KEY_4);
@@ -643,22 +841,23 @@ uint8 screen_monitor_handle_input(monitor_page_enum *page,
 
     if(screen_consume_monitor_button_event(Button_3, KEY_3))
     {
-        if(control_mode == CONTROL_MODE_ANGLE)
+        if(!armed)
         {
-            /* 角度闭环模式：走自动水平标定 + 起飞爬坡流程，不走立即解锁分支。
-             * 采样阶段保持 disarmed，状态机到 RAMP 时自行 Arm。 */
-            Flight_Runtime_Clear_Emergency_Stop_Latch();
-            Flight_Takeoff_Start();
-        }
-        else if(!armed)
-        {
-            screen_monitor_arm_with_initial_target();
+            /* 按当前模式执行健康检查、解锁和可选的油门渐升。 */
+            screen_monitor_start_flight();
         }
     }
 
     if(screen_consume_monitor_button_event(Button_4, KEY_4))
     {
-        screen_monitor_request_stop();
+        if(!armed && Flight_Takeoff_Is_Active())
+        {
+            Flight_Takeoff_AbortAt("K4 CANCEL", __FILE__, __LINE__);
+        }
+        else
+        {
+            screen_monitor_request_stop();
+        }
     }
 
     return 0U;

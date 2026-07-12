@@ -30,10 +30,10 @@ extern volatile uint8 armed;
 #define HEIGHT_ACC_NORM_GATE_MG           400.0f
 #define HEIGHT_VEL_FUSION_ACC_ALPHA       0.20f
 
-#define TOF_VALID_MIN_M                   0.05f
-#define TOF_VALID_MAX_M                   4.0f
+#define TOF_VALID_MIN_M                   0.00f
+#define TOF_VALID_MAX_M                   2.0f
 #define TOF_JUMP_LIMIT_M                  0.15f
-#define TOF_NO_UPDATE_TIMEOUT_TICKS       30U
+#define TOF_NO_UPDATE_TIMEOUT_TICKS       10U
 
 /*
  * ToF / optical-flow install compensation.
@@ -82,6 +82,9 @@ static float s_acc_velocity_filt_cms = 0.0f;
 static uint8 s_height_takeoff_target_active = 0U;
 static float s_height_takeoff_target_cm = HEIGHT_TARGET_START_CM;
 static float s_height_takeoff_target_step_cm = 0.0f;
+static uint8 s_soft_takeoff_prepared = 0U;
+static uint8 s_soft_takeoff_active = 0U;
+static float s_soft_takeoff_output_blend = 1.0f;
 
 static float height_clamp_float(float value, float min_value, float max_value)
 {
@@ -212,6 +215,89 @@ void HeightManager_Get_Diag(HeightManagerDiag_t *diag)
     {
         *diag = s_height_diag;
     }
+}
+
+uint8 HeightManager_IsTofValid(void)
+{
+    return tof_valid;
+}
+
+uint8 HeightManager_IsReadyForTakeoff(void)
+{
+    return (uint8)(tof_valid &&
+                   tof_filter_initialized &&
+                   tof_no_update_ticks < TOF_NO_UPDATE_TIMEOUT_TICKS);
+}
+
+void HeightManager_PrepareSoftTakeoff(void)
+{
+    if(!s_soft_takeoff_prepared || s_soft_takeoff_active)
+    {
+        s_height_loop_enabled = 0U;
+        s_height_takeoff_target_active = 0U;
+        s_height_takeoff_target_cm = g_height_result.height_cm;
+        s_height_takeoff_target_step_cm = 0.0f;
+        PID_Reset(&HeightPID);
+        PID_Reset(&HeightVelPID);
+        height_reset_velocity_estimator();
+        height_clear_control_diag();
+    }
+
+    s_soft_takeoff_prepared = 1U;
+    s_soft_takeoff_active = 0U;
+    s_soft_takeoff_output_blend = 0.0f;
+    HeightSpeedPID_output = 0.0f;
+}
+
+void HeightManager_BeginSoftTakeoff(void)
+{
+    float start_height_cm = g_height_result.height_cm;
+
+    HeightManager_Set_Target(HEIGHT_TARGET_DEFAULT_CM);
+
+    if(start_height_cm < TOF_VALID_MIN_M * 100.0f)
+    {
+        start_height_cm = TOF_VALID_MIN_M * 100.0f;
+    }
+    else if(start_height_cm > TOF_VALID_MAX_M * 100.0f)
+    {
+        start_height_cm = TOF_VALID_MAX_M * 100.0f;
+    }
+
+    s_soft_takeoff_prepared = 1U;
+    s_soft_takeoff_active = 1U;
+    s_soft_takeoff_output_blend = 0.0f;
+    s_height_loop_enabled = 1U;
+    s_height_takeoff_target_active = 1U;
+    s_height_takeoff_target_cm = start_height_cm;
+    s_height_takeoff_target_step_cm = (g_height_target_cm - start_height_cm) /
+                                      (HEIGHT_TARGET_RAMP_DURATION_S / TOF_DT);
+    HeightSpeedPID_output = 0.0f;
+    PID_Reset(&HeightPID);
+    PID_Reset(&HeightVelPID);
+    height_reset_velocity_estimator();
+    height_clear_control_diag();
+}
+
+void HeightManager_SetOutputBlend(float blend)
+{
+    s_soft_takeoff_output_blend = height_clamp_float(blend, 0.0f, 1.0f);
+}
+
+void HeightManager_AbortSoftTakeoff(void)
+{
+    s_soft_takeoff_prepared = 0U;
+    s_soft_takeoff_active = 0U;
+    s_soft_takeoff_output_blend = 1.0f;
+    s_height_loop_enabled = 0U;
+    s_height_takeoff_target_active = 0U;
+    s_height_takeoff_target_cm = HEIGHT_TARGET_START_CM;
+    s_height_takeoff_target_step_cm = 0.0f;
+    HeightSpeedPID_output = 0.0f;
+    PID_Reset(&HeightPID);
+    PID_Reset(&HeightVelPID);
+    height_reset_velocity_estimator();
+    height_clear_control_diag();
 }
 
 static float body_y_down_offset_cm(float offset_y_cm, float roll_deg, float pitch_deg)
@@ -408,6 +494,9 @@ void HeightManager_Init(float initial_height_cm)
     s_height_takeoff_target_active = 0U;
     s_height_takeoff_target_cm = HEIGHT_TARGET_START_CM;
     s_height_takeoff_target_step_cm = 0.0f;
+    s_soft_takeoff_prepared = 0U;
+    s_soft_takeoff_active = 0U;
+    s_soft_takeoff_output_blend = 1.0f;
 
     memset(&s_height_diag, 0, sizeof(s_height_diag));
     s_height_diag.gravity_bias_mg = HEIGHT_ACC_GRAVITY_BIAS_MG;
@@ -453,21 +542,15 @@ void HeightManager_Task_10ms(void)
     }
     else
     {
-        if(dl1b_distance_mm > 4000U)
+        /* DL1B 轮询快于传感器出数时，驱动会用 finish=0/8192 表示“当前没有新帧”。
+         * 这不是测距立即失效；保留上一有效值，连续超时后再置无效。 */
+        if(tof_no_update_ticks < 0xFFFFU)
+        {
+            tof_no_update_ticks++;
+        }
+        if(tof_no_update_ticks >= TOF_NO_UPDATE_TIMEOUT_TICKS)
         {
             tof_valid = 0U;
-            tof_no_update_ticks = 0U;
-        }
-        else
-        {
-            if(tof_no_update_ticks < 0xFFFFU)
-            {
-                tof_no_update_ticks++;
-            }
-            if(tof_no_update_ticks >= TOF_NO_UPDATE_TIMEOUT_TICKS)
-            {
-                tof_valid = 0U;
-            }
         }
     }
 
@@ -503,6 +586,9 @@ void HeightManager_Task_10ms(void)
 
     if(!armed)
     {
+        s_soft_takeoff_prepared = 0U;
+        s_soft_takeoff_active = 0U;
+        s_soft_takeoff_output_blend = 1.0f;
         s_height_loop_enabled = 0U;
         s_height_takeoff_target_active = 0U;
         s_height_takeoff_target_cm = HEIGHT_TARGET_START_CM;
@@ -528,7 +614,20 @@ void HeightManager_Task_10ms(void)
         float target_cm = g_height_target_cm;
         float error_cm;
 
-        if(base_throttle < FLIGHT_TAKEOFF_RAMP_TARGET_THROTTLE)
+        if(s_soft_takeoff_prepared && !s_soft_takeoff_active)
+        {
+            s_height_loop_enabled = 0U;
+            s_height_takeoff_target_active = 0U;
+            s_height_takeoff_target_cm = actual_cm;
+            HeightSpeedPID_output = 0.0f;
+            PID_Reset(&HeightPID);
+            PID_Reset(&HeightVelPID);
+            height_reset_velocity_estimator();
+            height_clear_control_diag();
+            return;
+        }
+
+        if(!s_soft_takeoff_active && base_throttle < FLIGHT_TAKEOFF_RAMP_TARGET_THROTTLE)
         {
             s_height_loop_enabled = 0U;
             s_height_takeoff_target_active = 0U;
@@ -576,6 +675,7 @@ void HeightManager_Task_10ms(void)
         {
             float height_pid_vz_cms;
             float target_vz_cms;
+            float raw_velocity_output;
 
             height_pid_vz_cms = PID_Calculate(&HeightPID,
                                               actual_cm + error_cm,
@@ -585,10 +685,12 @@ void HeightManager_Task_10ms(void)
                                                -HEIGHT_VEL_TARGET_LIMIT_CMS,
                                                HEIGHT_VEL_TARGET_LIMIT_CMS);
 
-            HeightSpeedPID_output = PID_Calculate(&HeightVelPID,
-                                                  target_vz_cms,
-                                                  g_height_result.velocity_cms,
-                                                  TOF_DT);
+            raw_velocity_output = PID_Calculate(&HeightVelPID,
+                                                target_vz_cms,
+                                                g_height_result.velocity_cms,
+                                                TOF_DT);
+            HeightSpeedPID_output = raw_velocity_output *
+                                    (s_soft_takeoff_active ? s_soft_takeoff_output_blend : 1.0f);
 
             s_height_diag.height_pid_output_cms = height_pid_vz_cms;
             s_height_diag.target_velocity_cms = target_vz_cms;
@@ -600,7 +702,8 @@ void HeightManager_Task_10ms(void)
         HeightSpeedPID_output = PID_Calculate(&HeightPID,
                                               actual_cm + error_cm,
                                               actual_cm,
-                                              TOF_DT);
+                                              TOF_DT) *
+                                (s_soft_takeoff_active ? s_soft_takeoff_output_blend : 1.0f);
         s_height_diag.height_pid_output_cms = HeightSpeedPID_output;
         s_height_diag.target_velocity_cms = 0.0f;
         s_height_diag.velocity_error_cms = 0.0f;

@@ -11,7 +11,9 @@ extern PID_Controller angle_pid_yaw;
 extern float target_roll_rate;
 extern float target_pitch_rate;
 extern float target_yaw_rate;
+extern float yaw_angle_error_deg;
 
+float Angle_WrapDeg180(float angle_deg);
 void Angle_Loop_Reset_Rate_Cmd_Lpf(void);
 void Angle_Loop_Update(float target_roll,
                        float target_pitch,

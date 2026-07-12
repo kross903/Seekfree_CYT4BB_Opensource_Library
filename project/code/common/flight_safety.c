@@ -2,7 +2,7 @@
 #include "common/battery_monitor.h"
 #include "common/PIT_Demo.h"
 #include "control/flight_control.h"
-#include "icm/icm42688.h"
+#include "icm/icm.h"
 #include "menu/menu_fly_test.h"
 #include "menu/menu_motor_test.h"
 #include "motor_hardware/motor_hardware.h"
@@ -13,17 +13,65 @@ volatile uint8 emergency_stop_triggered = 0U;
 volatile uint8 emergency_stop_reason = EMERGENCY_STOP_REASON_NONE;
 int low_voltage_protect_flag = 0;
 
+#define FLIGHT_SAFETY_TICK_MS                 5U
+#define FLIGHT_ESTOP_REARM_INHIBIT_TICKS      (FLIGHT_ESTOP_REARM_INHIBIT_MS / FLIGHT_SAFETY_TICK_MS)
+#define FLIGHT_CONTROL_TICK_US                 250U
+#define YAW_SPIN_RATE_LIMIT_DPS                200.0f
+#define YAW_SPIN_DURATION_MS                   150U
+#define YAW_SPIN_LIMIT_TICKS                   ((YAW_SPIN_DURATION_MS * 1000U) / FLIGHT_CONTROL_TICK_US)
+
+static volatile uint16 s_rearm_inhibit_ticks = 0U;
+static uint16 s_yaw_spin_ticks = 0U;
+
+void Flight_Safety_ResetYawSpinMonitor(void)
+{
+    s_yaw_spin_ticks = 0U;
+}
+
+static const char *flight_safety_imu_fault_text(uint32 fault_mask)
+{
+    if((fault_mask & ICM_HEALTH_FAULT_NONFINITE) != 0U)    return "IMU NONFINITE";
+    if((fault_mask & ICM_HEALTH_FAULT_QUATERNION) != 0U)   return "IMU QUAT NORM";
+    if((fault_mask & ICM_HEALTH_FAULT_SAMPLE_STALE) != 0U) return "IMU SAMPLE STALE";
+    if((fault_mask & ICM_HEALTH_FAULT_GYRO_SAT) != 0U)     return "IMU GYRO SAT";
+    if((fault_mask & ICM_HEALTH_FAULT_ACC_NORM) != 0U)     return "IMU ACC NORM";
+    return "IMU INVALID COUNT";
+}
+
 uint8 Flight_Safety_Check_Attitude(void)
 {
+    ICM_Health_t imu_health = {0};
+
     if(!armed)
     {
+        Flight_Safety_ResetYawSpinMonitor();
         return 0U;
     }
 
-    if(!isfinite(current_roll) || !isfinite(current_pitch) || !isfinite(current_yaw) ||
-       !isfinite(current_gyro_roll) || !isfinite(current_gyro_pitch) || !isfinite(current_gyro_yaw))
+    if(!isfinite(current_roll) || !isfinite(current_pitch) || !isfinite(current_yaw))
     {
-        Flight_Runtime_Emergency_Stop(EMERGENCY_STOP_REASON_INVALID_CONTROL);
+        Flight_Runtime_Emergency_StopAt(EMERGENCY_STOP_REASON_INVALID_CONTROL,
+                                        "ATTITUDE NAN/INF",
+                                        __FILE__,
+                                        __LINE__);
+        return 1U;
+    }
+    if(!isfinite(current_gyro_roll) || !isfinite(current_gyro_pitch) || !isfinite(current_gyro_yaw))
+    {
+        Flight_Runtime_Emergency_StopAt(EMERGENCY_STOP_REASON_INVALID_CONTROL,
+                                        "GYRO NAN/INF",
+                                        __FILE__,
+                                        __LINE__);
+        return 1U;
+    }
+
+    ICM_GetHealth(&imu_health);
+    if(!imu_health.attitude_valid || imu_health.consecutive_invalid_count >= 8U)
+    {
+        Flight_Runtime_Emergency_StopAt(EMERGENCY_STOP_REASON_INVALID_CONTROL,
+                                        flight_safety_imu_fault_text(imu_health.fault_mask),
+                                        __FILE__,
+                                        __LINE__);
         return 1U;
     }
 
@@ -37,6 +85,22 @@ uint8 Flight_Safety_Check_Attitude(void)
         Flight_Runtime_Emergency_Stop(EMERGENCY_STOP_REASON_ATTITUDE_PITCH);
         return 1U;
     }
+    if(fabsf(current_gyro_yaw) > YAW_SPIN_RATE_LIMIT_DPS)
+    {
+        if(s_yaw_spin_ticks < YAW_SPIN_LIMIT_TICKS)
+        {
+            s_yaw_spin_ticks++;
+        }
+        if(s_yaw_spin_ticks >= YAW_SPIN_LIMIT_TICKS)
+        {
+            Flight_Runtime_Emergency_Stop(EMERGENCY_STOP_REASON_YAW_SPIN);
+            return 1U;
+        }
+    }
+    else
+    {
+        Flight_Safety_ResetYawSpinMonitor();
+    }
     return 0U;
 }
 
@@ -44,7 +108,11 @@ uint8 Flight_Safety_Can_Arm(FlightArmRejectReason *reason)
 {
     FlightArmRejectReason reject_reason = FLIGHT_ARM_REJECT_NONE;
 
-    if(emergency_stop_triggered)
+    if(s_rearm_inhibit_ticks > 0U)
+    {
+        reject_reason = FLIGHT_ARM_REJECT_REARM_INHIBIT;
+    }
+    else if(emergency_stop_triggered)
     {
         reject_reason = FLIGHT_ARM_REJECT_ESTOP;
     }
@@ -54,6 +122,10 @@ uint8 Flight_Safety_Can_Arm(FlightArmRejectReason *reason)
     }
     else if(!isfinite(current_roll) || !isfinite(current_pitch) || !isfinite(current_yaw) ||
             !isfinite(current_gyro_roll) || !isfinite(current_gyro_pitch) || !isfinite(current_gyro_yaw))
+    {
+        reject_reason = FLIGHT_ARM_REJECT_INVALID_SENSOR;
+    }
+    else if(!ICM_Health_IsArmable())
     {
         reject_reason = FLIGHT_ARM_REJECT_INVALID_SENSOR;
     }
@@ -82,17 +154,58 @@ void Flight_Safety_Update_Battery_Warning(void)
     low_voltage_protect_flag = status.low_warning ? 1 : 0;
 }
 
-void Flight_Runtime_Emergency_Stop(uint8 reason)
+void Flight_Safety_Tick_5ms(void)
 {
+    if(s_rearm_inhibit_ticks > 0U)
+    {
+        s_rearm_inhibit_ticks--;
+    }
+}
+
+uint16 Flight_Safety_GetRearmInhibitRemainingMs(void)
+{
+    return (uint16)(s_rearm_inhibit_ticks * FLIGHT_SAFETY_TICK_MS);
+}
+
+static const char *flight_safety_estop_reason_text(uint8 reason)
+{
+    switch(reason)
+    {
+        case EMERGENCY_STOP_REASON_ATTITUDE_ROLL:   return "ESTOP ROLL LIMIT";
+        case EMERGENCY_STOP_REASON_ATTITUDE_PITCH:  return "ESTOP PITCH LIMIT";
+        case EMERGENCY_STOP_REASON_MANUAL_BUTTON:   return "ESTOP BUTTON";
+        case EMERGENCY_STOP_REASON_LINK_TIMEOUT:    return "ESTOP LINK TIMEOUT";
+        case EMERGENCY_STOP_REASON_INVALID_CONTROL: return "ESTOP INVALID CTRL";
+        case EMERGENCY_STOP_REASON_TAKEOFF_TOF:     return "ESTOP TAKEOFF TOF";
+        case EMERGENCY_STOP_REASON_YAW_SPIN:        return "ESTOP YAW SPIN";
+        case EMERGENCY_STOP_REASON_NONE:
+        default:                                    return "ESTOP UNKNOWN";
+    }
+}
+
+void Flight_Runtime_Emergency_StopAt(uint8 reason,
+                                     const char *detail,
+                                     const char *file,
+                                     uint32 line)
+{
+    const char *stop_text = (detail != NULL) ? detail : flight_safety_estop_reason_text(reason);
+
     armed = 0U;
     emergency_stop_triggered = 1U;
     emergency_stop_reason = reason;
+    if(reason == EMERGENCY_STOP_REASON_MANUAL_BUTTON ||
+       reason == EMERGENCY_STOP_REASON_YAW_SPIN)
+    {
+        s_rearm_inhibit_ticks = FLIGHT_ESTOP_REARM_INHIBIT_TICKS;
+    }
+    Flight_Safety_ResetYawSpinMonitor();
     MenuMotorTest_Stop();
     MenuFlyTest_Stop();
     target_throttle = 0.0f;
     current_throttle = 0.0f;
     base_throttle = 0.0f;
-    Flight_Takeoff_Abort();
+    Flight_Takeoff_RecordStopAt(stop_text, file, line);
+    Flight_Takeoff_AbortAt(stop_text, file, line);
     Velocity_Loop_Set_Enabled(0U);
     Position_Loop_Set_Enabled(0U);
     PIT_Demo_Safety_Reset_Angle_Rate_Cmd_Lpf();
@@ -100,8 +213,20 @@ void Flight_Runtime_Emergency_Stop(uint8 reason)
     small_driver_force_zero();
 }
 
-void Flight_Runtime_Clear_Emergency_Stop_Latch(void)
+void Flight_Runtime_Emergency_Stop(uint8 reason)
 {
+    Flight_Runtime_Emergency_StopAt(reason, NULL, __FILE__, __LINE__);
+}
+
+uint8 Flight_Runtime_Clear_Emergency_Stop_Latch(void)
+{
+    if(s_rearm_inhibit_ticks > 0U)
+    {
+        return 0U;
+    }
+
     emergency_stop_triggered = 0U;
     emergency_stop_reason = EMERGENCY_STOP_REASON_NONE;
+    Flight_Safety_ResetYawSpinMonitor();
+    return 1U;
 }

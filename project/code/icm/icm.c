@@ -1,6 +1,7 @@
 #include "icm.h"
 #include "common/project_headfile.h"
 #include <math.h>
+#include <string.h>
 
 #define ACC_MG_TO_MPS2              (9.81f / 1000.0f)  // mg -> m/s^2, 1000mg = 1g = 9.81m/s^2
 #define ACC_VEL_MPS_TO_CMS          (100.0f)           // m/s -> cm/s, velocity output X_V/Y_V uses cm/s
@@ -15,22 +16,35 @@
 #define ACC_LEVEL_BIAS_LIMIT_MG     (200.0f)           // reject stored/calibrated horizontal bias if magnitude is larger than this
 #define ACC_LEVEL_BIAS_SAMPLE_HZ    (4000U)            // acceleration bias calibration sample rate
 #define ACC_LEVEL_BIAS_SETTLE_MS    (1000U)            // wait time before sampling bias, lets attitude quaternion settle after reset
+#define ICM_DWT_LAR_UNLOCK          (0xC5ACCE55UL)
+#define ICM_STALE_IDENTICAL_LIMIT   (16U)
+#define ICM_GYRO_SATURATION_DPS     (1950.0f)
+#define ICM_HEALTH_ACC_MIN_MG       (400.0f)
+#define ICM_HEALTH_ACC_MAX_MG       (1600.0f)
+#define ICM_STILL_GYRO_MAX_DPS      (2.0f)
+#define ICM_STILL_ACC_MIN_MG        (950.0f)
+#define ICM_STILL_ACC_MAX_MG        (1050.0f)
+#define MAHONY_KP_MIN               (0.05f)
+#define MAHONY_KP_MAX               (2.0f)
+#define MAHONY_ACC_FULL_TRUST_MG    (50.0f)
+#define MAHONY_ACC_ZERO_TRUST_MG    (300.0f)
+#define MAHONY_GYRO_FULL_TRUST_DPS  (8.0f)
+#define MAHONY_GYRO_ZERO_TRUST_DPS  (100.0f)
+#define MAHONY_NORM_EPSILON         (1.0e-9f)
+#define ICM_VISION_YAW_RESIDUAL_GATE_DEG (30.0f)
+#define ICM_VISION_YAW_CONFIRM_FRAMES (3U)
+#define ICM_VISION_YAW_CORRECTION_ALPHA (0.02f)
+#define ICM_VISION_YAW_MAX_STEP_DEG (0.20f)
 
 // ==================== 全局变量定义 ====================
-#define sampleFreq  4000.0f         // 采样频率(赫兹)
 #define twoKpDef    (2.0f * 0.5f)   // Mahony比例增益
 #define twoKiDef    (2.0f * 0.0f)   // Mahony积分增益
-
-// 注意：这里使用 DT_ICM 避免与其他地方的 DT 冲突
-#ifndef DT
-#define DT 0.00025f                 // 采样周期(8000Hz = 0.125ms)
-#endif
 
 #define G 9.81f                     // 重力加速度(m/s?)
 
 
 // Mahony算法参数
-volatile float invsampleFreq = 1.0f / sampleFreq;
+volatile float invsampleFreq = ICM_SAMPLE_DT_S;
 volatile float twoKp = twoKpDef;
 volatile float twoKi = twoKiDef;
 volatile float q0 = 1.0f, q1 = 0.0f, q2 = 0.0f, q3 = 0.0f;      // Mahony四元数
@@ -76,6 +90,20 @@ biquad_state X_V_biquad, Y_V_biquad;
 biquad_state Pitch_g_biquad, Roll_g_biquad, Yaw_g_biquad;
 biquad_state Pitch_acc_biquad, Roll_acc_biquad, Yaw_acc_biquad;
 
+static ICM_Health_t s_icm_health = {0};
+static uint8 s_icm_dwt_ready = 0U;
+static uint32 s_icm_last_cycle = 0U;
+static int16 s_icm_last_raw[6] = {0};
+static uint32 s_icm_identical_raw_count = 0U;
+static uint32 s_icm_transient_fault_mask = 0U;
+static float s_last_valid_q[4] = {1.0f, 0.0f, 0.0f, 0.0f};
+
+static uint8 s_vision_yaw_enabled = 0U;
+static float s_vision_marker_world_heading_deg = 0.0f;
+static float s_vision_camera_yaw_offset_deg = 0.0f;
+static uint32 s_vision_yaw_last_sequence = 0U;
+static uint8 s_vision_yaw_confirm_count = 0U;
+
 // PID参数(根据你的应用调整)
 volatile PID_t PIDK_AA = {700, 0.15, 7};   // X平移位置
 volatile PID_t PIDK_AB = {1, 0, 0};        // X平移速度
@@ -115,6 +143,174 @@ static uint8 icm_is_valid_acc_level_bias(float value)
     return (value == value) && (fabsf(value) < ACC_LEVEL_BIAS_LIMIT_MG);
 }
 
+static float icm_clamp_float(float value, float min_value, float max_value)
+{
+    if(value < min_value)
+    {
+        return min_value;
+    }
+    if(value > max_value)
+    {
+        return max_value;
+    }
+    return value;
+}
+
+static float icm_wrap_angle_deg(float angle_deg)
+{
+    while(angle_deg > 180.0f) angle_deg -= 360.0f;
+    while(angle_deg < -180.0f) angle_deg += 360.0f;
+    return angle_deg;
+}
+
+static void icm_dwt_init(void)
+{
+    if(s_icm_dwt_ready)
+    {
+        return;
+    }
+
+    CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+    if((DWT->CTRL & DWT_CTRL_NOCYCCNT_Msk) != 0U)
+    {
+        return;
+    }
+
+    DWT->LAR = ICM_DWT_LAR_UNLOCK;
+    DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
+    s_icm_dwt_ready = 1U;
+}
+
+static void icm_update_sample_timing(void)
+{
+    uint32 now_cycle;
+
+    icm_dwt_init();
+    if(!s_icm_dwt_ready || SystemCoreClock == 0U)
+    {
+        return;
+    }
+
+    now_cycle = DWT->CYCCNT;
+    if(s_icm_last_cycle != 0U)
+    {
+        s_icm_health.sample_interval_us = ((float)(now_cycle - s_icm_last_cycle) * 1000000.0f) /
+                                          (float)SystemCoreClock;
+    }
+    s_icm_last_cycle = now_cycle;
+}
+
+static void icm_update_euler_from_quaternion(void)
+{
+    float roll_sin = 2.0f * (q0 * q1 + q2 * q3);
+    float roll_cos = 1.0f - 2.0f * (q1 * q1 + q2 * q2);
+    float pitch_sin = 2.0f * (q0 * q2 - q3 * q1);
+    float yaw_sin = 2.0f * (q0 * q3 + q1 * q2);
+    float yaw_cos = 1.0f - 2.0f * (q2 * q2 + q3 * q3);
+
+    pitch_sin = icm_clamp_float(pitch_sin, -1.0f, 1.0f);
+    Roll_a_Pi = atan2f(roll_sin, roll_cos);
+    Pitch_a_Pi = asinf(pitch_sin);
+    Yaw_a_Pi = atan2f(yaw_sin, yaw_cos);
+}
+
+static void icm_set_quaternion_from_level_accel(float ax, float ay, float az)
+{
+    float roll_rad;
+    float pitch_rad;
+    float half_roll;
+    float half_pitch;
+    float cr;
+    float sr;
+    float cp;
+    float sp;
+    float norm;
+
+    roll_rad = atan2f(ay, az);
+    pitch_rad = atan2f(-ax, sqrtf(ay * ay + az * az));
+    half_roll = 0.5f * roll_rad;
+    half_pitch = 0.5f * pitch_rad;
+    cr = cosf(half_roll);
+    sr = sinf(half_roll);
+    cp = cosf(half_pitch);
+    sp = sinf(half_pitch);
+
+    q0 = cr * cp;
+    q1 = sr * cp;
+    q2 = cr * sp;
+    q3 = -sr * sp;
+
+    norm = sqrtf(q0 * q0 + q1 * q1 + q2 * q2 + q3 * q3);
+    if(isfinite(norm) && norm > MAHONY_NORM_EPSILON)
+    {
+        q0 /= norm;
+        q1 /= norm;
+        q2 /= norm;
+        q3 /= norm;
+        s_last_valid_q[0] = q0;
+        s_last_valid_q[1] = q1;
+        s_last_valid_q[2] = q2;
+        s_last_valid_q[3] = q3;
+        icm_update_euler_from_quaternion();
+    }
+}
+
+static void icm_refresh_health(void)
+{
+    uint32 fault_mask = s_icm_transient_fault_mask;
+    float quaternion_norm = sqrtf(q0 * q0 + q1 * q1 + q2 * q2 + q3 * q3);
+    uint8 gyro_saturated;
+
+    s_icm_transient_fault_mask = 0U;
+    gyro_saturated = (uint8)((fabsf(Roll_g) >= ICM_GYRO_SATURATION_DPS) ||
+                             (fabsf(Pitch_g) >= ICM_GYRO_SATURATION_DPS) ||
+                             (fabsf(Yaw_g) >= ICM_GYRO_SATURATION_DPS));
+
+    if(!isfinite(Roll_acc) || !isfinite(Pitch_acc) || !isfinite(Yaw_acc) ||
+       !isfinite(Roll_g) || !isfinite(Pitch_g) || !isfinite(Yaw_g) ||
+       !isfinite(Roll_a) || !isfinite(Pitch_a) || !isfinite(Yaw_a))
+    {
+        fault_mask |= ICM_HEALTH_FAULT_NONFINITE;
+    }
+    if(!isfinite(acc_norm_filtered) ||
+       acc_norm_filtered < ICM_HEALTH_ACC_MIN_MG ||
+       acc_norm_filtered > ICM_HEALTH_ACC_MAX_MG)
+    {
+        fault_mask |= ICM_HEALTH_FAULT_ACC_NORM;
+    }
+    if(gyro_saturated)
+    {
+        fault_mask |= ICM_HEALTH_FAULT_GYRO_SAT;
+    }
+    if(!isfinite(quaternion_norm) || quaternion_norm < 0.90f || quaternion_norm > 1.10f)
+    {
+        fault_mask |= ICM_HEALTH_FAULT_QUATERNION;
+    }
+    if(s_icm_identical_raw_count >= ICM_STALE_IDENTICAL_LIMIT)
+    {
+        fault_mask |= ICM_HEALTH_FAULT_SAMPLE_STALE;
+    }
+    s_icm_health.sample_sequence++;
+    s_icm_health.acc_norm_mg = acc_norm_filtered;
+    s_icm_health.quaternion_norm = quaternion_norm;
+    s_icm_health.gyro_saturated = gyro_saturated;
+    s_icm_health.sample_stale = (uint8)((fault_mask & ICM_HEALTH_FAULT_SAMPLE_STALE) != 0U);
+    s_icm_health.attitude_valid = (uint8)(fault_mask == 0U);
+    s_icm_health.fault_mask = fault_mask;
+
+    if(fault_mask != 0U)
+    {
+        if(s_icm_health.consecutive_invalid_count < 0xFFFFFFFFU)
+        {
+            s_icm_health.consecutive_invalid_count++;
+        }
+    }
+    else
+    {
+        s_icm_health.consecutive_invalid_count = 0U;
+    }
+}
+
 static void icm_acc_level_bias_load_or_calibrate(uint8 force_calibration);
 
 static void origin_sample_live_attitude(float history_sum[ORIGIN_AXIS_COUNT])
@@ -135,7 +331,7 @@ static void origin_commit_targets(const float sum[ORIGIN_AXIS_COUNT])
 {
     target_angle_roll = sum[ORIGIN_AXIS_ROLL] / (float)IMU_calibration_seconds;
     target_angle_pitch = sum[ORIGIN_AXIS_PITCH] / (float)IMU_calibration_seconds;
-    target_angle_yaw = sum[ORIGIN_AXIS_YAW] / (float)IMU_calibration_seconds;
+    target_angle_yaw = Angle_WrapDeg180(sum[ORIGIN_AXIS_YAW] / (float)IMU_calibration_seconds);
 }
 
 void calculate_origin_point(void)
@@ -216,6 +412,14 @@ void ICM_Calculate_Init(void)
     q0 = 1.0f; q1 = 0.0f; q2 = 0.0f; q3 = 0.0f;
     q01 = 1.0f; q11 = 0.0f; q21 = 0.0f; q31 = 0.0f;
     integralFBx = 0.0f; integralFBy = 0.0f; integralFBz = 0.0f;
+    s_last_valid_q[0] = 1.0f;
+    s_last_valid_q[1] = 0.0f;
+    s_last_valid_q[2] = 0.0f;
+    s_last_valid_q[3] = 0.0f;
+    memset(&s_icm_health, 0, sizeof(s_icm_health));
+    s_icm_last_cycle = 0U;
+    s_icm_identical_raw_count = 0U;
+    ICM_VisionYaw_Configure(0U, 0.0f, 0.0f);
 
     // 4. 陀螺仪零飘校准
     if(IMU_calibrate_flag == 0) {
@@ -247,11 +451,24 @@ void ICM_Calculate_Init(void)
     }      
     
 
-    // 5. 预热姿态解算(让四元数收敛)
+    // 5. 预热传感器与数字滤波器，并直接使用当前重力方向初始化 Roll/Pitch 四元数。
     ips200_show_string(0, 16*3, "Warming up...");
-    for(int i = 0; i < 200; i++) {
+    for(int i = 0; i < 400; i++) {
         get_ICM_data();
-        system_delay_ms(5);
+        system_delay_us((uint32)(ICM_SAMPLE_DT_S * 1000000.0f));
+    }
+
+    if(isfinite(acc_norm_filtered) &&
+       acc_norm_filtered >= ICM_HEALTH_ACC_MIN_MG &&
+       acc_norm_filtered <= ICM_HEALTH_ACC_MAX_MG)
+    {
+        integralFBx = 0.0f;
+        integralFBy = 0.0f;
+        integralFBz = 0.0f;
+        icm_set_quaternion_from_level_accel(Roll_acc_F, Pitch_acc_F, Yaw_acc_F);
+        Roll_a = Roll_a_Pi * Rad2Ang;
+        Pitch_a = Pitch_a_Pi * Rad2Ang;
+        Yaw_a = Yaw_a_Pi * Rad2Ang;
     }
 
     icm_acc_level_bias_load_or_calibrate(force_acc_level_calibration);
@@ -278,19 +495,19 @@ void ICM_Calculate_Init(void)
  */
 void Filter_Init(void)
 {
-    // 速度滤波器(4000Hz采样, 10Hz截止频率)
-    biquad_filter_init(&X_V_biquad, BIQUAD_LOWPASS, 4000, 10, 0.7071);
-    biquad_filter_init(&Y_V_biquad, BIQUAD_LOWPASS, 4000, 10, 0.7071);
+    // 速度滤波器(4kHz采样, 10Hz截止频率)
+    biquad_filter_init(&X_V_biquad, BIQUAD_LOWPASS, (int)ICM_SAMPLE_RATE_HZ, 10, 0.7071f);
+    biquad_filter_init(&Y_V_biquad, BIQUAD_LOWPASS, (int)ICM_SAMPLE_RATE_HZ, 10, 0.7071f);
 
     // 角速度滤波器(4000Hz采样, 120Hz截止频率)
-    biquad_filter_init(&Pitch_g_biquad, BIQUAD_LOWPASS, 4000, 120, 0.7071);
-    biquad_filter_init(&Roll_g_biquad, BIQUAD_LOWPASS, 4000, 120, 0.7071);
-    biquad_filter_init(&Yaw_g_biquad, BIQUAD_LOWPASS, 4000, 120, 0.7071);
+    biquad_filter_init(&Pitch_g_biquad, BIQUAD_LOWPASS, (int)ICM_SAMPLE_RATE_HZ, 120, 0.7071f);
+    biquad_filter_init(&Roll_g_biquad, BIQUAD_LOWPASS, (int)ICM_SAMPLE_RATE_HZ, 120, 0.7071f);
+    biquad_filter_init(&Yaw_g_biquad, BIQUAD_LOWPASS, (int)ICM_SAMPLE_RATE_HZ, 120, 0.7071f);
 
     // 加速度滤波器(4000Hz采样, 30Hz截止频率)
-    biquad_filter_init(&Pitch_acc_biquad, BIQUAD_LOWPASS, 4000, 30, 0.7071);
-    biquad_filter_init(&Roll_acc_biquad, BIQUAD_LOWPASS, 4000, 30, 0.7071);
-    biquad_filter_init(&Yaw_acc_biquad, BIQUAD_LOWPASS, 4000, 30, 0.7071);
+    biquad_filter_init(&Pitch_acc_biquad, BIQUAD_LOWPASS, (int)ICM_SAMPLE_RATE_HZ, 30, 0.7071f);
+    biquad_filter_init(&Roll_acc_biquad, BIQUAD_LOWPASS, (int)ICM_SAMPLE_RATE_HZ, 30, 0.7071f);
+    biquad_filter_init(&Yaw_acc_biquad, BIQUAD_LOWPASS, (int)ICM_SAMPLE_RATE_HZ, 30, 0.7071f);
 }
 
 /**
@@ -382,13 +599,45 @@ float biquad(biquad_state *state, float data)
 // ==================== 主数据获取与处理 ====================
 /**
  * @brief 获取ICM数据并进行姿态解算
- * @note 在8KHz定时器中断中调用
+ * @note 在 4 kHz 控制定时器中断中调用
  */
 void get_ICM_data(void)
 {
+    int16 current_raw[6];
+    uint8 raw_identical = 1U;
+
+    icm_update_sample_timing();
+
     // 1. 读取原始数据
     Get_Acc_ICM42688();
     Get_Gyro_ICM42688();
+
+    current_raw[0] = icm42688_acc_x_r;
+    current_raw[1] = icm42688_acc_y_r;
+    current_raw[2] = icm42688_acc_z_r;
+    current_raw[3] = icm42688_gyro_x_r;
+    current_raw[4] = icm42688_gyro_y_r;
+    current_raw[5] = icm42688_gyro_z_r;
+    for(uint8 raw_index = 0U; raw_index < 6U; raw_index++)
+    {
+        if(current_raw[raw_index] != s_icm_last_raw[raw_index])
+        {
+            raw_identical = 0U;
+        }
+        s_icm_last_raw[raw_index] = current_raw[raw_index];
+    }
+    if(raw_identical)
+    {
+        if(s_icm_identical_raw_count < 0xFFFFFFFFU)
+        {
+            s_icm_identical_raw_count++;
+        }
+    }
+    else
+    {
+        s_icm_identical_raw_count = 0U;
+    }
+    s_icm_health.stale_count = s_icm_identical_raw_count;
 
     // ?? 保持原有的角度取反逻辑（用户要求不改）
 //    icm42688_gyro_x = -icm42688_gyro_x;  // Roll角速度取反
@@ -404,9 +653,9 @@ void get_ICM_data(void)
     float gy = icm42688_gyro_y * DEG2RAD;
     float gz = icm42688_gyro_z * DEG2RAD;
 
-    alpha_gx = (gx - prev_gx) * sampleFreq;  // rad/s?
-    alpha_gy = (gy - prev_gy) * sampleFreq;
-    alpha_gz = (gz - prev_gz) * sampleFreq;
+    alpha_gx = (gx - prev_gx) * ICM_SAMPLE_RATE_HZ;
+    alpha_gy = (gy - prev_gy) * ICM_SAMPLE_RATE_HZ;
+    alpha_gz = (gz - prev_gz) * ICM_SAMPLE_RATE_HZ;
 
     prev_gx = gx;
     prev_gy = gy;
@@ -462,7 +711,7 @@ void get_ICM_data(void)
 
     // 可选: 使用Madgwick算法作为对比
     // updateMadgwickEulerIMU(icm42688_gyro_x, icm42688_gyro_y, icm42688_gyro_z,
-    //                        Roll_acc_F, Pitch_acc_F, Yaw_acc_F, DT);
+    //                        Roll_acc_F, Pitch_acc_F, Yaw_acc_F, ICM_SAMPLE_DT_S);
 
     // 7. 双算法融合(可选)
     // Pitch = 0.5f * Pitch_a + 0.5f * Pitch_b;
@@ -484,6 +733,7 @@ void get_ICM_data(void)
 
     // 12. 姿态角限幅
     Angle_Limit_Process();
+    icm_refresh_health();
 }
 
 // ==================== Mahony姿态解算 ====================
@@ -497,118 +747,125 @@ void MahonyAHRSupdateIMU(float gx, float gy, float gz,
                          float ax, float ay, float az,
                          float acc_norm)
 {
-    static float recipNorm;
-    static float halfvx, halfvy, halfvz;
-    static float halfex, halfey, halfez;
-    static float qa, qb, qc;
+    float gyro_abs_max_dps;
+    float acc_norm_sq;
+    float acc_norm_error_mg;
+    float acc_confidence;
+    float gyro_confidence;
+    float correction_confidence;
+    float halfvx;
+    float halfvy;
+    float halfvz;
+    float halfex;
+    float halfey;
+    float halfez;
+    float qa;
+    float qb;
+    float qc;
+    float norm;
+    uint8 accel_valid;
 
-    // 判断加速度数据是否有效
-    if(!((ax == 0.0f) && (ay == 0.0f) && (az == 0.0f)))
+    if(!isfinite(gx) || !isfinite(gy) || !isfinite(gz))
     {
-        float gyro_abs_x_dps = fabsf(gx);
-        float gyro_abs_y_dps = fabsf(gy);
-        float gyro_abs_z_dps = fabsf(gz);
-        float gyro_abs_max_dps = gyro_abs_x_dps;
-        float acc_norm_error_mg = fabsf(acc_norm - 1000.0f);
+        s_icm_transient_fault_mask |= ICM_HEALTH_FAULT_NONFINITE;
+        return;
+    }
 
-        if(gyro_abs_y_dps > gyro_abs_max_dps) {
-            gyro_abs_max_dps = gyro_abs_y_dps;
-        }
-        if(gyro_abs_z_dps > gyro_abs_max_dps) {
-            gyro_abs_max_dps = gyro_abs_z_dps;
-        }
+    gyro_abs_max_dps = fabsf(gx);
+    if(fabsf(gy) > gyro_abs_max_dps) gyro_abs_max_dps = fabsf(gy);
+    if(fabsf(gz) > gyro_abs_max_dps) gyro_abs_max_dps = fabsf(gz);
 
-        // 角速度转换为弧度
-        gx *= DEG2RAD;
-        gy *= DEG2RAD;
-        gz *= DEG2RAD;
+    gx *= DEG2RAD;
+    gy *= DEG2RAD;
+    gz *= DEG2RAD;
 
-        // 归一化加速度
-        recipNorm = invSqrt(ax * ax + ay * ay + az * az);
-        ax *= recipNorm;
-        ay *= recipNorm;
-        az *= recipNorm;
+    acc_norm_sq = ax * ax + ay * ay + az * az;
+    accel_valid = (uint8)(isfinite(ax) && isfinite(ay) && isfinite(az) &&
+                          isfinite(acc_norm) && acc_norm_sq > MAHONY_NORM_EPSILON);
 
-        // 估计重力方向(从四元数推导)
+    if(accel_valid)
+    {
+        norm = sqrtf(acc_norm_sq);
+        ax /= norm;
+        ay /= norm;
+        az /= norm;
+
         halfvx = q1 * q3 - q0 * q2;
         halfvy = q0 * q1 + q2 * q3;
         halfvz = q0 * q0 - 0.5f + q3 * q3;
+        halfex = ay * halfvz - az * halfvy;
+        halfey = az * halfvx - ax * halfvz;
+        halfez = ax * halfvy - ay * halfvx;
 
-        // 计算误差(重力方向估计 × 加速度测量)
-        halfex = (ay * halfvz - az * halfvy);
-        halfey = (az * halfvx - ax * halfvz);
-        halfez = (ax * halfvy - ay * halfvx);
+        acc_norm_error_mg = fabsf(acc_norm - 1000.0f);
+        acc_confidence = 1.0f - (acc_norm_error_mg - MAHONY_ACC_FULL_TRUST_MG) /
+                                  (MAHONY_ACC_ZERO_TRUST_MG - MAHONY_ACC_FULL_TRUST_MG);
+        gyro_confidence = 1.0f - (gyro_abs_max_dps - MAHONY_GYRO_FULL_TRUST_DPS) /
+                                   (MAHONY_GYRO_ZERO_TRUST_DPS - MAHONY_GYRO_FULL_TRUST_DPS);
+        acc_confidence = icm_clamp_float(acc_confidence, 0.0f, 1.0f);
+        gyro_confidence = icm_clamp_float(gyro_confidence, 0.0f, 1.0f);
+        correction_confidence = acc_confidence * gyro_confidence;
+        twoKp = MAHONY_KP_MIN + correction_confidence * (MAHONY_KP_MAX - MAHONY_KP_MIN);
 
-        // 积分反馈(如果Ki > 0)
-        if(twoKi > 0.0f)
+        if(twoKi > 0.0f && correction_confidence > 0.0f)
         {
-            integralFBx += twoKi * halfex * invsampleFreq;
-            integralFBy += twoKi * halfey * invsampleFreq;
-            integralFBz += twoKi * halfez * invsampleFreq;
+            integralFBx += twoKi * halfex * invsampleFreq * correction_confidence;
+            integralFBy += twoKi * halfey * invsampleFreq * correction_confidence;
+            integralFBz += twoKi * halfez * invsampleFreq * correction_confidence;
             gx += integralFBx;
             gy += integralFBy;
             gz += integralFBz;
         }
-        else {
+        else
+        {
             integralFBx = 0.0f;
             integralFBy = 0.0f;
             integralFBz = 0.0f;
         }
 
-        // Mahony修正强度同时参考加速度可信度和陀螺运动状态。
-        // 机体转动时减弱加速度修正，避免姿态被滞后的加速度方向拖慢。
-        if((gyro_abs_max_dps < 8.0f) && (acc_norm_error_mg < 50.0f)) {
-            // 静止或微小运动: 高增益，快速收敛
-            twoKp = 2.0f;
-        }
-        else if((gyro_abs_max_dps < 30.0f) && (acc_norm_error_mg < 150.0f)) {
-            // 中等运动: 中等增益，平衡响应和稳定性
-            twoKp = 0.8f;
-        }
-        else {
-            // 【关键修改】剧烈运动: 保留极小增益，防止长时间漂移
-            // 不要设为 0，这样即使在振动环境下也能保持微弱的修正
-            twoKp = 0.05f;
-        }
-
-        // 比例反馈
         gx += twoKp * halfex;
         gy += twoKp * halfey;
         gz += twoKp * halfez;
     }
+    else
+    {
+        twoKp = MAHONY_KP_MIN;
+        s_icm_transient_fault_mask |= ICM_HEALTH_FAULT_ACC_NORM;
+    }
 
-    // 四元数微分方程
-    gx *= (0.5f * invsampleFreq);
-    gy *= (0.5f * invsampleFreq);
-    gz *= (0.5f * invsampleFreq);
-
+    gx *= 0.5f * ICM_SAMPLE_DT_S;
+    gy *= 0.5f * ICM_SAMPLE_DT_S;
+    gz *= 0.5f * ICM_SAMPLE_DT_S;
     qa = q0;
     qb = q1;
     qc = q2;
+    q0 += -qb * gx - qc * gy - q3 * gz;
+    q1 +=  qa * gx + qc * gz - q3 * gy;
+    q2 +=  qa * gy - qb * gz + q3 * gx;
+    q3 +=  qa * gz + qb * gy - qc * gx;
 
-    q0 += (-qb * gx - qc * gy - q3 * gz);
-    q1 += ( qa * gx + qc * gz - q3 * gy);
-    q2 += ( qa * gy - qb * gz + q3 * gx);
-    q3 += ( qa * gz + qb * gy - qc * gx);
+    norm = sqrtf(q0 * q0 + q1 * q1 + q2 * q2 + q3 * q3);
+    if(!isfinite(norm) || norm <= MAHONY_NORM_EPSILON)
+    {
+        q0 = s_last_valid_q[0];
+        q1 = s_last_valid_q[1];
+        q2 = s_last_valid_q[2];
+        q3 = s_last_valid_q[3];
+        s_icm_transient_fault_mask |= ICM_HEALTH_FAULT_QUATERNION;
+    }
+    else
+    {
+        q0 /= norm;
+        q1 /= norm;
+        q2 /= norm;
+        q3 /= norm;
+        s_last_valid_q[0] = q0;
+        s_last_valid_q[1] = q1;
+        s_last_valid_q[2] = q2;
+        s_last_valid_q[3] = q3;
+    }
 
-    // 归一化四元数
-    recipNorm = invSqrt(q0 * q0 + q1 * q1 + q2 * q2 + q3 * q3);
-    q0 *= recipNorm;
-    q1 *= recipNorm;
-    q2 *= recipNorm;
-    q3 *= recipNorm;
-
-    // 四元数转欧拉角(弧度)
-    static float r11, r12, r21, r31, r32;
-    r11 = 2.0f * (q0 * q1 + q2 * q3);
-    r12 = 1.0f - 2.0f * (q1 * q1 + q2 * q2);
-    r21 = 2.0f * (q0 * q2 - q3 * q1);
-    r31 = 2.0f * (q0 * q3 + q1 * q2);
-    r32 = 1.0f - 2.0f * (q2 * q2 + q3 * q3);
-
-    Yaw_a_Pi   = atan2f(r31, r32);
-    Pitch_a_Pi = asinf(r21);
-    Roll_a_Pi  = atan2f(r11, r12);
+    icm_update_euler_from_quaternion();
 }
 
 // ==================== Madgwick姿态解算(可选) ====================
@@ -699,8 +956,8 @@ void updateMadgwickEulerIMU(float gx, float gy, float gz,
  */
 void Calculate_Angular_Acceleration(void)
 {
-    Pitch_angular_acc = (Pitch_g_F - Pitch_g_last) * sampleFreq;
-    Yaw_angular_acc   = (Yaw_g_F - Yaw_g_last) * sampleFreq;
+    Pitch_angular_acc = (Pitch_g_F - Pitch_g_last) * ICM_SAMPLE_RATE_HZ;
+    Yaw_angular_acc   = (Yaw_g_F - Yaw_g_last) * ICM_SAMPLE_RATE_HZ;
 
     Pitch_g_last = Pitch_g_F;
     Roll_g_last  = Roll_g_F;
@@ -793,8 +1050,8 @@ void Update_Velocity_Estimate(void)
     }
 
     // Acc input is mg. Convert to m/s^2, then integrate to cm/s.
-    X_V += ax_level_mg * ACC_MG_TO_MPS2 * ACC_VEL_MPS_TO_CMS * DT;
-    Y_V += ay_level_mg * ACC_MG_TO_MPS2 * ACC_VEL_MPS_TO_CMS * DT;
+    X_V += ax_level_mg * ACC_MG_TO_MPS2 * ACC_VEL_MPS_TO_CMS * ICM_SAMPLE_DT_S;
+    Y_V += ay_level_mg * ACC_MG_TO_MPS2 * ACC_VEL_MPS_TO_CMS * ICM_SAMPLE_DT_S;
 
     X_V_F = biquad(&X_V_biquad, X_V);
     Y_V_F = biquad(&Y_V_biquad, Y_V);
@@ -1002,21 +1259,19 @@ void IMU_calibration(void)
     ips200_show_string(0, 16*2, "Don't move me!(1)");
     system_delay_ms(1000);
 
-    // 采集数据(8KHz * 3秒)
+    // 按当前 4 kHz ODR 采集，每组累积 1 秒。
     do {
-        system_delay_us(125);
+        system_delay_us((uint32)(ICM_SAMPLE_DT_S * 1000000.0f));
         Get_RAW_Gyro_ICM42688();
 
-        if(g_cnt < 8000) {
-            gyro_history_sum[0] += icm42688_gyro_x_r;
-            gyro_history_sum[1] += icm42688_gyro_y_r;
-            gyro_history_sum[2] += icm42688_gyro_z_r;
-            g_cnt++;
-        }
-        else {
-            gyro_history[0][s_cnt] = (float)gyro_history_sum[0] / 8000.0f;
-            gyro_history[1][s_cnt] = (float)gyro_history_sum[1] / 8000.0f;
-            gyro_history[2][s_cnt] = (float)gyro_history_sum[2] / 8000.0f;
+        gyro_history_sum[0] += icm42688_gyro_x_r;
+        gyro_history_sum[1] += icm42688_gyro_y_r;
+        gyro_history_sum[2] += icm42688_gyro_z_r;
+        g_cnt++;
+        if(g_cnt >= (uint32)ICM_SAMPLE_RATE_HZ) {
+            gyro_history[0][s_cnt] = (float)gyro_history_sum[0] / ICM_SAMPLE_RATE_HZ;
+            gyro_history[1][s_cnt] = (float)gyro_history_sum[1] / ICM_SAMPLE_RATE_HZ;
+            gyro_history[2][s_cnt] = (float)gyro_history_sum[2] / ICM_SAMPLE_RATE_HZ;
             gyro_history_sum[0] = 0;
             gyro_history_sum[1] = 0;
             gyro_history_sum[2] = 0;
@@ -1072,6 +1327,140 @@ float Get_Yaw_Error(void)
     return error;
 }
 
+uint8 ICM_IsStill(void)
+{
+    if(!isfinite(Roll_g_F) || !isfinite(Pitch_g_F) || !isfinite(Yaw_g_F) ||
+       !isfinite(acc_norm_filtered))
+    {
+        return 0U;
+    }
+
+    return (uint8)(fabsf(Roll_g_F) < ICM_STILL_GYRO_MAX_DPS &&
+                   fabsf(Pitch_g_F) < ICM_STILL_GYRO_MAX_DPS &&
+                   fabsf(Yaw_g_F) < ICM_STILL_GYRO_MAX_DPS &&
+                   acc_norm_filtered >= ICM_STILL_ACC_MIN_MG &&
+                   acc_norm_filtered <= ICM_STILL_ACC_MAX_MG &&
+                   !s_icm_health.sample_stale);
+}
+
+void ICM_GetHealth(ICM_Health_t *health)
+{
+    uint32 irq_state;
+
+    if(health == NULL)
+    {
+        return;
+    }
+
+    irq_state = __get_PRIMASK();
+    __disable_irq();
+    *health = s_icm_health;
+    if(irq_state == 0U)
+    {
+        __enable_irq();
+    }
+}
+
+uint8 ICM_Health_IsArmable(void)
+{
+    return (uint8)(s_icm_health.attitude_valid &&
+                   s_icm_health.fault_mask == 0U &&
+                   s_icm_health.consecutive_invalid_count == 0U);
+}
+
+void ICM_VisionYaw_Configure(uint8 enabled,
+                             float marker_world_heading_deg,
+                             float camera_yaw_offset_deg)
+{
+    s_vision_yaw_enabled = enabled ? 1U : 0U;
+    s_vision_marker_world_heading_deg = icm_wrap_angle_deg(marker_world_heading_deg);
+    s_vision_camera_yaw_offset_deg = icm_wrap_angle_deg(camera_yaw_offset_deg);
+    s_vision_yaw_last_sequence = 0U;
+    s_vision_yaw_confirm_count = 0U;
+}
+
+void ICM_VisionYaw_Update(float marker_heading_deg, uint8 valid, uint32 update_sequence)
+{
+    float observed_yaw_deg;
+    float residual_deg;
+    float correction_deg;
+    float half_correction_rad;
+    float cw;
+    float sw;
+    float old_q0;
+    float old_q1;
+    float old_q2;
+    float old_q3;
+    float norm;
+
+    if(!s_vision_yaw_enabled || update_sequence == s_vision_yaw_last_sequence)
+    {
+        return;
+    }
+    s_vision_yaw_last_sequence = update_sequence;
+
+    if(!valid || !isfinite(marker_heading_deg) || !s_icm_health.attitude_valid)
+    {
+        s_vision_yaw_confirm_count = 0U;
+        return;
+    }
+
+    observed_yaw_deg = icm_wrap_angle_deg(s_vision_marker_world_heading_deg -
+                                          marker_heading_deg +
+                                          s_vision_camera_yaw_offset_deg);
+    residual_deg = icm_wrap_angle_deg(observed_yaw_deg - Yaw_a);
+    if(fabsf(residual_deg) > ICM_VISION_YAW_RESIDUAL_GATE_DEG)
+    {
+        s_vision_yaw_confirm_count = 0U;
+        return;
+    }
+
+    if(s_vision_yaw_confirm_count < ICM_VISION_YAW_CONFIRM_FRAMES)
+    {
+        s_vision_yaw_confirm_count++;
+        return;
+    }
+
+    correction_deg = icm_clamp_float(residual_deg * ICM_VISION_YAW_CORRECTION_ALPHA,
+                                     -ICM_VISION_YAW_MAX_STEP_DEG,
+                                     ICM_VISION_YAW_MAX_STEP_DEG);
+    half_correction_rad = 0.5f * correction_deg * DEG2RAD;
+    cw = cosf(half_correction_rad);
+    sw = sinf(half_correction_rad);
+    old_q0 = q0;
+    old_q1 = q1;
+    old_q2 = q2;
+    old_q3 = q3;
+
+    q0 = cw * old_q0 - sw * old_q3;
+    q1 = cw * old_q1 - sw * old_q2;
+    q2 = cw * old_q2 + sw * old_q1;
+    q3 = cw * old_q3 + sw * old_q0;
+    norm = sqrtf(q0 * q0 + q1 * q1 + q2 * q2 + q3 * q3);
+    if(!isfinite(norm) || norm <= MAHONY_NORM_EPSILON)
+    {
+        q0 = old_q0;
+        q1 = old_q1;
+        q2 = old_q2;
+        q3 = old_q3;
+        s_icm_transient_fault_mask |= ICM_HEALTH_FAULT_QUATERNION;
+        return;
+    }
+
+    q0 /= norm;
+    q1 /= norm;
+    q2 /= norm;
+    q3 /= norm;
+    s_last_valid_q[0] = q0;
+    s_last_valid_q[1] = q1;
+    s_last_valid_q[2] = q2;
+    s_last_valid_q[3] = q3;
+    icm_update_euler_from_quaternion();
+    Roll_a = Roll_a_Pi * Rad2Ang;
+    Pitch_a = Pitch_a_Pi * Rad2Ang;
+    Yaw_a = Yaw_a_Pi * Rad2Ang;
+}
+
 /**
  * @brief 复位姿态解算系统
  */
@@ -1082,9 +1471,10 @@ void ICM_Attitude_Reset(void)
     integralFBx = 0.0f; integralFBy = 0.0f; integralFBz = 0.0f;
     X_V = 0.0f; Y_V = 0.0f;
     X_V_F = 0.0f; Y_V_F = 0.0f;
-
-    system_delay_ms(100);
-    Yaw_A0 = Yaw_a_Pi;
+    s_last_valid_q[0] = 1.0f;
+    s_last_valid_q[1] = 0.0f;
+    s_last_valid_q[2] = 0.0f;
+    s_last_valid_q[3] = 0.0f;
 }
 
 /**
@@ -1092,9 +1482,9 @@ void ICM_Attitude_Reset(void)
  */
 void Get_Attitude_Angle(float *roll, float *pitch, float *yaw)
 {
-    *roll = Roll_a;
-    *pitch = Pitch_a;
-    *yaw = Yaw_a;
+    if(roll != NULL) *roll = Roll_a;
+    if(pitch != NULL) *pitch = Pitch_a;
+    if(yaw != NULL) *yaw = Yaw_a;
 }
 
 /**
@@ -1102,9 +1492,9 @@ void Get_Attitude_Angle(float *roll, float *pitch, float *yaw)
  */
 void Get_Angular_Rate(float *roll_rate, float *pitch_rate, float *yaw_rate)
 {
-    *roll_rate = Roll_g_F;
-    *pitch_rate = Pitch_g_F;
-    *yaw_rate = Yaw_g_F;
+    if(roll_rate != NULL) *roll_rate = Roll_g_F;
+    if(pitch_rate != NULL) *pitch_rate = Pitch_g_F;
+    if(yaw_rate != NULL) *yaw_rate = Yaw_g_F;
 }
 
 /**
@@ -1113,18 +1503,7 @@ void Get_Angular_Rate(float *roll_rate, float *pitch_rate, float *yaw_rate)
  */
 int Check_IMU_Data_Quality(void)
 {
-    // 检查加速度范围
-    if(acc < 500.0f || acc > 1500.0f) return -1;
-
-    // 检查角速度范围
-    if(fabsf(Pitch_g) > 2000.0f || fabsf(Roll_g) > 2000.0f || fabsf(Yaw_g) > 2000.0f)
-        return -1;
-
-    // 检查四元数归一化
-    float q_norm = sqrtf(q0*q0 + q1*q1 + q2*q2 + q3*q3);
-    if(fabsf(q_norm - 1.0f) > 0.1f) return -1;
-
-    return 0;
+    return (s_icm_health.fault_mask == ICM_HEALTH_FAULT_NONE) ? 0 : -1;
 }
 
 /**
@@ -1150,13 +1529,11 @@ void Display_IMU_Info(void)
  */
 float invSqrt(float x)
 {
-    float halfx = 0.5f * x;
-    float y = x;
-    long i = *(long*)&y;
-    i = 0x5f3759df - (i >> 1);
-    y = *(float*)&i;
-    y = y * (1.5f - (halfx * y * y));
-    return y;
+    if(!isfinite(x) || x <= MAHONY_NORM_EPSILON)
+    {
+        return 0.0f;
+    }
+    return 1.0f / sqrtf(x);
 }
 
 /**

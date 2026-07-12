@@ -291,7 +291,7 @@ void Flight_Control_Set_Target_Angle(float roll, float pitch, float yaw)
 {
     target_angle_roll = roll;
     target_angle_pitch = pitch;
-    target_angle_yaw = yaw;
+    target_angle_yaw = Angle_WrapDeg180(yaw);
 
     sync_runtime_snapshot();
 }
@@ -338,6 +338,7 @@ uint8 Flight_Control_Arm(FlightArmRejectReason *reason)
     Flight_Runtime_Reset_All_Throttle_States();
 
     Yaw_Lock();
+    target_angle_yaw = Angle_WrapDeg180(current_yaw);
     gpio_set_level(LED3, GPIO_HIGH);
     Flight_Control_Reset_All_PID();
     sync_runtime_snapshot();
@@ -349,9 +350,8 @@ void Flight_Control_Disarm(void)
 {
     armed = 0;
     Flight_Runtime_Reset_All_Throttle_States();
-    /* 若 disarm 发生在自动起飞流程中（采样或爬坡阶段），必须同步中断状态机，
-     * 否则采样结束会再次 Arm，出现意外解锁。 */
-    Flight_Takeoff_Abort();
+    /* 若 disarm 发生在缓启动任一阶段，必须同步中断状态机和高度环接管。 */
+    Flight_Takeoff_AbortAt("DISARM", __FILE__, __LINE__);
     /* Disarm 同时关掉速度环, 下次起飞会在巡航分支首拍自动重新 enable。 */
     Velocity_Loop_Set_Enabled(0U);
     Position_Loop_Set_Enabled(0U);
@@ -417,6 +417,7 @@ uint8 Flight_Control_Is_Armed(void)
 /* 在切模式、重新解锁或大幅改参后清空 PID 累积历史量。 */
 void Flight_Control_Reset_All_PID(void)
 {
+    Flight_Safety_ResetYawSpinMonitor();
     PID_Reset(&gyro_pid_roll);
     PID_Reset(&gyro_pid_pitch);
     PID_Reset(&gyro_pid_yaw);
@@ -474,22 +475,119 @@ uint8 Flight_Control_Is_Throttle_Safe(float throttle)
 /*********************************************************************************************************************
  * 自动起飞流程实现
  *
- * 控制任务 (PIT_Control_Task_250us) 运行频率 4kHz (250us)，采样阶段每 8 次 tick 采一次，
- * 得到 500Hz 采样率，3s 共 1500 个样本。ramp 阶段共 12000 tick，逐拍线性累加。
+ * 控制任务运行频率为 4 kHz。前三个阶段由 PIT_Demo 直接输出四路等值油门；
+ * LIFTOFF_RAMP 才启用姿态混控，HEIGHT_BLEND 才允许高度环输出参与混控。
  *********************************************************************************************************************/
 #define TAKEOFF_CTRL_TICK_HZ        4000U   /* PIT_Control_Task_250us */
-#define TAKEOFF_SAMPLE_DIVIDER      (TAKEOFF_CTRL_TICK_HZ / FLIGHT_TAKEOFF_SAMPLE_HZ)
-#define TAKEOFF_CAPTURE_SAMPLES     ((uint32)(FLIGHT_TAKEOFF_SAMPLE_HZ * FLIGHT_TAKEOFF_CAPTURE_DURATION_S))
+#define TAKEOFF_ARM_DELAY_TICKS     ((uint32)(TAKEOFF_CTRL_TICK_HZ * FLIGHT_TAKEOFF_ARM_DELAY_S))
+#define TAKEOFF_MOTOR_SPINUP_TICKS  ((uint32)(TAKEOFF_CTRL_TICK_HZ * FLIGHT_TAKEOFF_MOTOR_SPINUP_S))
+#define TAKEOFF_IDLE_HOLD_TICKS     ((uint32)(TAKEOFF_CTRL_TICK_HZ * FLIGHT_TAKEOFF_IDLE_HOLD_S))
 #define TAKEOFF_RAMP_TICKS          ((uint32)(TAKEOFF_CTRL_TICK_HZ * FLIGHT_TAKEOFF_RAMP_DURATION_S))
+#define TAKEOFF_ATTITUDE_BLEND_TICKS ((uint32)(TAKEOFF_CTRL_TICK_HZ * FLIGHT_TAKEOFF_ATTITUDE_BLEND_S))
+#define TAKEOFF_HEIGHT_BLEND_TICKS  ((uint32)(TAKEOFF_CTRL_TICK_HZ * FLIGHT_TAKEOFF_HEIGHT_BLEND_S))
+#define TAKEOFF_HEIGHT_OUTPUT_BLEND_TICKS ((uint32)(TAKEOFF_CTRL_TICK_HZ * FLIGHT_TAKEOFF_HEIGHT_OUTPUT_BLEND_S))
 #define TAKEOFF_HOVER_ANGLE_COMP_LIMIT_DEG (10.0f)
 
 static volatile flight_takeoff_state_enum g_takeoff_state = FLIGHT_TAKEOFF_IDLE;
 static volatile uint32 g_takeoff_tick_in_state = 0U;
-static volatile uint32 g_takeoff_sample_count = 0U;
 static volatile float  g_takeoff_captured_roll = 0.0f;
 static volatile float  g_takeoff_captured_pitch = 0.0f;
+static volatile float  g_takeoff_initial_roll = 0.0f;
+static volatile float  g_takeoff_initial_pitch = 0.0f;
+static volatile float  g_takeoff_commanded_base = 0.0f;
 static volatile float  g_takeoff_hover_roll_comp_deg = 0.0f;
 static volatile float  g_takeoff_hover_pitch_comp_deg = 0.0f;
+static volatile uint8  g_takeoff_expected_active = 0U;
+static FlightTakeoffDiag g_takeoff_diag = {0U, FLIGHT_TAKEOFF_IDLE, NULL, NULL, 0U};
+
+static void takeoff_diag_clear(void)
+{
+    g_takeoff_diag.stopped = 0U;
+    g_takeoff_diag.state = (uint8)g_takeoff_state;
+    g_takeoff_diag.reason = NULL;
+    g_takeoff_diag.file = NULL;
+    g_takeoff_diag.line = 0U;
+}
+
+void Flight_Takeoff_RecordStopAt(const char *reason, const char *file, uint32 line)
+{
+    g_takeoff_diag.stopped = 1U;
+    g_takeoff_diag.state = (uint8)g_takeoff_state;
+    g_takeoff_diag.reason = (reason != NULL) ? reason : "UNKNOWN";
+    g_takeoff_diag.file = (file != NULL) ? file : "UNKNOWN";
+    g_takeoff_diag.line = line;
+}
+
+void Flight_Takeoff_GetDiag(FlightTakeoffDiag *diag)
+{
+    if(diag != NULL)
+    {
+        uint32 irq_state = __get_PRIMASK();
+
+        __disable_irq();
+        *diag = g_takeoff_diag;
+        if(irq_state == 0U)
+        {
+            __enable_irq();
+        }
+    }
+}
+
+static const char *takeoff_arm_reject_text(FlightArmRejectReason reason)
+{
+    switch(reason)
+    {
+        case FLIGHT_ARM_REJECT_ESTOP:           return "ESTOP LATCH";
+        case FLIGHT_ARM_REJECT_IMU_CALIBRATING: return "IMU CALIBRATING";
+        case FLIGHT_ARM_REJECT_INVALID_SENSOR:  return "INVALID SENSOR";
+        case FLIGHT_ARM_REJECT_ATTITUDE:        return "ATTITUDE LIMIT";
+        case FLIGHT_ARM_REJECT_MOTOR_NOT_READY: return "MOTOR NOT READY";
+        case FLIGHT_ARM_REJECT_REARM_INHIBIT:   return "ESTOP WAIT 2S";
+        case FLIGHT_ARM_REJECT_NONE:
+        default:                                return "ARM REJECTED";
+    }
+}
+
+static float takeoff_clamp_unit(float value)
+{
+    if(value < 0.0f) return 0.0f;
+    if(value > 1.0f) return 1.0f;
+    return value;
+}
+
+static float takeoff_smoothstep(float progress)
+{
+    progress = takeoff_clamp_unit(progress);
+    return progress * progress * (3.0f - 2.0f * progress);
+}
+
+static uint32 takeoff_state_duration_ticks(flight_takeoff_state_enum state)
+{
+    switch(state)
+    {
+        case FLIGHT_TAKEOFF_ARM_DELAY:      return TAKEOFF_ARM_DELAY_TICKS;
+        case FLIGHT_TAKEOFF_MOTOR_SPINUP:   return TAKEOFF_MOTOR_SPINUP_TICKS;
+        case FLIGHT_TAKEOFF_IDLE_HOLD:      return TAKEOFF_IDLE_HOLD_TICKS;
+        case FLIGHT_TAKEOFF_LIFTOFF_RAMP:   return TAKEOFF_RAMP_TICKS;
+        case FLIGHT_TAKEOFF_HEIGHT_BLEND:   return TAKEOFF_HEIGHT_BLEND_TICKS;
+        case FLIGHT_TAKEOFF_IDLE:
+        default:                            return 0U;
+    }
+}
+
+static void takeoff_set_commanded_base(float throttle)
+{
+    g_takeoff_commanded_base = throttle_safe_limit(throttle);
+    target_throttle = g_takeoff_commanded_base;
+    current_throttle = g_takeoff_commanded_base;
+    base_throttle = g_takeoff_commanded_base;
+}
+
+static void takeoff_enter_state(flight_takeoff_state_enum state)
+{
+    g_takeoff_state = state;
+    g_takeoff_tick_in_state = 0U;
+}
 
 static float takeoff_limit_hover_angle_comp(float value)
 {
@@ -505,47 +603,86 @@ static float takeoff_limit_hover_angle_comp(float value)
     return value;
 }
 
-static void takeoff_reset_state(void)
+static void takeoff_finish_state(void)
 {
-    g_takeoff_state = FLIGHT_TAKEOFF_IDLE;
-    g_takeoff_tick_in_state = 0U;
-    g_takeoff_sample_count = 0U;
+    g_takeoff_expected_active = 0U;
+    takeoff_enter_state(FLIGHT_TAKEOFF_IDLE);
+}
+
+static uint8 takeoff_start_armed_flow(void)
+{
+    FlightArmRejectReason reject_reason = FLIGHT_ARM_REJECT_NONE;
+
+    if(control_mode == CONTROL_MODE_ANGLE && !HeightManager_IsReadyForTakeoff())
+    {
+        Flight_Takeoff_RecordStopAt("TOF NOT READY", __FILE__, __LINE__);
+        return 0U;
+    }
+    if(!ICM_Health_IsArmable())
+    {
+        Flight_Takeoff_RecordStopAt("IMU NOT ARMABLE", __FILE__, __LINE__);
+        return 0U;
+    }
+    if(!Flight_Control_Arm(&reject_reason))
+    {
+        Flight_Takeoff_RecordStopAt(takeoff_arm_reject_text(reject_reason), __FILE__, __LINE__);
+        return 0U;
+    }
+
+    g_takeoff_captured_roll = 0.0f;
+    g_takeoff_captured_pitch = 0.0f;
+    g_takeoff_initial_roll = current_roll;
+    g_takeoff_initial_pitch = current_pitch;
+    target_angle_yaw = Angle_WrapDeg180(current_yaw);
+    takeoff_set_commanded_base(0.0f);
+
+    if(control_mode == CONTROL_MODE_ANGLE)
+    {
+        HeightManager_PrepareSoftTakeoff();
+        Velocity_Loop_Set_Enabled(0U);
+        Position_Loop_Set_Enabled(0U);
+        g_takeoff_expected_active = 1U;
+        takeoff_enter_state(FLIGHT_TAKEOFF_ARM_DELAY);
+    }
+    else
+    {
+        takeoff_finish_state();
+    }
+    return 1U;
 }
 
 uint8 Flight_Takeoff_Start(void)
 {
-    FlightArmRejectReason reject_reason;
+    takeoff_diag_clear();
 
-    /* 仅在角度闭环模式、且流程处于 IDLE 时才接受启动。 */
-    if(control_mode != CONTROL_MODE_ANGLE)
-    {
-        return 0U;
-    }
+    /* KEY3 只执行当前健康检查和解锁，不再触发额外的静止采集。 */
     if(armed)
     {
+        Flight_Takeoff_RecordStopAt("ALREADY ARMED", __FILE__, __LINE__);
         return 0U;
     }
     if(g_takeoff_state != FLIGHT_TAKEOFF_IDLE)
     {
+        Flight_Takeoff_RecordStopAt("TAKEOFF STATE BUSY", __FILE__, __LINE__);
         return 0U;
     }
-    if(!Flight_Safety_Can_Arm(&reject_reason))
-    {
-        return 0U;
-    }
-
-    /* 进入采样阶段前保持当前 disarmed 状态，避免电机输出。 */
-    g_takeoff_tick_in_state = 0U;
-    g_takeoff_sample_count = 0U;
-    g_takeoff_captured_roll = 0.0f;
-    g_takeoff_captured_pitch = 0.0f;
-    g_takeoff_state = FLIGHT_TAKEOFF_CAPTURE;
-    return 1U;
+    return takeoff_start_armed_flow();
 }
 
 void Flight_Takeoff_Abort(void)
 {
-    takeoff_reset_state();
+    Flight_Takeoff_AbortAt("ABORT API", __FILE__, __LINE__);
+}
+
+void Flight_Takeoff_AbortAt(const char *reason, const char *file, uint32 line)
+{
+    if(g_takeoff_state != FLIGHT_TAKEOFF_IDLE)
+    {
+        Flight_Takeoff_RecordStopAt(reason, file, line);
+    }
+    HeightManager_AbortSoftTakeoff();
+    g_takeoff_commanded_base = 0.0f;
+    takeoff_finish_state();
 }
 
 uint8 Flight_Takeoff_Is_Active(void)
@@ -556,6 +693,29 @@ uint8 Flight_Takeoff_Is_Active(void)
 flight_takeoff_state_enum Flight_Takeoff_Get_State(void)
 {
     return g_takeoff_state;
+}
+
+float Flight_Takeoff_Get_Progress(void)
+{
+    uint32 duration_ticks = takeoff_state_duration_ticks(g_takeoff_state);
+
+    if(duration_ticks == 0U)
+    {
+        return 0.0f;
+    }
+    return takeoff_clamp_unit((float)g_takeoff_tick_in_state / (float)duration_ticks);
+}
+
+float Flight_Takeoff_Get_Commanded_Base_Throttle(void)
+{
+    return g_takeoff_commanded_base;
+}
+
+uint8 Flight_Takeoff_Requires_BaseOnly_Output(void)
+{
+    return (uint8)(g_takeoff_state == FLIGHT_TAKEOFF_ARM_DELAY ||
+                   g_takeoff_state == FLIGHT_TAKEOFF_MOTOR_SPINUP ||
+                   g_takeoff_state == FLIGHT_TAKEOFF_IDLE_HOLD);
 }
 
 void Flight_Takeoff_Get_Captured_Angles(float *roll, float *pitch)
@@ -590,77 +750,120 @@ void Flight_Takeoff_Get_Hover_Angle_Compensation(float *roll_deg, float *pitch_d
 
 uint8 Flight_Takeoff_Tick_250us(void)
 {
+    uint32 duration_ticks;
+    float progress;
+    float shaped;
+
+    if(g_takeoff_state == FLIGHT_TAKEOFF_IDLE)
+    {
+        if(g_takeoff_expected_active)
+        {
+            Flight_Takeoff_RecordStopAt("STATE CLEARED UNEXPECTED", __FILE__, __LINE__);
+            g_takeoff_expected_active = 0U;
+        }
+        return 0U;
+    }
+    if(!armed)
+    {
+        Flight_Takeoff_AbortAt("ARM FLAG CLEARED", __FILE__, __LINE__);
+        return 0U;
+    }
+    if(!HeightManager_IsTofValid())
+    {
+        Flight_Runtime_Emergency_Stop(EMERGENCY_STOP_REASON_TAKEOFF_TOF);
+        return 0U;
+    }
+    duration_ticks = takeoff_state_duration_ticks(g_takeoff_state);
+    if(g_takeoff_tick_in_state < duration_ticks)
+    {
+        g_takeoff_tick_in_state++;
+    }
+    progress = (duration_ticks > 0U) ?
+               ((float)g_takeoff_tick_in_state / (float)duration_ticks) : 1.0f;
+    shaped = takeoff_smoothstep(progress);
+
     switch(g_takeoff_state)
     {
-        case FLIGHT_TAKEOFF_CAPTURE:
+        case FLIGHT_TAKEOFF_ARM_DELAY:
         {
-            /* Keep the pre-takeoff wait duration, but do not learn a hover attitude from the ground pose. */
-            if((g_takeoff_tick_in_state % TAKEOFF_SAMPLE_DIVIDER) == 0U)
+            takeoff_set_commanded_base(0.0f);
+            HeightManager_PrepareSoftTakeoff();
+            if(g_takeoff_tick_in_state >= TAKEOFF_ARM_DELAY_TICKS)
             {
-                g_takeoff_sample_count++;
+                takeoff_enter_state(FLIGHT_TAKEOFF_MOTOR_SPINUP);
             }
-            g_takeoff_tick_in_state++;
-
-            if(g_takeoff_sample_count >= TAKEOFF_CAPTURE_SAMPLES)
-            {
-                /* Hover attitude target is true level, not the startup/ground attitude. */
-                g_takeoff_captured_roll  = 0.0f;
-                g_takeoff_captured_pitch = 0.0f;
-                target_angle_yaw = current_yaw;
-
-                /* 采样完成 -> 自动解锁并进入 ramp 阶段。Arm() 内部会重置所有 PID 与油门状态。 */
-                if(!Flight_Control_Arm(NULL))
-                {
-                    takeoff_reset_state();
-                    return 0U;
-                }
-
-                g_takeoff_tick_in_state = 0U;
-                g_takeoff_state = FLIGHT_TAKEOFF_RAMP;
-            }
-
-            /* 采样阶段不接管目标角度/油门：飞机停在地面，由 !armed 分支直接把电机清零。 */
-            return 0U;
+            return 1U;
         }
 
-        case FLIGHT_TAKEOFF_RAMP:
+        case FLIGHT_TAKEOFF_MOTOR_SPINUP:
         {
-            float progress;
-            float ramped;
+            takeoff_set_commanded_base(FLIGHT_TAKEOFF_IDLE_THROTTLE * shaped);
+            HeightManager_PrepareSoftTakeoff();
+            if(g_takeoff_tick_in_state >= TAKEOFF_MOTOR_SPINUP_TICKS)
+            {
+                takeoff_set_commanded_base(FLIGHT_TAKEOFF_IDLE_THROTTLE);
+                takeoff_enter_state(FLIGHT_TAKEOFF_IDLE_HOLD);
+            }
+            return 1U;
+        }
+
+        case FLIGHT_TAKEOFF_IDLE_HOLD:
+        {
+            takeoff_set_commanded_base(FLIGHT_TAKEOFF_IDLE_THROTTLE);
+            HeightManager_PrepareSoftTakeoff();
+            if(g_takeoff_tick_in_state >= TAKEOFF_IDLE_HOLD_TICKS)
+            {
+                Flight_Control_Reset_All_PID();
+                target_angle_roll = g_takeoff_initial_roll;
+                target_angle_pitch = g_takeoff_initial_pitch;
+                takeoff_enter_state(FLIGHT_TAKEOFF_LIFTOFF_RAMP);
+            }
+            return 1U;
+        }
+
+        case FLIGHT_TAKEOFF_LIFTOFF_RAMP:
+        {
+            float attitude_progress;
+            float attitude_shaped;
             float hover_roll;
             float hover_pitch;
 
-            if(!armed)
-            {
-                /* 外部触发了急停/disarm，ramp 途中被打断：直接退出。 */
-                takeoff_reset_state();
-                return 0U;
-            }
-
-            g_takeoff_tick_in_state++;
-            if(g_takeoff_tick_in_state > TAKEOFF_RAMP_TICKS)
-            {
-                g_takeoff_tick_in_state = TAKEOFF_RAMP_TICKS;
-            }
-
-            progress = (float)g_takeoff_tick_in_state / (float)TAKEOFF_RAMP_TICKS;
-            ramped = SAFE_MIN_THROTTLE +
-                     (FLIGHT_TAKEOFF_RAMP_TARGET_THROTTLE - SAFE_MIN_THROTTLE) * progress;
-
-            /* 接管油门：绕过默认 throttle_ramp，直接写 base/current/target，保持三者一致。 */
-            target_throttle = ramped;
-            current_throttle = ramped;
-            base_throttle = ramped;
-
-            /* 接管目标角度：锁定到悬停基准角，覆盖摇杆 PID 的输出。 */
+            takeoff_set_commanded_base(FLIGHT_TAKEOFF_IDLE_THROTTLE +
+                                       (FLIGHT_TAKEOFF_RAMP_TARGET_THROTTLE -
+                                        FLIGHT_TAKEOFF_IDLE_THROTTLE) * shaped);
+            HeightManager_PrepareSoftTakeoff();
             Flight_Takeoff_Get_Captured_Angles(&hover_roll, &hover_pitch);
-            target_angle_roll  = hover_roll;
-            target_angle_pitch = hover_pitch;
+            attitude_progress = (TAKEOFF_ATTITUDE_BLEND_TICKS > 0U) ?
+                                ((float)g_takeoff_tick_in_state /
+                                 (float)TAKEOFF_ATTITUDE_BLEND_TICKS) : 1.0f;
+            attitude_shaped = takeoff_smoothstep(attitude_progress);
+            target_angle_roll = g_takeoff_initial_roll +
+                                (hover_roll - g_takeoff_initial_roll) * attitude_shaped;
+            target_angle_pitch = g_takeoff_initial_pitch +
+                                 (hover_pitch - g_takeoff_initial_pitch) * attitude_shaped;
 
             if(g_takeoff_tick_in_state >= TAKEOFF_RAMP_TICKS)
             {
-                /* ramp 结束：保持飞机 armed，油门停在当前 ramp 目标值，交还控制权给巡航分支。 */
-                takeoff_reset_state();
+                takeoff_set_commanded_base(FLIGHT_TAKEOFF_RAMP_TARGET_THROTTLE);
+                HeightManager_BeginSoftTakeoff();
+                takeoff_enter_state(FLIGHT_TAKEOFF_HEIGHT_BLEND);
+            }
+            return 1U;
+        }
+
+        case FLIGHT_TAKEOFF_HEIGHT_BLEND:
+        {
+            float output_progress = (TAKEOFF_HEIGHT_OUTPUT_BLEND_TICKS > 0U) ?
+                                    ((float)g_takeoff_tick_in_state /
+                                     (float)TAKEOFF_HEIGHT_OUTPUT_BLEND_TICKS) : 1.0f;
+
+            takeoff_set_commanded_base(FLIGHT_TAKEOFF_RAMP_TARGET_THROTTLE);
+            HeightManager_SetOutputBlend(takeoff_smoothstep(output_progress));
+            if(g_takeoff_tick_in_state >= TAKEOFF_HEIGHT_BLEND_TICKS)
+            {
+                HeightManager_SetOutputBlend(1.0f);
+                takeoff_diag_clear();
+                takeoff_finish_state();
             }
             return 1U;
         }

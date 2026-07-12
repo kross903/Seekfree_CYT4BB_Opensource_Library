@@ -9,6 +9,11 @@ bool Send_state = 0;
 #define TOF_UPDATE_PIT             PIT_CH11
 #define FLOW_UPDATE_PIT            PIT_CH12
 
+/* 实机确认 V 型标志世界朝向和摄像头绕 Z 轴安装偏角后再改为 1。 */
+#define VISION_YAW_FUSION_ENABLE           (0U)
+#define VISION_MARKER_WORLD_HEADING_DEG    (0.0f)
+#define VISION_CAMERA_YAW_OFFSET_DEG       (0.0f)
+
 static void init_optical_flow_sensor(void)
 {
 #if FLOW_SENSOR_SELECTED == FLOW_SENSOR_UPFLOW302
@@ -29,18 +34,18 @@ static void init_default_pid_parameters(void)
 {
 
     PID_Init(&gyro_pid_roll,
-             3.0f, 0.0f, 0.2f,
+             2.0f, 0.0f, 0.2f,
              2000.0f, 100.0f, 10.0f, 0.8f);
     PID_Init(&gyro_pid_pitch,
-             3.0f, 0.0f, 0.4f,
+             2.0f, 0.0f, 0.4f,
              2000.0f, 100.0f, 10.0f, 0.8f);
     PID_Init(&gyro_pid_yaw,
-             4.5f, 0.0f, 0.0f,
+             3.0f, 0.0f, 0.0f,
              400.0f, 10.0f, 0.0f, 0.0f);
     PID_Init(&HeightPID, 2.0f, 0.0001f, 0.0f, 80.0f, 30.0f, 10000.0f, 0.3f);
     PID_Init(&HeightVelPID, 1.0f, 0.0001f, 0.0f, 80.0f, 20.0f, 10000.0f, 0.3f);
-    PID_Init(&angle_pid_roll,  2.0f, 0.0001f, 0.0f, 300.0f, 60000.0f, 10000.0f, 0.30f);
-    PID_Init(&angle_pid_pitch, 2.0f, 0.0001f, 0.0f, 300.0f, 60000.0f, 10000.0f, 0.30f);
+    PID_Init(&angle_pid_roll,  1.2f, 0.0001f, 0.0f, 300.0f, 60000.0f, 10000.0f, 0.30f);
+    PID_Init(&angle_pid_pitch, 1.2f, 0.0001f, 0.0f, 300.0f, 60000.0f, 10000.0f, 0.30f);
     PID_Init(&angle_pid_yaw, 2.0f, 0.0f, 0.0f, 100.0f, 20.0f, 0.0f, 0.0f);
     PID_Init(&vel_pid_x, 0.50f, 0.000f, 0.0f, 120.0f, 30.0f, 10000.0f, 0.8f);
     PID_Init(&vel_pid_y, 0.50f, 0.000f, 0.0f, 120.0f, 30.0f, 10000.0f, 0.8f);
@@ -84,6 +89,9 @@ static void init_runtime_modules(void)
 
     IMU_calibrate_flag = 1;
     ICM_Calculate_Init();
+    ICM_VisionYaw_Configure(VISION_YAW_FUSION_ENABLE,
+                            VISION_MARKER_WORLD_HEADING_DEG,
+                            VISION_CAMERA_YAW_OFFSET_DEG);
     HeightManager_Init(100.0f);
     PMW_Flow_Init();
     init_optical_flow_sensor();

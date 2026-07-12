@@ -1,6 +1,8 @@
 #ifndef ICM_H_
 #define ICM_H_
 
+#include "zf_common_typedef.h"
+
 // 统一数学常量与类型到 ControlMath 模块
 #include "../control/ControlMath.h"
 #include "icm42688.h"
@@ -18,11 +20,8 @@
 #define STATE_DIM           7               // 状态维度：4 元数 + 3 陀螺零偏
 #define MEAS_DIM            3               // 测量维度
 
-// 统一 DT 定义，避免与其他模块的宏定义冲突
-// 如果外部未定义，则使用默认 ICM_DT
-#ifndef ICM_DT
-#define ICM_DT              (0.00025f)      // 默认采样周期 1/4000 s
-#endif
+#define ICM_SAMPLE_RATE_HZ  (4000.0f)
+#define ICM_SAMPLE_DT_S     (0.00025f)
 
 // 校准参数
 #define IMU_calibration_seconds  3          // 校准时长(秒)
@@ -68,6 +67,27 @@ typedef struct {
     float Q[STATE_DIM][STATE_DIM];     // 过程噪声协方差
     float R[MEAS_DIM][MEAS_DIM];       // 测量噪声协方差
 } EKF_State;
+
+#define ICM_HEALTH_FAULT_NONE          (0U)
+#define ICM_HEALTH_FAULT_NONFINITE     (1U << 0)
+#define ICM_HEALTH_FAULT_ACC_NORM      (1U << 1)
+#define ICM_HEALTH_FAULT_GYRO_SAT      (1U << 2)
+#define ICM_HEALTH_FAULT_QUATERNION    (1U << 3)
+#define ICM_HEALTH_FAULT_SAMPLE_STALE  (1U << 4)
+
+typedef struct
+{
+    uint32 sample_sequence;
+    uint32 stale_count;
+    uint32 consecutive_invalid_count;
+    float sample_interval_us;
+    float acc_norm_mg;
+    float quaternion_norm;
+    uint32 fault_mask;
+    uint8 gyro_saturated;
+    uint8 sample_stale;
+    uint8 attitude_valid;
+} ICM_Health_t;
 
 // ==================== 全局变量声明 ====================
 
@@ -195,6 +215,13 @@ void ICM_Attitude_Reset(void);
 void Get_Attitude_Angle(float *roll, float *pitch, float *yaw);
 void Get_Angular_Rate(float *roll_rate, float *pitch_rate, float *yaw_rate);
 void Get_Acceleration(float *ax, float *ay, float *az);
+void ICM_GetHealth(ICM_Health_t *health);
+uint8 ICM_Health_IsArmable(void);
+uint8 ICM_IsStill(void);
+void ICM_VisionYaw_Configure(uint8 enabled,
+                             float marker_world_heading_deg,
+                             float camera_yaw_offset_deg);
+void ICM_VisionYaw_Update(float marker_heading_deg, uint8 valid, uint32 update_sequence);
 
 // ========== Yaw 数据接口 ==========
 float get_Yaw_data(void);
@@ -211,4 +238,3 @@ void Adaptive_Parameter_Tuning(void);
 #endif
 
 #endif /* ICM_H_ */
-

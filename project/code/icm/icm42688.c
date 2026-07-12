@@ -31,15 +31,21 @@ static void ICM42688_ApplyInstallMatrix(float x_in, float y_in, float z_in,
 float icm42688_acc_inv = 1, icm42688_gyro_inv = 1;
 
 static const float k_icm42688_sensor_to_body[3][3] = {
-    /* fixed install compensation:
-     * roll  = +0.54 deg
-     * pitch = +3.20 deg
-     * yaw   =  0.00 deg
+    /* 2026-07-12 六面静止数据标定结果，传感器坐标系转换到机体坐标系。
+     * ZYX 数学等效角：Roll = 2.6486 deg，Pitch = 1.3344 deg，Yaw = 1.5246 deg。
+     * 六姿态残差：max = 0.5552 deg，RMS = 0.3679 deg，det(R) = 1.0。
      */
-    { 0.9997265, -0.0000000,  0.0233853},
-    { 0.0009793,  0.9991229, -0.0418642},
-    {-0.0233648,  0.0418757,  0.9988496},
+    { 0.999374892f, -0.025502550f,  0.024483577f},
+    { 0.026599487f,  0.998606716f, -0.045575141f},
+    {-0.023287182f,  0.046197902f,  0.998660834f},
 
+};
+
+/* 同一组六面数据得到的传感器原始加速度零偏，单位为 ADC count。 */
+static const float k_icm42688_acc_bias_count[3] = {
+    -11.821327f,
+      3.214315f,
+     10.511541f,
 };
 
 static void ICM42688_ApplyInstallMatrix(float x_in, float y_in, float z_in,
@@ -112,8 +118,8 @@ void Init_ICM42688(void)
     ICM42688_DELAY_MS(20);                              // 操作完PWR—MGMT0寄存器后200us内不能有任何读写寄存器的操作
 
 
-    Set_LowpassFilter_Range_ICM42688(ICM42688_AFS_16G, ICM42688_AODR_8000HZ,
-                                      ICM42688_GFS_2000DPS, ICM42688_GODR_8000HZ);
+    Set_LowpassFilter_Range_ICM42688(ICM42688_AFS_16G, ICM42688_AODR_4000HZ,
+                                      ICM42688_GFS_2000DPS, ICM42688_GODR_4000HZ);
 
 
     Write_Data_ICM42688(ICM42688_PWR_MGMT0, 0x0f);      // 设置GYRO_MODE,ACCEL_MODE为低噪声模式
@@ -147,9 +153,9 @@ void Get_Acc_ICM42688(void)
     icm42688_acc_y_r = raw_y_r;
     icm42688_acc_z_r = raw_z_r;
 
-    raw_x = icm42688_acc_inv * raw_x_r;
-    raw_y = icm42688_acc_inv * raw_y_r;
-    raw_z = icm42688_acc_inv * raw_z_r;
+    raw_x = icm42688_acc_inv * ((float)raw_x_r - k_icm42688_acc_bias_count[0]);
+    raw_y = icm42688_acc_inv * ((float)raw_y_r - k_icm42688_acc_bias_count[1]);
+    raw_z = icm42688_acc_inv * ((float)raw_z_r - k_icm42688_acc_bias_count[2]);
 
     ICM42688_ApplyInstallMatrix(raw_x, raw_y, raw_z,
                                 &icm42688_acc_x, &icm42688_acc_y, &icm42688_acc_z);

@@ -24,6 +24,9 @@ void PID_Init(PID_Controller *pid, float kp, float ki, float kd,
 // 当前实现仍按固定中断节拍工作，dt 参数保留用于接口兼容。
 float PID_Calculate(PID_Controller *pid, float target, float current, float dt);
 
+// 使用调用方已经处理好的误差计算输出，适用于周期角度等非普通减法误差。
+float PID_CalculateError(PID_Controller *pid, float error, float dt);
+
 // 清空 PID 内部历史量，通常在解锁、切模式或急停后调用。
 void PID_Reset(PID_Controller *pid);
 

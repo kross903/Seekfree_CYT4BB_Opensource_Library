@@ -1,4 +1,5 @@
 #include "control/angle_loop.h"
+#include <math.h>
 
 #define ANGLE_LOOP_DT_S                 0.00025f
 #define ANGLE_RATE_CMD_LPF_ALPHA        0.04f
@@ -10,10 +11,32 @@ PID_Controller angle_pid_yaw;
 float target_roll_rate = 0.0f;
 float target_pitch_rate = 0.0f;
 float target_yaw_rate = 0.0f;
+float yaw_angle_error_deg = 0.0f;
 
 static uint8 g_angle_rate_cmd_lpf_init = 0U;
 static float g_target_roll_rate_lpf = 0.0f;
 static float g_target_pitch_rate_lpf = 0.0f;
+
+float Angle_WrapDeg180(float angle_deg)
+{
+    float wrapped;
+
+    if(!isfinite(angle_deg))
+    {
+        return angle_deg;
+    }
+    if(angle_deg >= -180.0f && angle_deg < 180.0f)
+    {
+        return angle_deg;
+    }
+
+    wrapped = fmodf(angle_deg + 180.0f, 360.0f);
+    if(wrapped < 0.0f)
+    {
+        wrapped += 360.0f;
+    }
+    return wrapped - 180.0f;
+}
 
 void Angle_Loop_Reset_Rate_Cmd_Lpf(void)
 {
@@ -23,6 +46,7 @@ void Angle_Loop_Reset_Rate_Cmd_Lpf(void)
     target_roll_rate = 0.0f;
     target_pitch_rate = 0.0f;
     target_yaw_rate = 0.0f;
+    yaw_angle_error_deg = 0.0f;
 }
 
 static void angle_loop_update_rate_cmd_lpf(float roll_rate_raw, float pitch_rate_raw)
@@ -54,5 +78,6 @@ void Angle_Loop_Update(float target_roll,
     float target_pitch_rate_raw = PID_Calculate(&angle_pid_pitch, target_pitch, current_pitch, ANGLE_LOOP_DT_S);
 
     angle_loop_update_rate_cmd_lpf(target_roll_rate_raw, target_pitch_rate_raw);
-    target_yaw_rate = PID_Calculate(&angle_pid_yaw, target_yaw, current_yaw, ANGLE_LOOP_DT_S);
+    yaw_angle_error_deg = Angle_WrapDeg180(target_yaw - current_yaw);
+    target_yaw_rate = PID_CalculateError(&angle_pid_yaw, yaw_angle_error_deg, ANGLE_LOOP_DT_S);
 }

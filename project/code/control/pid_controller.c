@@ -31,17 +31,13 @@ void PID_Init(PID_Controller *pid, float kp, float ki, float kd,
  * PID 输出计算入口:
  * 按“误差 -> 积分 -> 微分 -> 限幅”的顺序算出本次控制输出。
  */
-float PID_Calculate(PID_Controller *pid, float target, float current, float dt)
+float PID_CalculateError(PID_Controller *pid, float error, float dt)
 {
-    float error = 0.0f;
     float output = 0.0f;
     float integral_factor = 1.0f;
     float raw_derivative = 0.0f;
 
     (void)dt;
-
-    // 计算误差
-    error = target - current;
 
     // 当前工程仍按固定周期运行，积分暂不直接乘 dt。
     if(fabsf(error) > 0.0f)
@@ -84,6 +80,11 @@ float PID_Calculate(PID_Controller *pid, float target, float current, float dt)
     pid->prev_error = error;
 
     return output;
+}
+
+float PID_Calculate(PID_Controller *pid, float target, float current, float dt)
+{
+    return PID_CalculateError(pid, target - current, dt);
 }
 
 /*

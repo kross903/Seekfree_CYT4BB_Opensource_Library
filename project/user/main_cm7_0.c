@@ -51,6 +51,7 @@ static monitor_page_enum g_monitor_page = MONITOR_PAGE_DATA;
 static void build_monitor_runtime_snapshot(MonitorRuntimeSnapshot *snapshot)
 {
     BatteryStatus battery_status;
+    ICM_Health_t imu_health = {0};
     uint8 ir_track_valid = 0U;
     if(snapshot == NULL)
     {
@@ -59,12 +60,17 @@ static void build_monitor_runtime_snapshot(MonitorRuntimeSnapshot *snapshot)
 
     VehicleMarkerLocalization_ServiceLostProtection();
     BatteryMonitor_GetStatus(&battery_status);
+    ICM_GetHealth(&imu_health);
     ir_track_valid = (uint8)((g_vehicle_marker_pose.valid && !g_vehicle_marker_position_lost_flag) ? 1U : 0U);
 
     snapshot->control_mode = control_mode;
     snapshot->armed = (uint8)(armed ? 1U : 0U);
     snapshot->low_voltage = (uint8)(low_voltage_protect_flag ? 1U : 0U);
     snapshot->has_nearest = ir_track_valid;
+    snapshot->tof_ready = HeightManager_IsReadyForTakeoff();
+    snapshot->rearm_inhibit_active =
+        (uint8)(Flight_Safety_GetRearmInhibitRemainingMs() > 0U);
+    snapshot->takeoff_state = (uint8)Flight_Takeoff_Get_State();
     snapshot->voltage = battery_status.local_filtered_voltage_v;
     snapshot->target_throttle = (int32)Flight_Control_Get_Target_Throttle();
     snapshot->base_throttle = (int32)base_throttle;
@@ -77,6 +83,7 @@ static void build_monitor_runtime_snapshot(MonitorRuntimeSnapshot *snapshot)
     snapshot->tof_height_cm = tof_height_true_filt * 100.0f;
     snapshot->fused_height_cm = g_height_result.height_cm;
     snapshot->fused_velocity_cms = g_height_result.velocity_cms;
+    snapshot->imu_fault_mask = imu_health.fault_mask;
 }
 
 static void update_monitor_vision_state(void)
@@ -132,6 +139,7 @@ static void update_monitor_view(void)
     static uint8 drone_status_tick_div = 0;
     static uint8 local_screen_refresh_div = 0U;
     uint8 camera_new_frame = 0U;
+    uint8 assistant_image_mode = 0U;
     uint8 link_tick = 0;
     uint8 screen_mirror_enabled = 0U;
     uint8 screen_mirror_enabled_changed = 0U;
@@ -144,18 +152,6 @@ static void update_monitor_view(void)
     if(CommMux_UpdateFromSwitch())
     {
         Vofa_ClearRxState();//清除旧状态，避免对新模式的干扰
-    }
-
-    camera_new_frame = CrossCoreCamera_ControlCoreService(current_roll,
-                                                          current_pitch,
-                                                          tof_height_true_filt * 100.0f);
-    if(CommMux_IsAssistantImageMode())
-    {
-        if(camera_new_frame)
-        {
-            (void)CrossCoreCamera_ControlCoreSendAssistantFrame();
-        }
-        return;
     }
 
     build_monitor_runtime_snapshot(&snapshot);
@@ -174,8 +170,23 @@ static void update_monitor_view(void)
         return;
     }
 
-    update_monitor_vision_state();
-    service_monitor_telemetry();
+    /* 图像模式只改变 UART1 的发送内容，不能绕过 Flight View 的按键和本机屏幕刷新。 */
+    camera_new_frame = CrossCoreCamera_ControlCoreService(current_roll,
+                                                          current_pitch,
+                                                          tof_height_true_filt * 100.0f);
+    assistant_image_mode = CommMux_IsAssistantImageMode();
+    if(assistant_image_mode)
+    {
+        if(camera_new_frame)
+        {
+            (void)CrossCoreCamera_ControlCoreSendAssistantFrame();
+        }
+    }
+    else
+    {
+        update_monitor_vision_state();
+        service_monitor_telemetry();
+    }
     build_monitor_runtime_snapshot(&snapshot);
 
     if(link_tick)
@@ -241,7 +252,6 @@ static void initialize_control_core_modules(void)
     Device_Init();
 
     VehicleMarkerLocalization_Init();
-    HeightManager_Init(100.0f);
 }
 
 int main(void)

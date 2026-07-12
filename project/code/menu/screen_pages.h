@@ -17,6 +17,9 @@ typedef struct
     uint8 armed;
     uint8 low_voltage;
     uint8 has_nearest;
+    uint8 tof_ready;
+    uint8 rearm_inhibit_active;
+    uint8 takeoff_state;
     float voltage;
     int32 target_throttle;
     int32 base_throttle;
@@ -29,6 +32,7 @@ typedef struct
     float tof_height_cm;
     float fused_height_cm;
     float fused_velocity_cms;
+    uint32 imu_fault_mask;
 } MonitorRuntimeSnapshot;
 
 void ui_menu_init_display(void);

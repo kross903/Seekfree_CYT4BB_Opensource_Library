@@ -50,6 +50,12 @@ void HeightManager_Set_Target(float target_cm);
 float HeightManager_Get_Target(void);
 float HeightManager_Get_Active_Target(void);
 void HeightManager_Get_Diag(HeightManagerDiag_t *diag);
+uint8 HeightManager_IsTofValid(void);
+uint8 HeightManager_IsReadyForTakeoff(void);
+void HeightManager_PrepareSoftTakeoff(void);
+void HeightManager_BeginSoftTakeoff(void);
+void HeightManager_SetOutputBlend(float blend);
+void HeightManager_AbortSoftTakeoff(void);
 float HeightManager_GetCenterHeightFromTofCm(float tof_los_cm, float roll_deg, float pitch_deg);
 float HeightManager_GetFlowHeightFromTofCm(float tof_los_cm, float roll_deg, float pitch_deg);
 
