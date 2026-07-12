@@ -37,6 +37,8 @@ typedef struct {
     /* 图像域 */
     float centroid_row, centroid_col;      /* 质心坐标(行, 列) */
     int   area;                            /* 连通域像素面积 */
+    int   min_row, max_row;                 /* 连通域外接框行范围 */
+    int   min_col, max_col;                 /* 连通域外接框列范围 */
     float average_brightness;              /* 区域平均亮度 */
     float aspect_ratio;                    /* 外接矩形宽高比 */
     float occupancy_ratio;                 /* 面积 / 外接矩形面积 */
@@ -55,6 +57,7 @@ typedef struct {
     float min_aspect;                      /* 最小宽高比 */
     float max_aspect;                      /* 最大宽高比 */
     float min_occupancy;                   /* 最小占空比 */
+    float min_circularity;                 /* 最小圆度 */
 } BeaconConfig_t;
 
 /* ====================== 全局变量 ====================== */

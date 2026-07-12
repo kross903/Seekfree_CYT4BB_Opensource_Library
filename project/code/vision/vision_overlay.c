@@ -86,6 +86,72 @@ void VisionOverlay_DrawImagePoint4x4(int img_x, int img_y, uint16 color, uint16 
     }
 }
 
+void VisionOverlay_DrawBinaryContour(const uint8 *binary_image,
+                                     int min_col, int max_col,
+                                     int min_row, int max_row,
+                                     uint16 color, uint16 image_y_offset)
+{
+    int row = 0;
+    int col = 0;
+
+    if(binary_image == NULL)
+    {
+        return;
+    }
+
+    if(min_col < 0) min_col = 0;
+    if(max_col >= MT9V03X_W) max_col = MT9V03X_W - 1;
+    if(min_row < 0) min_row = 0;
+    if(max_row >= MT9V03X_H) max_row = MT9V03X_H - 1;
+    if(min_col > max_col || min_row > max_row)
+    {
+        return;
+    }
+
+    for(row = min_row; row <= max_row; row++)
+    {
+        for(col = min_col; col <= max_col; col++)
+        {
+            int dr = 0;
+            int dc = 0;
+            uint8 is_boundary = 0U;
+
+            if(binary_image[row * MT9V03X_W + col] == 0U)
+            {
+                continue;
+            }
+
+            for(dr = -1; dr <= 1 && !is_boundary; dr++)
+            {
+                for(dc = -1; dc <= 1; dc++)
+                {
+                    int next_row = row + dr;
+                    int next_col = col + dc;
+
+                    if(dr == 0 && dc == 0)
+                    {
+                        continue;
+                    }
+                    if(next_row < 0 || next_row >= MT9V03X_H ||
+                       next_col < 0 || next_col >= MT9V03X_W ||
+                       binary_image[next_row * MT9V03X_W + next_col] == 0U)
+                    {
+                        is_boundary = 1U;
+                        break;
+                    }
+                }
+            }
+
+            if(is_boundary)
+            {
+                ips200_draw_point((uint16)col,
+                                  (uint16)(row + (int)image_y_offset),
+                                  color);
+            }
+        }
+    }
+}
+
 void VisionOverlay_DrawWorldPoint4x4(float world_x, float world_y, uint16 color, uint16 image_y_offset)
 {
     int img_x = 0;

@@ -72,6 +72,10 @@ typedef struct
     uint8 valid;
     float x_cm;
     float y_cm;
+    int min_row;
+    int max_row;
+    int min_col;
+    int max_col;
 } VisionRuntimeBeaconSlot_t;
 
 void VisionRuntime_ProcessFrame(float height_cm);
