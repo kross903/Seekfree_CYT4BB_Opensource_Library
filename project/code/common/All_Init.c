@@ -34,21 +34,21 @@ static void init_default_pid_parameters(void)
 {
 
     PID_Init(&gyro_pid_roll,
-             2.0f, 0.0f, 0.2f,
+             2.5f, 0.0f, 0.2f,
              2000.0f, 100.0f, 10.0f, 0.8f);
     PID_Init(&gyro_pid_pitch,
-             2.0f, 0.0f, 0.4f,
+             2.5f, 0.0f, 0.4f,
              2000.0f, 100.0f, 10.0f, 0.8f);
     PID_Init(&gyro_pid_yaw,
-             3.0f, 0.0f, 0.0f,
+             2.5f, 0.0f, 0.0f,
              400.0f, 10.0f, 0.0f, 0.0f);
-    PID_Init(&HeightPID, 2.0f, 0.0001f, 0.0f, 80.0f, 30.0f, 10000.0f, 0.3f);
+    PID_Init(&HeightPID, 1.0f, 0.0001f, 0.0f, 80.0f, 30.0f, 10000.0f, 0.3f);
     PID_Init(&HeightVelPID, 1.0f, 0.0001f, 0.0f, 80.0f, 20.0f, 10000.0f, 0.3f);
-    PID_Init(&angle_pid_roll,  1.2f, 0.0001f, 0.0f, 300.0f, 60000.0f, 10000.0f, 0.30f);
-    PID_Init(&angle_pid_pitch, 1.2f, 0.0001f, 0.0f, 300.0f, 60000.0f, 10000.0f, 0.30f);
-    PID_Init(&angle_pid_yaw, 2.0f, 0.0f, 0.0f, 100.0f, 20.0f, 0.0f, 0.0f);
-    PID_Init(&vel_pid_x, 0.50f, 0.000f, 0.0f, 120.0f, 30.0f, 10000.0f, 0.8f);
-    PID_Init(&vel_pid_y, 0.50f, 0.000f, 0.0f, 120.0f, 30.0f, 10000.0f, 0.8f);
+    PID_Init(&angle_pid_roll,  5.5f, 0.0001f, 0.0f, 300.0f, 60000.0f, 10000.0f, 0.30f);
+    PID_Init(&angle_pid_pitch, 5.5f, 0.0001f, 0.0f, 300.0f, 60000.0f, 10000.0f, 0.30f);
+    PID_Init(&angle_pid_yaw, 5.0f, 0.0f, 0.0f, 100.0f, 20.0f, 0.0f, 0.0f);
+    PID_Init(&vel_pid_x, 0.80f, 0.000f, 0.0f, 120.0f, 30.0f, 10000.0f, 0.8f);
+    PID_Init(&vel_pid_y, 0.80f, 0.000f, 0.0f, 120.0f, 30.0f, 10000.0f, 0.8f);
     PID_Init(&pos_pid_x, 0.0f, 0.00f, 0.0f, 100.0f, 30.0f, 10000.0f, 1.0f);
     PID_Init(&pos_pid_y, 0.0f, 0.00f, 0.0f, 100.0f, 30.0f, 10000.0f, 1.0f);
 }

@@ -258,6 +258,7 @@ static void icm_set_quaternion_from_level_accel(float ax, float ay, float az)
 static void icm_refresh_health(void)
 {
     uint32 fault_mask = s_icm_transient_fault_mask;
+    uint32 critical_fault_mask;
     float quaternion_norm = sqrtf(q0 * q0 + q1 * q1 + q2 * q2 + q3 * q3);
     uint8 gyro_saturated;
 
@@ -290,15 +291,16 @@ static void icm_refresh_health(void)
     {
         fault_mask |= ICM_HEALTH_FAULT_SAMPLE_STALE;
     }
+    critical_fault_mask = fault_mask & ICM_HEALTH_CRITICAL_FAULT_MASK;
     s_icm_health.sample_sequence++;
     s_icm_health.acc_norm_mg = acc_norm_filtered;
     s_icm_health.quaternion_norm = quaternion_norm;
     s_icm_health.gyro_saturated = gyro_saturated;
     s_icm_health.sample_stale = (uint8)((fault_mask & ICM_HEALTH_FAULT_SAMPLE_STALE) != 0U);
-    s_icm_health.attitude_valid = (uint8)(fault_mask == 0U);
+    s_icm_health.attitude_valid = (uint8)(critical_fault_mask == 0U);
     s_icm_health.fault_mask = fault_mask;
 
-    if(fault_mask != 0U)
+    if(critical_fault_mask != 0U)
     {
         if(s_icm_health.consecutive_invalid_count < 0xFFFFFFFFU)
         {

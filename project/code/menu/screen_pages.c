@@ -418,7 +418,7 @@ static const char *ui_monitor_hint_top_text(uint8 armed,
 {
     if(armed) return ui_monitor_takeoff_phase_text(takeoff_state);
     if(rearm_inhibit_active) return "ESTOP LOCK - WAIT 2S";
-    if(imu_fault_mask != 0U) return "IMU FAULT - CHECK F4";
+    if((imu_fault_mask & ICM_HEALTH_CRITICAL_FAULT_MASK) != 0U) return "IMU FAULT - CHECK F4";
     if(control_mode == CONTROL_MODE_ANGLE && !tof_ready) return "TOF WAIT - CHECK FD";
     return "K3: START  K1/K2: PAGE";
 }
@@ -431,7 +431,7 @@ static const char *ui_monitor_hint_bottom_text(uint8 armed,
 {
     if(armed) return "ANY KEY = EMERGENCY STOP";
     if(rearm_inhibit_active) return "KEY3 DISABLED TEMPORARILY";
-    if(imu_fault_mask != 0U) return "DO NOT ARM  HOLD K4:MENU";
+    if((imu_fault_mask & ICM_HEALTH_CRITICAL_FAULT_MASK) != 0U) return "DO NOT ARM  HOLD K4:MENU";
     if(control_mode == CONTROL_MODE_ANGLE && !tof_ready) return "WAIT VALID TOF FRAME";
     return "HOLD K4:MENU WHEN STOPPED";
 }
@@ -442,7 +442,8 @@ static uint16 ui_monitor_hint_color(uint8 armed,
                                     uint8 rearm_inhibit_active,
                                     uint32 imu_fault_mask)
 {
-    if(armed || rearm_inhibit_active || imu_fault_mask != 0U) return RGB565_RED;
+    if(armed || rearm_inhibit_active ||
+       (imu_fault_mask & ICM_HEALTH_CRITICAL_FAULT_MASK) != 0U) return RGB565_RED;
     if(control_mode == CONTROL_MODE_ANGLE && !tof_ready) return RGB565_YELLOW;
     return RGB565_WHITE;
 }
@@ -636,9 +637,9 @@ static void ui_monitor_draw_view_hud(const MonitorViewHudData *data)
     ips200_show_int(UI_MONITOR_LEFT_VALUE_X, UI_MONITOR_IR_Y, data->beacon_count, 2U);
     ui_show_padded_text(UI_MONITOR_RIGHT_VALUE_X,
                         UI_MONITOR_IR_Y,
-                        (data->imu_fault_mask == 0U) ? "OK" : "BAD",
+                        ((data->imu_fault_mask & ICM_HEALTH_CRITICAL_FAULT_MASK) == 0U) ? "OK" : "BAD",
                         4U,
-                        (data->imu_fault_mask == 0U) ? RGB565_GREEN : RGB565_RED);
+                        ((data->imu_fault_mask & ICM_HEALTH_CRITICAL_FAULT_MASK) == 0U) ? RGB565_GREEN : RGB565_RED);
     ips200_set_color(RGB565_WHITE, RGB565_BLACK);
     ui_monitor_draw_takeoff_diag(data);
     ui_show_padded_text(0U, UI_MONITOR_HINT_TOP_Y, data->hint_top_text, 28U, data->hint_color);

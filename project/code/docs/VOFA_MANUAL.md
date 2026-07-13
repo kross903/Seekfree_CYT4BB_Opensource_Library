@@ -113,9 +113,9 @@ Flight View 内置起飞诊断区：进入任一起飞阶段后显示绿色 `STA
 | I14 | IMU 健康故障位掩码，0 表示当前无故障 |
 | I15 | 姿态有效标志：0 无效、1 有效 |
 
-静止时应重点观察 I3-I5 是否接近零、I13 是否稳定。I14 的 bit0-bit4 依次表示非有限数、加速度模值异常、陀螺饱和、四元数异常和样本停更；无故障时 I14 为 0、I15 为 1。Flight View 的 KEY3 不会改变这两个字段，只会依据当前健康状态尝试解锁。
+静止时应重点观察 I3-I5 是否接近零、I13 是否稳定。I14 的 bit0-bit4 依次表示非有限数、加速度模值异常、陀螺饱和、四元数异常和样本停更；无故障时 I14 为 0、I15 为 1。bit1（I14=2）出现时，Mahony 会把加速度修正权重降到最低，姿态主要由陀螺积分。飞行中 I14/I15 仅用于诊断和 Flight View 提示，不再直接触发急停；解锁时仍通过完整 IMU 健康检查决定是否允许启动。
 
-Flight View 触发 `INVALID CTRL` 时会进一步显示具体原因：`IMU NONFINITE`、`IMU ACC NORM`、`IMU GYRO SAT`、`IMU QUAT NORM`、`IMU SAMPLE STALE`、`ATTITUDE NAN/INF`、`GYRO NAN/INF`、`BASE THROTTLE NAN` 或 `MIXER OUTPUT NAN`。其中 IMU 类原因可结合 I14 的位掩码确认。
+Flight View 触发 `INVALID CTRL` 时会进一步显示具体原因：`ATTITUDE NAN/INF`、`GYRO NAN/INF`、`BASE THROTTLE NAN` 或 `MIXER OUTPUT NAN`。IMU 健康位本身不再触发飞行中急停。
 
 <a id="f6"></a>
 ## F6：姿态角环与角速度环

@@ -28,20 +28,8 @@ void Flight_Safety_ResetYawSpinMonitor(void)
     s_yaw_spin_ticks = 0U;
 }
 
-static const char *flight_safety_imu_fault_text(uint32 fault_mask)
-{
-    if((fault_mask & ICM_HEALTH_FAULT_NONFINITE) != 0U)    return "IMU NONFINITE";
-    if((fault_mask & ICM_HEALTH_FAULT_QUATERNION) != 0U)   return "IMU QUAT NORM";
-    if((fault_mask & ICM_HEALTH_FAULT_SAMPLE_STALE) != 0U) return "IMU SAMPLE STALE";
-    if((fault_mask & ICM_HEALTH_FAULT_GYRO_SAT) != 0U)     return "IMU GYRO SAT";
-    if((fault_mask & ICM_HEALTH_FAULT_ACC_NORM) != 0U)     return "IMU ACC NORM";
-    return "IMU INVALID COUNT";
-}
-
 uint8 Flight_Safety_Check_Attitude(void)
 {
-    ICM_Health_t imu_health = {0};
-
     if(!armed)
     {
         Flight_Safety_ResetYawSpinMonitor();
@@ -60,16 +48,6 @@ uint8 Flight_Safety_Check_Attitude(void)
     {
         Flight_Runtime_Emergency_StopAt(EMERGENCY_STOP_REASON_INVALID_CONTROL,
                                         "GYRO NAN/INF",
-                                        __FILE__,
-                                        __LINE__);
-        return 1U;
-    }
-
-    ICM_GetHealth(&imu_health);
-    if(!imu_health.attitude_valid || imu_health.consecutive_invalid_count >= 8U)
-    {
-        Flight_Runtime_Emergency_StopAt(EMERGENCY_STOP_REASON_INVALID_CONTROL,
-                                        flight_safety_imu_fault_text(imu_health.fault_mask),
                                         __FILE__,
                                         __LINE__);
         return 1U;

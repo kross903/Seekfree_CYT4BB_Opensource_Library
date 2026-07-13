@@ -74,6 +74,10 @@ typedef struct {
 #define ICM_HEALTH_FAULT_GYRO_SAT      (1U << 2)
 #define ICM_HEALTH_FAULT_QUATERNION    (1U << 3)
 #define ICM_HEALTH_FAULT_SAMPLE_STALE  (1U << 4)
+#define ICM_HEALTH_CRITICAL_FAULT_MASK (ICM_HEALTH_FAULT_NONFINITE | \
+                                        ICM_HEALTH_FAULT_GYRO_SAT | \
+                                        ICM_HEALTH_FAULT_QUATERNION | \
+                                        ICM_HEALTH_FAULT_SAMPLE_STALE)
 
 typedef struct
 {
