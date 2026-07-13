@@ -1825,7 +1825,253 @@ uint8 VehicleMarkerLocalization_AppendBlob(const VisionBlob_t *blob, const Visio
     return 1U;
 }
 
+static float vehicle_marker_chevron_image_distance_sq(const VehicleMarkerPoint2D_t *a,
+                                                      const VehicleMarkerPoint2D_t *b)
+{
+    float dx = b->u - a->u;
+    float dy = b->v - a->v;
+    return dx * dx + dy * dy;
+}
+
+static float vehicle_marker_chevron_image_point_to_line_distance_sq(const VehicleMarkerPoint2D_t *p,
+                                                                    const VehicleMarkerPoint2D_t *a,
+                                                                    const VehicleMarkerPoint2D_t *b)
+{
+    float ax = b->u - a->u;
+    float ay = b->v - a->v;
+    float px = p->u - a->u;
+    float py = p->v - a->v;
+    float cross = ax * py - ay * px;
+    float len_sq = ax * ax + ay * ay;
+
+    if(len_sq < VEHICLE_MARKER_CHEVRON_POINT_EPS)
+    {
+        return vehicle_marker_chevron_image_distance_sq(p, a);
+    }
+
+    return (cross * cross) / len_sq;
+}
+
+/* Extract the V geometry in image space. World-coordinate projection is not
+ * used here because its non-uniform scale can change which contour point is
+ * the tip. */
+static uint8 vehicle_marker_chevron_extract_image_geometry(VehicleMarkerPoint2D_t *apex,
+                                                           VehicleMarkerPoint2D_t *left_tip,
+                                                           VehicleMarkerPoint2D_t *right_tip)
+{
+    const VisionContour_t *contour = &s_vehicle_marker_chevron_candidate.contour;
+    VehicleMarkerPoint2D_t pair_a = {0};
+    VehicleMarkerPoint2D_t pair_b = {0};
+    VehicleMarkerPoint2D_t apex_point = {0};
+    uint16 point_count = contour->point_count;
+    uint16 pair_i = 0U;
+    uint16 pair_j = 0U;
+    uint16 apex_i = 0U;
+    uint16 i = 0U;
+    uint16 j = 0U;
+    float best_pair_dist_sq = -1.0f;
+    float best_apex_dist_sq = -1.0f;
+    float cross = 0.0f;
+    float dot = 0.0f;
+    float len_a = 0.0f;
+    float len_b = 0.0f;
+    float angle = 0.0f;
+
+    if(apex == NULL || left_tip == NULL || right_tip == NULL ||
+       point_count < VEHICLE_MARKER_CHEVRON_MIN_CONTOUR_POINTS)
+    {
+        return 0U;
+    }
+
+    /* The diameter of the component gives the two arm endpoints. */
+    for(i = 0U; i + 1U < point_count; i++)
+    {
+        VehicleMarkerPoint2D_t point_i = {(float)contour->point_x[i],
+                                          (float)contour->point_y[i], 0.0f};
+        for(j = (uint16)(i + 1U); j < point_count; j++)
+        {
+            VehicleMarkerPoint2D_t point_j = {(float)contour->point_x[j],
+                                              (float)contour->point_y[j], 0.0f};
+            float dist_sq = vehicle_marker_chevron_image_distance_sq(&point_i, &point_j);
+            if(dist_sq > best_pair_dist_sq)
+            {
+                best_pair_dist_sq = dist_sq;
+                pair_i = i;
+                pair_j = j;
+            }
+        }
+    }
+
+    if(best_pair_dist_sq <= VEHICLE_MARKER_CHEVRON_POINT_EPS)
+    {
+        return 0U;
+    }
+
+    pair_a.u = (float)contour->point_x[pair_i];
+    pair_a.v = (float)contour->point_y[pair_i];
+    pair_a.intensity = 0.0f;
+    pair_b.u = (float)contour->point_x[pair_j];
+    pair_b.v = (float)contour->point_y[pair_j];
+    pair_b.intensity = 0.0f;
+
+    /* The apex is the contour point furthest from the tip-to-tip chord. */
+    for(i = 0U; i < point_count; i++)
+    {
+        VehicleMarkerPoint2D_t point = {(float)contour->point_x[i],
+                                        (float)contour->point_y[i], 0.0f};
+        float dist_sq = vehicle_marker_chevron_image_point_to_line_distance_sq(&point,
+                                                                                 &pair_a,
+                                                                                 &pair_b);
+        if(dist_sq > best_apex_dist_sq)
+        {
+            best_apex_dist_sq = dist_sq;
+            apex_i = i;
+        }
+    }
+
+    if(best_apex_dist_sq <= VEHICLE_MARKER_CHEVRON_POINT_EPS)
+    {
+        return 0U;
+    }
+
+    apex_point.u = (float)contour->point_x[apex_i];
+    apex_point.v = (float)contour->point_y[apex_i];
+    apex_point.intensity = 0.0f;
+    if(vehicle_marker_chevron_image_distance_sq(&apex_point, &pair_a) <= VEHICLE_MARKER_CHEVRON_POINT_EPS ||
+       vehicle_marker_chevron_image_distance_sq(&apex_point, &pair_b) <= VEHICLE_MARKER_CHEVRON_POINT_EPS)
+    {
+        return 0U;
+    }
+
+    len_a = vehicle_marker_chevron_image_distance_sq(&apex_point, &pair_a);
+    len_b = vehicle_marker_chevron_image_distance_sq(&apex_point, &pair_b);
+    cross = (pair_a.u - apex_point.u) * (pair_b.v - apex_point.v) -
+            (pair_a.v - apex_point.v) * (pair_b.u - apex_point.u);
+    if(cross * cross <= VEHICLE_MARKER_CHEVRON_POINT_EPS)
+    {
+        return 0U;
+    }
+
+    dot = (pair_a.u - apex_point.u) * (pair_b.u - apex_point.u) +
+          (pair_a.v - apex_point.v) * (pair_b.v - apex_point.v);
+    angle = acosf(vehicle_marker_chevron_clamp_float(dot / sqrtf(len_a * len_b), -1.0f, 1.0f));
+    if(angle < 0.35f || angle > 3.00f)
+    {
+        return 0U;
+    }
+
+    *apex = apex_point;
+    /* Keep the labels deterministic. In image coordinates a positive cross
+     * product is assigned to the left arm; labels do not affect geometry. */
+    if(cross >= 0.0f)
+    {
+        *left_tip = pair_a;
+        *right_tip = pair_b;
+    }
+    else
+    {
+        *left_tip = pair_b;
+        *right_tip = pair_a;
+    }
+    return 1U;
+}
+
 static uint8 vehicle_marker_chevron_process_candidate(VehicleMarkerPose_t *out_pose)
+{
+    VehicleMarkerPoint2D_t apex_img = {0};
+    VehicleMarkerPoint2D_t left_tip_img = {0};
+    VehicleMarkerPoint2D_t right_tip_img = {0};
+    VehicleMarkerWorldPoint_t apex = {0};
+    VehicleMarkerWorldPoint_t left_tip = {0};
+    VehicleMarkerWorldPoint_t right_tip = {0};
+    VehicleMarkerPoint2D_t left_line_start_img = {0};
+    VehicleMarkerPoint2D_t left_line_end_img = {0};
+    VehicleMarkerPoint2D_t right_line_start_img = {0};
+    VehicleMarkerPoint2D_t right_line_end_img = {0};
+    float left_span_cm = 0.0f;
+    float right_span_cm = 0.0f;
+    float heading_x = 0.0f;
+    float heading_y = 0.0f;
+    float heading_deg = 0.0f;
+    float estimated_z = g_ipm.height;
+    float left_dx = 0.0f;
+    float left_dy = 0.0f;
+    float right_dx = 0.0f;
+    float right_dy = 0.0f;
+
+    if(!vehicle_marker_chevron_extract_image_geometry(&apex_img, &left_tip_img, &right_tip_img))
+    {
+        return 0U;
+    }
+
+    if(!IPM_Image2WorldF(apex_img.u, apex_img.v, &apex.x, &apex.y) ||
+       !IPM_Image2WorldF(left_tip_img.u, left_tip_img.v, &left_tip.x, &left_tip.y) ||
+       !IPM_Image2WorldF(right_tip_img.u, right_tip_img.v, &right_tip.x, &right_tip.y))
+    {
+        return 0U;
+    }
+
+    left_line_start_img = apex_img;
+    left_line_end_img = left_tip_img;
+    right_line_start_img = apex_img;
+    right_line_end_img = right_tip_img;
+    left_span_cm = sqrtf(vehicle_marker_chevron_point_distance_sq(&apex, &left_tip));
+    right_span_cm = sqrtf(vehicle_marker_chevron_point_distance_sq(&apex, &right_tip));
+
+    left_dx = left_tip.x - apex.x;
+    left_dy = left_tip.y - apex.y;
+    right_dx = right_tip.x - apex.x;
+    right_dy = right_tip.y - apex.y;
+    heading_x = left_dx + right_dx;
+    heading_y = left_dy + right_dy;
+    if((heading_x * heading_x + heading_y * heading_y) < VEHICLE_MARKER_CHEVRON_POINT_EPS)
+    {
+        heading_x = left_dx;
+        heading_y = left_dy;
+    }
+    heading_deg = atan2f(heading_y, heading_x) * (180.0f / 3.14159265f);
+
+    if(estimated_z <= 1.0f)
+    {
+        estimated_z = VEHICLE_MARKER_CHEVRON_REF_HEIGHT_CM;
+    }
+
+    if(!vehicle_marker_chevron_store_pose(&apex,
+                                          &left_tip,
+                                          &right_tip,
+                                          &left_line_start_img,
+                                          &left_line_end_img,
+                                          &right_line_start_img,
+                                          &right_line_end_img,
+                                          heading_deg,
+                                          0.5f * (left_span_cm + right_span_cm),
+                                          estimated_z,
+                                          out_pose))
+    {
+        return 0U;
+    }
+
+    /* Preserve the exact contour geometry for the UI instead of the rounded
+     * world-to-image reprojection performed by vehicle_marker_chevron_store_pose. */
+    g_vehicle_marker_pose.img_pts[0] = apex_img;
+    g_vehicle_marker_pose.img_pts[1] = left_tip_img;
+    g_vehicle_marker_pose.img_pts[2] = right_tip_img;
+    s_vehicle_marker_chevron_debug.apex_img = apex_img;
+    s_vehicle_marker_chevron_debug.left_tip_img = left_tip_img;
+    s_vehicle_marker_chevron_debug.right_tip_img = right_tip_img;
+    s_vehicle_marker_chevron_debug.left_line_start_img = left_line_start_img;
+    s_vehicle_marker_chevron_debug.left_line_end_img = left_line_end_img;
+    s_vehicle_marker_chevron_debug.right_line_start_img = right_line_start_img;
+    s_vehicle_marker_chevron_debug.right_line_end_img = right_line_end_img;
+
+    if(out_pose != NULL)
+    {
+        *out_pose = g_vehicle_marker_pose;
+    }
+    return 1U;
+}
+
+static uint8 vehicle_marker_chevron_process_candidate_legacy(VehicleMarkerPose_t *out_pose)
 {
     VehicleMarkerWorldPoint_t apex = {0};
     VehicleMarkerWorldPoint_t left_tip = {0};

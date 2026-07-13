@@ -92,6 +92,10 @@ static void VisionRuntime_UpdateBeaconSlotsFromCurrentFrame(int beacon_count,
         s_vision_runtime_beacon_slots[slot_count].valid = 1U;
         s_vision_runtime_beacon_slots[slot_count].x_cm = beacon_results[best_index].world_x;
         s_vision_runtime_beacon_slots[slot_count].y_cm = beacon_results[best_index].world_y;
+        s_vision_runtime_beacon_slots[slot_count].min_row = beacon_results[best_index].min_row;
+        s_vision_runtime_beacon_slots[slot_count].max_row = beacon_results[best_index].max_row;
+        s_vision_runtime_beacon_slots[slot_count].min_col = beacon_results[best_index].min_col;
+        s_vision_runtime_beacon_slots[slot_count].max_col = beacon_results[best_index].max_col;
         slot_count++;
     }
 }

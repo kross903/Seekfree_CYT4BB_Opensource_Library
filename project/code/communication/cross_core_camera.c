@@ -252,6 +252,7 @@ static void CrossCoreCamera_CameraCoreDrawVisionScreen(const VisionRuntimeDiag_t
     uint8 display_mode = g_shared_vision_screen_ctrl->display_mode;
     uint8 vision_status = g_shared_vision_screen_ctrl->vision_status;
     const uint8 *binary_display_image = VisionRuntime_GetBinaryDisplayImage();
+    const uint8 *binary_image = VisionRuntime_GetBinaryImage();
     VisionRuntimeBeaconSlot_t beacon_slots[VISION_RUNTIME_BEACON_SLOT_COUNT] = {0};
     uint8 beacon_count = 0U;
     uint8 has_vehicle = 0U;
@@ -283,6 +284,13 @@ static void CrossCoreCamera_CameraCoreDrawVisionScreen(const VisionRuntimeDiag_t
         }
 
         beacon_count++;
+        VisionOverlay_DrawBinaryContour(binary_image,
+                                        beacon_slots[i].min_col,
+                                        beacon_slots[i].max_col,
+                                        beacon_slots[i].min_row,
+                                        beacon_slots[i].max_row,
+                                        RGB565_CYAN,
+                                        image_y);
         VisionOverlay_DrawWorldPoint4x4(beacon_slots[i].x_cm,
                                         beacon_slots[i].y_cm,
                                         RGB565_RED,

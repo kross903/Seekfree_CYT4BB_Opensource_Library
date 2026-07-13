@@ -7,7 +7,8 @@ BeaconConfig_t g_beacon_config = {
     .area_threshold   = 15,
     .min_aspect       = 0.3f,
     .max_aspect       = 6.0f,
-    .min_occupancy    = 0.15f
+    .min_occupancy    = 0.65f,
+    .min_circularity  = 0.72f
 };
 
 static BeaconResult_t *s_beacon_frame_results = NULL;
@@ -30,6 +31,10 @@ static void BeaconDetect_FillResultFromBlob(const VisionBlob_t *blob, BeaconResu
     result->centroid_row = blob->centroid_row;
     result->centroid_col = blob->centroid_col;
     result->area = blob->area;
+    result->min_row = blob->min_row;
+    result->max_row = blob->max_row;
+    result->min_col = blob->min_col;
+    result->max_col = blob->max_col;
     result->average_brightness = blob->average_brightness;
     result->aspect_ratio = blob->aspect_ratio;
     result->occupancy_ratio = blob->occupancy_ratio;
@@ -67,6 +72,10 @@ uint8 BeaconDetect_AppendBlob(const VisionBlob_t *blob)
         return 0U;
     }
     if(blob->occupancy_ratio < g_beacon_config.min_occupancy)
+    {
+        return 0U;
+    }
+    if(blob->circularity < g_beacon_config.min_circularity)
     {
         return 0U;
     }
