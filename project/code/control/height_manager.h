@@ -14,6 +14,35 @@ typedef struct
     float velocity_cms;
 } HeightFusionResult_t;
 
+typedef enum
+{
+    HEIGHT_TOF_STATE_INVALID = 0,
+    HEIGHT_TOF_STATE_LIVE,
+    HEIGHT_TOF_STATE_HELD_REJECTED,
+    HEIGHT_TOF_STATE_REACQUIRING
+} HeightTofState_t;
+
+typedef struct
+{
+    float raw_los_cm;
+    float compensated_center_cm;
+    float flow_height_cm;
+    float filtered_height_cm;
+    float vertical_velocity_cms;
+    float predicted_height_cm;
+    float innovation_cm;
+    float gate_cm;
+    float candidate_mean_cm;
+    uint32 sample_sequence;
+    uint16 raw_sample_age_ms;
+    uint16 accepted_age_ms;
+    uint8 candidate_count;
+    uint8 reject_count;
+    uint8 new_sample;
+    uint8 valid;
+    uint8 state;
+} HeightTofSnapshot_t;
+
 typedef struct
 {
     float tof_raw_cm;
@@ -30,7 +59,17 @@ typedef struct
     float velocity_error_cms;
     float height_pid_output_cms;
     float velocity_pid_output;
+    float tof_predicted_cm;
+    float tof_innovation_cm;
+    float tof_gate_cm;
+    float tof_candidate_cm;
+    uint32 tof_sample_sequence;
+    uint16 tof_raw_age_ms;
+    uint16 tof_accepted_age_ms;
     uint8 tof_valid;
+    uint8 tof_candidate_count;
+    uint8 tof_reject_count;
+    uint8 tof_state;
     uint8 acc_used;
     uint8 cascade_enabled;
 } HeightManagerDiag_t;
@@ -50,6 +89,7 @@ void HeightManager_Set_Target(float target_cm);
 float HeightManager_Get_Target(void);
 float HeightManager_Get_Active_Target(void);
 void HeightManager_Get_Diag(HeightManagerDiag_t *diag);
+void HeightManager_GetTofSnapshot(HeightTofSnapshot_t *snapshot);
 uint8 HeightManager_IsTofValid(void);
 uint8 HeightManager_IsReadyForTakeoff(void);
 void HeightManager_PrepareSoftTakeoff(void);

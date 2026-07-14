@@ -9,6 +9,20 @@ bool Send_state = 0;
 #define TOF_UPDATE_PIT             PIT_CH11
 #define FLOW_UPDATE_PIT            PIT_CH12
 
+#define BOARD_BUZZER_PIN           P19_4
+#define BOARD_BUZZER_PHASE_TICKS   20U   /* 20 x 5ms = 100ms */
+
+typedef enum
+{
+    BOARD_BUZZER_IDLE = 0,
+    BOARD_BUZZER_FIRST_ON,
+    BOARD_BUZZER_GAP,
+    BOARD_BUZZER_SECOND_ON
+} BoardBuzzerState_t;
+
+static volatile uint8 s_board_buzzer_state = BOARD_BUZZER_IDLE;
+static volatile uint8 s_board_buzzer_ticks = 0U;
+
 /* 实机确认 V 型标志世界朝向和摄像头绕 Z 轴安装偏角后再改为 1。 */
 #define VISION_YAW_FUSION_ENABLE           (0U)
 #define VISION_MARKER_WORLD_HEADING_DEG    (0.0f)
@@ -23,6 +37,7 @@ static void init_optical_flow_sensor(void)
 
 static void init_display_and_basic_peripherals(void)
 {
+    gpio_init(BOARD_BUZZER_PIN, GPO, GPIO_LOW, GPO_PUSH_PULL);
     ips200_set_dir(IPS200_PORTAIT);
     ips200_init(IPS200_TYPE_SPI);
 
@@ -30,14 +45,64 @@ static void init_display_and_basic_peripherals(void)
     dl1b_init();
 }
 
+void BoardBuzzer_RequestDoubleBeep(void)
+{
+    uint32 irq_state = __get_PRIMASK();
+
+    __disable_irq();
+    gpio_set_level(BOARD_BUZZER_PIN, GPIO_HIGH);
+    s_board_buzzer_state = BOARD_BUZZER_FIRST_ON;
+    s_board_buzzer_ticks = BOARD_BUZZER_PHASE_TICKS;
+    if(irq_state == 0U)
+    {
+        __enable_irq();
+    }
+}
+
+void BoardBuzzer_Task5ms(void)
+{
+    if(s_board_buzzer_state == BOARD_BUZZER_IDLE)
+    {
+        return;
+    }
+
+    if(s_board_buzzer_ticks > 1U)
+    {
+        s_board_buzzer_ticks--;
+        return;
+    }
+
+    switch((BoardBuzzerState_t)s_board_buzzer_state)
+    {
+        case BOARD_BUZZER_FIRST_ON:
+            gpio_set_level(BOARD_BUZZER_PIN, GPIO_LOW);
+            s_board_buzzer_state = BOARD_BUZZER_GAP;
+            s_board_buzzer_ticks = BOARD_BUZZER_PHASE_TICKS;
+            break;
+
+        case BOARD_BUZZER_GAP:
+            gpio_set_level(BOARD_BUZZER_PIN, GPIO_HIGH);
+            s_board_buzzer_state = BOARD_BUZZER_SECOND_ON;
+            s_board_buzzer_ticks = BOARD_BUZZER_PHASE_TICKS;
+            break;
+
+        case BOARD_BUZZER_SECOND_ON:
+        default:
+            gpio_set_level(BOARD_BUZZER_PIN, GPIO_LOW);
+            s_board_buzzer_state = BOARD_BUZZER_IDLE;
+            s_board_buzzer_ticks = 0U;
+            break;
+    }
+}
+
 static void init_default_pid_parameters(void)
 {
 
     PID_Init(&gyro_pid_roll,
-             2.5f, 0.0f, 0.2f,
+             3.0f, 0.1f, 0.2f,
              2000.0f, 100.0f, 10.0f, 0.8f);
     PID_Init(&gyro_pid_pitch,
-             2.5f, 0.0f, 0.4f,
+             3.0f, 0.1f, 0.4f,
              2000.0f, 100.0f, 10.0f, 0.8f);
     PID_Init(&gyro_pid_yaw,
              2.5f, 0.0f, 0.0f,

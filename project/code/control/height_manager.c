@@ -30,10 +30,15 @@ extern volatile uint8 armed;
 #define HEIGHT_ACC_NORM_GATE_MG           400.0f
 #define HEIGHT_VEL_FUSION_ACC_ALPHA       0.20f
 
-#define TOF_VALID_MIN_M                   0.00f
+#define TOF_VALID_MIN_M                   0.02f
 #define TOF_VALID_MAX_M                   2.0f
-#define TOF_JUMP_LIMIT_M                  0.15f
 #define TOF_NO_UPDATE_TIMEOUT_TICKS       10U
+#define TOF_PREDICT_MAX_SPEED_CMS         100.0f
+#define TOF_INNOVATION_BASE_GATE_CM       5.0f
+#define TOF_INNOVATION_MAX_GATE_CM        20.0f
+#define TOF_CANDIDATE_CONSISTENCY_CM      10.0f
+#define TOF_REACQUIRE_CONFIRM_FRAMES      5U
+#define TOF_REJECT_INVALID_FRAMES         10U
 
 /*
  * ToF / optical-flow install compensation.
@@ -59,18 +64,33 @@ float tof_height_true_filt = 0.0f;
 float g_height_target_cm = HEIGHT_TARGET_DEFAULT_CM;
 
 static HeightManagerDiag_t s_height_diag = {0};
+static HeightTofSnapshot_t s_tof_snapshot_buffer[2] = {0};
+static volatile uint8 s_tof_snapshot_active = 0U;
 
 static uint8 s_height_loop_enabled = 0U;
 
-static float height_m = 0.0f;
-static float tof_height_m = 0.0f;
 static float tof_height_true_m = 0.0f;
 static float tof_height_true_prev = 0.0f;
 static float tof_vel_mps_filt = 0.0f;
 static float tof_sample_dt_s = TOF_DT;
 static uint8 tof_valid = 0U;
 static uint8 tof_filter_initialized = 0U;
-static uint16 tof_no_update_ticks = 0U;
+
+static HeightTofState_t s_tof_state = HEIGHT_TOF_STATE_INVALID;
+static uint32 s_tof_sample_sequence = 0U;
+static uint16 s_tof_raw_age_ticks = 0U;
+static uint16 s_tof_accepted_age_ticks = 0U;
+static uint8 s_tof_candidate_count = 0U;
+static uint8 s_tof_reject_count = 0U;
+static float s_tof_candidate_center_mean_cm = 0.0f;
+static float s_tof_candidate_raw_mean_cm = 0.0f;
+static float s_tof_candidate_flow_mean_cm = 0.0f;
+static float s_tof_candidate_gate_cm = 0.0f;
+static float s_tof_accepted_center_cm = 0.0f;
+static float s_tof_accepted_flow_cm = 0.0f;
+static float s_tof_predicted_cm = 0.0f;
+static float s_tof_innovation_cm = 0.0f;
+static float s_tof_gate_cm = TOF_INNOVATION_BASE_GATE_CM;
 
 static float s_tof_median_history_cm[TOF_MEDIAN_WINDOW] = {0.0f};
 static uint8 s_tof_median_count = 0U;
@@ -97,6 +117,74 @@ static float height_clamp_float(float value, float min_value, float max_value)
         return min_value;
     }
     return value;
+}
+
+static void height_increment_u16(uint16 *value)
+{
+    if(*value < 0xFFFFU)
+    {
+        (*value)++;
+    }
+}
+
+static uint16 height_ticks_to_ms(uint16 ticks)
+{
+    uint32 milliseconds = (uint32)ticks * 10U;
+
+    if(milliseconds > 0xFFFFU)
+    {
+        milliseconds = 0xFFFFU;
+    }
+
+    return (uint16)milliseconds;
+}
+
+static void height_reset_tof_candidate(void)
+{
+    s_tof_candidate_count = 0U;
+    s_tof_reject_count = 0U;
+    s_tof_candidate_center_mean_cm = 0.0f;
+    s_tof_candidate_raw_mean_cm = 0.0f;
+    s_tof_candidate_flow_mean_cm = 0.0f;
+    s_tof_candidate_gate_cm = 0.0f;
+}
+
+static void height_publish_tof_snapshot(uint8 new_sample)
+{
+    HeightTofSnapshot_t snapshot = {0};
+    uint8 publish_index = (uint8)(s_tof_snapshot_active ^ 1U);
+
+    snapshot.raw_los_cm = s_height_diag.tof_raw_cm;
+    snapshot.compensated_center_cm = s_height_diag.tof_comp_cm;
+    snapshot.flow_height_cm = s_tof_accepted_flow_cm;
+    snapshot.filtered_height_cm = tof_height_true_filt * 100.0f;
+    snapshot.vertical_velocity_cms = tof_vel_mps_filt * 100.0f;
+    snapshot.predicted_height_cm = s_tof_predicted_cm;
+    snapshot.innovation_cm = s_tof_innovation_cm;
+    snapshot.gate_cm = s_tof_gate_cm;
+    snapshot.candidate_mean_cm = s_tof_candidate_center_mean_cm;
+    snapshot.sample_sequence = s_tof_sample_sequence;
+    snapshot.raw_sample_age_ms = height_ticks_to_ms(s_tof_raw_age_ticks);
+    snapshot.accepted_age_ms = height_ticks_to_ms(s_tof_accepted_age_ticks);
+    snapshot.candidate_count = s_tof_candidate_count;
+    snapshot.reject_count = s_tof_reject_count;
+    snapshot.new_sample = new_sample;
+    snapshot.valid = tof_valid;
+    snapshot.state = (uint8)s_tof_state;
+
+    s_tof_snapshot_buffer[publish_index] = snapshot;
+    s_tof_snapshot_active = publish_index;
+
+    s_height_diag.tof_predicted_cm = snapshot.predicted_height_cm;
+    s_height_diag.tof_innovation_cm = snapshot.innovation_cm;
+    s_height_diag.tof_gate_cm = snapshot.gate_cm;
+    s_height_diag.tof_candidate_cm = snapshot.candidate_mean_cm;
+    s_height_diag.tof_sample_sequence = snapshot.sample_sequence;
+    s_height_diag.tof_raw_age_ms = snapshot.raw_sample_age_ms;
+    s_height_diag.tof_accepted_age_ms = snapshot.accepted_age_ms;
+    s_height_diag.tof_candidate_count = snapshot.candidate_count;
+    s_height_diag.tof_reject_count = snapshot.reject_count;
+    s_height_diag.tof_state = snapshot.state;
 }
 
 static float height_median3(float a, float b, float c)
@@ -217,6 +305,19 @@ void HeightManager_Get_Diag(HeightManagerDiag_t *diag)
     }
 }
 
+void HeightManager_GetTofSnapshot(HeightTofSnapshot_t *snapshot)
+{
+    uint8 active_index;
+
+    if(snapshot == NULL)
+    {
+        return;
+    }
+
+    active_index = s_tof_snapshot_active;
+    *snapshot = s_tof_snapshot_buffer[active_index];
+}
+
 uint8 HeightManager_IsTofValid(void)
 {
     return tof_valid;
@@ -226,7 +327,8 @@ uint8 HeightManager_IsReadyForTakeoff(void)
 {
     return (uint8)(tof_valid &&
                    tof_filter_initialized &&
-                   tof_no_update_ticks < TOF_NO_UPDATE_TIMEOUT_TICKS);
+                   s_tof_state == HEIGHT_TOF_STATE_LIVE &&
+                   s_tof_raw_age_ticks < TOF_NO_UPDATE_TIMEOUT_TICKS);
 }
 
 void HeightManager_PrepareSoftTakeoff(void)
@@ -358,16 +460,19 @@ float HeightManager_GetFlowHeightFromTofCm(float tof_los_cm, float roll_deg, flo
     return flow_height_cm > 0.0f ? flow_height_cm : 0.0f;
 }
 
-static void update_tof_height_filter(void)
+static void update_tof_height_filter(float tof_los_cm,
+                                     float tof_comp_cm,
+                                     float flow_height_cm,
+                                     uint8 reset_filter)
 {
     float vel = 0.0f;
-    float tof_los_cm = tof_height_m * 100.0f;
-    float tof_comp_cm;
     float tof_median_cm;
 
-    tof_comp_cm = HeightManager_GetCenterHeightFromTofCm(tof_los_cm,
-                                                         current_roll,
-                                                         current_pitch);
+    if(reset_filter)
+    {
+        height_reset_tof_median_filter();
+    }
+
     tof_median_cm = height_update_tof_median(tof_comp_cm);
     tof_height_true_m = tof_median_cm * 0.01f;
 
@@ -375,12 +480,12 @@ static void update_tof_height_filter(void)
     s_height_diag.tof_comp_cm = tof_comp_cm;
     s_height_diag.tof_median_cm = tof_median_cm;
 
-    if(!tof_filter_initialized)
+    if(reset_filter || !tof_filter_initialized)
     {
         tof_height_true_filt = tof_height_true_m;
         tof_height_true_prev = tof_height_true_m;
         tof_vel_mps_filt = 0.0f;
-        tof_sample_dt_s = TOF_DT;
+        tof_sample_dt_s = 0.0f;
         tof_filter_initialized = 1U;
     }
     else
@@ -389,12 +494,142 @@ static void update_tof_height_filter(void)
 
         vel = (tof_height_true_filt - tof_height_true_prev) / tof_sample_dt_s;
         tof_height_true_prev = tof_height_true_filt;
-        tof_sample_dt_s = TOF_DT;
+        tof_sample_dt_s = 0.0f;
         tof_vel_mps_filt += TOF_VEL_LPF_ALPHA * (vel - tof_vel_mps_filt);
     }
 
+    s_tof_accepted_center_cm = tof_comp_cm;
+    s_tof_accepted_flow_cm = flow_height_cm;
+    s_tof_accepted_age_ticks = 0U;
+    tof_valid = 1U;
+    s_tof_state = HEIGHT_TOF_STATE_LIVE;
+    height_reset_tof_candidate();
+
     s_height_diag.tof_height_filt_cm = tof_height_true_filt * 100.0f;
     s_height_diag.tof_velocity_cms = tof_vel_mps_filt * 100.0f;
+}
+
+static void height_mark_tof_invalid(uint8 clear_candidate)
+{
+    tof_valid = 0U;
+    s_tof_state = HEIGHT_TOF_STATE_INVALID;
+    tof_height_true_prev = tof_height_true_filt;
+    tof_vel_mps_filt = 0.0f;
+    tof_sample_dt_s = 0.0f;
+    tof_filter_initialized = 0U;
+    height_reset_tof_median_filter();
+
+    if(clear_candidate)
+    {
+        height_reset_tof_candidate();
+    }
+}
+
+static void height_start_or_update_candidate(float raw_los_cm,
+                                             float center_height_cm,
+                                             float flow_height_cm)
+{
+    uint8 next_count;
+
+    if(s_tof_reject_count < 0xFFU)
+    {
+        s_tof_reject_count++;
+    }
+
+    if(s_tof_candidate_count == 0U)
+    {
+        s_tof_candidate_gate_cm = s_tof_gate_cm;
+    }
+
+    if(s_tof_candidate_count == 0U ||
+       fabsf(center_height_cm - s_tof_candidate_center_mean_cm) > TOF_CANDIDATE_CONSISTENCY_CM)
+    {
+        s_tof_candidate_count = 1U;
+        s_tof_candidate_center_mean_cm = center_height_cm;
+        s_tof_candidate_raw_mean_cm = raw_los_cm;
+        s_tof_candidate_flow_mean_cm = flow_height_cm;
+    }
+    else
+    {
+        next_count = (uint8)(s_tof_candidate_count + 1U);
+        s_tof_candidate_center_mean_cm +=
+            (center_height_cm - s_tof_candidate_center_mean_cm) / (float)next_count;
+        s_tof_candidate_raw_mean_cm +=
+            (raw_los_cm - s_tof_candidate_raw_mean_cm) / (float)next_count;
+        s_tof_candidate_flow_mean_cm +=
+            (flow_height_cm - s_tof_candidate_flow_mean_cm) / (float)next_count;
+        s_tof_candidate_count = next_count;
+    }
+
+    if(s_tof_candidate_count >= TOF_REACQUIRE_CONFIRM_FRAMES)
+    {
+        update_tof_height_filter(s_tof_candidate_raw_mean_cm,
+                                 s_tof_candidate_center_mean_cm,
+                                 s_tof_candidate_flow_mean_cm,
+                                 1U);
+        return;
+    }
+
+    s_tof_state = (s_tof_candidate_count > 1U) ?
+                  HEIGHT_TOF_STATE_REACQUIRING :
+                  HEIGHT_TOF_STATE_HELD_REJECTED;
+
+    if(s_tof_reject_count >= TOF_REJECT_INVALID_FRAMES)
+    {
+        height_mark_tof_invalid(0U);
+    }
+}
+
+static void height_process_tof_sample(float raw_los_cm)
+{
+    float center_height_cm;
+    float flow_height_cm;
+    float accepted_age_s;
+    float predicted_velocity_cms;
+
+    center_height_cm = HeightManager_GetCenterHeightFromTofCm(raw_los_cm,
+                                                               current_roll,
+                                                               current_pitch);
+    flow_height_cm = HeightManager_GetFlowHeightFromTofCm(raw_los_cm,
+                                                          current_roll,
+                                                          current_pitch);
+
+    s_height_diag.tof_raw_cm = raw_los_cm;
+    s_height_diag.tof_comp_cm = center_height_cm;
+
+    if(!tof_filter_initialized || !tof_valid)
+    {
+        s_tof_predicted_cm = center_height_cm;
+        s_tof_innovation_cm = 0.0f;
+        s_tof_gate_cm = TOF_INNOVATION_BASE_GATE_CM;
+        update_tof_height_filter(raw_los_cm, center_height_cm, flow_height_cm, 1U);
+        return;
+    }
+
+    accepted_age_s = (float)s_tof_accepted_age_ticks * TOF_DT;
+    predicted_velocity_cms = height_clamp_float(tof_vel_mps_filt * 100.0f,
+                                                -TOF_PREDICT_MAX_SPEED_CMS,
+                                                TOF_PREDICT_MAX_SPEED_CMS);
+    s_tof_predicted_cm = s_tof_accepted_center_cm +
+                         predicted_velocity_cms * accepted_age_s;
+    s_tof_gate_cm = height_clamp_float(TOF_INNOVATION_BASE_GATE_CM +
+                                      TOF_PREDICT_MAX_SPEED_CMS * accepted_age_s,
+                                      TOF_INNOVATION_BASE_GATE_CM,
+                                      TOF_INNOVATION_MAX_GATE_CM);
+    if(s_tof_candidate_count > 0U && s_tof_candidate_gate_cm < s_tof_gate_cm)
+    {
+        s_tof_gate_cm = s_tof_candidate_gate_cm;
+    }
+    s_tof_innovation_cm = center_height_cm - s_tof_predicted_cm;
+
+    if(fabsf(s_tof_innovation_cm) <= s_tof_gate_cm)
+    {
+        update_tof_height_filter(raw_los_cm, center_height_cm, flow_height_cm, 0U);
+    }
+    else
+    {
+        height_start_or_update_candidate(raw_los_cm, center_height_cm, flow_height_cm);
+    }
 }
 
 static void update_acc_velocity_estimator(uint8 estimator_valid)
@@ -475,21 +710,24 @@ static void publish_estimator_result(void)
 
 void HeightManager_Init(float initial_height_cm)
 {
-    if(initial_height_cm < 1.0f)
-    {
-        initial_height_cm = 100.0f;
-    }
+    (void)initial_height_cm;
 
-    height_m = 0.0f;
-    tof_height_m = 0.0f;
     tof_height_true_m = 0.0f;
-    tof_height_true_filt = initial_height_cm * 0.01f;
-    tof_height_true_prev = tof_height_true_filt;
+    tof_height_true_filt = 0.0f;
+    tof_height_true_prev = 0.0f;
     tof_vel_mps_filt = 0.0f;
-    tof_sample_dt_s = TOF_DT;
+    tof_sample_dt_s = 0.0f;
     tof_valid = 0U;
     tof_filter_initialized = 0U;
-    tof_no_update_ticks = 0U;
+    s_tof_state = HEIGHT_TOF_STATE_INVALID;
+    s_tof_sample_sequence = 0U;
+    s_tof_raw_age_ticks = 0U;
+    s_tof_accepted_age_ticks = 0U;
+    s_tof_accepted_center_cm = 0.0f;
+    s_tof_accepted_flow_cm = 0.0f;
+    s_tof_predicted_cm = 0.0f;
+    s_tof_innovation_cm = 0.0f;
+    s_tof_gate_cm = TOF_INNOVATION_BASE_GATE_CM;
     s_height_loop_enabled = 0U;
     s_height_takeoff_target_active = 0U;
     s_height_takeoff_target_cm = HEIGHT_TARGET_START_CM;
@@ -499,90 +737,86 @@ void HeightManager_Init(float initial_height_cm)
     s_soft_takeoff_output_blend = 1.0f;
 
     memset(&s_height_diag, 0, sizeof(s_height_diag));
+    memset(s_tof_snapshot_buffer, 0, sizeof(s_tof_snapshot_buffer));
+    s_tof_snapshot_active = 0U;
     s_height_diag.gravity_bias_mg = HEIGHT_ACC_GRAVITY_BIAS_MG;
-    s_height_diag.tof_height_filt_cm = initial_height_cm;
     s_height_diag.cascade_enabled = HEIGHT_CASCADE_ENABLE;
 
     height_reset_tof_median_filter();
+    height_reset_tof_candidate();
     height_reset_velocity_estimator();
 
     HeightSpeedPID_output = 0.0f;
     HeightManager_Set_Target(HEIGHT_TARGET_DEFAULT_CM);
     PID_Reset(&HeightPID);
     PID_Reset(&HeightVelPID);
-    publish_height_result(initial_height_cm, 0.0f);
+    publish_height_result(0.0f, 0.0f);
+    height_publish_tof_snapshot(0U);
 }
 
 void HeightManager_Task_10ms(void)
 {
-    uint8 tof_new_sample = 0U;
+    uint8 tof_raw_new_sample = 0U;
+    uint8 tof_sample_accepted = 0U;
+    float raw_los_cm;
+
+    height_increment_u16(&s_tof_raw_age_ticks);
+    height_increment_u16(&s_tof_accepted_age_ticks);
+    if(tof_filter_initialized)
+    {
+        tof_sample_dt_s += TOF_DT;
+        if(tof_sample_dt_s > 0.50f)
+        {
+            tof_sample_dt_s = 0.50f;
+        }
+    }
 
     dl1b_get_distance();
 
     if(dl1b_finsh_flag && dl1b_distance_mm <= 4000)
     {
-        height_m = dl1b_distance_mm * 0.001f;
-        tof_new_sample = 1U;
-        tof_no_update_ticks = 0U;
-
-        if(tof_valid && fabsf(height_m - tof_height_m) > TOF_JUMP_LIMIT_M)
+        raw_los_cm = (float)dl1b_distance_mm * 0.1f;
+        tof_raw_new_sample = 1U;
+        s_tof_sample_sequence++;
+        if(s_tof_sample_sequence >= 1000000U)
         {
-            height_m = tof_height_m;
+            s_tof_sample_sequence = 0U;
         }
+        s_height_diag.tof_raw_cm = raw_los_cm;
 
-        if(height_m >= TOF_VALID_MIN_M && height_m <= TOF_VALID_MAX_M)
+        if(raw_los_cm >= TOF_VALID_MIN_M * 100.0f &&
+           raw_los_cm <= TOF_VALID_MAX_M * 100.0f)
         {
-            tof_height_m = height_m;
-            tof_valid = 1U;
+            s_tof_raw_age_ticks = 0U;
+            height_process_tof_sample(raw_los_cm);
+            tof_sample_accepted = (uint8)(tof_valid &&
+                                          s_tof_state == HEIGHT_TOF_STATE_LIVE &&
+                                          s_tof_accepted_age_ticks == 0U);
         }
         else
         {
-            tof_valid = 0U;
+            s_height_diag.tof_comp_cm = 0.0f;
         }
     }
-    else
+
+    if(s_tof_raw_age_ticks >= TOF_NO_UPDATE_TIMEOUT_TICKS)
     {
-        /* DL1B 轮询快于传感器出数时，驱动会用 finish=0/8192 表示“当前没有新帧”。
-         * 这不是测距立即失效；保留上一有效值，连续超时后再置无效。 */
-        if(tof_no_update_ticks < 0xFFFFU)
-        {
-            tof_no_update_ticks++;
-        }
-        if(tof_no_update_ticks >= TOF_NO_UPDATE_TIMEOUT_TICKS)
-        {
-            tof_valid = 0U;
-        }
+        height_mark_tof_invalid(1U);
     }
 
     if(tof_valid)
     {
-        if(tof_new_sample)
+        if(!tof_sample_accepted)
         {
-            update_tof_height_filter();
-        }
-        else
-        {
-            tof_sample_dt_s += TOF_DT;
-            if(tof_sample_dt_s > 0.20f)
-            {
-                tof_sample_dt_s = 0.20f;
-            }
             tof_vel_mps_filt *= TOF_VEL_NO_SAMPLE_DECAY;
             s_height_diag.tof_velocity_cms = tof_vel_mps_filt * 100.0f;
             s_height_diag.tof_height_filt_cm = tof_height_true_filt * 100.0f;
         }
     }
-    else
-    {
-        tof_height_true_prev = tof_height_true_filt;
-        tof_vel_mps_filt = 0.0f;
-        tof_sample_dt_s = TOF_DT;
-        tof_filter_initialized = 0U;
-        height_reset_tof_median_filter();
-    }
 
     update_acc_velocity_estimator(tof_valid);
     publish_estimator_result();
+    height_publish_tof_snapshot(tof_raw_new_sample);
 
     if(!armed)
     {

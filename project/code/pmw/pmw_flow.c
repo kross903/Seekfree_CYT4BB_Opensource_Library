@@ -38,8 +38,6 @@
  */
 #define PMW_FLOW_BODY_VX_FROM_FLOW_X_SIGN   (1.0f)
 #define PMW_FLOW_BODY_VY_FROM_FLOW_Y_SIGN   (1.0f)
-#define PMW_FLOW_MIN_HEIGHT_CM              (5.0f)
-#define PMW_FLOW_MAX_HEIGHT_CM              (400.0f)
 #define PMW_FLOW_MIN_DT_S                   (FLOW_SENSOR_NOMINAL_DT_S * 0.5f)
 #define PMW_FLOW_MAX_DT_S                   (FLOW_SENSOR_NOMINAL_DT_S * 2.0f)
 #define PMW_FLOW_MAX_ABS_DELTA_COUNT        (5000)
@@ -50,7 +48,6 @@
  * UP-FLOW-302 当前约 40Hz / dt=25ms，VEL_LPF_CUTOFF_HZ=8Hz 时 alpha 约 0.72。
  */
 #define PMW_FLOW_RANGE_LPF_ALPHA            (0.40f)
-#define PMW_FLOW_TOF_JUMP_REJECT_CM         (15.0f)
 #define PMW_FLOW_GRAVITY_CMS2               (980.665f)
 #define PMW_FLOW_VEL_LPF_CUTOFF_HZ          (12.0f)
 #define PMW_FLOW_VEL_DEADBAND_CMS           (5.0f)
@@ -73,7 +70,6 @@
 #define PMW_FLOW_CONFIDENCE_SPEED_GOOD_RATIO (0.50f)
 #define PMW_FLOW_CONFIDENCE_SPEED_BAD_RATIO  (0.90f)
 #define PMW_FLOW_CONFIDENCE_TOF_HOLD_SCALE  (0.75f)
-#define PMW_FLOW_CONFIDENCE_TOF_JUMP_SCALE  (0.80f)
 #define PMW_FLOW_CONFIDENCE_MIN_VALID_OBSERVATION (0.30f)
 #define PMW_FLOW_FUSION_IMU_X_SIGN          (1.0f)
 #define PMW_FLOW_FUSION_IMU_Y_SIGN          (-1.0f)
@@ -83,7 +79,7 @@
 #define PMW_FLOW_FUSION_RESET_CONFIRM_FRAMES (2U)
 #define PMW_FLOW_FUSION_PREDICT_HOLD_FRAMES (25U)
 #ifndef PMW_FLOW_KALMAN_ENABLE
-#define PMW_FLOW_KALMAN_ENABLE             (0U)
+#define PMW_FLOW_KALMAN_ENABLE             (1U)
 #endif
 #ifndef PMW_FLOW_KALMAN_Q_CMS2
 #define PMW_FLOW_KALMAN_Q_CMS2             (2.0f)
@@ -131,9 +127,7 @@ static PMWFlowState_t g_pmw_flow_mainloop_state = {0};
 static uint32 g_pmw_flow_mainloop_seq = 0U;
 
 static float g_pmw_flow_range_filt_cm = 0.0f;
-static float g_pmw_flow_range_last_valid_cm = 0.0f;
 static uint8 g_pmw_flow_range_filt_init = 0U;
-static uint8 g_pmw_flow_range_last_valid_init = 0U;
 static float g_pmw_flow_vel_x_filt_cms = 0.0f;
 static float g_pmw_flow_vel_y_filt_cms = 0.0f;
 static uint8 g_pmw_flow_vel_filt_init = 0U;
@@ -360,7 +354,6 @@ static float pmw_flow_ramp_down_confidence(float value, float good_value, float 
 
 static float pmw_flow_calc_confidence(const PMWFlowState_t *state,
                                       uint8 tof_source,
-                                      uint8 tof_jump_rejected,
                                       float fused_vx_cms,
                                       float fused_vy_cms)
 {
@@ -425,11 +418,6 @@ static float pmw_flow_calc_confidence(const PMWFlowState_t *state,
     else if(tof_source != PMW_FLOW_TOF_SOURCE_LIVE)
     {
         confidence = 0.0f;
-    }
-
-    if(tof_jump_rejected)
-    {
-        confidence *= PMW_FLOW_CONFIDENCE_TOF_JUMP_SCALE;
     }
 
     confidence = pmw_flow_limit_float(confidence, 0.0f, 1.0f);
@@ -547,7 +535,6 @@ static void pmw_flow_apply_invalid_velocity_hold(PMWFlowState_t *state)
         state->valid = 0U;
         g_pmw_flow_vel_filt_init = 0U;
         g_pmw_flow_range_filt_init = 0U;
-        g_pmw_flow_range_last_valid_init = 0U;
         g_pmw_flow_vel_output_init = 0U;
     }
 
@@ -564,7 +551,6 @@ static uint8 pmw_flow_fusion_predict_hold_active(void)
 static void pmw_flow_update_velocity_feedback(PMWFlowState_t *state,
                                               uint8 flow_observation_valid,
                                               uint8 tof_source,
-                                              uint8 tof_jump_rejected,
                                               float imu_velocity_x_cms,
                                               float imu_velocity_y_cms)
 {
@@ -626,7 +612,6 @@ static void pmw_flow_update_velocity_feedback(PMWFlowState_t *state,
                                       residual_y_cms * residual_y_cms);
             flow_confidence = pmw_flow_calc_confidence(state,
                                                        tof_source,
-                                                       tof_jump_rejected,
                                                        g_pmw_flow_fused_vx_cms,
                                                        g_pmw_flow_fused_vy_cms);
             state->flow_confidence = flow_confidence;
@@ -999,9 +984,7 @@ void PMW_Flow_Reset(void)
     g_pmw_flow_mainloop_state = cleared_state;
     g_pmw_flow_mainloop_seq = 0U;
     g_pmw_flow_range_filt_cm = 0.0f;
-    g_pmw_flow_range_last_valid_cm = 0.0f;
     g_pmw_flow_range_filt_init = 0U;
-    g_pmw_flow_range_last_valid_init = 0U;
     g_pmw_flow_vel_x_filt_cms = 0.0f;
     g_pmw_flow_vel_y_filt_cms = 0.0f;
     g_pmw_flow_vel_filt_init = 0U;
@@ -1106,7 +1089,7 @@ void PMW_Flow_UpdateSample(int16 flow_delta_x,
                            int16 flow_delta_y,
                            float roll_deg,
                            float pitch_deg,
-                           float tof_los_cm,
+                           float tof_height_cm,
                            uint8 tof_source,
                            float dt_s,
                            float imu_velocity_x_cms,
@@ -1119,12 +1102,11 @@ void PMW_Flow_UpdateSample(int16 flow_delta_x,
     float vy_raw;
     float tilt_abs_max_deg;
     float velocity_lpf_alpha;
-    uint8 tof_jump_rejected = 0U;
     uint8 flow_observation_valid = 0U;
     new_state.flow_delta_x_count = 0;
     new_state.flow_delta_y_count = 0;
     new_state.dt_s = dt_s;
-    new_state.tof_los_cm = tof_los_cm;
+    new_state.tof_los_cm = tof_height_cm;
     new_state.roll_deg = roll_deg;
     new_state.pitch_deg = pitch_deg;
     new_state.gyro_flow_x_delta_rad = g_pmw_flow_gyro_flow_x_delta_rad;
@@ -1150,22 +1132,21 @@ void PMW_Flow_UpdateSample(int16 flow_delta_x,
 
     if(!(dt_s >= PMW_FLOW_MIN_DT_S) ||
        !(dt_s <= PMW_FLOW_MAX_DT_S) ||
-       !pmw_flow_is_valid_number(tof_los_cm) ||
+       !pmw_flow_is_valid_number(tof_height_cm) ||
        !pmw_flow_is_valid_number(roll_deg) ||
        !pmw_flow_is_valid_number(pitch_deg) ||
        !pmw_flow_is_valid_number(new_state.gyro_flow_x_delta_rad) ||
        !pmw_flow_is_valid_number(new_state.gyro_flow_y_delta_rad) ||
        !pmw_flow_is_valid_delta_count(flow_delta_x) ||
        !pmw_flow_is_valid_delta_count(flow_delta_y) ||
-       (tof_los_cm < PMW_FLOW_MIN_HEIGHT_CM) ||
-       (tof_los_cm > PMW_FLOW_MAX_HEIGHT_CM))
+       (tof_source == PMW_FLOW_TOF_SOURCE_NONE) ||
+       !(tof_height_cm > 0.0f))
     {
-        new_state.range_cm = tof_los_cm;
+        new_state.range_cm = tof_height_cm;
         pmw_flow_apply_invalid_velocity_hold(&new_state);
         pmw_flow_update_velocity_feedback(&new_state,
                                           flow_observation_valid,
                                           tof_source,
-                                          tof_jump_rejected,
                                           imu_velocity_x_cms,
                                           imu_velocity_y_cms);
         pmw_flow_update_world_odometry(&new_state);
@@ -1173,25 +1154,8 @@ void PMW_Flow_UpdateSample(int16 flow_delta_x,
         return;
     }
 
-    /* (2) ToF 距离去毛刺 + LPF：v = range × flow_rate，距离单帧抖动会直接放大成速度噪声。 */
-    range_sample_cm = tof_los_cm;
-    if(g_pmw_flow_range_last_valid_init)
-    {
-        if(fabsf(range_sample_cm - g_pmw_flow_range_last_valid_cm) > PMW_FLOW_TOF_JUMP_REJECT_CM)
-        {
-            range_sample_cm = g_pmw_flow_range_last_valid_cm;
-            tof_jump_rejected = 1U;
-        }
-        else
-        {
-            g_pmw_flow_range_last_valid_cm = range_sample_cm;
-        }
-    }
-    else
-    {
-        g_pmw_flow_range_last_valid_cm = range_sample_cm;
-        g_pmw_flow_range_last_valid_init = 1U;
-    }
+    /* (2) HeightManager 已完成 ToF 有效性与跳变判定，这里只保留距离低通。 */
+    range_sample_cm = tof_height_cm;
 
     if(!g_pmw_flow_range_filt_init)
     {
@@ -1260,7 +1224,6 @@ void PMW_Flow_UpdateSample(int16 flow_delta_x,
         pmw_flow_update_velocity_feedback(&new_state,
                                           flow_observation_valid,
                                           tof_source,
-                                          tof_jump_rejected,
                                           imu_velocity_x_cms,
                                           imu_velocity_y_cms);
         pmw_flow_update_world_odometry(&new_state);
@@ -1314,7 +1277,6 @@ void PMW_Flow_UpdateSample(int16 flow_delta_x,
     pmw_flow_update_velocity_feedback(&new_state,
                                       flow_observation_valid,
                                       tof_source,
-                                      tof_jump_rejected,
                                       imu_velocity_x_cms,
                                       imu_velocity_y_cms);
     pmw_flow_update_world_odometry(&new_state);

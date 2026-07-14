@@ -156,7 +156,7 @@ static float build_vofa_test_channel(void)
     return test_value;
 }
 
-static void set_angle_pid_value(uint8 axis, uint8 item, float value)
+static uint8 set_angle_pid_value(uint8 axis, uint8 item, float value)
 {
     float kp = 0.0f;
     float ki = 0.0f;
@@ -169,13 +169,14 @@ static void set_angle_pid_value(uint8 axis, uint8 item, float value)
         case '1': kp = value; break;
         case '2': ki = value; break;
         case '3': kd = value; break;
-        default:  return;
+        default:  return 0U;
     }
 
     Flight_Control_Set_Angle_PID(axis, kp, ki, kd);
+    return 1U;
 }
 
-static void set_gyro_pid_value(uint8 axis, uint8 item, float value)
+static uint8 set_gyro_pid_value(uint8 axis, uint8 item, float value)
 {
     float kp = 0.0f;
     float ki = 0.0f;
@@ -202,19 +203,19 @@ static void set_gyro_pid_value(uint8 axis, uint8 item, float value)
                 kd = value;
             }
             Flight_Control_Set_Gyro_PID(axis, kp, ki, kd);
-            break;
+            return 1U;
 
         case '4':
             Flight_Control_Get_Gyro_Limits(axis, &out_limit, &int_limit);
             Flight_Control_Set_Gyro_Limits(axis, out_limit, value);
-            break;
+            return 1U;
 
         default:
-            break;
+            return 0U;
     }
 }
 
-static void set_height_pid_value(uint8 item, float value)
+static uint8 set_height_pid_value(uint8 item, float value)
 {
     float kp = 0.0f;
     float ki = 0.0f;
@@ -227,20 +228,21 @@ static void set_height_pid_value(uint8 item, float value)
         case '1': kp = value; break;
         case '2': ki = value; break;
         case '3': kd = value; break;
-        default:  return;
+        default:  return 0U;
     }
 
     Flight_Control_Set_Height_PID(kp, ki, kd);
+    return 1U;
 }
 
-static void set_height_vel_pid_value(uint8 item, float value)
+static uint8 set_height_vel_pid_value(uint8 item, float value)
 {
     switch(item)
     {
-        case '1': HeightVelPID.Kp = value; break;
-        case '2': HeightVelPID.Ki = value; break;
-        case '3': HeightVelPID.Kd = value; break;
-        default:  break;
+        case '1': HeightVelPID.Kp = value; return 1U;
+        case '2': HeightVelPID.Ki = value; return 1U;
+        case '3': HeightVelPID.Kd = value; return 1U;
+        default:  return 0U;
     }
 }
 
@@ -255,7 +257,7 @@ static void set_height_vel_pid_value(uint8 item, float value)
  *
  * 上层在 USART_PID_Adjust 已经按命令字符 'V'/'W' 区分轴，避免与角度环 R/P/Y 混淆。
  */
-static void set_vel_pid_value(uint8 axis, uint8 item, float value)
+static uint8 set_vel_pid_value(uint8 axis, uint8 item, float value)
 {
     PID_Controller *pid = NULL;
 
@@ -269,7 +271,7 @@ static void set_vel_pid_value(uint8 axis, uint8 item, float value)
     }
     else
     {
-        return;
+        return 0U;
     }
 
     switch(item)
@@ -279,18 +281,20 @@ static void set_vel_pid_value(uint8 axis, uint8 item, float value)
         case '3': pid->Kd = value; break;
         case '4': pid->output_limit = value; break;
         case '5': pid->integral_limit = value; break;
-        default:  return;
+        default:  return 0U;
     }
+
+    return 1U;
 }
 
-static void set_pos_pid_value(uint8 axis, uint8 item, float value)
+static uint8 set_pos_pid_value(uint8 axis, uint8 item, float value)
 {
     PID_Controller *pid = NULL;
 
     if(item == '0')
     {
         Position_Loop_Set_Enabled((value > 0.5f) ? 1U : 0U);
-        return;
+        return 1U;
     }
 
     if(axis == 0U)
@@ -303,7 +307,7 @@ static void set_pos_pid_value(uint8 axis, uint8 item, float value)
     }
     else
     {
-        return;
+        return 0U;
     }
 
     switch(item)
@@ -313,11 +317,13 @@ static void set_pos_pid_value(uint8 axis, uint8 item, float value)
         case '3': pid->Kd = value; break;
         case '4': pid->output_limit = value; break;
         case '5': pid->integral_limit = value; break;
-        default:  return;
+        default:  return 0U;
     }
+
+    return 1U;
 }
 
-static void set_hover_angle_compensation_value(uint8 item, float value)
+static uint8 set_hover_angle_compensation_value(uint8 item, float value)
 {
     float hover_roll = 0.0f;
     float hover_pitch = 0.0f;
@@ -328,10 +334,11 @@ static void set_hover_angle_compensation_value(uint8 item, float value)
     {
         case '1': hover_roll = value; break;
         case '2': hover_pitch = value; break;
-        default:  return;
+        default:  return 0U;
     }
 
     Flight_Takeoff_Set_Hover_Angle_Compensation(hover_roll, hover_pitch);
+    return 1U;
 }
 
 
@@ -342,11 +349,11 @@ static void set_hover_angle_compensation_value(uint8 item, float value)
  * 范围由 PMW_Flow_SetGyroCompGain() 内部夹位，这里负值才表示“不变更”，
  * 所以已 has_value 的正常调参直接传 value 即可。
  */
-static void set_pmw_flow_gyro_gain_value(uint8 item, float value)
+static uint8 set_pmw_flow_gyro_gain_value(uint8 item, float value)
 {
     if(value < 0.0f)
     {
-        return;
+        return 0U;
     }
 
     switch(item)
@@ -354,13 +361,13 @@ static void set_pmw_flow_gyro_gain_value(uint8 item, float value)
         case 'x':
         case 'X':
             PMW_Flow_SetGyroCompGain(value, -1.0f);
-            break;
+            return 1U;
         case 'y':
         case 'Y':
             PMW_Flow_SetGyroCompGain(-1.0f, value);
-            break;
+            return 1U;
         default:
-            break;
+            return 0U;
     }
 }
 
@@ -879,6 +886,7 @@ void USART_PID_Adjust(void)
     uint8 command = 0;
     uint8 item = 0;
     uint8 reply_command = 0U;
+    uint8 write_success = 0U;
 
     if(!CommMux_IsVofaMode())
     {
@@ -899,7 +907,7 @@ void USART_PID_Adjust(void)
         case 'R':
             if(has_value)
             {
-                set_angle_pid_value(AXIS_ROLL, item, data_get);
+                write_success = set_angle_pid_value(AXIS_ROLL, item, data_get);
             }
             send_back_command = 'R';
             reply_command = 'R';
@@ -908,7 +916,7 @@ void USART_PID_Adjust(void)
         case 'r':
             if(has_value)
             {
-                set_gyro_pid_value(AXIS_ROLL, item, data_get);
+                write_success = set_gyro_pid_value(AXIS_ROLL, item, data_get);
             }
             send_back_command = 'r';
             reply_command = 'r';
@@ -917,7 +925,7 @@ void USART_PID_Adjust(void)
         case 'P':
             if(has_value)
             {
-                set_angle_pid_value(AXIS_PITCH, item, data_get);
+                write_success = set_angle_pid_value(AXIS_PITCH, item, data_get);
             }
             send_back_command = 'P';
             reply_command = 'P';
@@ -926,7 +934,7 @@ void USART_PID_Adjust(void)
         case 'p':
             if(has_value)
             {
-                set_gyro_pid_value(AXIS_PITCH, item, data_get);
+                write_success = set_gyro_pid_value(AXIS_PITCH, item, data_get);
             }
             send_back_command = 'p';
             reply_command = 'p';
@@ -935,7 +943,7 @@ void USART_PID_Adjust(void)
         case 'Y':
             if(has_value)
             {
-                set_angle_pid_value(AXIS_YAW, item, data_get);
+                write_success = set_angle_pid_value(AXIS_YAW, item, data_get);
             }
             send_back_command = 'Y';
             reply_command = 'Y';
@@ -944,16 +952,17 @@ void USART_PID_Adjust(void)
         case 'y':
             if(has_value)
             {
-                set_gyro_pid_value(AXIS_YAW, item, data_get);
+                write_success = set_gyro_pid_value(AXIS_YAW, item, data_get);
             }
             send_back_command = 'y';
             reply_command = 'y';
             break;
 
         case 'S':
-            if(has_value)
+            if(has_value && item == '0')
             {
                 Flight_Control_Set_Throttle(data_get);
+                write_success = 1U;
             }
             send_back_command = 'S';
             reply_command = 'S';
@@ -962,7 +971,7 @@ void USART_PID_Adjust(void)
         case 'B':
             if(has_value)
             {
-                set_hover_angle_compensation_value(item, data_get);
+                write_success = set_hover_angle_compensation_value(item, data_get);
             }
             send_back_command = 'B';
             reply_command = 'B';
@@ -971,7 +980,7 @@ void USART_PID_Adjust(void)
         case 'V':
             if(has_value)
             {
-                set_vel_pid_value(0U, item, data_get);
+                write_success = set_vel_pid_value(0U, item, data_get);
             }
             send_back_command = 'V';
             reply_command = 'V';
@@ -980,7 +989,7 @@ void USART_PID_Adjust(void)
         case 'W':
             if(has_value)
             {
-                set_vel_pid_value(1U, item, data_get);
+                write_success = set_vel_pid_value(1U, item, data_get);
             }
             send_back_command = 'W';
             reply_command = 'W';
@@ -989,7 +998,7 @@ void USART_PID_Adjust(void)
         case 'I':
             if(has_value)
             {
-                set_pos_pid_value(0U, item, data_get);
+                write_success = set_pos_pid_value(0U, item, data_get);
             }
             send_back_command = 'I';
             reply_command = 'I';
@@ -998,7 +1007,7 @@ void USART_PID_Adjust(void)
         case 'J':
             if(has_value)
             {
-                set_pos_pid_value(1U, item, data_get);
+                write_success = set_pos_pid_value(1U, item, data_get);
             }
             send_back_command = 'J';
             reply_command = 'J';
@@ -1051,7 +1060,7 @@ void USART_PID_Adjust(void)
         case 'H':
             if(has_value)
             {
-                set_height_pid_value(item, data_get);
+                write_success = set_height_pid_value(item, data_get);
             }
             send_back_command = 'H';
             reply_command = 'H';
@@ -1060,7 +1069,7 @@ void USART_PID_Adjust(void)
         case 'h':
             if(has_value)
             {
-                set_height_vel_pid_value(item, data_get);
+                write_success = set_height_vel_pid_value(item, data_get);
             }
             send_back_command = 'h';
             reply_command = 'h';
@@ -1069,7 +1078,7 @@ void USART_PID_Adjust(void)
         case 'G':
             if(has_value)
             {
-                set_pmw_flow_gyro_gain_value(item, data_get);
+                write_success = set_pmw_flow_gyro_gain_value(item, data_get);
             }
             send_back_command = 'G';
             reply_command = 'G';
@@ -1083,6 +1092,10 @@ void USART_PID_Adjust(void)
     if(reply_command != 0U)
     {
         send_pid_data_back(reply_command);
+    }
+    if(write_success)
+    {
+        BoardBuzzer_RequestDoubleBeep();
     }
 }
 
@@ -1303,39 +1316,25 @@ void send_date_back(void)
         case 13:
         {
             HeightManagerDiag_t height_diag = {0};
-            float actual_cm;
-            float target_cm;
-            float error_cm;
 
             HeightManager_Get_Diag(&height_diag);
 
-            actual_cm  = g_height_result.height_cm;
-            target_cm  = HeightManager_Get_Active_Target();
-            error_cm   = target_cm - actual_cm;
-            if(error_cm > 40.0f)
-            {
-                error_cm = 40.0f;
-            }
-            else if(error_cm < -40.0f)
-            {
-                error_cm = -40.0f;
-            }
-            send_sixteen_date(target_cm,
-                              actual_cm,
-                              error_cm,
+            send_sixteen_date(height_diag.tof_raw_cm,
+                              height_diag.tof_comp_cm,
                               height_diag.tof_median_cm,
                               height_diag.tof_height_filt_cm,
+                              height_diag.tof_predicted_cm,
+                              height_diag.tof_innovation_cm,
+                              height_diag.tof_gate_cm,
+                              height_diag.tof_candidate_cm,
+                              (float)height_diag.tof_candidate_count,
+                              (float)height_diag.tof_reject_count,
+                              (float)height_diag.tof_state,
+                              (float)height_diag.tof_raw_age_ms,
+                              (float)height_diag.tof_accepted_age_ms,
                               height_diag.tof_velocity_cms,
-                              height_diag.acc_velocity_cms,
-                              height_diag.fused_velocity_cms,
-                              height_diag.target_velocity_cms,
-                              height_diag.velocity_error_cms,
-                              height_diag.velocity_pid_output,
-                              base_throttle,
-                              height_diag.acc_z_level_mg,
-                              (float)height_diag.tof_valid,
-                              (float)height_diag.acc_used,
-                              (float)height_diag.cascade_enabled);
+                              (float)height_diag.tof_sample_sequence,
+                              (float)height_diag.tof_valid);
             break;
         }
 

@@ -4,9 +4,6 @@
 #include "control/height_manager.h"
 #include "pmw/pmw_flow.h"
 
-#define PMW_FLOW_TOF_MIN_VALID_MM       (50U)
-#define PMW_FLOW_TOF_MAX_VALID_MM       (4000U)
-#define PMW_FLOW_TOF_STALE_TIMEOUT_TICK (50U)
 #define PMW_FLOW_TOF_SRC_NONE           PMW_FLOW_TOF_SOURCE_NONE
 #define PMW_FLOW_TOF_SRC_LIVE           PMW_FLOW_TOF_SOURCE_LIVE
 #define PMW_FLOW_TOF_SRC_HOLD           PMW_FLOW_TOF_SOURCE_HOLD
@@ -14,7 +11,6 @@
 static volatile float g_pmw3901_flow_height_used_cm = 0.0f;
 static volatile uint16 g_pmw3901_tof_stale_ticks = 0U;
 static volatile uint8 g_pmw3901_tof_source = PMW_FLOW_TOF_SRC_NONE;
-static float g_pmw3901_tof_last_valid_cm = 0.0f;
 
 static float flow_sensor_get_sample_dt_s(void)
 {
@@ -39,7 +35,7 @@ void OpticalFlowFeed_Task(void)
 #if FLOW_SENSOR_SELECTED == FLOW_SENSOR_PMW3901
     static uint8 pmw3901_ready = 0;
 #endif
-    float tof_los_cm = 0.0f;
+    HeightTofSnapshot_t tof_snapshot = {0};
     float flow_height_cm = 0.0f;
     float flow_sample_dt_s = flow_sensor_get_sample_dt_s();
     int16 flow_delta_x = 0;
@@ -54,7 +50,6 @@ void OpticalFlowFeed_Task(void)
         g_pmw3901_flow_height_used_cm = 0.0f;
         g_pmw3901_tof_stale_ticks = 0U;
         g_pmw3901_tof_source = PMW_FLOW_TOF_SRC_NONE;
-        g_pmw3901_tof_last_valid_cm = 0.0f;
         pmw3901_ready = (0 == pmw3901_init()) ? 1U : 0U;
         return;
     }
@@ -75,37 +70,22 @@ void OpticalFlowFeed_Task(void)
     upflow302_finsh_flag = 0U;
 #endif
 
-    if(dl1b_finsh_flag &&
-       dl1b_distance_mm >= PMW_FLOW_TOF_MIN_VALID_MM &&
-       dl1b_distance_mm <= PMW_FLOW_TOF_MAX_VALID_MM)
-    {
-        tof_los_cm = (float)dl1b_distance_mm * 0.1f;
-        g_pmw3901_tof_last_valid_cm = tof_los_cm;
-        g_pmw3901_tof_stale_ticks = 0U;
-        tof_source = PMW_FLOW_TOF_SRC_LIVE;
-    }
-    else if(g_pmw3901_tof_last_valid_cm > 0.0f &&
-            g_pmw3901_tof_stale_ticks < PMW_FLOW_TOF_STALE_TIMEOUT_TICK)
-    {
-        tof_los_cm = g_pmw3901_tof_last_valid_cm;
-        g_pmw3901_tof_stale_ticks++;
-        tof_source = PMW_FLOW_TOF_SRC_HOLD;
-    }
-    else
-    {
-        tof_los_cm = 0.0f;
-        if(g_pmw3901_tof_stale_ticks < 0xFFFFU)
-        {
-            g_pmw3901_tof_stale_ticks++;
-        }
-        tof_source = PMW_FLOW_TOF_SRC_NONE;
-    }
+    HeightManager_GetTofSnapshot(&tof_snapshot);
+    g_pmw3901_tof_stale_ticks = (uint16)(tof_snapshot.raw_sample_age_ms / 10U);
 
-    if(tof_los_cm > 0.0f)
+    if(tof_snapshot.valid)
     {
-        flow_height_cm = HeightManager_GetFlowHeightFromTofCm(tof_los_cm,
-                                                              current_roll,
-                                                              current_pitch);
+        flow_height_cm = tof_snapshot.flow_height_cm;
+
+        if(tof_snapshot.state == (uint8)HEIGHT_TOF_STATE_LIVE)
+        {
+            tof_source = PMW_FLOW_TOF_SRC_LIVE;
+        }
+        else if(tof_snapshot.state == (uint8)HEIGHT_TOF_STATE_HELD_REJECTED ||
+                tof_snapshot.state == (uint8)HEIGHT_TOF_STATE_REACQUIRING)
+        {
+            tof_source = PMW_FLOW_TOF_SRC_HOLD;
+        }
     }
 
     if(!flow_sample_valid)
@@ -128,14 +108,14 @@ void OpticalFlowFeed_Task(void)
                           Y_V_F);
 }
 
-void OpticalFlowFeed_GetTofStatus(float *tof_los_cm, uint16 *stale_ticks, uint8 *source)
+void OpticalFlowFeed_GetTofStatus(float *tof_height_cm, uint16 *stale_ticks, uint8 *source)
 {
-    if(tof_los_cm   != NULL) *tof_los_cm   = g_pmw3901_flow_height_used_cm;
+    if(tof_height_cm != NULL) *tof_height_cm = g_pmw3901_flow_height_used_cm;
     if(stale_ticks  != NULL) *stale_ticks  = g_pmw3901_tof_stale_ticks;
     if(source       != NULL) *source       = g_pmw3901_tof_source;
 }
 
-void PMW_Flow_Get_TOF_Status(float *tof_los_cm, uint16 *stale_ticks, uint8 *source)
+void PMW_Flow_Get_TOF_Status(float *tof_height_cm, uint16 *stale_ticks, uint8 *source)
 {
-    OpticalFlowFeed_GetTofStatus(tof_los_cm, stale_ticks, source);
+    OpticalFlowFeed_GetTofStatus(tof_height_cm, stale_ticks, source);
 }

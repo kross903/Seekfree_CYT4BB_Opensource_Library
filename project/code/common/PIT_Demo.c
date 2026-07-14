@@ -522,6 +522,7 @@ uint8 Flight_Fly_Test_Get_Confirm_State(void)
 
 void PIT_KeyVoltage_Task_5ms(void)
 {
+    BoardBuzzer_Task5ms();
     Flight_Safety_Tick_5ms();
     VehicleMarkerLocalization_Task5ms();
     key_scanner();
