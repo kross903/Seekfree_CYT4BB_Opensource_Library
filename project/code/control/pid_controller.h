@@ -13,15 +13,26 @@ typedef struct
     float output_limit;       // 输出限幅
     float integral_limit;     // 积分限幅
     float IntegralThreshold;  // 启用积分缩放的误差阈值
-    float alpha;              // 微分一阶低通滤波系数
+    float alpha;              // 参考周期下的微分一阶低通滤波系数
+    float reference_dt_s;     // 当前参数的原调参周期
+    float cached_dt_s;        // 已缓存的实际运行周期
+    float cached_alpha;       // 已缓存的参考滤波系数
+    float integral_step_scale;
+    float derivative_step_scale;
+    float runtime_alpha;
 } PID_Controller;
 
 // 按给定参数初始化一个 PID 控制器。
 void PID_Init(PID_Controller *pid, float kp, float ki, float kd,
               float out_limit, float int_limit, float integral_threshold, float alpha);
 
-// 根据目标值、当前值和采样周期计算新的控制输出。
-// 当前实现仍按固定中断节拍工作，dt 参数保留用于接口兼容。
+// 设置现有 PID 参数对应的原调参周期。
+void PID_SetReferenceDt(PID_Controller *pid, float reference_dt_s);
+
+// 在中断启动前预计算实际运行周期对应的缩放和滤波系数。
+void PID_PrepareRuntimeDt(PID_Controller *pid, float runtime_dt_s);
+
+// 根据目标值、当前值和实际运行周期计算新的控制输出。
 float PID_Calculate(PID_Controller *pid, float target, float current, float dt);
 
 // 使用调用方已经处理好的误差计算输出，适用于周期角度等非普通减法误差。

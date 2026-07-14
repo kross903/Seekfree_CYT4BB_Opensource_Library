@@ -72,6 +72,10 @@ typedef struct
     uint32 control_delayed_entry_count;
     uint32 motor_count;
     uint32 motor_execution_overrun_count;
+    uint32 rate_slot_count;
+    uint32 angle_slot_count;
+    uint32 velocity_slot_count;
+    uint32 position_slot_count;
 } FlightRealtimeDiag;
 // ==================== Flight-runtime interface ====================
 /*
@@ -111,7 +115,6 @@ void PIT_Adc_Task_5ms(void);
 void PIT_OpticalFlow_Task(void);
 void PIT_PMW3901_Task_20ms(void);
 void PIT_Control_Task_250us(void);
-void PIT_Motor_Task_500us(void);
 void FlightRealtime_ControlBegin(void);
 void FlightRealtime_ControlEnd(void);
 void FlightRealtime_MotorBegin(void);

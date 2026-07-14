@@ -2,7 +2,7 @@
 #include "control/ControlMath.h"
 #include "zf_common_headfile.h"
 
-#define VELOCITY_LOOP_DT_S             0.00025f
+#define VELOCITY_LOOP_DT_S             0.004f
 #define VEL_LOOP_GRAVITY_CMS2          981.0f
 #define VEL_LOOP_PITCH_SIGN            (1.0f)
 #define VEL_LOOP_ROLL_SIGN             (-1.0f)

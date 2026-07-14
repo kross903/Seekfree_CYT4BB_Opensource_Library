@@ -1,6 +1,6 @@
 #include "control/rate_loop.h"
 
-#define RATE_LOOP_DT_S                  0.00025f
+#define RATE_LOOP_DT_S                  0.001f
 
 PID_Controller gyro_pid_roll;
 PID_Controller gyro_pid_pitch;

@@ -10,7 +10,7 @@
 #define POSITION_LOOP_VY_SIGN          (1.0f)
 #define POSITION_LOOP_DEADZONE_CM      (3.0f)
 #define POSITION_LOOP_PREDICT_RELEASE_EPS_CM (1.0f)
-#define POSITION_LOOP_DT_S             0.00025f
+#define POSITION_LOOP_DT_S             0.020f
 
 PID_Controller pos_pid_x;
 PID_Controller pos_pid_y;
@@ -36,6 +36,7 @@ static float g_position_loop_hold_start_y_cm = 0.0f;
 static float g_position_loop_hold_distance_cm = 0.0f;
 static float g_position_loop_hold_dx_cm = 0.0f;
 static float g_position_loop_hold_dy_cm = 0.0f;
+static uint32 g_position_loop_last_pose_seq = 0U;
 
 static void position_loop_set_output(float vx_cms, float vy_cms, float *target_vx_cms, float *target_vy_cms)
 {
@@ -69,6 +70,7 @@ static void position_loop_reset_runtime(void)
     g_position_loop_hold_distance_cm = 0.0f;
     g_position_loop_hold_dx_cm = 0.0f;
     g_position_loop_hold_dy_cm = 0.0f;
+    g_position_loop_last_pose_seq = g_vehicle_marker_pose_update_seq;
 }
 
 static void position_loop_reset_predict_hold(void)
@@ -200,6 +202,8 @@ void Position_Loop_Update_Velocity_Target(uint8 velocity_ready,
                                           float *target_vy_cms)
 {
     uint8 raw_ir_track_valid = position_loop_get_raw_ir_track_valid();
+    uint8 new_visual_pose = (uint8)(raw_ir_track_valid &&
+                                    g_vehicle_marker_pose_update_seq != g_position_loop_last_pose_seq);
     uint8 position_input_valid = 0U;
     float position_input_x_cm = 0.0f;
     float position_input_y_cm = 0.0f;
@@ -219,11 +223,12 @@ void Position_Loop_Update_Velocity_Target(uint8 velocity_ready,
         return;
     }
 
-    if(raw_ir_track_valid)
+    if(new_visual_pose)
     {
         position_input_valid = 1U;
         position_input_x_cm = g_vehicle_marker_pose.x;
         position_input_y_cm = g_vehicle_marker_pose.y;
+        g_position_loop_last_pose_seq = g_vehicle_marker_pose_update_seq;
         g_position_loop_last_pose_valid = 1U;
         g_position_loop_last_x_cm = position_input_x_cm;
         g_position_loop_last_y_cm = position_input_y_cm;

@@ -45,7 +45,7 @@ extern small_device_value_struct motor_value;
 void uart_control_callback(void);                                   // 无刷驱动 串口接收回调函数
 
 void small_driver_set_duty(int16 motor_duty_1, int16 motor_duty_2, int16 motor_duty_3, int16 motor_duty_4);      // 无刷驱动 设置电机占空比
-void small_driver_service_tx(void);
+void small_driver_service_tx(uint16 elapsed_us);
 void small_driver_force_zero(void);
 void small_driver_get_diag(SmallDriverUartDiag *diag);
 

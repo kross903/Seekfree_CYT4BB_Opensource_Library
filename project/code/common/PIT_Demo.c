@@ -24,8 +24,16 @@
 
 #define FLIGHT_REALTIME_DWT_LAR_UNLOCK 0xC5ACCE55UL
 #define CONTROL_PERIOD_US              250U
-#define MOTOR_PERIOD_US                500U
+#define MOTOR_PERIOD_US                1000U
 #define CONTROL_DELAY_THRESHOLD_US     313U
+
+#define CONTROL_SCHEDULER_TICKS        80U
+#define RATE_SLOT_DIVISOR              4U
+#define ANGLE_SLOT_DIVISOR             8U
+#define ANGLE_SLOT_PHASE               3U
+#define VELOCITY_SLOT_DIVISOR          16U
+#define VELOCITY_SLOT_PHASE            2U
+#define POSITION_SLOT_PHASE            1U
 
 /*
  * 真位置闭环参数。
@@ -108,6 +116,11 @@ static uint32 s_motor_last_cycles = 0U;
 static uint32 s_motor_max_cycles = 0U;
 static uint32 s_motor_count = 0U;
 static uint32 s_motor_execution_overrun_count = 0U;
+static uint32 s_rate_slot_count = 0U;
+static uint32 s_angle_slot_count = 0U;
+static uint32 s_velocity_slot_count = 0U;
+static uint32 s_position_slot_count = 0U;
+static uint8 s_control_scheduler_tick = 0U;
 
 static void flight_realtime_init(void)
 {
@@ -250,6 +263,10 @@ void FlightRealtime_GetDiag(FlightRealtimeDiag *diag)
     diag->control_delayed_entry_count = s_control_delayed_entry_count;
     diag->motor_count = s_motor_count;
     diag->motor_execution_overrun_count = s_motor_execution_overrun_count;
+    diag->rate_slot_count = s_rate_slot_count;
+    diag->angle_slot_count = s_angle_slot_count;
+    diag->velocity_slot_count = s_velocity_slot_count;
+    diag->position_slot_count = s_position_slot_count;
     if(irq_state == 0U)
     {
         __enable_irq();
@@ -547,16 +564,6 @@ void PIT_PMW3901_Task_20ms(void)
     PIT_OpticalFlow_Task();
 }
 
-void PIT_Motor_Task_500us(void)
-{
-    uint8 output_enabled = (uint8)(MenuMotorTest_GetOutputEnable() || MenuFlyTest_GetOutputEnable());
-
-    MotorHardware_WriteOutput(motor_throttle,
-                              armed,
-                              output_enabled,
-                              MenuMotorTest_IsActive());
-}
-
 // ==================== 4 kHz control-loop task ====================
 
 static uint8 control_task_handle_imu_calibration(void)
@@ -599,7 +606,7 @@ static uint8 control_task_handle_attitude_safety(void)
     return 0U;
 }
 
-static uint8 control_task_handle_motor_test(void)
+static uint8 control_task_handle_motor_test(uint8 rate_due)
 {
     if(!MenuMotorTest_IsActive())
     {
@@ -617,11 +624,14 @@ static uint8 control_task_handle_motor_test(void)
 
     Angle_Loop_Reset_Rate_Cmd_Lpf();
     Rate_Loop_Reset_Output();
-    MenuMotorTest_ApplyOutput(motor_throttle);
+    if(rate_due)
+    {
+        MenuMotorTest_ApplyOutput(motor_throttle);
+    }
     return 1U;
 }
 
-static uint8 control_task_handle_fly_test(void)
+static uint8 control_task_handle_fly_test(uint8 angle_due, uint8 rate_due)
 {
     float target_roll = 0.0f;
     float target_pitch = 0.0f;
@@ -665,33 +675,39 @@ static uint8 control_task_handle_fly_test(void)
         return 1U;
     }
 
-    MenuFlyTest_GetTarget(&target_roll, &target_pitch, &target_yaw);
-    Angle_Loop_Update(target_roll,
-                      target_pitch,
-                      target_yaw,
-                      current_roll,
-                      current_pitch,
-                      current_yaw);
-    target_yaw_rate = 0.0f;
-    PID_Reset(&angle_pid_yaw);
+    if(angle_due)
+    {
+        MenuFlyTest_GetTarget(&target_roll, &target_pitch, &target_yaw);
+        Angle_Loop_Update(target_roll,
+                          target_pitch,
+                          target_yaw,
+                          current_roll,
+                          current_pitch,
+                          current_yaw);
+        target_yaw_rate = 0.0f;
+        PID_Reset(&angle_pid_yaw);
+    }
 
-    Rate_Loop_Update(target_roll_rate,
-                     target_pitch_rate,
-                     0.0f,
-                     current_gyro_roll,
-                     current_gyro_pitch,
-                     current_gyro_yaw);
-    PID_Reset(&gyro_pid_yaw);
+    if(rate_due)
+    {
+        Rate_Loop_Update(target_roll_rate,
+                         target_pitch_rate,
+                         0.0f,
+                         current_gyro_roll,
+                         current_gyro_pitch,
+                         current_gyro_yaw);
+        PID_Reset(&gyro_pid_yaw);
 
-    roll_output = limit_fly_test_attitude_output(roll_output);
-    pitch_output = limit_fly_test_attitude_output(pitch_output);
-    yaw_output = 0.0f;
+        roll_output = limit_fly_test_attitude_output(roll_output);
+        pitch_output = limit_fly_test_attitude_output(pitch_output);
+        yaw_output = 0.0f;
 
-    Motor_Mixer_Update_BaseOnly(motor_throttle,
-                                1U,
-                                (float)MenuFlyTest_GetThrottle(),
-                                current_roll,
-                                current_pitch);
+        Motor_Mixer_Update_BaseOnly(motor_throttle,
+                                    1U,
+                                    (float)MenuFlyTest_GetThrottle(),
+                                    current_roll,
+                                    current_pitch);
+    }
     return 1U;
 }
 
@@ -725,8 +741,14 @@ static uint8 control_task_handle_takeoff_base_only(void)
     PID_Reset(&gyro_pid_roll);
     PID_Reset(&gyro_pid_pitch);
     PID_Reset(&gyro_pid_yaw);
-    Velocity_Loop_Set_Enabled(0U);
-    Position_Loop_Set_Enabled(0U);
+    if(Velocity_Loop_Is_Enabled())
+    {
+        Velocity_Loop_Set_Enabled(0U);
+    }
+    if(Position_Loop_Is_Enabled())
+    {
+        Position_Loop_Set_Enabled(0U);
+    }
 
     equal_output = Motor_Mixer_Limit_Output(Flight_Takeoff_Get_Commanded_Base_Throttle());
     motor_throttle[0] = equal_output;
@@ -748,8 +770,6 @@ static void control_task_update_cruise_throttle(uint8 takeoff_active)
 static uint8 control_task_handle_manual_mode(void)
 {
     uint16 manual_output;
-    float position_target_vx_cms = 0.0f;
-    float position_target_vy_cms = 0.0f;
 
     if(control_mode != CONTROL_MODE_MANUAL)
     {
@@ -773,12 +793,15 @@ static uint8 control_task_handle_manual_mode(void)
     {
         manual_output = Motor_Mixer_Limit_Output(base_throttle);
     }
-    Position_Loop_Update_Velocity_Target(0U,
-                                         0.0f,
-                                         0.0f,
-                                         &position_target_vx_cms,
-                                         &position_target_vy_cms);
-    Velocity_Loop_Set_Target_Velocity(position_target_vx_cms, position_target_vy_cms);
+    if(Position_Loop_Is_Enabled())
+    {
+        Position_Loop_Set_Enabled(0U);
+    }
+    if(Velocity_Loop_Is_Enabled())
+    {
+        Velocity_Loop_Set_Enabled(0U);
+    }
+    Velocity_Loop_Set_Target_Velocity(0.0f, 0.0f);
     Angle_Loop_Reset_Rate_Cmd_Lpf();
     motor_throttle[0] = manual_output;
     motor_throttle[1] = manual_output;
@@ -787,23 +810,12 @@ static uint8 control_task_handle_manual_mode(void)
     return 1U;
 }
 
-static void control_task_update_angle_mode(uint8 takeoff_active)
+static void control_task_prepare_angle_mode(uint8 takeoff_active)
 {
-    float captured_roll = 0.0f;
-    float captured_pitch = 0.0f;
-    float position_target_vx_cms = 0.0f;
-    float position_target_vy_cms = 0.0f;
-    float velocity_target_roll = 0.0f;
-    float velocity_target_pitch = 0.0f;
-    PMWFlowState_t flow_snap;
-    uint8 velocity_ready;
-
     if(takeoff_active)
     {
         return;
     }
-
-    Flight_Takeoff_Get_Captured_Angles(&captured_roll, &captured_pitch);
 
     if(!Velocity_Loop_Is_Enabled())
     {
@@ -811,24 +823,26 @@ static void control_task_update_angle_mode(uint8 takeoff_active)
         Velocity_Loop_Reset_Runtime();
         Position_Loop_Set_Enabled(1U);
     }
+}
+
+static void control_task_update_position_target(uint8 takeoff_active)
+{
+    float position_target_vx_cms = 0.0f;
+    float position_target_vy_cms = 0.0f;
+    PMWFlowState_t flow_snap;
+
+    if(takeoff_active)
+    {
+        return;
+    }
 
     PMW_Flow_GetState(&flow_snap);
-    velocity_ready = flow_snap.fused_velocity_valid;
-    Position_Loop_Update_Velocity_Target(velocity_ready,
+    Position_Loop_Update_Velocity_Target(flow_snap.fused_velocity_valid,
                                          flow_snap.velocity_x_fused_cms,
                                          flow_snap.velocity_y_fused_cms,
                                          &position_target_vx_cms,
                                          &position_target_vy_cms);
     Velocity_Loop_Set_Target_Velocity(position_target_vx_cms, position_target_vy_cms);
-    Velocity_Loop_Update_Attitude_Target(velocity_ready,
-                                         flow_snap.velocity_x_fused_cms,
-                                         flow_snap.velocity_y_fused_cms,
-                                         captured_roll,
-                                         captured_pitch,
-                                         &velocity_target_roll,
-                                         &velocity_target_pitch);
-    target_angle_roll = velocity_target_roll;
-    target_angle_pitch = velocity_target_pitch;
 
     pos_fusion_r_adc    = 0.0f;
     pos_fusion_r_tof    = 0.0f;
@@ -837,7 +851,33 @@ static void control_task_update_angle_mode(uint8 takeoff_active)
     pos_fusion_fault    = 0U;
 }
 
-static void control_task_update_inner_loops(void)
+static void control_task_update_velocity_target(uint8 takeoff_active)
+{
+    float captured_roll = 0.0f;
+    float captured_pitch = 0.0f;
+    float velocity_target_roll = target_angle_roll;
+    float velocity_target_pitch = target_angle_pitch;
+    PMWFlowState_t flow_snap;
+
+    if(takeoff_active)
+    {
+        return;
+    }
+
+    Flight_Takeoff_Get_Captured_Angles(&captured_roll, &captured_pitch);
+    PMW_Flow_GetState(&flow_snap);
+    Velocity_Loop_Update_Attitude_Target(flow_snap.fused_velocity_valid,
+                                         flow_snap.velocity_x_fused_cms,
+                                         flow_snap.velocity_y_fused_cms,
+                                         captured_roll,
+                                         captured_pitch,
+                                         &velocity_target_roll,
+                                         &velocity_target_pitch);
+    target_angle_roll = velocity_target_roll;
+    target_angle_pitch = velocity_target_pitch;
+}
+
+static void control_task_update_angle_loop(void)
 {
     Angle_Loop_Update(target_angle_roll,
                       target_angle_pitch,
@@ -845,7 +885,10 @@ static void control_task_update_inner_loops(void)
                       current_roll,
                       current_pitch,
                       current_yaw);
+}
 
+static void control_task_update_rate_and_mixer(void)
+{
     Rate_Loop_Update(target_roll_rate,
                      target_pitch_rate,
                      target_yaw_rate,
@@ -867,14 +910,68 @@ static void control_task_update_inner_loops(void)
     }
 }
 
+static void control_scheduler_begin_tick(uint8 *rate_due,
+                                         uint8 *angle_due,
+                                         uint8 *velocity_due,
+                                         uint8 *position_due)
+{
+    uint8 tick = s_control_scheduler_tick;
+
+    *rate_due = (uint8)((tick % RATE_SLOT_DIVISOR) == 0U);
+    *angle_due = (uint8)((tick % ANGLE_SLOT_DIVISOR) == ANGLE_SLOT_PHASE);
+    *velocity_due = (uint8)((tick % VELOCITY_SLOT_DIVISOR) == VELOCITY_SLOT_PHASE);
+    *position_due = (uint8)(tick == POSITION_SLOT_PHASE);
+
+    if(*rate_due) s_rate_slot_count++;
+    if(*angle_due) s_angle_slot_count++;
+    if(*velocity_due) s_velocity_slot_count++;
+    if(*position_due) s_position_slot_count++;
+
+    tick++;
+    s_control_scheduler_tick = (tick >= CONTROL_SCHEDULER_TICKS) ? 0U : tick;
+}
+
+static void control_task_submit_motor_output(void)
+{
+    uint8 output_enabled = (uint8)(MenuMotorTest_GetOutputEnable() || MenuFlyTest_GetOutputEnable());
+
+    FlightRealtime_MotorBegin();
+    MotorHardware_WriteOutput(motor_throttle,
+                              armed,
+                              output_enabled,
+                              MenuMotorTest_IsActive());
+    FlightRealtime_MotorEnd();
+}
+
+static void control_task_finish_cycle(uint8 rate_due)
+{
+    if(emergency_stop_triggered)
+    {
+        clear_motor_throttle_state();
+        MotorHardware_ServiceEmergencyStop();
+        return;
+    }
+
+    if(rate_due)
+    {
+        control_task_submit_motor_output();
+    }
+}
+
 void PIT_Control_Task_250us(void)
 {
     uint8 takeoff_active = 0U;
+    uint8 rate_due;
+    uint8 angle_due;
+    uint8 velocity_due;
+    uint8 position_due;
 
     MotorHardware_InitOnce();
+    control_scheduler_begin_tick(&rate_due, &angle_due, &velocity_due, &position_due);
 
     if(control_task_handle_imu_calibration())
     {
+        control_task_finish_cycle(rate_due);
         return;
     }
 
@@ -882,28 +979,39 @@ void PIT_Control_Task_250us(void)
 
     if(control_task_handle_attitude_safety())
     {
+        control_task_finish_cycle(rate_due);
+        return;
+    }
+
+    if(emergency_stop_triggered)
+    {
+        control_task_finish_cycle(rate_due);
         return;
     }
 
     takeoff_active = Flight_Takeoff_Tick_250us();
 
-    if(control_task_handle_motor_test())
+    if(control_task_handle_motor_test(rate_due))
     {
+        control_task_finish_cycle(rate_due);
         return;
     }
 
-    if(control_task_handle_fly_test())
+    if(control_task_handle_fly_test(angle_due, rate_due))
     {
+        control_task_finish_cycle(rate_due);
         return;
     }
 
     if(control_task_handle_disarmed())
     {
+        control_task_finish_cycle(rate_due);
         return;
     }
 
     if(control_task_handle_takeoff_base_only())
     {
+        control_task_finish_cycle(rate_due);
         return;
     }
 
@@ -911,9 +1019,26 @@ void PIT_Control_Task_250us(void)
 
     if(control_task_handle_manual_mode())
     {
+        control_task_finish_cycle(rate_due);
         return;
     }
 
-    control_task_update_angle_mode(takeoff_active);
-    control_task_update_inner_loops();
+    control_task_prepare_angle_mode(takeoff_active);
+    if(position_due)
+    {
+        control_task_update_position_target(takeoff_active);
+    }
+    if(velocity_due)
+    {
+        control_task_update_velocity_target(takeoff_active);
+    }
+    if(angle_due)
+    {
+        control_task_update_angle_loop();
+    }
+    if(rate_due)
+    {
+        control_task_update_rate_and_mixer();
+    }
+    control_task_finish_cycle(rate_due);
 }

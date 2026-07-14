@@ -6,7 +6,6 @@
 #include "menu/menu_fly_test.h"
 #include "menu/menu_motor_test.h"
 #include "motor_hardware/motor_hardware.h"
-#include "motor_hardware/small_driver_uart_control.h"
 #include <math.h>
 
 volatile uint8 emergency_stop_triggered = 0U;
@@ -188,7 +187,7 @@ void Flight_Runtime_Emergency_StopAt(uint8 reason,
     Position_Loop_Set_Enabled(0U);
     PIT_Demo_Safety_Reset_Angle_Rate_Cmd_Lpf();
     PIT_Demo_Safety_Clear_Motor_Throttle_State();
-    small_driver_force_zero();
+    MotorHardware_ForceEmergencyStop();
 }
 
 void Flight_Runtime_Emergency_Stop(uint8 reason)

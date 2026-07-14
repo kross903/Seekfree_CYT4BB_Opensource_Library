@@ -3,8 +3,6 @@
 small_device_value_struct motor_value;      // 定义通讯参数结构体
 
 #define SMALL_DRIVER_FRAME_LEN          11U
-#define SMALL_DRIVER_SERVICE_PERIOD_US  500U
-
 static uint8 s_pending_frame[SMALL_DRIVER_FRAME_LEN] = {0};
 static uint8 s_pending_valid = 0U;
 static SmallDriverUartDiag s_uart_diag = {0};
@@ -129,7 +127,7 @@ void small_driver_set_duty(int16 motor_duty_1, int16 motor_duty_2, int16 motor_d
     small_driver_queue_frame(motor_value.send_data_buffer);
 }
 
-void small_driver_service_tx(void)
+void small_driver_service_tx(uint16 elapsed_us)
 {
     volatile stc_SCB_t *uart = get_scb_module(SMALL_DRIVER_UART);
     uint32 copied;
@@ -141,7 +139,7 @@ void small_driver_service_tx(void)
 
     if(!Cy_SCB_UART_IsTxComplete(uart))
     {
-        uint32 next_age_us = (uint32)s_uart_diag.pending_age_us + SMALL_DRIVER_SERVICE_PERIOD_US;
+        uint32 next_age_us = (uint32)s_uart_diag.pending_age_us + elapsed_us;
         s_uart_diag.pending_age_us = (uint16)((next_age_us > 0xFFFFU) ? 0xFFFFU : next_age_us);
         if(s_uart_diag.pending_age_us > s_uart_diag.max_pending_age_us)
         {
@@ -263,7 +261,7 @@ void small_driver_uart_init(void)
     small_driver_init();                                                                        // 结构体参数初始化
 
     small_driver_force_zero();                                                                  // 设置0占空比
-    small_driver_service_tx();
+    small_driver_service_tx(0U);
 
     small_driver_get_speed();                                                                   // 获取实时速度数据
 }

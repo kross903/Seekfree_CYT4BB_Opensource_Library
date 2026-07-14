@@ -25,6 +25,75 @@ void PID_Init(PID_Controller *pid, float kp, float ki, float kd,
     pid->integral_limit = int_limit;
     pid->IntegralThreshold = integral_threshold;
     pid->alpha = alpha;
+    pid->reference_dt_s = 0.0f;
+    pid->cached_dt_s = 0.0f;
+    pid->cached_alpha = -1.0f;
+    pid->integral_step_scale = 1.0f;
+    pid->derivative_step_scale = 1.0f;
+    pid->runtime_alpha = alpha;
+}
+
+void PID_SetReferenceDt(PID_Controller *pid, float reference_dt_s)
+{
+    if(pid == NULL)
+    {
+        return;
+    }
+
+    pid->reference_dt_s = (isfinite(reference_dt_s) && reference_dt_s > 0.0f)
+                            ? reference_dt_s
+                            : 0.0f;
+    pid->cached_dt_s = 0.0f;
+    pid->cached_alpha = -1.0f;
+}
+
+static void pid_update_timing_cache(PID_Controller *pid, float dt)
+{
+    float reference_dt_s;
+    float ratio;
+
+    if(!isfinite(dt) || dt <= 0.0f)
+    {
+        dt = (pid->reference_dt_s > 0.0f) ? pid->reference_dt_s : 1.0f;
+    }
+    if((pid->cached_dt_s == dt) && (pid->cached_alpha == pid->alpha))
+    {
+        return;
+    }
+
+    reference_dt_s = (isfinite(pid->reference_dt_s) && pid->reference_dt_s > 0.0f)
+                       ? pid->reference_dt_s
+                       : dt;
+    ratio = dt / reference_dt_s;
+    if(!isfinite(ratio) || ratio <= 0.0f)
+    {
+        ratio = 1.0f;
+    }
+
+    pid->integral_step_scale = ratio;
+    pid->derivative_step_scale = 1.0f / ratio;
+    if(pid->alpha <= 0.0f)
+    {
+        pid->runtime_alpha = 0.0f;
+    }
+    else if(pid->alpha >= 1.0f)
+    {
+        pid->runtime_alpha = 1.0f;
+    }
+    else
+    {
+        pid->runtime_alpha = 1.0f - powf(1.0f - pid->alpha, ratio);
+    }
+    pid->cached_dt_s = dt;
+    pid->cached_alpha = pid->alpha;
+}
+
+void PID_PrepareRuntimeDt(PID_Controller *pid, float runtime_dt_s)
+{
+    if(pid != NULL)
+    {
+        pid_update_timing_cache(pid, runtime_dt_s);
+    }
 }
 
 /*
@@ -37,9 +106,8 @@ float PID_CalculateError(PID_Controller *pid, float error, float dt)
     float integral_factor = 1.0f;
     float raw_derivative = 0.0f;
 
-    (void)dt;
+    pid_update_timing_cache(pid, dt);
 
-    // 当前工程仍按固定周期运行，积分暂不直接乘 dt。
     if(fabsf(error) > 0.0f)
     {
         integral_factor = (fabsf(error) < pid->IntegralThreshold) ? 1.0f
@@ -47,7 +115,7 @@ float PID_CalculateError(PID_Controller *pid, float error, float dt)
     }
 
     // 误差越大，积分缩放越强，保持原工程的积分抑制策略不变。
-    pid->integral += integral_factor * error;
+    pid->integral += integral_factor * error * pid->integral_step_scale;
 
     // 积分限幅
     if(pid->integral > pid->integral_limit)
@@ -60,8 +128,9 @@ float PID_CalculateError(PID_Controller *pid, float error, float dt)
     }
 
     // 微分项采用一阶低通滤波，降低测量噪声带来的尖峰。
-    raw_derivative = error - pid->prev_error;
-    pid->derivative = pid->alpha * raw_derivative + (1.0f - pid->alpha) * pid->derivative;
+    raw_derivative = (error - pid->prev_error) * pid->derivative_step_scale;
+    pid->derivative = pid->runtime_alpha * raw_derivative +
+                      (1.0f - pid->runtime_alpha) * pid->derivative;
 
     // 计算 PID 输出
     output = pid->Kp * error + pid->Ki * pid->integral + pid->Kd * pid->derivative;
@@ -94,5 +163,6 @@ float PID_Calculate(PID_Controller *pid, float target, float current, float dt)
 void PID_Reset(PID_Controller *pid)
 {
     pid->integral = 0.0f;
+    pid->derivative = 0.0f;
     pid->prev_error = 0.0f;
 }

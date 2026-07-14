@@ -15,6 +15,8 @@
 // #define MOTOR_PWM_CH3                  TCPWM_CH10_P05_1
 // #define MOTOR_PWM_CH4                  TCPWM_CH09_P05_0
 #define MOTOR_PWM_DUTY_MIN             2000U
+#define MOTOR_UART_NORMAL_SERVICE_US   1000U
+#define MOTOR_UART_ESTOP_SERVICE_US    250U
 
 // 1  2     4   3
 // 3  4     2   1
@@ -169,7 +171,7 @@ void MotorHardware_WriteOutput(const volatile uint16 motor_throttle[4],
         dshot_set_all_throttle(0U, 0U, 0U, 0U);
 #else
         small_driver_set_duty(0, 0, 0, 0);
-        small_driver_service_tx();
+        small_driver_service_tx(MOTOR_UART_NORMAL_SERVICE_US);
 #endif
         return;
     }
@@ -199,7 +201,46 @@ void MotorHardware_WriteOutput(const volatile uint16 motor_throttle[4],
         throttle_to_uart_duty(output[2]),
         throttle_to_uart_duty(output[3])
     );
-    small_driver_service_tx();
+    small_driver_service_tx(MOTOR_UART_NORMAL_SERVICE_US);
+#endif
+}
+
+void MotorHardware_ForceEmergencyStop(void)
+{
+    if(!motor_pwm_initialized)
+    {
+        return;
+    }
+
+#if MOTOR_OUTPUT_PROTOCOL == 0
+    pwm_set_duty(MOTOR_PWM_CH1, MOTOR_PWM_DUTY_MIN);
+    pwm_set_duty(MOTOR_PWM_CH2, MOTOR_PWM_DUTY_MIN);
+    pwm_set_duty(MOTOR_PWM_CH3, MOTOR_PWM_DUTY_MIN);
+    pwm_set_duty(MOTOR_PWM_CH4, MOTOR_PWM_DUTY_MIN);
+#elif MOTOR_OUTPUT_PROTOCOL == 1
+    dshot_set_all_throttle(0U, 0U, 0U, 0U);
+#else
+    small_driver_force_zero();
+    small_driver_service_tx(0U);
+#endif
+}
+
+void MotorHardware_ServiceEmergencyStop(void)
+{
+    if(!motor_pwm_initialized)
+    {
+        return;
+    }
+
+#if MOTOR_OUTPUT_PROTOCOL == 0
+    pwm_set_duty(MOTOR_PWM_CH1, MOTOR_PWM_DUTY_MIN);
+    pwm_set_duty(MOTOR_PWM_CH2, MOTOR_PWM_DUTY_MIN);
+    pwm_set_duty(MOTOR_PWM_CH3, MOTOR_PWM_DUTY_MIN);
+    pwm_set_duty(MOTOR_PWM_CH4, MOTOR_PWM_DUTY_MIN);
+#elif MOTOR_OUTPUT_PROTOCOL == 1
+    dshot_set_all_throttle(0U, 0U, 0U, 0U);
+#else
+    small_driver_service_tx(MOTOR_UART_ESTOP_SERVICE_US);
 #endif
 }
 

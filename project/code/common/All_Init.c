@@ -5,12 +5,17 @@ bool Send_state = 0;
 
 #define KEY_VOLT_PIT               PIT_CH0
 #define CONTROL_LOOP_PIT           PIT_CH1
-#define MOTOR_OUTPUT_PIT           PIT_CH2
 #define TOF_UPDATE_PIT             PIT_CH11
 #define FLOW_UPDATE_PIT            PIT_CH12
 
 #define BOARD_BUZZER_PIN           P19_4
 #define BOARD_BUZZER_PHASE_TICKS   20U   /* 20 x 5ms = 100ms */
+#define LEGACY_FAST_PID_DT_S       0.00025f
+#define HEIGHT_PID_DT_S            0.010f
+#define RATE_PID_RUNTIME_DT_S       0.001f
+#define ANGLE_PID_RUNTIME_DT_S      0.002f
+#define VELOCITY_PID_RUNTIME_DT_S   0.004f
+#define POSITION_PID_RUNTIME_DT_S   0.020f
 
 typedef enum
 {
@@ -116,6 +121,33 @@ static void init_default_pid_parameters(void)
     PID_Init(&vel_pid_y, 0.80f, 0.000f, 0.0f, 120.0f, 30.0f, 10000.0f, 0.8f);
     PID_Init(&pos_pid_x, 0.0f, 0.00f, 0.0f, 100.0f, 30.0f, 10000.0f, 1.0f);
     PID_Init(&pos_pid_y, 0.0f, 0.00f, 0.0f, 100.0f, 30.0f, 10000.0f, 1.0f);
+
+    PID_SetReferenceDt(&gyro_pid_roll, LEGACY_FAST_PID_DT_S);
+    PID_SetReferenceDt(&gyro_pid_pitch, LEGACY_FAST_PID_DT_S);
+    PID_SetReferenceDt(&gyro_pid_yaw, LEGACY_FAST_PID_DT_S);
+    PID_SetReferenceDt(&angle_pid_roll, LEGACY_FAST_PID_DT_S);
+    PID_SetReferenceDt(&angle_pid_pitch, LEGACY_FAST_PID_DT_S);
+    PID_SetReferenceDt(&angle_pid_yaw, LEGACY_FAST_PID_DT_S);
+    PID_SetReferenceDt(&vel_pid_x, LEGACY_FAST_PID_DT_S);
+    PID_SetReferenceDt(&vel_pid_y, LEGACY_FAST_PID_DT_S);
+    PID_SetReferenceDt(&pos_pid_x, LEGACY_FAST_PID_DT_S);
+    PID_SetReferenceDt(&pos_pid_y, LEGACY_FAST_PID_DT_S);
+    PID_SetReferenceDt(&HeightPID, HEIGHT_PID_DT_S);
+    PID_SetReferenceDt(&HeightVelPID, HEIGHT_PID_DT_S);
+
+    PID_PrepareRuntimeDt(&gyro_pid_roll, RATE_PID_RUNTIME_DT_S);
+    PID_PrepareRuntimeDt(&gyro_pid_pitch, RATE_PID_RUNTIME_DT_S);
+    PID_PrepareRuntimeDt(&gyro_pid_yaw, RATE_PID_RUNTIME_DT_S);
+    PID_PrepareRuntimeDt(&angle_pid_roll, ANGLE_PID_RUNTIME_DT_S);
+    PID_PrepareRuntimeDt(&angle_pid_pitch, ANGLE_PID_RUNTIME_DT_S);
+    PID_PrepareRuntimeDt(&angle_pid_yaw, ANGLE_PID_RUNTIME_DT_S);
+    PID_PrepareRuntimeDt(&vel_pid_x, VELOCITY_PID_RUNTIME_DT_S);
+    PID_PrepareRuntimeDt(&vel_pid_y, VELOCITY_PID_RUNTIME_DT_S);
+    PID_PrepareRuntimeDt(&pos_pid_x, POSITION_PID_RUNTIME_DT_S);
+    PID_PrepareRuntimeDt(&pos_pid_y, POSITION_PID_RUNTIME_DT_S);
+    PID_PrepareRuntimeDt(&HeightPID, HEIGHT_PID_DT_S);
+    PID_PrepareRuntimeDt(&HeightVelPID, HEIGHT_PID_DT_S);
+    Angle_Loop_InitTiming();
 }
 
     /*
@@ -141,7 +173,7 @@ static void init_default_pid_parameters(void)
     PID_Init(&pos_pid_x, 1.0f, 0.00f, 0.0f, 100.0f, 30.0f, 10000.0f, 1.0f);
     PID_Init(&pos_pid_y, 1.0f, 0.00f, 0.0f, 100.0f, 30.0f, 10000.0f, 1.0f);
 }
-     * 光流速度闭环 PID @ 4kHz 控制环。
+     * 光流速度闭环 PID @ 250Hz 软件分频。
       * 反馈: 光流 + ICM 融合后的机体水平速度 velocity_x/y_fused_cms (cm/s)。
      * 输出: 水平加速度指令 ax/ay_cmd (cm/s^2)，再换算成姿态修正角。
      * - vel_pid_x: 前向速度 (vx) -> ax_cmd -> pitch 修正
@@ -167,7 +199,6 @@ static void init_periodic_interrupts(void)
 {
     pit_us_init(KEY_VOLT_PIT, 5000);      // 5ms
     pit_us_init(CONTROL_LOOP_PIT, 250);   // 4kHz control
-    pit_us_init(MOTOR_OUTPUT_PIT, 500);   // 2kHz PWM update
     pit_us_init(FLOW_UPDATE_PIT, FLOW_SENSOR_UPDATE_US);
     pit_us_init(TOF_UPDATE_PIT, 10000);   // 100Hz TOF poll (sensor 出数率由 dl1b 内部配置决定；提高轮询率只降低消费延迟)
 }
