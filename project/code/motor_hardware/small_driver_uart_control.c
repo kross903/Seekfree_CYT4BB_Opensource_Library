@@ -2,10 +2,175 @@
 
 small_device_value_struct motor_value;      // 定义通讯参数结构体
 
-#define SMALL_DRIVER_FRAME_LEN          11U
 static uint8 s_pending_frame[SMALL_DRIVER_FRAME_LEN] = {0};
 static uint8 s_pending_valid = 0U;
 static SmallDriverUartDiag s_uart_diag = {0};
+static SmallDriverEscStatus s_esc_status = {0};
+static SmallDriverEscFaultEvent s_esc_fault_event = {0};
+static uint8 s_esc_fault_event_pending = 0U;
+static uint8 s_esc_event_sequence_synced = 0U;
+static uint8 s_esc_last_event_sequence = 0U;
+static uint8 s_esc_had_active_fault = 0U;
+
+static uint8 small_driver_active_fault_mask(const uint8 active_fault[4])
+{
+    uint8 mask = 0U;
+    uint8 i;
+
+    for(i = 0U; i < 4U; i++)
+    {
+        if(active_fault[i] != (uint8)SMALL_DRIVER_ESC_FAULT_NONE)
+        {
+            mask |= (uint8)(1U << i);
+        }
+    }
+    return mask;
+}
+
+static void small_driver_publish_fault_event(uint8 sequence, uint8 fault_code, uint8 motor_mask)
+{
+    if(!s_esc_fault_event_pending &&
+       fault_code > (uint8)SMALL_DRIVER_ESC_FAULT_NONE &&
+       fault_code <= (uint8)SMALL_DRIVER_ESC_FAULT_LOW_SPEED_RESTART &&
+       motor_mask != 0U)
+    {
+        s_esc_fault_event.sequence = sequence;
+        s_esc_fault_event.fault_code = fault_code;
+        s_esc_fault_event.motor_mask = (uint8)(motor_mask & 0x0FU);
+        s_esc_fault_event_pending = 1U;
+    }
+}
+
+static void small_driver_parse_speed_frame(const uint8 frame[SMALL_DRIVER_FRAME_LEN])
+{
+    uint8 i;
+
+    for(i = 0U; i < 4U; i++)
+    {
+        uint16 raw_speed = (uint16)(((uint16)frame[i * 2U + 2U] << 8) |
+                                    (uint16)frame[i * 2U + 3U]);
+        motor_value.receive_speed_data[i] = (int16)raw_speed;
+    }
+    s_esc_status.speed_frame_count++;
+}
+
+static void small_driver_parse_status_frame(const uint8 frame[SMALL_DRIVER_FRAME_LEN])
+{
+    uint8 i;
+    uint8 active_mask;
+    uint8 first_active_code = 0U;
+    uint8 first_active_mask = 0U;
+
+    if(frame[2] != SMALL_DRIVER_ESC_STATUS_VERSION)
+    {
+        s_esc_status.unknown_frame_count++;
+        return;
+    }
+
+    s_esc_status.protocol_version = frame[2];
+    s_esc_status.event_sequence = frame[3];
+    s_esc_status.last_fault_code = frame[4];
+    s_esc_status.last_fault_motor_mask = (uint8)(frame[5] & 0x0FU);
+    for(i = 0U; i < 4U; i++)
+    {
+        s_esc_status.active_fault[i] = frame[i + 6U];
+    }
+    s_esc_status.valid = 1U;
+    s_esc_status.stale = 0U;
+    s_esc_status.age_ms = 0U;
+    s_esc_status.status_frame_count++;
+
+    active_mask = small_driver_active_fault_mask(s_esc_status.active_fault);
+    if(!s_esc_event_sequence_synced)
+    {
+        s_esc_event_sequence_synced = 1U;
+        s_esc_last_event_sequence = frame[3];
+        if(active_mask != 0U)
+        {
+            for(i = 0U; i < 4U; i++)
+            {
+                if(s_esc_status.active_fault[i] != 0U)
+                {
+                    first_active_code = s_esc_status.active_fault[i];
+                    break;
+                }
+            }
+            for(i = 0U; i < 4U; i++)
+            {
+                if(s_esc_status.active_fault[i] == first_active_code)
+                {
+                    first_active_mask |= (uint8)(1U << i);
+                }
+            }
+            small_driver_publish_fault_event(frame[3], first_active_code, first_active_mask);
+        }
+    }
+    else if(frame[4] != 0U && frame[3] != s_esc_last_event_sequence)
+    {
+        s_esc_last_event_sequence = frame[3];
+        small_driver_publish_fault_event(frame[3], frame[4], frame[5]);
+    }
+
+    if(active_mask != 0U && !s_esc_had_active_fault)
+    {
+        for(i = 0U; i < 4U; i++)
+        {
+            if(s_esc_status.active_fault[i] != 0U)
+            {
+                first_active_code = s_esc_status.active_fault[i];
+                break;
+            }
+        }
+        for(i = 0U; i < 4U; i++)
+        {
+            if(s_esc_status.active_fault[i] == first_active_code)
+            {
+                first_active_mask |= (uint8)(1U << i);
+            }
+        }
+        small_driver_publish_fault_event(frame[3], first_active_code, first_active_mask);
+    }
+    s_esc_had_active_fault = (uint8)(active_mask != 0U);
+}
+
+static void small_driver_dispatch_rx_frame(const uint8 frame[SMALL_DRIVER_FRAME_LEN])
+{
+    if(frame[1] == SMALL_DRIVER_SPEED_FUNCTION)
+    {
+        small_driver_parse_speed_frame(frame);
+    }
+    else if(frame[1] == SMALL_DRIVER_ESC_STATUS_FUNCTION)
+    {
+        small_driver_parse_status_frame(frame);
+    }
+    else
+    {
+        s_esc_status.unknown_frame_count++;
+    }
+}
+
+static void small_driver_resync_rx_buffer(void)
+{
+    uint8 next_start = 1U;
+
+    while(next_start < SMALL_DRIVER_FRAME_LEN &&
+          motor_value.receive_data_buffer[next_start] != 0xA5U)
+    {
+        next_start++;
+    }
+    if(next_start < SMALL_DRIVER_FRAME_LEN)
+    {
+        uint8 remaining = (uint8)(SMALL_DRIVER_FRAME_LEN - next_start);
+        memmove(motor_value.receive_data_buffer,
+                &motor_value.receive_data_buffer[next_start],
+                remaining);
+        motor_value.receive_data_count = remaining;
+    }
+    else
+    {
+        motor_value.receive_data_count = 0U;
+    }
+}
 
 static void small_driver_build_duty_frame(uint8 frame[SMALL_DRIVER_FRAME_LEN],
                                           int16 motor_duty_1,
@@ -59,51 +224,41 @@ static void small_driver_queue_frame(const uint8 frame[SMALL_DRIVER_FRAME_LEN])
 //-------------------------------------------------------------------------------------------------------------------
 void uart_control_callback(void)
 {
-    uint8 receive_data;                                                                     // 定义临时变量
+    uint8 receive_data;
 
-    if(uart_query_byte(SMALL_DRIVER_UART, &receive_data))                                   // 接收串口数据
+    while(uart_query_byte(SMALL_DRIVER_UART, &receive_data))
     {
-        if(receive_data == 0xA5 && motor_value.receive_data_buffer[0] != 0xA5)              // 判断是否收到帧头 并且 当前接收内容中是否正确包含帧头
+        uint8 i;
+
+        if(motor_value.receive_data_count == 0U)
         {
-            motor_value.receive_data_count = 0;                                             // 未收到帧头或者未正确包含帧头则重新接收
+            if(receive_data != 0xA5U)
+            {
+                continue;
+            }
+            motor_value.receive_data_buffer[0] = receive_data;
+            motor_value.receive_data_count = 1U;
+            continue;
         }
 
-        motor_value.receive_data_buffer[motor_value.receive_data_count ++] = receive_data;  // 保存串口数据
-
-        if(motor_value.receive_data_count >= 11)                                            // 判断是否接收到指定数量的数据
+        motor_value.receive_data_buffer[motor_value.receive_data_count++] = receive_data;
+        if(motor_value.receive_data_count >= SMALL_DRIVER_FRAME_LEN)
         {
-            if(motor_value.receive_data_buffer[0] == 0xA5)                                  // 判断帧头是否正确
+            motor_value.sum_check_data = 0U;
+            for(i = 0U; i < 10U; i++)
             {
-                motor_value.sum_check_data = 0;                                             // 清除校验位数据
+                motor_value.sum_check_data += motor_value.receive_data_buffer[i];
+            }
 
-                for(int i = 0; i < 10; i ++)
-                {
-                    motor_value.sum_check_data += motor_value.receive_data_buffer[i];       // 重新计算校验位
-                }
-
-                if(motor_value.sum_check_data == motor_value.receive_data_buffer[10])       // 校验数据准确性
-                {
-                    for(int i = 0; i < 4; i ++)
-                    {
-                        motor_value.receive_speed_data[i]   = (((int)motor_value.receive_data_buffer[i * 2 + 2] << 8) | (int)motor_value.receive_data_buffer[i * 2 + 3]);
-                    }
-
-                    motor_value.receive_data_count = 0;                                     // 清除缓冲区计数值
-
-                    memset(motor_value.receive_data_buffer, 0, 11);                         // 清除缓冲区数据
-                }
-                else
-                {
-                    motor_value.receive_data_count = 0;                                     // 清除缓冲区计数值
-
-                    memset(motor_value.receive_data_buffer, 0, 11);                         // 清除缓冲区数据
-                }
+            if(motor_value.sum_check_data == motor_value.receive_data_buffer[10])
+            {
+                small_driver_dispatch_rx_frame(motor_value.receive_data_buffer);
+                motor_value.receive_data_count = 0U;
             }
             else
             {
-                motor_value.receive_data_count = 0;                                         // 清除缓冲区计数值
-
-                memset(motor_value.receive_data_buffer, 0, 11);                             // 清除缓冲区数据
+                s_esc_status.checksum_error_count++;
+                small_driver_resync_rx_buffer();
             }
         }
     }
@@ -186,6 +341,73 @@ void small_driver_get_diag(SmallDriverUartDiag *diag)
     }
 }
 
+void small_driver_get_esc_status(SmallDriverEscStatus *status)
+{
+    if(status != NULL)
+    {
+        uint32 irq_state = __get_PRIMASK();
+
+        __disable_irq();
+        *status = s_esc_status;
+        if(irq_state == 0U)
+        {
+            __enable_irq();
+        }
+    }
+}
+
+uint8 small_driver_take_fault_event(SmallDriverEscFaultEvent *event)
+{
+    uint32 irq_state = __get_PRIMASK();
+    uint8 available;
+
+    __disable_irq();
+    available = s_esc_fault_event_pending;
+    if(available)
+    {
+        if(event != NULL)
+        {
+            *event = s_esc_fault_event;
+        }
+        s_esc_fault_event_pending = 0U;
+    }
+    if(irq_state == 0U)
+    {
+        __enable_irq();
+    }
+    return available;
+}
+
+uint8 small_driver_esc_has_active_fault(void)
+{
+    uint32 irq_state = __get_PRIMASK();
+    uint8 active;
+
+    __disable_irq();
+    active = (uint8)(small_driver_active_fault_mask(s_esc_status.active_fault) != 0U);
+    if(irq_state == 0U)
+    {
+        __enable_irq();
+    }
+    return active;
+}
+
+void small_driver_tick_5ms(void)
+{
+    if(s_esc_status.valid)
+    {
+        if(s_esc_status.age_ms <= (uint16)(0xFFFFU - 5U))
+        {
+            s_esc_status.age_ms = (uint16)(s_esc_status.age_ms + 5U);
+        }
+        else
+        {
+            s_esc_status.age_ms = 0xFFFFU;
+        }
+        s_esc_status.stale = (uint8)(s_esc_status.age_ms >= SMALL_DRIVER_ESC_STATUS_STALE_MS);
+    }
+}
+
 //-------------------------------------------------------------------------------------------------------------------
 // 函数简介     无刷驱动 获取速度信息
 // 参数说明     void
@@ -241,7 +463,13 @@ void small_driver_init(void)
     motor_value.sum_check_data              = 0;
     memset(s_pending_frame, 0, sizeof(s_pending_frame));
     memset(&s_uart_diag, 0, sizeof(s_uart_diag));
+    memset(&s_esc_status, 0, sizeof(s_esc_status));
+    memset(&s_esc_fault_event, 0, sizeof(s_esc_fault_event));
     s_pending_valid = 0U;
+    s_esc_fault_event_pending = 0U;
+    s_esc_event_sequence_synced = 0U;
+    s_esc_last_event_sequence = 0U;
+    s_esc_had_active_fault = 0U;
 }
 
 

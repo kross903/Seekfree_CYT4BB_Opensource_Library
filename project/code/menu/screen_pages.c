@@ -1,5 +1,6 @@
 #include "screen_pages.h"
 #include "common/project_headfile.h"
+#include "motor_hardware/small_driver_uart_control.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -385,6 +386,9 @@ typedef struct
     float fused_height_cm;
     float fused_velocity_cms;
     uint32 imu_fault_mask;
+    uint8 esc_status_valid;
+    uint8 esc_status_stale;
+    uint8 esc_active_fault;
     uint8 takeoff_state;
     float takeoff_progress;
     FlightTakeoffDiag takeoff_diag;
@@ -450,6 +454,8 @@ static uint16 ui_monitor_hint_color(uint8 armed,
 
 static void ui_monitor_fill_view_hud(const MonitorRuntimeSnapshot *snapshot, MonitorViewHudData *data)
 {
+    SmallDriverEscStatus esc_status;
+
     if(snapshot == NULL || data == NULL)
     {
         return;
@@ -487,6 +493,10 @@ static void ui_monitor_fill_view_hud(const MonitorRuntimeSnapshot *snapshot, Mon
     data->fused_height_cm = snapshot->fused_height_cm;
     data->fused_velocity_cms = snapshot->fused_velocity_cms;
     data->imu_fault_mask = snapshot->imu_fault_mask;
+    small_driver_get_esc_status(&esc_status);
+    data->esc_status_valid = esc_status.valid;
+    data->esc_status_stale = esc_status.stale;
+    data->esc_active_fault = small_driver_esc_has_active_fault();
     data->takeoff_state = snapshot->takeoff_state;
     data->takeoff_progress = Flight_Takeoff_Get_Progress();
     Flight_Takeoff_GetDiag(&data->takeoff_diag);
@@ -513,7 +523,7 @@ static void ui_monitor_draw_view_layout(void)
     ips200_show_string(0U, UI_MONITOR_HEIGHT_Y, "ROLL:");
     ips200_show_string(120U, UI_MONITOR_HEIGHT_Y, "PITCH:");
     ips200_show_string(0U, UI_MONITOR_IR_Y, "BCN:");
-    ips200_show_string(120U, UI_MONITOR_IR_Y, "IMU:");
+    ips200_show_string(120U, UI_MONITOR_IR_Y, "I/E:");
     ips200_set_color(RGB565_WHITE, RGB565_BLACK);
 }
 
@@ -598,6 +608,9 @@ static void ui_monitor_draw_takeoff_diag(const MonitorViewHudData *data)
 
 static void ui_monitor_draw_view_hud(const MonitorViewHudData *data)
 {
+    const char *health_text;
+    uint16 health_color;
+
     if(data == NULL)
     {
         return;
@@ -635,11 +648,27 @@ static void ui_monitor_draw_view_hud(const MonitorViewHudData *data)
     ips200_show_float(UI_MONITOR_LEFT_VALUE_X, UI_MONITOR_HEIGHT_Y, data->roll, 4U, 1U);
     ips200_show_float(UI_MONITOR_RIGHT_VALUE_X, UI_MONITOR_HEIGHT_Y, data->pitch, 4U, 1U);
     ips200_show_int(UI_MONITOR_LEFT_VALUE_X, UI_MONITOR_IR_Y, data->beacon_count, 2U);
-    ui_show_padded_text(UI_MONITOR_RIGHT_VALUE_X,
-                        UI_MONITOR_IR_Y,
-                        ((data->imu_fault_mask & ICM_HEALTH_CRITICAL_FAULT_MASK) == 0U) ? "OK" : "BAD",
-                        4U,
-                        ((data->imu_fault_mask & ICM_HEALTH_CRITICAL_FAULT_MASK) == 0U) ? RGB565_GREEN : RGB565_RED);
+    if((data->imu_fault_mask & ICM_HEALTH_CRITICAL_FAULT_MASK) != 0U || data->esc_active_fault)
+    {
+        health_text = ((data->imu_fault_mask & ICM_HEALTH_CRITICAL_FAULT_MASK) != 0U) ? "BAD/--" : "OK/FLT";
+        health_color = RGB565_RED;
+    }
+    else if(!data->esc_status_valid)
+    {
+        health_text = "OK/--";
+        health_color = RGB565_YELLOW;
+    }
+    else if(data->esc_status_stale)
+    {
+        health_text = "OK/ST";
+        health_color = RGB565_YELLOW;
+    }
+    else
+    {
+        health_text = "OK/OK";
+        health_color = RGB565_GREEN;
+    }
+    ui_show_padded_text(UI_MONITOR_RIGHT_VALUE_X, UI_MONITOR_IR_Y, health_text, 7U, health_color);
     ips200_set_color(RGB565_WHITE, RGB565_BLACK);
     ui_monitor_draw_takeoff_diag(data);
     ui_show_padded_text(0U, UI_MONITOR_HINT_TOP_Y, data->hint_top_text, 28U, data->hint_color);

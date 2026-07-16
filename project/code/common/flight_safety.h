@@ -15,6 +15,7 @@
 #define EMERGENCY_STOP_REASON_INVALID_CONTROL 5
 #define EMERGENCY_STOP_REASON_TAKEOFF_TOF     6
 #define EMERGENCY_STOP_REASON_YAW_SPIN        7
+#define EMERGENCY_STOP_REASON_ESC_FAULT       8
 
 #define FLIGHT_ESTOP_REARM_INHIBIT_MS          2000U
 
@@ -34,11 +35,13 @@ extern volatile uint8 emergency_stop_reason;
 extern int low_voltage_protect_flag;
 
 uint8 Flight_Safety_Check_Attitude(void);
+uint8 Flight_Safety_Check_Esc(void);
 uint8 Flight_Safety_Can_Arm(FlightArmRejectReason *reason);
 void Flight_Safety_Update_Battery_Warning(void);
 void Flight_Safety_Tick_5ms(void);
 uint16 Flight_Safety_GetRearmInhibitRemainingMs(void);
 void Flight_Safety_ResetYawSpinMonitor(void);
+const char *Flight_Safety_GetEscFaultText(void);
 
 void Flight_Runtime_Emergency_Stop(uint8 reason);
 void Flight_Runtime_Emergency_StopAt(uint8 reason,

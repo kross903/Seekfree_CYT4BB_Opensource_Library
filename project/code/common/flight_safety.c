@@ -6,7 +6,9 @@
 #include "menu/menu_fly_test.h"
 #include "menu/menu_motor_test.h"
 #include "motor_hardware/motor_hardware.h"
+#include "motor_hardware/small_driver_uart_control.h"
 #include <math.h>
+#include <stdio.h>
 
 volatile uint8 emergency_stop_triggered = 0U;
 volatile uint8 emergency_stop_reason = EMERGENCY_STOP_REASON_NONE;
@@ -21,6 +23,129 @@ int low_voltage_protect_flag = 0;
 
 static volatile uint16 s_rearm_inhibit_ticks = 0U;
 static uint16 s_yaw_spin_ticks = 0U;
+static char s_esc_estop_text[32] = "ESC FAULT";
+static char s_esc_active_text[32] = "ESC FAULT";
+
+static const char *flight_safety_esc_fault_name(uint8 fault_code)
+{
+    switch((SmallDriverEscFaultCode)fault_code)
+    {
+        case SMALL_DRIVER_ESC_FAULT_VOLTAGE:          return "VOLTAGE";
+        case SMALL_DRIVER_ESC_FAULT_LOCKED:           return "LOCKED";
+        case SMALL_DRIVER_ESC_FAULT_DISTURB:          return "DISTURB";
+        case SMALL_DRIVER_ESC_FAULT_START_FAIL:       return "START FAIL";
+        case SMALL_DRIVER_ESC_FAULT_TEMPERATURE_LOW:  return "TEMP LOW";
+        case SMALL_DRIVER_ESC_FAULT_TEMPERATURE_HIGH: return "TEMP HIGH";
+        case SMALL_DRIVER_ESC_FAULT_OVER_CURRENT:     return "OVERCURRENT";
+        case SMALL_DRIVER_ESC_FAULT_LOW_SPEED_RESTART:return "LOW SPEED";
+        case SMALL_DRIVER_ESC_FAULT_NONE:
+        default:                                      return "UNKNOWN";
+    }
+}
+
+static uint8 flight_safety_first_motor(uint8 motor_mask)
+{
+    uint8 i;
+
+    for(i = 0U; i < 4U; i++)
+    {
+        if((motor_mask & (uint8)(1U << i)) != 0U)
+        {
+            return i;
+        }
+    }
+    return 0U;
+}
+
+static void flight_safety_format_esc_fault(char *text,
+                                           uint32 text_size,
+                                           uint8 fault_code,
+                                           uint8 motor_mask)
+{
+    const char *name = flight_safety_esc_fault_name(fault_code);
+    uint8 board_fault = (uint8)(fault_code == SMALL_DRIVER_ESC_FAULT_VOLTAGE ||
+                                fault_code == SMALL_DRIVER_ESC_FAULT_TEMPERATURE_LOW ||
+                                fault_code == SMALL_DRIVER_ESC_FAULT_TEMPERATURE_HIGH ||
+                                fault_code == SMALL_DRIVER_ESC_FAULT_OVER_CURRENT);
+
+    if(board_fault)
+    {
+        snprintf(text, text_size, "ESC BOARD %s", name);
+    }
+    else if((motor_mask & (uint8)(motor_mask - 1U)) == 0U && motor_mask != 0U)
+    {
+        snprintf(text,
+                 text_size,
+                 "ESC M%u %s",
+                 (unsigned int)(flight_safety_first_motor(motor_mask) + 1U),
+                 name);
+    }
+    else
+    {
+        snprintf(text, text_size, "ESC MULTI %s", name);
+    }
+}
+
+const char *Flight_Safety_GetEscFaultText(void)
+{
+    SmallDriverEscStatus status;
+    uint8 first_code = 0U;
+    uint8 motor_mask = 0U;
+    uint8 i;
+
+    small_driver_get_esc_status(&status);
+    for(i = 0U; i < 4U; i++)
+    {
+        if(status.active_fault[i] != 0U)
+        {
+            first_code = status.active_fault[i];
+            break;
+        }
+    }
+    if(first_code != 0U)
+    {
+        for(i = 0U; i < 4U; i++)
+        {
+            if(status.active_fault[i] == first_code)
+            {
+                motor_mask |= (uint8)(1U << i);
+            }
+        }
+        flight_safety_format_esc_fault(s_esc_active_text,
+                                       sizeof(s_esc_active_text),
+                                       first_code,
+                                       motor_mask);
+        return s_esc_active_text;
+    }
+    return NULL;
+}
+
+uint8 Flight_Safety_Check_Esc(void)
+{
+    SmallDriverEscFaultEvent event;
+    uint8 output_active = (uint8)(armed ||
+                                  MenuMotorTest_GetOutputEnable() ||
+                                  MenuFlyTest_GetOutputEnable());
+
+    if(!small_driver_take_fault_event(&event))
+    {
+        return 0U;
+    }
+    if(!output_active || emergency_stop_triggered)
+    {
+        return 0U;
+    }
+
+    flight_safety_format_esc_fault(s_esc_estop_text,
+                                   sizeof(s_esc_estop_text),
+                                   event.fault_code,
+                                   event.motor_mask);
+    Flight_Runtime_Emergency_StopAt(EMERGENCY_STOP_REASON_ESC_FAULT,
+                                    s_esc_estop_text,
+                                    __FILE__,
+                                    __LINE__);
+    return 1U;
+}
 
 void Flight_Safety_ResetYawSpinMonitor(void)
 {
@@ -115,6 +240,10 @@ uint8 Flight_Safety_Can_Arm(FlightArmRejectReason *reason)
     {
         reject_reason = FLIGHT_ARM_REJECT_MOTOR_NOT_READY;
     }
+    else if(small_driver_esc_has_active_fault())
+    {
+        reject_reason = FLIGHT_ARM_REJECT_MOTOR_NOT_READY;
+    }
 
     if(reason != NULL)
     {
@@ -133,6 +262,7 @@ void Flight_Safety_Update_Battery_Warning(void)
 
 void Flight_Safety_Tick_5ms(void)
 {
+    small_driver_tick_5ms();
     if(s_rearm_inhibit_ticks > 0U)
     {
         s_rearm_inhibit_ticks--;
@@ -155,6 +285,7 @@ static const char *flight_safety_estop_reason_text(uint8 reason)
         case EMERGENCY_STOP_REASON_INVALID_CONTROL: return "ESTOP INVALID CTRL";
         case EMERGENCY_STOP_REASON_TAKEOFF_TOF:     return "ESTOP TAKEOFF TOF";
         case EMERGENCY_STOP_REASON_YAW_SPIN:        return "ESTOP YAW SPIN";
+        case EMERGENCY_STOP_REASON_ESC_FAULT:       return "ESTOP ESC FAULT";
         case EMERGENCY_STOP_REASON_NONE:
         default:                                    return "ESTOP UNKNOWN";
     }
@@ -171,7 +302,8 @@ void Flight_Runtime_Emergency_StopAt(uint8 reason,
     emergency_stop_triggered = 1U;
     emergency_stop_reason = reason;
     if(reason == EMERGENCY_STOP_REASON_MANUAL_BUTTON ||
-       reason == EMERGENCY_STOP_REASON_YAW_SPIN)
+       reason == EMERGENCY_STOP_REASON_YAW_SPIN ||
+       reason == EMERGENCY_STOP_REASON_ESC_FAULT)
     {
         s_rearm_inhibit_ticks = FLIGHT_ESTOP_REARM_INHIBIT_TICKS;
     }
@@ -198,6 +330,11 @@ void Flight_Runtime_Emergency_Stop(uint8 reason)
 uint8 Flight_Runtime_Clear_Emergency_Stop_Latch(void)
 {
     if(s_rearm_inhibit_ticks > 0U)
+    {
+        return 0U;
+    }
+    if(emergency_stop_reason == EMERGENCY_STOP_REASON_ESC_FAULT &&
+       small_driver_esc_has_active_fault())
     {
         return 0U;
     }

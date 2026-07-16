@@ -969,6 +969,12 @@ void PIT_Control_Task_250us(void)
     MotorHardware_InitOnce();
     control_scheduler_begin_tick(&rate_due, &angle_due, &velocity_due, &position_due);
 
+    if(Flight_Safety_Check_Esc())
+    {
+        control_task_finish_cycle(rate_due);
+        return;
+    }
+
     if(control_task_handle_imu_calibration())
     {
         control_task_finish_cycle(rate_due);
