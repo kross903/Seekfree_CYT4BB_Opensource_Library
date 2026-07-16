@@ -320,15 +320,6 @@ static uint8 check_fly_test_attitude_safety(void)
                    (current_pitch < -FLY_TEST_ATTITUDE_SAFE_DEG));
 }
 
-static uint8 check_menu_test_attitude_safety(void)
-{
-    return (uint8)(!isfinite(current_roll) || !isfinite(current_pitch) ||
-                   (current_roll > SAFE_MAX_ANGLE_ROLL) ||
-                   (current_roll < -SAFE_MAX_ANGLE_ROLL) ||
-                   (current_pitch > SAFE_MAX_ANGLE_PITCH) ||
-                   (current_pitch < -SAFE_MAX_ANGLE_PITCH));
-}
-
 static float limit_fly_test_attitude_output(float output)
 {
     if(output > FLY_TEST_ATTITUDE_OUTPUT_LIMIT)
@@ -613,7 +604,7 @@ static uint8 control_task_handle_motor_test(uint8 rate_due)
         return 0U;
     }
 
-    if(emergency_stop_triggered || check_menu_test_attitude_safety())
+    if(emergency_stop_triggered)
     {
         MenuMotorTest_SetOutputEnable(0U);
         Angle_Loop_Reset_Rate_Cmd_Lpf();
@@ -975,6 +966,12 @@ void PIT_Control_Task_250us(void)
         return;
     }
 
+    if(control_task_handle_motor_test(rate_due))
+    {
+        control_task_finish_cycle(rate_due);
+        return;
+    }
+
     if(control_task_handle_imu_calibration())
     {
         control_task_finish_cycle(rate_due);
@@ -996,12 +993,6 @@ void PIT_Control_Task_250us(void)
     }
 
     takeoff_active = Flight_Takeoff_Tick_250us();
-
-    if(control_task_handle_motor_test(rate_due))
-    {
-        control_task_finish_cycle(rate_due);
-        return;
-    }
 
     if(control_task_handle_fly_test(angle_due, rate_due))
     {

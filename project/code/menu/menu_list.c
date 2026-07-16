@@ -102,10 +102,6 @@ void icm_init_menu()
 #define VISION_VIEW_SNAPSHOT_WAIT_TICKS 120U
 #define VISION_VIEW_SNAPSHOT_WAIT_MS    5U
 
-#define MOTOR_TEST_CONFIRM_IDLE 0U
-#define MOTOR_TEST_CONFIRM_WAIT 1U
-#define MOTOR_TEST_CONFIRM_ON   2U
-
 static void test_page_clear_line(uint16 y)
 {
     ips200_set_color(RGB565_WHITE, RGB565_BLACK);
@@ -192,12 +188,6 @@ static uint8 test_attitude_within_limit(float roll_limit, float pitch_limit)
                    (current_roll >= -roll_limit) &&
                    (current_pitch <= pitch_limit) &&
                    (current_pitch >= -pitch_limit));
-}
-
-static uint8 test_motor_output_safe(void)
-{
-    return (uint8)((!emergency_stop_triggered) &&
-                   test_attitude_within_limit(SAFE_MAX_ANGLE_ROLL, SAFE_MAX_ANGLE_PITCH));
 }
 
 static uint8 test_fly_output_safe(void)
@@ -527,73 +517,49 @@ static void fly_test_page(void)
 static void motor_test_page(void)
 {
     static uint8 edit_field = 0U;
-    static uint8 confirm_state = MOTOR_TEST_CONFIRM_IDLE;
     uint8 selected_motor = 0U;
     uint8 output_enable = 0U;
     uint16 throttle = 0U;
     uint16 output_limit = 0U;
     uint16 test_limit = 0U;
-    const char *safe_text = NULL;
 
     if(!Flight_Motor_Test_Is_Active())
     {
         Flight_Motor_Test_Start();
         edit_field = 0U;
-        confirm_state = MOTOR_TEST_CONFIRM_IDLE;
     }
 
     if(key_flag == Button_4)
     {
         Flight_Motor_Test_Stop();
-        confirm_state = MOTOR_TEST_CONFIRM_IDLE;
         return;
     }
 
     selected_motor = Flight_Motor_Test_Get_Selected();
     throttle = Flight_Motor_Test_Get_Throttle();
-    output_enable = Flight_Motor_Test_Get_Output_Enable();
     output_limit = Flight_Motor_Test_Get_Output_Limit();
     test_limit = (MOTOR_TEST_MAX_THROTTLE < output_limit) ? MOTOR_TEST_MAX_THROTTLE : output_limit;
-    if((!test_motor_output_safe() || throttle == 0U) && (output_enable || confirm_state != MOTOR_TEST_CONFIRM_IDLE))
-    {
-        Flight_Motor_Test_Set_Output_Enable(0U);
-        confirm_state = MOTOR_TEST_CONFIRM_IDLE;
-        output_enable = 0U;
-    }
 
     if(key_flag == Button_1)
     {
-        if(confirm_state == MOTOR_TEST_CONFIRM_WAIT)
+        switch(edit_field)
         {
-            Flight_Motor_Test_Set_Output_Enable(0U);
-            confirm_state = MOTOR_TEST_CONFIRM_IDLE;
-        }
-        else
-        {
-            switch(edit_field)
-            {
-                case 0U:
-                    selected_motor = (selected_motor == 0U) ? 3U : (selected_motor - 1U);
-                    Flight_Motor_Test_Set_Selected(selected_motor);
-                    Flight_Motor_Test_Set_Output_Enable(0U);
-                    confirm_state = MOTOR_TEST_CONFIRM_IDLE;
-                    break;
+            case 0U:
+                selected_motor = (selected_motor == 0U) ? 3U : (selected_motor - 1U);
+                Flight_Motor_Test_Set_Selected(selected_motor);
+                break;
 
-                case 1U:
-                    throttle = (throttle > MOTOR_TEST_STEP) ? (throttle - MOTOR_TEST_STEP) : 0U;
-                    Flight_Motor_Test_Set_Throttle(throttle);
-                    Flight_Motor_Test_Set_Output_Enable(0U);
-                    confirm_state = MOTOR_TEST_CONFIRM_IDLE;
-                    break;
+            case 1U:
+                throttle = (throttle > MOTOR_TEST_STEP) ? (throttle - MOTOR_TEST_STEP) : 0U;
+                Flight_Motor_Test_Set_Throttle(throttle);
+                break;
 
-                case 2U:
-                    Flight_Motor_Test_Set_Output_Enable(0U);
-                    confirm_state = MOTOR_TEST_CONFIRM_IDLE;
-                    break;
+            case 2U:
+                Flight_Motor_Test_Set_Output_Enable(0U);
+                break;
 
-                default:
-                    break;
-            }
+            default:
+                break;
         }
         key_flag = 0;
     }
@@ -604,23 +570,15 @@ static void motor_test_page(void)
             case 0U:
                 selected_motor = (selected_motor + 1U) & 0x03U;
                 Flight_Motor_Test_Set_Selected(selected_motor);
-                Flight_Motor_Test_Set_Output_Enable(0U);
-                confirm_state = MOTOR_TEST_CONFIRM_IDLE;
                 break;
 
             case 1U:
                 throttle = (throttle + MOTOR_TEST_STEP > test_limit) ? test_limit : (throttle + MOTOR_TEST_STEP);
                 Flight_Motor_Test_Set_Throttle(throttle);
-                Flight_Motor_Test_Set_Output_Enable(0U);
-                confirm_state = MOTOR_TEST_CONFIRM_IDLE;
                 break;
 
             case 2U:
-                if(test_motor_output_safe() && throttle > 0U && !output_enable)
-                {
-                    confirm_state = MOTOR_TEST_CONFIRM_WAIT;
-                    Flight_Motor_Test_Set_Output_Enable(0U);
-                }
+                Flight_Motor_Test_Set_Output_Enable(1U);
                 break;
 
             default:
@@ -630,52 +588,24 @@ static void motor_test_page(void)
     }
     else if(key_flag == Button_3)
     {
-        if(edit_field == 2U && confirm_state == MOTOR_TEST_CONFIRM_WAIT &&
-           test_motor_output_safe() && throttle > 0U)
-        {
-            Flight_Motor_Test_Set_Output_Enable(1U);
-            confirm_state = MOTOR_TEST_CONFIRM_ON;
-        }
-        else
-        {
-            edit_field = (edit_field + 1U) % 3U;
-            if(edit_field != 2U)
-            {
-                Flight_Motor_Test_Set_Output_Enable(0U);
-                confirm_state = MOTOR_TEST_CONFIRM_IDLE;
-            }
-        }
+        edit_field = (edit_field + 1U) % 3U;
         key_flag = 0;
     }
 
     selected_motor = Flight_Motor_Test_Get_Selected();
     throttle = Flight_Motor_Test_Get_Throttle();
     output_enable = Flight_Motor_Test_Get_Output_Enable();
-    safe_text = test_safety_reason(0U);
 
-    test_page_show_text(TEST_ROW_Y(0U), "KEY:", confirm_state == MOTOR_TEST_CONFIRM_WAIT ? "K3 OK K1 NO" : "K3 FLD K2",
-                        confirm_state == MOTOR_TEST_CONFIRM_WAIT ? RGB565_YELLOW : RGB565_WHITE);
+    test_page_show_text(TEST_ROW_Y(0U), "KEY:",
+                        (edit_field == 2U) ? "K1 OFF K2 ON" : "K1- K2+ K3",
+                        RGB565_WHITE);
     test_page_show_text(TEST_ROW_Y(1U), (edit_field == 0U) ? "> MOTOR:" : "  MOTOR:", "M", RGB565_WHITE);
     ips200_show_int((uint16)(TEST_VALUE_X + 16U), TEST_ROW_Y(1U), (int32)(selected_motor + 1U), 1U);
     test_page_show_int(TEST_ROW_Y(2U), (edit_field == 1U) ? "> THR:" : "  THR:", (int32)throttle, 4U);
     test_page_show_text(TEST_ROW_Y(3U), (edit_field == 2U) ? "> OUT:" : "  OUT:",
                         output_enable ? "ON   " : "OFF  ",
                         output_enable ? RGB565_RED : RGB565_GREEN);
-    test_page_show_text(TEST_ROW_Y(4U), "CONF:",
-                        (confirm_state == MOTOR_TEST_CONFIRM_WAIT) ? "WAIT " :
-                        (confirm_state == MOTOR_TEST_CONFIRM_ON) ? "ON   " : "IDLE ",
-                        confirm_state == MOTOR_TEST_CONFIRM_WAIT ? RGB565_YELLOW :
-                        (confirm_state == MOTOR_TEST_CONFIRM_ON ? RGB565_RED : RGB565_WHITE));
-    test_page_show_text(TEST_ROW_Y(5U), "SAFE:", safe_text,
-                        (safe_text[0] == 'O') ? RGB565_GREEN : RGB565_RED);
-    test_page_show_int(TEST_ROW_Y(6U), "TEST MAX:", (int32)test_limit, 4U);
-    test_page_show_int(TEST_ROW_Y(7U), "OUT LIM:", (int32)output_limit, 4U);
-    test_page_show_int(TEST_ROW_Y(8U), "SCALE:", (int32)MOTOR_OUTPUT_SCALE_MAX, 4U);
-    test_page_show_int(TEST_ROW_Y(9U), "M1 M2:", (int32)motor_throttle[0], 4U);
-    ips200_show_int(TEST_RIGHT_VALUE_X, TEST_ROW_Y(9U), (int32)motor_throttle[1], 4U);
-    test_page_show_int(TEST_ROW_Y(10U), "M3 M4:", (int32)motor_throttle[2], 4U);
-    ips200_show_int(TEST_RIGHT_VALUE_X, TEST_ROW_Y(10U), (int32)motor_throttle[3], 4U);
-    test_page_show_text(TEST_ROW_Y(11U), "PROP:", "REMOVE", RGB565_YELLOW);
+    test_page_show_text(TEST_ROW_Y(5U), "PROP:", "REMOVE", RGB565_YELLOW);
 }
 
 /*

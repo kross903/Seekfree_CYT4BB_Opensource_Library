@@ -44,6 +44,7 @@ typedef struct
     uint32 speed_frame_count;
     uint32 checksum_error_count;
     uint32 unknown_frame_count;
+    uint32 fault_event_count;
     uint16 age_ms;
     uint8 valid;
     uint8 stale;
@@ -51,6 +52,9 @@ typedef struct
     uint8 event_sequence;
     uint8 last_fault_code;
     uint8 last_fault_motor_mask;
+    uint8 last_event_sequence;
+    uint8 last_event_code;
+    uint8 last_event_motor_mask;
     uint8 active_fault[4];
 } SmallDriverEscStatus;
 

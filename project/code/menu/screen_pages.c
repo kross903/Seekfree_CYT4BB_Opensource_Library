@@ -746,6 +746,7 @@ static uint8 screen_monitor_handle_armed_estop_key(void)
 
 static void screen_monitor_start_flight(void)
 {
+    Flight_Safety_ClearEscReportLatch();
     if(!Flight_Runtime_Clear_Emergency_Stop_Latch())
     {
         Flight_Takeoff_RecordStopAt("ESTOP LOCK ACTIVE", __FILE__, __LINE__);

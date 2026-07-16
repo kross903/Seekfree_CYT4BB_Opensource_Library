@@ -20,6 +20,7 @@
 #define VOFA_PACKET_QUEUE_DEPTH    4
 #define VOFA_LOOP_OVERRUN_US       20000.0f
 #define VOFA_DWT_LAR_UNLOCK        0xC5ACCE55UL
+#define VOFA_ESC_DIAG_PERIOD_US    50000UL
 
 static uint8 uart_get_data[VOFA_PACKET_MAX_LEN];
 static uint8 fifo_get_data[VOFA_PACKET_MAX_LEN];
@@ -33,7 +34,7 @@ static void send_sixteen_date(float date_1, float date_2, float date_3, float da
                               float date_9, float date_10, float date_11, float date_12,
                               float date_13, float date_14, float date_15, float date_16);
 
-/* 保留的回传模式：F2/F3/F4/F5/F6/F7/F8/F9/FA/FC/FD/FI/FU/FY/FZ。 */
+/* 保留的回传模式：F2/F3/F4/F5/F6/F7/F8/F9/FA/FC/FD/FE/FI/FU/FY/FZ。 */
 static int send_back_flag = 0;
 static uint8 send_back_command = 'R';
 
@@ -51,6 +52,8 @@ static uint8 f2_timing_initialized = 0U;
 static uint32 fc_last_cycle = 0U;
 static uint32 fc_frame_sequence = 0U;
 static uint8 fc_timing_initialized = 0U;
+static uint32 fe_last_cycle = 0U;
+static uint8 fe_timing_initialized = 0U;
 
 static void vofa_loop_profiler_init(void)
 {
@@ -68,6 +71,39 @@ static void vofa_loop_profiler_init(void)
     DWT->LAR = VOFA_DWT_LAR_UNLOCK;
     DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
     vofa_loop_profiler_ready = 1U;
+}
+
+static uint8 vofa_esc_diag_send_due(void)
+{
+    uint32 now_cycle;
+    uint32 period_cycles;
+
+    vofa_loop_profiler_init();
+    if(!vofa_loop_profiler_ready || SystemCoreClock == 0U)
+    {
+        return 1U;
+    }
+
+    now_cycle = DWT->CYCCNT;
+    if(!fe_timing_initialized)
+    {
+        fe_last_cycle = now_cycle;
+        fe_timing_initialized = 1U;
+        return 1U;
+    }
+
+    period_cycles = (uint32)(((uint64)SystemCoreClock * VOFA_ESC_DIAG_PERIOD_US) / 1000000ULL);
+    if(period_cycles == 0U)
+    {
+        period_cycles = 1U;
+    }
+    if((uint32)(now_cycle - fe_last_cycle) < period_cycles)
+    {
+        return 0U;
+    }
+
+    fe_last_cycle = now_cycle;
+    return 1U;
 }
 
 void Vofa_MainLoopProfile_Begin(void)
@@ -1087,6 +1123,12 @@ void USART_PID_Adjust(void)
                     break;
                 case 'D':
                 case 'd': send_back_flag = 13; break;
+                case 'E':
+                case 'e':
+                    send_back_flag = 14;
+                    fe_last_cycle = 0U;
+                    fe_timing_initialized = 0U;
+                    break;
                 case 'I':
                 case 'i': send_back_flag = 18; break;
                 case 'U':
@@ -1320,6 +1362,45 @@ void send_date_back(void)
                            ay_level_mg - acc_level_y_bias_mg,
                            X_V_F,
                            Y_V_F);
+            break;
+        }
+
+        case 14:
+        {
+            SmallDriverEscStatus esc_status = {0};
+            uint8 active_fault_mask = 0U;
+            uint8 i;
+
+            if(!vofa_esc_diag_send_due())
+            {
+                break;
+            }
+
+            small_driver_get_esc_status(&esc_status);
+            for(i = 0U; i < 4U; i++)
+            {
+                if(esc_status.active_fault[i] != (uint8)SMALL_DRIVER_ESC_FAULT_NONE)
+                {
+                    active_fault_mask |= (uint8)(1U << i);
+                }
+            }
+
+            send_sixteen_date((float)esc_status.valid,
+                              (float)esc_status.stale,
+                              (float)esc_status.age_ms,
+                              (float)esc_status.protocol_version,
+                              (float)esc_status.status_frame_count,
+                              (float)esc_status.checksum_error_count,
+                              (float)esc_status.unknown_frame_count,
+                              (float)esc_status.fault_event_count,
+                              (float)esc_status.last_event_sequence,
+                              (float)esc_status.last_event_code,
+                              (float)esc_status.last_event_motor_mask,
+                              (float)active_fault_mask,
+                              (float)esc_status.active_fault[0],
+                              (float)esc_status.active_fault[1],
+                              (float)esc_status.active_fault[2],
+                              (float)esc_status.active_fault[3]);
             break;
         }
 

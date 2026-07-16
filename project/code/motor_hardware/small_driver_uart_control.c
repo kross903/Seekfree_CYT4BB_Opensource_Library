@@ -11,6 +11,7 @@ static uint8 s_esc_fault_event_pending = 0U;
 static uint8 s_esc_event_sequence_synced = 0U;
 static uint8 s_esc_last_event_sequence = 0U;
 static uint8 s_esc_had_active_fault = 0U;
+static uint8 s_esc_latched_sequence_valid = 0U;
 
 static uint8 small_driver_active_fault_mask(const uint8 active_fault[4])
 {
@@ -29,14 +30,32 @@ static uint8 small_driver_active_fault_mask(const uint8 active_fault[4])
 
 static void small_driver_publish_fault_event(uint8 sequence, uint8 fault_code, uint8 motor_mask)
 {
-    if(!s_esc_fault_event_pending &&
-       fault_code > (uint8)SMALL_DRIVER_ESC_FAULT_NONE &&
-       fault_code <= (uint8)SMALL_DRIVER_ESC_FAULT_LOW_SPEED_RESTART &&
-       motor_mask != 0U)
+    uint8 valid_motor_mask = (uint8)(motor_mask & 0x0FU);
+
+    if(fault_code <= (uint8)SMALL_DRIVER_ESC_FAULT_NONE ||
+       fault_code > (uint8)SMALL_DRIVER_ESC_FAULT_LOW_SPEED_RESTART ||
+       valid_motor_mask == 0U)
+    {
+        return;
+    }
+
+    if(!s_esc_latched_sequence_valid || sequence != s_esc_status.last_event_sequence)
+    {
+        s_esc_status.last_event_sequence = sequence;
+        s_esc_status.last_event_code = fault_code;
+        s_esc_status.last_event_motor_mask = valid_motor_mask;
+        if(s_esc_status.fault_event_count < 0xFFFFFFFFUL)
+        {
+            s_esc_status.fault_event_count++;
+        }
+        s_esc_latched_sequence_valid = 1U;
+    }
+
+    if(!s_esc_fault_event_pending)
     {
         s_esc_fault_event.sequence = sequence;
         s_esc_fault_event.fault_code = fault_code;
-        s_esc_fault_event.motor_mask = (uint8)(motor_mask & 0x0FU);
+        s_esc_fault_event.motor_mask = valid_motor_mask;
         s_esc_fault_event_pending = 1U;
     }
 }
@@ -470,6 +489,7 @@ void small_driver_init(void)
     s_esc_event_sequence_synced = 0U;
     s_esc_last_event_sequence = 0U;
     s_esc_had_active_fault = 0U;
+    s_esc_latched_sequence_valid = 0U;
 }
 
 

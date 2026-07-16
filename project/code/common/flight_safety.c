@@ -20,14 +20,12 @@ int low_voltage_protect_flag = 0;
 #define YAW_SPIN_RATE_LIMIT_DPS                200.0f
 #define YAW_SPIN_DURATION_MS                   150U
 #define YAW_SPIN_LIMIT_TICKS                   ((YAW_SPIN_DURATION_MS * 1000U) / FLIGHT_CONTROL_TICK_US)
-#define ESC_REPORT_HOLD_MS                     5000U
-#define ESC_REPORT_HOLD_TICKS                  (ESC_REPORT_HOLD_MS / FLIGHT_SAFETY_TICK_MS)
 
 static volatile uint16 s_rearm_inhibit_ticks = 0U;
 static uint16 s_yaw_spin_ticks = 0U;
 static char s_esc_active_text[32] = "ESC FAULT";
 static char s_esc_report_text[32] = "ESC FAULT";
-static volatile uint16 s_esc_report_ticks = 0U;
+static volatile uint8 s_esc_report_latched = 0U;
 
 static const char *flight_safety_esc_fault_name(uint8 fault_code)
 {
@@ -127,11 +125,27 @@ const char *Flight_Safety_GetEscReportText(void)
 {
     const char *active_fault = Flight_Safety_GetEscFaultText();
 
+    if(s_esc_report_latched)
+    {
+        return s_esc_report_text;
+    }
     if(active_fault != NULL)
     {
         return active_fault;
     }
-    return (s_esc_report_ticks > 0U) ? s_esc_report_text : NULL;
+    return NULL;
+}
+
+void Flight_Safety_ClearEscReportLatch(void)
+{
+    uint32 irq_state = __get_PRIMASK();
+
+    __disable_irq();
+    s_esc_report_latched = 0U;
+    if(irq_state == 0U)
+    {
+        __enable_irq();
+    }
 }
 
 uint8 Flight_Safety_Check_Esc(void)
@@ -143,12 +157,15 @@ uint8 Flight_Safety_Check_Esc(void)
         return 0U;
     }
 
-    /* 独立锁存报告文本，急停诊断刷新不能覆盖瞬时电调故障。 */
-    flight_safety_format_esc_fault(s_esc_report_text,
-                                   sizeof(s_esc_report_text),
-                                   event.fault_code,
-                                   event.motor_mask);
-    s_esc_report_ticks = ESC_REPORT_HOLD_TICKS;
+    /* 首个事件保持到下一次启动请求，后续衍生故障不能覆盖根因。 */
+    if(!s_esc_report_latched)
+    {
+        flight_safety_format_esc_fault(s_esc_report_text,
+                                       sizeof(s_esc_report_text),
+                                       event.fault_code,
+                                       event.motor_mask);
+        s_esc_report_latched = 1U;
+    }
     return 0U;
 }
 
@@ -271,10 +288,6 @@ void Flight_Safety_Tick_5ms(void)
     if(s_rearm_inhibit_ticks > 0U)
     {
         s_rearm_inhibit_ticks--;
-    }
-    if(s_esc_report_ticks > 0U)
-    {
-        s_esc_report_ticks--;
     }
 }
 

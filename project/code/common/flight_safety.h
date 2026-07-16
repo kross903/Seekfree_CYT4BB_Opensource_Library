@@ -43,6 +43,7 @@ uint16 Flight_Safety_GetRearmInhibitRemainingMs(void);
 void Flight_Safety_ResetYawSpinMonitor(void);
 const char *Flight_Safety_GetEscFaultText(void);
 const char *Flight_Safety_GetEscReportText(void);
+void Flight_Safety_ClearEscReportLatch(void);
 
 void Flight_Runtime_Emergency_Stop(uint8 reason);
 void Flight_Runtime_Emergency_StopAt(uint8 reason,
