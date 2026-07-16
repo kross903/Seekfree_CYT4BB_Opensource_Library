@@ -33,7 +33,7 @@ static void send_sixteen_date(float date_1, float date_2, float date_3, float da
                               float date_9, float date_10, float date_11, float date_12,
                               float date_13, float date_14, float date_15, float date_16);
 
-/* 保留的回传模式：F2/F3/F4/F6/F8/FA/FC/FD/FI/FU/FY/FZ。 */
+/* 保留的回传模式：F2/F3/F4/F5/F6/F7/F8/F9/FA/FC/FD/FI/FU/FY/FZ。 */
 static int send_back_flag = 0;
 static uint8 send_back_command = 'R';
 
@@ -641,6 +641,53 @@ static void send_sixteen_date(float date_1, float date_2, float date_3, float da
     uart_write_buffer(UART_INDEX, (const uint8 *)tail, 4);
 }
 
+static void send_rate_loop_tuning_data(uint8 axis)
+{
+    RateLoopDiag_t diag = {0};
+    float target_angle = 0.0f;
+    float actual_angle = 0.0f;
+
+    if(!Rate_Loop_Get_Diag(axis, &diag))
+    {
+        return;
+    }
+
+    switch(axis)
+    {
+        case AXIS_ROLL:
+            target_angle = target_angle_roll;
+            actual_angle = current_roll;
+            break;
+        case AXIS_PITCH:
+            target_angle = target_angle_pitch;
+            actual_angle = current_pitch;
+            break;
+        case AXIS_YAW:
+            target_angle = target_angle_yaw;
+            actual_angle = current_yaw;
+            break;
+        default:
+            return;
+    }
+
+    send_sixteen_date(diag.target_rate,
+                      diag.actual_rate,
+                      diag.error,
+                      diag.p_output,
+                      diag.i_output,
+                      diag.d_output,
+                      diag.raw_output,
+                      diag.output,
+                      (float)diag.saturated,
+                      target_angle,
+                      actual_angle,
+                      base_throttle,
+                      (float)motor_throttle[0],
+                      (float)motor_throttle[1],
+                      (float)motor_throttle[2],
+                      (float)motor_throttle[3]);
+}
+
 void Init_uart(void)
 {
     fifo_init(&uart_data_fifo, FIFO_DATA_8BIT, uart_get_data, VOFA_PACKET_MAX_LEN);
@@ -1024,8 +1071,11 @@ void USART_PID_Adjust(void)
                     break;
                 case '3': send_back_flag = 3; break;
                 case '4': send_back_flag = 4; break;
+                case '5': send_back_flag = 5; break;
                 case '6': send_back_flag = 6; break;
+                case '7': send_back_flag = 7; break;
                 case '8': send_back_flag = 8; break;
+                case '9': send_back_flag = 9; break;
                 case 'A':
                 case 'a': send_back_flag = 10; break;
                 case 'C':
@@ -1189,6 +1239,10 @@ void send_date_back(void)
             break;
         }
 
+        case 5:
+            send_rate_loop_tuning_data(AXIS_ROLL);
+            break;
+
         case 6:
             send_sixteen_date(target_angle_roll,
                               current_roll,
@@ -1206,6 +1260,10 @@ void send_date_back(void)
                               current_gyro_yaw,
                               yaw_output,
                               yaw_angle_error_deg);
+            break;
+
+        case 7:
+            send_rate_loop_tuning_data(AXIS_PITCH);
             break;
 
         case 8:
@@ -1239,6 +1297,10 @@ void send_date_back(void)
                            roll_corr_deg);
             break;
         }
+
+        case 9:
+            send_rate_loop_tuning_data(AXIS_YAW);
+            break;
 
         case 10:
         {
