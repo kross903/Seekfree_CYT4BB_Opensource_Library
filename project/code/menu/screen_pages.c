@@ -389,6 +389,7 @@ typedef struct
     uint8 esc_status_valid;
     uint8 esc_status_stale;
     uint8 esc_active_fault;
+    const char *esc_report_text;
     uint8 takeoff_state;
     float takeoff_progress;
     FlightTakeoffDiag takeoff_diag;
@@ -414,41 +415,39 @@ static const char *ui_monitor_takeoff_phase_text(uint8 takeoff_state)
 }
 
 static const char *ui_monitor_hint_top_text(uint8 armed,
-                                            uint8 control_mode,
-                                            uint8 tof_ready,
                                             uint8 rearm_inhibit_active,
                                             uint8 takeoff_state,
-                                            uint32 imu_fault_mask)
+                                            uint32 imu_fault_mask,
+                                            const char *esc_report_text)
 {
+    if(esc_report_text != NULL) return esc_report_text;
     if(armed) return ui_monitor_takeoff_phase_text(takeoff_state);
     if(rearm_inhibit_active) return "ESTOP LOCK - WAIT 2S";
     if((imu_fault_mask & ICM_HEALTH_CRITICAL_FAULT_MASK) != 0U) return "IMU FAULT - CHECK F4";
-    if(control_mode == CONTROL_MODE_ANGLE && !tof_ready) return "TOF WAIT - CHECK FD";
     return "K3: START  K1/K2: PAGE";
 }
 
 static const char *ui_monitor_hint_bottom_text(uint8 armed,
-                                               uint8 control_mode,
-                                               uint8 tof_ready,
                                                uint8 rearm_inhibit_active,
-                                               uint32 imu_fault_mask)
+                                               uint32 imu_fault_mask,
+                                               const char *esc_report_text)
 {
     if(armed) return "ANY KEY = EMERGENCY STOP";
+    if(esc_report_text != NULL) return "ESC REPORT - NO AUTO STOP";
     if(rearm_inhibit_active) return "KEY3 DISABLED TEMPORARILY";
     if((imu_fault_mask & ICM_HEALTH_CRITICAL_FAULT_MASK) != 0U) return "DO NOT ARM  HOLD K4:MENU";
-    if(control_mode == CONTROL_MODE_ANGLE && !tof_ready) return "WAIT VALID TOF FRAME";
     return "HOLD K4:MENU WHEN STOPPED";
 }
 
 static uint16 ui_monitor_hint_color(uint8 armed,
-                                    uint8 control_mode,
-                                    uint8 tof_ready,
                                     uint8 rearm_inhibit_active,
-                                    uint32 imu_fault_mask)
+                                    uint32 imu_fault_mask,
+                                    const char *esc_report_text,
+                                    uint8 esc_active_fault)
 {
+    if(esc_report_text != NULL) return esc_active_fault ? RGB565_RED : RGB565_YELLOW;
     if(armed || rearm_inhibit_active ||
        (imu_fault_mask & ICM_HEALTH_CRITICAL_FAULT_MASK) != 0U) return RGB565_RED;
-    if(control_mode == CONTROL_MODE_ANGLE && !tof_ready) return RGB565_YELLOW;
     return RGB565_WHITE;
 }
 
@@ -461,23 +460,27 @@ static void ui_monitor_fill_view_hud(const MonitorRuntimeSnapshot *snapshot, Mon
         return;
     }
 
+    small_driver_get_esc_status(&esc_status);
+    data->esc_status_valid = esc_status.valid;
+    data->esc_status_stale = esc_status.stale;
+    data->esc_active_fault = small_driver_esc_has_active_fault();
+    data->esc_report_text = Flight_Safety_GetEscReportText();
+
     data->mode_text = ui_monitor_mode_text(snapshot->control_mode);
     data->hint_top_text = ui_monitor_hint_top_text(snapshot->armed,
-                                                   snapshot->control_mode,
-                                                   snapshot->tof_ready,
                                                    snapshot->rearm_inhibit_active,
                                                    snapshot->takeoff_state,
-                                                   snapshot->imu_fault_mask);
+                                                   snapshot->imu_fault_mask,
+                                                   data->esc_report_text);
     data->hint_bottom_text = ui_monitor_hint_bottom_text(snapshot->armed,
-                                                         snapshot->control_mode,
-                                                         snapshot->tof_ready,
                                                          snapshot->rearm_inhibit_active,
-                                                         snapshot->imu_fault_mask);
+                                                         snapshot->imu_fault_mask,
+                                                         data->esc_report_text);
     data->hint_color = ui_monitor_hint_color(snapshot->armed,
-                                             snapshot->control_mode,
-                                             snapshot->tof_ready,
                                              snapshot->rearm_inhibit_active,
-                                             snapshot->imu_fault_mask);
+                                             snapshot->imu_fault_mask,
+                                             data->esc_report_text,
+                                             data->esc_active_fault);
     data->armed = snapshot->armed;
     data->low_voltage = snapshot->low_voltage;
     data->has_nearest = snapshot->has_nearest;
@@ -493,10 +496,6 @@ static void ui_monitor_fill_view_hud(const MonitorRuntimeSnapshot *snapshot, Mon
     data->fused_height_cm = snapshot->fused_height_cm;
     data->fused_velocity_cms = snapshot->fused_velocity_cms;
     data->imu_fault_mask = snapshot->imu_fault_mask;
-    small_driver_get_esc_status(&esc_status);
-    data->esc_status_valid = esc_status.valid;
-    data->esc_status_stale = esc_status.stale;
-    data->esc_active_fault = small_driver_esc_has_active_fault();
     data->takeoff_state = snapshot->takeoff_state;
     data->takeoff_progress = Flight_Takeoff_Get_Progress();
     Flight_Takeoff_GetDiag(&data->takeoff_diag);

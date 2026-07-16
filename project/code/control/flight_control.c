@@ -617,11 +617,6 @@ static uint8 takeoff_start_armed_flow(void)
 {
     FlightArmRejectReason reject_reason = FLIGHT_ARM_REJECT_NONE;
 
-    if(control_mode == CONTROL_MODE_ANGLE && !HeightManager_IsReadyForTakeoff())
-    {
-        Flight_Takeoff_RecordStopAt("TOF NOT READY", __FILE__, __LINE__);
-        return 0U;
-    }
     if(!ICM_Health_IsArmable())
     {
         Flight_Takeoff_RecordStopAt("IMU NOT ARMABLE", __FILE__, __LINE__);
@@ -770,11 +765,6 @@ uint8 Flight_Takeoff_Tick_250us(void)
     if(!armed)
     {
         Flight_Takeoff_AbortAt("ARM FLAG CLEARED", __FILE__, __LINE__);
-        return 0U;
-    }
-    if(!HeightManager_IsTofValid())
-    {
-        Flight_Runtime_Emergency_Stop(EMERGENCY_STOP_REASON_TAKEOFF_TOF);
         return 0U;
     }
     duration_ticks = takeoff_state_duration_ticks(g_takeoff_state);

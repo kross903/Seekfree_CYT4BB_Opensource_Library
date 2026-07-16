@@ -20,11 +20,14 @@ int low_voltage_protect_flag = 0;
 #define YAW_SPIN_RATE_LIMIT_DPS                200.0f
 #define YAW_SPIN_DURATION_MS                   150U
 #define YAW_SPIN_LIMIT_TICKS                   ((YAW_SPIN_DURATION_MS * 1000U) / FLIGHT_CONTROL_TICK_US)
+#define ESC_REPORT_HOLD_MS                     5000U
+#define ESC_REPORT_HOLD_TICKS                  (ESC_REPORT_HOLD_MS / FLIGHT_SAFETY_TICK_MS)
 
 static volatile uint16 s_rearm_inhibit_ticks = 0U;
 static uint16 s_yaw_spin_ticks = 0U;
-static char s_esc_estop_text[32] = "ESC FAULT";
 static char s_esc_active_text[32] = "ESC FAULT";
+static char s_esc_report_text[32] = "ESC FAULT";
+static volatile uint16 s_esc_report_ticks = 0U;
 
 static const char *flight_safety_esc_fault_name(uint8 fault_code)
 {
@@ -120,31 +123,33 @@ const char *Flight_Safety_GetEscFaultText(void)
     return NULL;
 }
 
+const char *Flight_Safety_GetEscReportText(void)
+{
+    const char *active_fault = Flight_Safety_GetEscFaultText();
+
+    if(active_fault != NULL)
+    {
+        return active_fault;
+    }
+    return (s_esc_report_ticks > 0U) ? s_esc_report_text : NULL;
+}
+
 uint8 Flight_Safety_Check_Esc(void)
 {
     SmallDriverEscFaultEvent event;
-    uint8 output_active = (uint8)(armed ||
-                                  MenuMotorTest_GetOutputEnable() ||
-                                  MenuFlyTest_GetOutputEnable());
 
     if(!small_driver_take_fault_event(&event))
     {
         return 0U;
     }
-    if(!output_active || emergency_stop_triggered)
-    {
-        return 0U;
-    }
 
-    flight_safety_format_esc_fault(s_esc_estop_text,
-                                   sizeof(s_esc_estop_text),
+    /* 独立锁存报告文本，急停诊断刷新不能覆盖瞬时电调故障。 */
+    flight_safety_format_esc_fault(s_esc_report_text,
+                                   sizeof(s_esc_report_text),
                                    event.fault_code,
                                    event.motor_mask);
-    Flight_Runtime_Emergency_StopAt(EMERGENCY_STOP_REASON_ESC_FAULT,
-                                    s_esc_estop_text,
-                                    __FILE__,
-                                    __LINE__);
-    return 1U;
+    s_esc_report_ticks = ESC_REPORT_HOLD_TICKS;
+    return 0U;
 }
 
 void Flight_Safety_ResetYawSpinMonitor(void)
@@ -266,6 +271,10 @@ void Flight_Safety_Tick_5ms(void)
     if(s_rearm_inhibit_ticks > 0U)
     {
         s_rearm_inhibit_ticks--;
+    }
+    if(s_esc_report_ticks > 0U)
+    {
+        s_esc_report_ticks--;
     }
 }
 
