@@ -191,7 +191,7 @@ static void update_monitor_view(void)
 
     if(link_tick)
     {
-        core_link_user_tick(20U);
+        core_link_user_tick((uint16)(FLOW_SENSOR_UPDATE_US / 1000U));
         core_link_user_service_beacon_link();
 
         local_screen_refresh_div ++;

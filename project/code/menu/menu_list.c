@@ -101,6 +101,13 @@ void icm_init_menu()
 #define TEST_ROW_Y(row)         ((uint16)(56U + (uint16)(row) * 20U))
 #define VISION_VIEW_SNAPSHOT_WAIT_TICKS 120U
 #define VISION_VIEW_SNAPSHOT_WAIT_MS    5U
+#define TRACK_LIGHT_RELEASE_TIMEOUT_TICKS 40U
+
+static uint8 s_track_light_page_active = 0U;
+static uint8 s_track_light_image_visible = 0U;
+static uint8 s_track_light_release_pending = 0U;
+static uint8 s_track_light_exit_pending = 0U;
+static uint8 s_track_light_release_wait_ticks = 0U;
 
 static void test_page_clear_line(uint16 y)
 {
@@ -407,6 +414,199 @@ static void vision_view_page(void)
     }
 }
 
+static uint8 track_light_service_downlink(void)
+{
+    if(!Car_Copy_Screen_Flag)
+    {
+        return 0U;
+    }
+
+    Car_Copy_Screen_Flag = 0U;
+    core_link_user_tick((uint16)(FLOW_SENSOR_UPDATE_US / 1000U));
+    core_link_user_service_beacon_link();
+    return 1U;
+}
+
+static void track_light_reset_page_state(void)
+{
+    s_track_light_page_active = 0U;
+    s_track_light_image_visible = 0U;
+    s_track_light_release_pending = 0U;
+    s_track_light_exit_pending = 0U;
+    s_track_light_release_wait_ticks = 0U;
+}
+
+static void track_light_restore_local_screen(void)
+{
+    ips200_set_dir(IPS200_PORTAIT);
+    ips200_init(IPS200_TYPE_SPI);
+    ips200_set_font(IPS200_8X16_FONT);
+    ips200_clear();
+    ips200_set_color(RGB565_YELLOW, RGB565_BLACK);
+    ips200_show_string(TEST_PAGE_X, 20U, "Track Light Test");
+}
+
+static void track_light_draw_beacon_slot(uint8 row,
+                                         uint8 slot,
+                                         const VisionRuntimeBeaconSlot_t *beacon)
+{
+    uint16 y = TEST_ROW_Y(row);
+
+    test_page_clear_line(y);
+    ips200_set_color(RGB565_WHITE, RGB565_BLACK);
+    ips200_show_char(TEST_PAGE_X, y, 'B');
+    ips200_show_uint((uint16)(TEST_PAGE_X + 8U), y, (uint32)(slot + 1U), 1U);
+    ips200_set_color(beacon->valid ? RGB565_GREEN : RGB565_RED, RGB565_BLACK);
+    ips200_show_string((uint16)(TEST_PAGE_X + 24U), y, beacon->valid ? "ON " : "OFF");
+    ips200_set_color(RGB565_WHITE, RGB565_BLACK);
+    ips200_show_string((uint16)(TEST_PAGE_X + 56U), y, "X:");
+    ips200_show_float((uint16)(TEST_PAGE_X + 72U), y,
+                      beacon->valid ? beacon->x_cm : 0.0f, 3U, 1U);
+    ips200_show_string((uint16)(TEST_PAGE_X + 136U), y, "Y:");
+    ips200_show_float((uint16)(TEST_PAGE_X + 152U), y,
+                      beacon->valid ? beacon->y_cm : 0.0f, 3U, 1U);
+}
+
+static void track_light_draw_data(void)
+{
+    VisionRuntimeDiag_t diag = {0};
+    VisionRuntimeBeaconSlot_t slots[VISION_RUNTIME_BEACON_SLOT_COUNT] = {0};
+    uint8 car_valid;
+    uint8 i;
+
+    VisionRuntime_GetDiag(&diag);
+    VisionRuntime_GetBeaconSlots(slots, VISION_RUNTIME_BEACON_SLOT_COUNT);
+    car_valid = (uint8)(g_vehicle_marker_pose.valid
+                        && !g_vehicle_marker_position_lost_flag
+                        && (g_vehicle_marker_pose.detected_point_count >= 3U));
+
+    ips200_set_font(IPS200_8X16_FONT);
+    test_page_show_text(TEST_ROW_Y(0U), "DOWNLINK:", "RUN  ", RGB565_GREEN);
+    test_page_show_text(TEST_ROW_Y(1U), "IMAGE:", "OFF  ", RGB565_WHITE);
+    test_page_show_text(TEST_ROW_Y(2U), "CAR:", car_valid ? "VALID" : "LOST ",
+                        car_valid ? RGB565_GREEN : RGB565_RED);
+    test_page_show_float(TEST_ROW_Y(3U), "CAR X CM:", car_valid ? g_vehicle_marker_pose.x : 0.0f,
+                         3U, 1U);
+    test_page_show_float(TEST_ROW_Y(4U), "CAR Y CM:", car_valid ? g_vehicle_marker_pose.y : 0.0f,
+                         3U, 1U);
+    test_page_show_int(TEST_ROW_Y(5U), "BEACONS:", (int32)diag.beacon_count, 2U);
+
+    for(i = 0U; i < VISION_RUNTIME_BEACON_SLOT_COUNT; ++i)
+    {
+        track_light_draw_beacon_slot((uint8)(6U + i), i, &slots[i]);
+    }
+
+    test_page_show_text(TEST_ROW_Y(11U), "K3:", "IMAGE K4 BACK", RGB565_CYAN);
+}
+
+static uint8 track_light_wait_for_screen_release(void)
+{
+    if(!CrossCoreCamera_ControlCoreIsVisionScreenActive())
+    {
+        return 1U;
+    }
+
+    if(s_track_light_release_wait_ticks < TRACK_LIGHT_RELEASE_TIMEOUT_TICKS)
+    {
+        s_track_light_release_wait_ticks++;
+        return 0U;
+    }
+
+    return 1U;
+}
+
+static void track_light_test_page(void)
+{
+    uint8 refresh_due = track_light_service_downlink();
+
+    if(!s_track_light_page_active)
+    {
+        track_light_reset_page_state();
+        s_track_light_page_active = 1U;
+        track_light_restore_local_screen();
+        track_light_draw_data();
+        key_flag = 0U;
+    }
+
+    if(key_flag == Button_4 && !s_track_light_exit_pending)
+    {
+        if(s_track_light_image_visible || s_track_light_release_pending
+           || CrossCoreCamera_ControlCoreIsVisionScreenActive())
+        {
+            CrossCoreCamera_ControlCoreRequestVisionScreen(0U);
+            s_track_light_image_visible = 0U;
+            s_track_light_release_pending = 1U;
+            s_track_light_exit_pending = 1U;
+            s_track_light_release_wait_ticks = 0U;
+            key_flag = 0U;
+        }
+        else
+        {
+            track_light_reset_page_state();
+            return;
+        }
+    }
+
+    if(s_track_light_exit_pending)
+    {
+        key_flag = 0U;
+        if(!track_light_wait_for_screen_release())
+        {
+            return;
+        }
+
+        track_light_restore_local_screen();
+        track_light_reset_page_state();
+        key_flag = Button_4;
+        return;
+    }
+
+    if(s_track_light_release_pending)
+    {
+        key_flag = 0U;
+        if(!track_light_wait_for_screen_release())
+        {
+            return;
+        }
+
+        track_light_restore_local_screen();
+        s_track_light_release_pending = 0U;
+        s_track_light_release_wait_ticks = 0U;
+        track_light_draw_data();
+        return;
+    }
+
+    if(key_flag == Button_3)
+    {
+        key_flag = 0U;
+        if(s_track_light_image_visible)
+        {
+            CrossCoreCamera_ControlCoreRequestVisionScreen(0U);
+            s_track_light_image_visible = 0U;
+            s_track_light_release_pending = 1U;
+            s_track_light_release_wait_ticks = 0U;
+        }
+        else
+        {
+            CrossCoreCamera_ControlCoreSetVisionDisplayMode(CROSS_CORE_CAMERA_VISION_DISPLAY_BINARY);
+            CrossCoreCamera_ControlCoreSetVisionStatus(CROSS_CORE_CAMERA_VISION_STATUS_IDLE);
+            CrossCoreCamera_ControlCoreRequestVisionScreen(1U);
+            s_track_light_image_visible = 1U;
+        }
+        return;
+    }
+
+    if(s_track_light_image_visible)
+    {
+        return;
+    }
+
+    if(refresh_due)
+    {
+        track_light_draw_data();
+    }
+}
+
 static void fly_test_page(void)
 {
     uint16 throttle = 0U;
@@ -638,6 +838,7 @@ void init_test_menu(void)
     menu_create_item(&testMenu, "IMU Status", imu_status_page, NULL);
     menu_create_item(&testMenu, "Flow Status", flow_status_page, NULL);
     menu_create_item(&testMenu, "Vision View", vision_view_page, NULL);
+    menu_create_item(&testMenu, "Track Light", track_light_test_page, NULL);
     menu_create_item(&testMenu, "VOFA Status", vofa_status_page, NULL);
     
 }

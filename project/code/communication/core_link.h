@@ -14,7 +14,7 @@
 
 #define CORE_LINK_SOF1                  (0xA5)
 #define CORE_LINK_SOF2                  (0x5A)
-extern volatile uint8 Car_Copy_Screen_Flag;//20ms
+extern volatile uint8 Car_Copy_Screen_Flag; // Link scheduler tick flag.
 
 typedef enum
 {
