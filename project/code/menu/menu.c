@@ -218,7 +218,9 @@ void menu_execute_function(Menu* menu)
 #if CY_CORE_CM7_0
         (void)CrossCoreCamera_ControlCoreService(current_roll,
                                                  current_pitch,
-                                                 tof_height_true_filt * 100.0f);
+                                                 current_yaw,
+                                                 tof_height_true_filt * 100.0f,
+                                                 g_height_result.height_cm);
 #endif
         item->function();
 

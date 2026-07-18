@@ -252,7 +252,9 @@ static void vision_view_send_snapshot(void)
         core_link_user_poll();
         (void)CrossCoreCamera_ControlCoreService(current_roll,
                                                  current_pitch,
-                                                 tof_height_true_filt * 100.0f);
+                                                 current_yaw,
+                                                 tof_height_true_filt * 100.0f,
+                                                 g_height_result.height_cm);
         if(CrossCoreCamera_ControlCoreSendAssistantFrame())
         {
             sent = 1U;
@@ -1013,7 +1015,9 @@ void menu_open(void)
 #if CY_CORE_CM7_0
         (void)CrossCoreCamera_ControlCoreService(current_roll,
                                                  current_pitch,
-                                                 tof_height_true_filt * 100.0f);
+                                                 current_yaw,
+                                                 tof_height_true_filt * 100.0f,
+                                                 g_height_result.height_cm);
 #endif
         Send_test();
         USART_PID_Adjust();

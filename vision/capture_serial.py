@@ -21,6 +21,9 @@ except ImportError:  # pragma: no cover - handled by the UI at runtime
 HEAD = 0xAA
 CAMERA_FUNCTION = 0x02
 CAMERA_HEADER_LEN = 8
+METADATA_FUNCTION = 0x12
+METADATA_VERSION = 0x01
+METADATA_PACKET_LEN = 33
 
 
 def list_serial_ports() -> list[str]:
@@ -52,22 +55,64 @@ def read_exact(port: serial.Serial, size: int) -> bytes:
     return bytes(data)
 
 
-def find_camera_header(port: serial.Serial) -> tuple[int, int, int, int, int]:
+def parse_metadata_packet(packet: bytes) -> dict:
+    if len(packet) != METADATA_PACKET_LEN:
+        raise ValueError(f"invalid metadata packet length: {len(packet)}")
+    if packet[0] != HEAD or packet[1] != METADATA_FUNCTION:
+        raise ValueError("invalid metadata packet header")
+    if packet[2] != METADATA_VERSION or packet[3] != METADATA_PACKET_LEN:
+        raise ValueError("unsupported metadata packet version or size")
+    if (sum(packet[:-1]) & 0xFF) != packet[-1]:
+        raise ValueError("metadata checksum mismatch")
+    image_seq, input_seq, roll, pitch, yaw, tof_height, fused_height = struct.unpack(
+        "<IIfffff", packet[4:32]
+    )
+    return {
+        "version": packet[2],
+        "image_seq": image_seq,
+        "input_seq": input_seq,
+        "roll_deg": roll,
+        "pitch_deg": pitch,
+        "yaw_deg": yaw,
+        "tof_height_cm": tof_height,
+        "fused_height_cm": fused_height,
+    }
+
+
+def find_camera_packet(port: serial.Serial) -> tuple[dict | None, int, int, int, int, int]:
+    metadata = None
     while True:
         byte = port.read(1)
         if not byte:
             raise TimeoutError("timeout waiting for camera frame header")
         if byte[0] != HEAD:
             continue
-        rest = read_exact(port, CAMERA_HEADER_LEN - 1)
-        if rest[0] != CAMERA_FUNCTION or rest[2] != CAMERA_HEADER_LEN:
+
+        prefix = read_exact(port, 3)
+        function = prefix[0]
+        if function == METADATA_FUNCTION:
+            packet = bytes((HEAD, prefix[0], prefix[1], prefix[2])) + read_exact(port, METADATA_PACKET_LEN - 4)
+            try:
+                metadata = parse_metadata_packet(packet)
+            except ValueError:
+                metadata = None
             continue
-        image_type = (rest[1] >> 5) & 0x07
-        no_image = (rest[1] >> 4) & 0x01
-        boundary_num = rest[1] & 0x0F
-        width, height = struct.unpack_from("<HH", rest, 3)
+
+        if function != CAMERA_FUNCTION or prefix[2] != CAMERA_HEADER_LEN:
+            continue
+
+        camera_type = prefix[1]
+        image_type = (camera_type >> 5) & 0x07
+        no_image = (camera_type >> 4) & 0x01
+        boundary_num = camera_type & 0x0F
+        width, height = struct.unpack("<HH", read_exact(port, 4))
         if width and height:
-            return image_type, no_image, boundary_num, width, height
+            return metadata, image_type, no_image, boundary_num, width, height
+
+
+def find_camera_header(port: serial.Serial) -> tuple[int, int, int, int, int]:
+    _metadata, image_type, no_image, boundary_num, width, height = find_camera_packet(port)
+    return image_type, no_image, boundary_num, width, height
 
 
 def payload_to_grayscale(payload: bytes, image_type: int, width: int, height: int) -> bytes | None:
@@ -100,14 +145,22 @@ def save_frame(frame: dict, out_dir: Path, prefix: str, index: int) -> dict:
         "height": frame["height"],
         "payload_size": frame["payload_size"],
         "boundary_num": frame["boundary_num"],
+        "telemetry": frame.get("metadata"),
     }, ensure_ascii=True, indent=2), encoding="utf-8")
     return {**frame, "index": index, "raw_path": raw_path, "image_path": image_path, "json_path": json_path}
 
 
 def capture_single_frame(port: serial.Serial) -> dict:
-    image_type, no_image, boundary_num, width, height = find_camera_header(port)
+    metadata, image_type, no_image, boundary_num, width, height = find_camera_packet(port)
     if no_image:
-        return {"skipped": True, "boundary_num": boundary_num, "image_type": image_type, "width": width, "height": height}
+        return {
+            "skipped": True,
+            "boundary_num": boundary_num,
+            "image_type": image_type,
+            "width": width,
+            "height": height,
+            "metadata": metadata,
+        }
     size = image_payload_size(image_type, width, height)
     return {
         "skipped": False,
@@ -117,6 +170,7 @@ def capture_single_frame(port: serial.Serial) -> dict:
         "height": height,
         "payload_size": size,
         "payload": read_exact(port, size),
+        "metadata": metadata,
     }
 
 
@@ -143,6 +197,14 @@ def capture_frames(
                 continue
             saved = save_frame(frame, out_dir, prefix, len(frames))
             frames.append(saved)
-            on_log(f"saved {saved['raw_path'].name}")
+            metadata = saved.get("metadata") or {}
+            if metadata:
+                on_log(
+                    f"saved {saved['raw_path'].name} "
+                    f"R={metadata['roll_deg']:.2f} P={metadata['pitch_deg']:.2f} "
+                    f"Y={metadata['yaw_deg']:.2f} H={metadata['tof_height_cm']:.1f}cm"
+                )
+            else:
+                on_log(f"saved {saved['raw_path'].name} (no telemetry)")
             on_frame(saved)
     return frames

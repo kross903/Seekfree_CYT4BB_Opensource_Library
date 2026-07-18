@@ -180,9 +180,11 @@ class VisionToolApp:
         self.compiler_var = tk.StringVar(value="自动检测")
         self.roll_var = tk.StringVar(value="0")
         self.pitch_var = tk.StringVar(value="0")
+        self.yaw_var = tk.StringVar(value="0")
         self.height_var = tk.StringVar(value="100")
         self.status_var = tk.StringVar(value="就绪")
         self.frame_info_var = tk.StringVar(value="未选择帧")
+        self.frame_telemetry_var = tk.StringVar(value="帧姿态/高度：暂无")
         self.result_info_var = tk.StringVar(value="暂无仿真结果")
         self.preview_image: ImageTk.PhotoImage | None = None
         self.binary_image: ImageTk.PhotoImage | None = None
@@ -263,11 +265,12 @@ class VisionToolApp:
         ttk.Button(button_bar, text="放弃修改", command=self.reload_source).grid(row=0, column=1, sticky="ew", padx=(3, 0))
 
     def build_preview_panel(self, parent: ttk.Frame) -> None:
-        parent.rowconfigure(1, weight=1)
+        parent.rowconfigure(2, weight=1)
         parent.columnconfigure(0, weight=1)
         ttk.Label(parent, textvariable=self.frame_info_var).grid(row=0, column=0, sticky="w")
+        ttk.Label(parent, textvariable=self.frame_telemetry_var).grid(row=1, column=0, sticky="w", pady=(3, 0))
         image_frame = ttk.Frame(parent)
-        image_frame.grid(row=1, column=0, sticky="nsew", pady=(6, 0))
+        image_frame.grid(row=2, column=0, sticky="nsew", pady=(6, 0))
         image_frame.columnconfigure(0, weight=1)
         image_frame.columnconfigure(1, weight=1)
         image_frame.rowconfigure(0, weight=1)
@@ -314,7 +317,12 @@ class VisionToolApp:
         params = ttk.LabelFrame(parent, text="仿真参数", padding=6)
         params.grid(row=5, column=0, columnspan=3, sticky="ew")
         params.columnconfigure(1, weight=1)
-        for row, (label, variable) in enumerate((("Roll (deg)", self.roll_var), ("Pitch (deg)", self.pitch_var), ("Height (cm)", self.height_var))):
+        for row, (label, variable) in enumerate((
+            ("Roll (deg)", self.roll_var),
+            ("Pitch (deg)", self.pitch_var),
+            ("Yaw (deg, record)", self.yaw_var),
+            ("ToF height (cm)", self.height_var),
+        )):
             ttk.Label(params, text=label).grid(row=row, column=0, sticky="w", pady=3)
             ttk.Entry(params, textvariable=variable).grid(row=row, column=1, sticky="ew", pady=3)
 
@@ -466,10 +474,38 @@ class VisionToolApp:
         except Exception as exc:
             self.status_var.set(f"读取帧失败: {exc}")
             return
+        self.apply_frame_metadata(path)
         self.frame_info_var.set(f"{path.name}  {image.width}×{image.height}")
         display = self.fit_image(image, self.preview_label.winfo_width() or 560, self.preview_label.winfo_height() or 360)
         self.preview_image = ImageTk.PhotoImage(display)
         self.preview_label.configure(image=self.preview_image, text="")
+
+    def apply_frame_metadata(self, path: Path) -> None:
+        metadata_path = path.with_suffix(".json")
+        try:
+            payload = json.loads(metadata_path.read_text(encoding="utf-8"))
+            telemetry = payload.get("telemetry")
+            if not isinstance(telemetry, dict):
+                self.frame_telemetry_var.set("帧姿态/高度：无元数据")
+                return
+            roll = float(telemetry["roll_deg"])
+            pitch = float(telemetry["pitch_deg"])
+            yaw = float(telemetry["yaw_deg"])
+            tof_height = float(telemetry["tof_height_cm"])
+            fused_height = float(telemetry["fused_height_cm"])
+            self.roll_var.set(f"{roll:.6f}")
+            self.pitch_var.set(f"{pitch:.6f}")
+            self.yaw_var.set(f"{yaw:.6f}")
+            self.height_var.set(f"{tof_height:.6f}")
+            image_seq = telemetry.get("image_seq", "-")
+            input_seq = telemetry.get("input_seq", "-")
+            self.frame_telemetry_var.set(
+                f"帧元数据 seq={image_seq}/{input_seq}  "
+                f"R={roll:.2f}° P={pitch:.2f}° Y={yaw:.2f}°  "
+                f"ToF={tof_height:.1f}cm Fusion={fused_height:.1f}cm"
+            )
+        except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError):
+            self.frame_telemetry_var.set("帧姿态/高度：无元数据")
 
     @staticmethod
     def load_image(path: Path) -> Image.Image:

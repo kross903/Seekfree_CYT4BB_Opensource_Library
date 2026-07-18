@@ -4,12 +4,18 @@
 #define SHARED_VISION_INPUT_ADDR                    0x28001000u
 #define SHARED_VISION_RESULT_ADDR                   0x28001100u
 #define SHARED_VISION_SCREEN_CTRL_ADDR              0x28001300u
+#define SHARED_VISION_SNAPSHOT_METADATA_ADDR        0x28001340u
 #define SHARED_VISION_MAGIC                         0x56495331u
 #define SHARED_VISION_SCREEN_MAGIC                  0x56534331u
+#define SHARED_VISION_SNAPSHOT_METADATA_MAGIC       0x56534D31u
 #define CROSS_CORE_CAMERA_ASSISTANT_IMAGE_ENABLE    0U
 #define CROSS_CORE_CAMERA_SCREEN_FRAME_DIVIDER      2U
 #define CROSS_CORE_VISION_IPC_RESULT_READY          0x56495352u
 #define CROSS_CORE_CAMERA_DWT_LAR_UNLOCK            0xC5ACCE55UL
+
+#define CROSS_CORE_CAMERA_METADATA_FUNCTION         0x12U
+#define CROSS_CORE_CAMERA_METADATA_VERSION          0x01U
+#define CROSS_CORE_CAMERA_METADATA_PACKET_SIZE      33U
 
 #define CROSS_CORE_CAMERA_SCREEN_OWNER_NONE         0U
 #define CROSS_CORE_CAMERA_SCREEN_OWNER_VISION       1U
@@ -20,7 +26,9 @@ typedef struct
     uint32 seq;
     float roll_deg;
     float pitch_deg;
-    float height_cm;
+    float yaw_deg;
+    float tof_height_cm;
+    float fused_height_cm;
 } SharedVisionInput_t;
 
 typedef struct
@@ -55,12 +63,40 @@ typedef struct
     uint8 reserved;
 } SharedVisionScreenCtrl_t;
 
+typedef struct
+{
+    uint32 magic;
+    uint32 image_seq;
+    uint32 input_seq;
+    float roll_deg;
+    float pitch_deg;
+    float yaw_deg;
+    float tof_height_cm;
+    float fused_height_cm;
+} SharedVisionSnapshotMetadata_t;
+
 static volatile SharedVisionInput_t *const g_shared_vision_input =
     (volatile SharedVisionInput_t *)SHARED_VISION_INPUT_ADDR;
 static volatile SharedVisionResult_t *const g_shared_vision_result =
     (volatile SharedVisionResult_t *)SHARED_VISION_RESULT_ADDR;
 static volatile SharedVisionScreenCtrl_t *const g_shared_vision_screen_ctrl =
     (volatile SharedVisionScreenCtrl_t *)SHARED_VISION_SCREEN_CTRL_ADDR;
+static volatile SharedVisionSnapshotMetadata_t *const g_shared_vision_snapshot_metadata =
+    (volatile SharedVisionSnapshotMetadata_t *)SHARED_VISION_SNAPSHOT_METADATA_ADDR;
+
+static void CrossCoreCamera_CleanSnapshotMetadata(void)
+{
+    SCB_CleanDCache_by_Addr((void *)g_shared_vision_snapshot_metadata,
+                           sizeof(SharedVisionSnapshotMetadata_t));
+}
+
+#if CY_CORE_CM7_0
+static void CrossCoreCamera_InvalidateSnapshotMetadata(void)
+{
+    SCB_InvalidateDCache_by_Addr((void *)g_shared_vision_snapshot_metadata,
+                                sizeof(SharedVisionSnapshotMetadata_t));
+}
+#endif
 
 #pragma location = 0x2802bf80
 __no_init uint8 g_cross_core_camera_image_copy[MT9V03X_H][MT9V03X_W];
@@ -180,14 +216,16 @@ static void CrossCoreCamera_SetCameraCoreScreenActive(uint8 active)
     CrossCoreCamera_CleanScreenCtrl();
 }
 
-static void CrossCoreCamera_CameraCorePublishAssistantSnapshot(void)
+static void CrossCoreCamera_CameraCorePublishAssistantSnapshot(const SharedVisionInput_t *input_snapshot)
 {
     static uint32 last_snapshot_request_seq = 0U;
     uint32 snapshot_request_seq = 0U;
+    uint32 image_seq = 0U;
 
     CrossCoreCamera_InvalidateScreenCtrl();
     if(g_shared_vision_screen_ctrl->magic != SHARED_VISION_SCREEN_MAGIC ||
-       g_shared_vision_screen_ctrl->assistant_stream_enable == 0U)
+       g_shared_vision_screen_ctrl->assistant_stream_enable == 0U ||
+       input_snapshot == NULL)
     {
         return;
     }
@@ -202,9 +240,20 @@ static void CrossCoreCamera_CameraCorePublishAssistantSnapshot(void)
     memcpy(g_cross_core_camera_assistant_image[0], mt9v03x_image[0], MT9V03X_IMAGE_SIZE);
     SCB_CleanDCache_by_Addr(g_cross_core_camera_assistant_image[0], MT9V03X_IMAGE_SIZE);
 
+    image_seq = g_shared_vision_screen_ctrl->assistant_image_seq + 1U;
+    g_shared_vision_snapshot_metadata->magic = SHARED_VISION_SNAPSHOT_METADATA_MAGIC;
+    g_shared_vision_snapshot_metadata->image_seq = image_seq;
+    g_shared_vision_snapshot_metadata->input_seq = input_snapshot->seq;
+    g_shared_vision_snapshot_metadata->roll_deg = input_snapshot->roll_deg;
+    g_shared_vision_snapshot_metadata->pitch_deg = input_snapshot->pitch_deg;
+    g_shared_vision_snapshot_metadata->yaw_deg = input_snapshot->yaw_deg;
+    g_shared_vision_snapshot_metadata->tof_height_cm = input_snapshot->tof_height_cm;
+    g_shared_vision_snapshot_metadata->fused_height_cm = input_snapshot->fused_height_cm;
+    CrossCoreCamera_CleanSnapshotMetadata();
+
     g_shared_vision_screen_ctrl->assistant_image_display_mode = CROSS_CORE_CAMERA_VISION_DISPLAY_RAW;
     g_shared_vision_screen_ctrl->assistant_image_ready = 1U;
-    g_shared_vision_screen_ctrl->assistant_image_seq++;
+    g_shared_vision_screen_ctrl->assistant_image_seq = image_seq;
     CrossCoreCamera_CleanScreenCtrl();
 }
 
@@ -493,7 +542,17 @@ void CrossCoreCamera_CameraCoreInit(void)
     g_shared_vision_input->seq = 0U;
     g_shared_vision_input->roll_deg = 0.0f;
     g_shared_vision_input->pitch_deg = 0.0f;
-    g_shared_vision_input->height_cm = 100.0f;
+    g_shared_vision_input->yaw_deg = 0.0f;
+    g_shared_vision_input->tof_height_cm = 100.0f;
+    g_shared_vision_input->fused_height_cm = 100.0f;
+    g_shared_vision_snapshot_metadata->magic = 0U;
+    g_shared_vision_snapshot_metadata->image_seq = 0U;
+    g_shared_vision_snapshot_metadata->input_seq = 0U;
+    g_shared_vision_snapshot_metadata->roll_deg = 0.0f;
+    g_shared_vision_snapshot_metadata->pitch_deg = 0.0f;
+    g_shared_vision_snapshot_metadata->yaw_deg = 0.0f;
+    g_shared_vision_snapshot_metadata->tof_height_cm = 100.0f;
+    g_shared_vision_snapshot_metadata->fused_height_cm = 100.0f;
     g_shared_vision_result->magic = SHARED_VISION_MAGIC;
     g_shared_vision_result->seq = 0U;
     g_shared_vision_screen_ctrl->magic = SHARED_VISION_SCREEN_MAGIC;
@@ -511,6 +570,7 @@ void CrossCoreCamera_CameraCoreInit(void)
     CrossCoreCamera_CleanInput();
     CrossCoreCamera_CleanResult();
     CrossCoreCamera_CleanScreenCtrl();
+    CrossCoreCamera_CleanSnapshotMetadata();
 #endif
 }
 
@@ -543,18 +603,20 @@ void CrossCoreCamera_CameraCoreTask(void)
     {
         input_snapshot.roll_deg = 0.0f;
         input_snapshot.pitch_deg = 0.0f;
-        input_snapshot.height_cm = 100.0f;
+        input_snapshot.yaw_deg = 0.0f;
+        input_snapshot.tof_height_cm = 100.0f;
+        input_snapshot.fused_height_cm = 100.0f;
     }
 
     // 执行本帧完整视觉处理：信标识别 + 小车标志识别。
     VisionRuntime_ProcessFrameWithPose(input_snapshot.roll_deg,
                                        input_snapshot.pitch_deg,
-                                       input_snapshot.height_cm);
+                                       input_snapshot.tof_height_cm);
     // 读取本帧诊断、小车丢失调试信息和信标槽位结果。
     VisionRuntime_GetDiag(&diag_snapshot);
     VisionRuntime_GetBeaconSlots(beacon_slots, VISION_RUNTIME_BEACON_SLOT_COUNT);
     VehicleMarkerLocalization_GetLossDebug(&loss_debug);
-    CrossCoreCamera_CameraCorePublishAssistantSnapshot();
+    CrossCoreCamera_CameraCorePublishAssistantSnapshot(&input_snapshot);
 
     // 将 1 核本帧结果写回共享区，供 0 核读取并参与控制/显示。
     g_shared_vision_result->magic = SHARED_VISION_MAGIC;
@@ -625,7 +687,11 @@ void CrossCoreCamera_ControlCoreTask(void)
     }
 }
 
-uint8 CrossCoreCamera_ControlCoreService(float roll_deg, float pitch_deg, float height_cm)
+uint8 CrossCoreCamera_ControlCoreService(float roll_deg,
+                                         float pitch_deg,
+                                         float yaw_deg,
+                                         float tof_height_cm,
+                                         float fused_height_cm)
 {
     static uint8 last_assistant_stream_enable = 0xFFU;
     uint8 camera_new_frame = 0U;
@@ -645,17 +711,27 @@ uint8 CrossCoreCamera_ControlCoreService(float roll_deg, float pitch_deg, float 
     }
 
     CrossCoreCamera_ControlCoreTask();
-    CrossCoreCamera_ControlCorePublishInput(roll_deg, pitch_deg, height_cm);
+    CrossCoreCamera_ControlCorePublishInput(roll_deg,
+                                            pitch_deg,
+                                            yaw_deg,
+                                            tof_height_cm,
+                                            fused_height_cm);
     camera_new_frame = CrossCoreCamera_ControlCoreFetchFrame();
     return camera_new_frame;
 }
 
-void CrossCoreCamera_ControlCorePublishInput(float roll_deg, float pitch_deg, float height_cm)
+void CrossCoreCamera_ControlCorePublishInput(float roll_deg,
+                                             float pitch_deg,
+                                             float yaw_deg,
+                                             float tof_height_cm,
+                                             float fused_height_cm)
 {
     g_shared_vision_input->magic = SHARED_VISION_MAGIC;
     g_shared_vision_input->roll_deg = roll_deg;
     g_shared_vision_input->pitch_deg = pitch_deg;
-    g_shared_vision_input->height_cm = height_cm;
+    g_shared_vision_input->yaw_deg = yaw_deg;
+    g_shared_vision_input->tof_height_cm = tof_height_cm;
+    g_shared_vision_input->fused_height_cm = fused_height_cm;
     g_shared_vision_input->seq++;
     CrossCoreCamera_CleanInput();
 }
@@ -692,7 +768,17 @@ void CrossCoreCamera_ControlCoreAssistantInit(void)
     g_shared_vision_input->seq = 0U;
     g_shared_vision_input->roll_deg = 0.0f;
     g_shared_vision_input->pitch_deg = 0.0f;
-    g_shared_vision_input->height_cm = 100.0f;
+    g_shared_vision_input->yaw_deg = 0.0f;
+    g_shared_vision_input->tof_height_cm = 100.0f;
+    g_shared_vision_input->fused_height_cm = 100.0f;
+    g_shared_vision_snapshot_metadata->magic = 0U;
+    g_shared_vision_snapshot_metadata->image_seq = 0U;
+    g_shared_vision_snapshot_metadata->input_seq = 0U;
+    g_shared_vision_snapshot_metadata->roll_deg = 0.0f;
+    g_shared_vision_snapshot_metadata->pitch_deg = 0.0f;
+    g_shared_vision_snapshot_metadata->yaw_deg = 0.0f;
+    g_shared_vision_snapshot_metadata->tof_height_cm = 100.0f;
+    g_shared_vision_snapshot_metadata->fused_height_cm = 100.0f;
     g_shared_vision_result->magic = 0U;
     g_shared_vision_result->seq = 0U;
     g_shared_vision_screen_ctrl->magic = SHARED_VISION_SCREEN_MAGIC;
@@ -710,6 +796,7 @@ void CrossCoreCamera_ControlCoreAssistantInit(void)
     CrossCoreCamera_CleanInput();
     CrossCoreCamera_CleanResult();
     CrossCoreCamera_CleanScreenCtrl();
+    CrossCoreCamera_CleanSnapshotMetadata();
     SCB_CleanInvalidateDCache_by_Addr(&g_cross_core_camera_image_fresh_flag, 1);
     seekfree_assistant_interface_init(SEEKFREE_ASSISTANT_CUSTOM);
 }
@@ -744,10 +831,53 @@ uint8 CrossCoreCamera_ControlCoreRequestAssistantSnapshot(void)
     return 1U;
 }
 
+static void CrossCoreCamera_MetadataWriteU32(uint8 *buffer, uint32 value)
+{
+    buffer[0] = (uint8)(value & 0xFFU);
+    buffer[1] = (uint8)((value >> 8) & 0xFFU);
+    buffer[2] = (uint8)((value >> 16) & 0xFFU);
+    buffer[3] = (uint8)((value >> 24) & 0xFFU);
+}
+
+static void CrossCoreCamera_MetadataWriteFloat(uint8 *buffer, float value)
+{
+    uint32 bits = 0U;
+
+    memcpy(&bits, &value, sizeof(bits));
+    CrossCoreCamera_MetadataWriteU32(buffer, bits);
+}
+
+static void CrossCoreCamera_SendSnapshotMetadata(const SharedVisionSnapshotMetadata_t *metadata)
+{
+    uint8 packet[CROSS_CORE_CAMERA_METADATA_PACKET_SIZE] = {0};
+    uint8 checksum = 0U;
+    uint8 i;
+
+    packet[0] = SEEKFREE_ASSISTANT_SEND_HEAD;
+    packet[1] = CROSS_CORE_CAMERA_METADATA_FUNCTION;
+    packet[2] = CROSS_CORE_CAMERA_METADATA_VERSION;
+    packet[3] = CROSS_CORE_CAMERA_METADATA_PACKET_SIZE;
+    CrossCoreCamera_MetadataWriteU32(&packet[4], metadata->image_seq);
+    CrossCoreCamera_MetadataWriteU32(&packet[8], metadata->input_seq);
+    CrossCoreCamera_MetadataWriteFloat(&packet[12], metadata->roll_deg);
+    CrossCoreCamera_MetadataWriteFloat(&packet[16], metadata->pitch_deg);
+    CrossCoreCamera_MetadataWriteFloat(&packet[20], metadata->yaw_deg);
+    CrossCoreCamera_MetadataWriteFloat(&packet[24], metadata->tof_height_cm);
+    CrossCoreCamera_MetadataWriteFloat(&packet[28], metadata->fused_height_cm);
+
+    for(i = 0U; i < (CROSS_CORE_CAMERA_METADATA_PACKET_SIZE - 1U); i++)
+    {
+        checksum = (uint8)(checksum + packet[i]);
+    }
+    packet[CROSS_CORE_CAMERA_METADATA_PACKET_SIZE - 1U] = checksum;
+    seekfree_assistant_transfer(packet, CROSS_CORE_CAMERA_METADATA_PACKET_SIZE);
+}
+
 uint8 CrossCoreCamera_ControlCoreSendAssistantFrame(void)
 {
     static uint32 last_sent_seq = 0U;
     uint32 image_seq = 0U;
+    SharedVisionSnapshotMetadata_t metadata;
 
     if(!CommMux_IsAssistantImageMode())
     {
@@ -766,6 +896,14 @@ uint8 CrossCoreCamera_ControlCoreSendAssistantFrame(void)
     if(image_seq == last_sent_seq)
     {
         return 0U;
+    }
+
+    CrossCoreCamera_InvalidateSnapshotMetadata();
+    metadata = *g_shared_vision_snapshot_metadata;
+    if(metadata.magic == SHARED_VISION_SNAPSHOT_METADATA_MAGIC &&
+       metadata.image_seq == image_seq)
+    {
+        CrossCoreCamera_SendSnapshotMetadata(&metadata);
     }
 
     SCB_InvalidateDCache_by_Addr(g_cross_core_camera_assistant_image[0], MT9V03X_IMAGE_SIZE);

@@ -173,7 +173,9 @@ static void update_monitor_view(void)
     /* 图像模式只改变 UART1 的发送内容，不能绕过 Flight View 的按键和本机屏幕刷新。 */
     camera_new_frame = CrossCoreCamera_ControlCoreService(current_roll,
                                                           current_pitch,
-                                                          tof_height_true_filt * 100.0f);
+                                                          current_yaw,
+                                                          tof_height_true_filt * 100.0f,
+                                                          g_height_result.height_cm);
     assistant_image_mode = CommMux_IsAssistantImageMode();
     if(assistant_image_mode)
     {
