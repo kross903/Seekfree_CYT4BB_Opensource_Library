@@ -108,6 +108,7 @@ static uint8 s_track_light_image_visible = 0U;
 static uint8 s_track_light_release_pending = 0U;
 static uint8 s_track_light_exit_pending = 0U;
 static uint8 s_track_light_release_wait_ticks = 0U;
+static uint8 s_track_light_status_tick_div = 0U;
 
 static void test_page_clear_line(uint16 y)
 {
@@ -424,6 +425,46 @@ static uint8 track_light_service_downlink(void)
     Car_Copy_Screen_Flag = 0U;
     core_link_user_tick((uint16)(FLOW_SENSOR_UPDATE_US / 1000U));
     core_link_user_service_beacon_link();
+
+    s_track_light_status_tick_div++;
+    if(s_track_light_status_tick_div >= 10U)
+    {
+        MonitorRuntimeSnapshot snapshot = {0};
+        BatteryStatus battery_status;
+        ICM_Health_t imu_health = {0};
+        uint8 ir_track_valid;
+
+        s_track_light_status_tick_div = 0U;
+        VehicleMarkerLocalization_ServiceLostProtection();
+        BatteryMonitor_GetStatus(&battery_status);
+        ICM_GetHealth(&imu_health);
+        ir_track_valid = (uint8)((g_vehicle_marker_pose.valid
+                                  && !g_vehicle_marker_position_lost_flag) ? 1U : 0U);
+
+        snapshot.control_mode = control_mode;
+        snapshot.armed = (uint8)(armed ? 1U : 0U);
+        snapshot.low_voltage = (uint8)(low_voltage_protect_flag ? 1U : 0U);
+        snapshot.has_nearest = ir_track_valid;
+        snapshot.tof_ready = HeightManager_IsReadyForTakeoff();
+        snapshot.rearm_inhibit_active =
+            (uint8)(Flight_Safety_GetRearmInhibitRemainingMs() > 0U);
+        snapshot.takeoff_state = (uint8)Flight_Takeoff_Get_State();
+        snapshot.voltage = battery_status.local_filtered_voltage_v;
+        snapshot.target_throttle = (int32)Flight_Control_Get_Target_Throttle();
+        snapshot.base_throttle = (int32)base_throttle;
+        snapshot.roll = current_roll;
+        snapshot.pitch = current_pitch;
+        snapshot.yaw = current_yaw;
+        snapshot.beacon_count = ir_track_valid ? g_vehicle_marker_pose.detected_point_count : 0;
+        snapshot.nearest_x = ir_track_valid ? g_vehicle_marker_pose.x : 0.0f;
+        snapshot.nearest_y = ir_track_valid ? g_vehicle_marker_pose.y : 0.0f;
+        snapshot.tof_height_cm = tof_height_true_filt * 100.0f;
+        snapshot.fused_height_cm = g_height_result.height_cm;
+        snapshot.fused_velocity_cms = g_height_result.velocity_cms;
+        snapshot.imu_fault_mask = imu_health.fault_mask;
+        core_link_user_send_drone_status_from_snapshot(&snapshot);
+    }
+
     return 1U;
 }
 
@@ -434,6 +475,7 @@ static void track_light_reset_page_state(void)
     s_track_light_release_pending = 0U;
     s_track_light_exit_pending = 0U;
     s_track_light_release_wait_ticks = 0U;
+    s_track_light_status_tick_div = 0U;
 }
 
 static void track_light_restore_local_screen(void)

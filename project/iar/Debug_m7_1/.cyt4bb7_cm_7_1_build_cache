@@ -3,6 +3,12 @@
     <Tool>
         <Name>linker</Name>
         <Parent>
+            <Path>D:\code\project\Seekfree_CYT4BB_Opensource_Library\project\iar\project_config\Debug_m7_1\Exe\cyt4bb7_cm_7_1.out</Path>
+            <Output>
+                <Path>D:\code\project\Seekfree_CYT4BB_Opensource_Library\project\iar\Debug_m7_1\List\cyt4bb7_cm_7_1.map</Path>
+            </Output>
+        </Parent>
+        <Parent>
             <Path>C:\Users\saileach\Desktop\飞跃雷区资料\CYT4BB7_Drone\Seekfree_CYT4BB_Opensource_Library\project\iar\project_config\Debug_m7_1\Exe\cyt4bb7_cm_7_1.out</Path>
             <Output>
                 <Path>C:\Users\saileach\Desktop\飞跃雷区资料\CYT4BB7_Drone\Seekfree_CYT4BB_Opensource_Library\project\iar\Debug_m7_1\List\cyt4bb7_cm_7_1.map</Path>
