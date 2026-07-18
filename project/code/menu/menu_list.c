@@ -102,6 +102,12 @@ void icm_init_menu()
 #define VISION_VIEW_SNAPSHOT_WAIT_TICKS 120U
 #define VISION_VIEW_SNAPSHOT_WAIT_MS    5U
 #define TRACK_LIGHT_RELEASE_TIMEOUT_TICKS 40U
+#define MT9V03X_ADJUST_INFO_Y           128U
+#define MT9V03X_ADJUST_STEP_Y           148U
+#define MT9V03X_ADJUST_STATUS_Y         168U
+#define MT9V03X_ADJUST_HINT_Y           188U
+#define MT9V03X_ADJUST_EXPOSURE_MIN     1U
+#define MT9V03X_ADJUST_EXPOSURE_MAX     65535U
 
 static uint8 s_track_light_page_active = 0U;
 static uint8 s_track_light_image_visible = 0U;
@@ -109,6 +115,87 @@ static uint8 s_track_light_release_pending = 0U;
 static uint8 s_track_light_exit_pending = 0U;
 static uint8 s_track_light_release_wait_ticks = 0U;
 static uint8 s_track_light_status_tick_div = 0U;
+
+static void test_page_clear_line(uint16 y);
+
+static void mt9v03x_adjust_page(void)
+{
+    static uint16 exposure_time = MT9V03X_EXP_TIME_DEF;
+    static uint16 adjust_step = 1U;
+    static uint8 set_result = 0U;
+    static uint8 page_active = 0U;
+    uint16 next_exposure = exposure_time;
+    uint16 y;
+
+    if(!page_active)
+    {
+        page_active = 1U;
+        key_flag = 0U;
+    }
+
+    if(key_flag == Button_4)
+    {
+        page_active = 0U;
+        return;
+    }
+
+    if(key_flag == Button_1)
+    {
+        next_exposure = (exposure_time > adjust_step) ?
+                        (uint16)(exposure_time - adjust_step) :
+                        (uint16)MT9V03X_ADJUST_EXPOSURE_MIN;
+        key_flag = 0U;
+    }
+    else if(key_flag == Button_2)
+    {
+        next_exposure = (exposure_time > (MT9V03X_ADJUST_EXPOSURE_MAX - adjust_step)) ?
+                        (uint16)MT9V03X_ADJUST_EXPOSURE_MAX :
+                        (uint16)(exposure_time + adjust_step);
+        key_flag = 0U;
+    }
+    else if(key_flag == Button_3)
+    {
+        adjust_step = (adjust_step == 1U) ? 10U : 1U;
+        key_flag = 0U;
+    }
+
+    if(next_exposure != exposure_time)
+    {
+        set_result = mt9v03x_set_exposure_time(next_exposure);
+        if(set_result == 0U)
+        {
+            exposure_time = next_exposure;
+        }
+        key_flag = 0U;
+    }
+
+    ips200_show_gray_image(0U, 0U, mt9v03x_image[0],
+                           MT9V03X_W, MT9V03X_H,
+                           MT9V03X_W, MT9V03X_H, 0U);
+
+    y = MT9V03X_ADJUST_INFO_Y;
+    test_page_clear_line(y);
+    ips200_set_color(RGB565_WHITE, RGB565_BLACK);
+    ips200_show_string(TEST_PAGE_X, y, "EXPOSURE:");
+    ips200_show_uint(TEST_VALUE_X, y, exposure_time, 5U);
+
+    y = MT9V03X_ADJUST_STEP_Y;
+    test_page_clear_line(y);
+    ips200_set_color(RGB565_WHITE, RGB565_BLACK);
+    ips200_show_string(TEST_PAGE_X, y, "STEP:");
+    ips200_show_uint(TEST_VALUE_X, y, adjust_step, 2U);
+
+    y = MT9V03X_ADJUST_STATUS_Y;
+    test_page_clear_line(y);
+    ips200_set_color(set_result == 0U ? RGB565_GREEN : RGB565_RED, RGB565_BLACK);
+    ips200_show_string(TEST_PAGE_X, y, set_result == 0U ? "SET: OK" : "SET: FAIL");
+
+    y = MT9V03X_ADJUST_HINT_Y;
+    test_page_clear_line(y);
+    ips200_set_color(RGB565_CYAN, RGB565_BLACK);
+    ips200_show_string(TEST_PAGE_X, y, "K1- K2+ K3 STEP K4 BACK");
+    ips200_set_color(RGB565_WHITE, RGB565_BLACK);
+}
 
 static void test_page_clear_line(uint16 y)
 {
@@ -882,6 +969,7 @@ void init_test_menu(void)
     menu_create_item(&testMenu, "Vision View", vision_view_page, NULL);
     menu_create_item(&testMenu, "Track Light", track_light_test_page, NULL);
     menu_create_item(&testMenu, "VOFA Status", vofa_status_page, NULL);
+    menu_create_item(&testMenu, "MT9V03X Adjust", mt9v03x_adjust_page, NULL);
     
 }
 
