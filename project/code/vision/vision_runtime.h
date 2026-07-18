@@ -8,6 +8,9 @@
 #define VISION_RUNTIME_BLOB_AREA_COUNT (16U)
 #define VISION_RUNTIME_BEACON_SPLIT_AREA_THRESHOLD (17)
 #define VISION_RUNTIME_CONTOUR_MAX_POINTS (640U)
+#define VISION_RUNTIME_LOCAL_BIRDVIEW_SCALE_CM_PER_PIXEL (0.5f)
+#define VISION_RUNTIME_LOCAL_BIRDVIEW_MAX_WIDTH (96U)
+#define VISION_RUNTIME_LOCAL_BIRDVIEW_MAX_HEIGHT (96U)
 
 typedef struct
 {
@@ -22,6 +25,13 @@ typedef struct
     float aspect_ratio;
     float occupancy_ratio;
     float circularity;
+    float physical_area_cm2;
+    float physical_perimeter_cm;
+    float physical_circularity;
+    float physical_aspect_ratio;
+    float physical_occupancy_ratio;
+    uint16 physical_pixel_count;
+    uint8 physical_valid;
     float world_x;
     float world_y;
     uint8 world_valid;
@@ -62,6 +72,9 @@ typedef struct
     float beacon_nearest_y_cm;
     float beacon_nearest_distance_cm;
     float beacon_nearest_area;
+    float beacon_nearest_area_cm2;
+    float beacon_nearest_perimeter_cm;
+    float beacon_nearest_circularity;
     float beacon_nearest_brightness;
     float beacon_nearest_occupancy;
     float beacon_nearest_aspect;
@@ -76,6 +89,11 @@ typedef struct
     int max_row;
     int min_col;
     int max_col;
+    float area_cm2;
+    float perimeter_cm;
+    float circularity;
+    uint16 physical_pixel_count;
+    uint8 physical_valid;
 } VisionRuntimeBeaconSlot_t;
 
 void VisionRuntime_ProcessFrame(float height_cm);

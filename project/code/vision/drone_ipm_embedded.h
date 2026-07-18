@@ -148,6 +148,9 @@ uint8 DroneIPM_Embedded_Image2WorldF(float img_x, float img_y, float *result);
  */
 bool DroneIPM_Embedded_World2Image(float world_x, float world_y, int *result);
 
+/* 地面坐标投影到原始图像的浮点坐标，供高质量重采样使用。 */
+bool DroneIPM_Embedded_World2ImageF(float world_x, float world_y, float *result);
+
 /**
  * @brief 获取正下方点在图像中的位置
  * @param result 输出[img_x, img_y]

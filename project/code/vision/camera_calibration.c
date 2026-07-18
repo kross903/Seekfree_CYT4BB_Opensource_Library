@@ -412,6 +412,79 @@ uint8 CameraCalibration_UndistortPoint(float distorted_x,
     return 1U;
 }
 
+uint8 CameraCalibration_RectifiedPointToSource(float rectified_x,
+                                               float rectified_y,
+                                               float *source_x,
+                                               float *source_y)
+{
+#if CAMERA_UNDISTORT_RECT_MAP_HAS_DATA
+    int x0;
+    int y0;
+    int x1;
+    int y1;
+    float tx;
+    float ty;
+
+    if(source_x == NULL || source_y == NULL ||
+       rectified_x < 0.0f || rectified_x > ((float)MT9V03X_W - 1.0f) ||
+       rectified_y < 0.0f || rectified_y > ((float)MT9V03X_H - 1.0f))
+    {
+        return 0U;
+    }
+
+    x0 = (int)floorf(rectified_x);
+    y0 = (int)floorf(rectified_y);
+    x1 = (x0 + 1 < MT9V03X_W) ? (x0 + 1) : x0;
+    y1 = (y0 + 1 < MT9V03X_H) ? (y0 + 1) : y0;
+    if(camera_undistort_rect_valid[y0][x0] == 0U ||
+       camera_undistort_rect_valid[y0][x1] == 0U ||
+       camera_undistort_rect_valid[y1][x0] == 0U ||
+       camera_undistort_rect_valid[y1][x1] == 0U)
+    {
+        return 0U;
+    }
+
+    tx = rectified_x - (float)x0;
+    ty = rectified_y - (float)y0;
+    *source_x =
+        ((1.0f - tx) * (1.0f - ty) * (float)camera_undistort_rect_src_x[y0][x0]) +
+        (tx * (1.0f - ty) * (float)camera_undistort_rect_src_x[y0][x1]) +
+        ((1.0f - tx) * ty * (float)camera_undistort_rect_src_x[y1][x0]) +
+        (tx * ty * (float)camera_undistort_rect_src_x[y1][x1]);
+    *source_y =
+        ((1.0f - tx) * (1.0f - ty) * (float)camera_undistort_rect_src_y[y0][x0]) +
+        (tx * (1.0f - ty) * (float)camera_undistort_rect_src_y[y0][x1]) +
+        ((1.0f - tx) * ty * (float)camera_undistort_rect_src_y[y1][x0]) +
+        (tx * ty * (float)camera_undistort_rect_src_y[y1][x1]);
+    return 1U;
+#else
+    float ray_body[3];
+    float length;
+
+    if(source_x == NULL || source_y == NULL)
+    {
+        return 0U;
+    }
+
+    /* 去畸变坐标使用与 CameraCalibration_UndistortPoint 相同的正交投影。 */
+    ray_body[0] = (rectified_y - CAMERA_CALIBRATION_CY) / CAMERA_CALIBRATION_FY;
+    ray_body[1] = (rectified_x - CAMERA_CALIBRATION_CX) / CAMERA_CALIBRATION_FX;
+    ray_body[2] = 1.0f;
+    length = sqrtf((ray_body[0] * ray_body[0]) +
+                   (ray_body[1] * ray_body[1]) +
+                   (ray_body[2] * ray_body[2]));
+    if(length < 1e-6f)
+    {
+        return 0U;
+    }
+    ray_body[0] /= length;
+    ray_body[1] /= length;
+    ray_body[2] /= length;
+
+    return CameraCalibration_BodyRayToPixel(ray_body, source_x, source_y);
+#endif
+}
+
 uint8 CameraCalibration_RectifiedPixelToSource(int dst_x,
                                                int dst_y,
                                                int *src_x,

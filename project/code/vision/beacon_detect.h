@@ -5,7 +5,7 @@
  * 模块职责:
  * 1. 对原始灰度图执行固定阈值二值化
  * 2. 用八邻域 BFS 提取连通域
- * 3. 按面积、宽高比、占空比过滤候选区域
+ * 3. 按物理鸟瞰栅格的面积、宽高比、占空比过滤候选区域
  * 4. 通过 IPM 将像素坐标换算为地面坐标
  *
  * 说明:
@@ -42,6 +42,13 @@ typedef struct {
     float average_brightness;              /* 区域平均亮度 */
     float aspect_ratio;                    /* 外接矩形宽高比 */
     float occupancy_ratio;                 /* 面积 / 外接矩形面积 */
+    float physical_area_cm2;               /* 局部物理鸟瞰栅格面积 */
+    float physical_perimeter_cm;           /* 局部物理鸟瞰栅格周长 */
+    float physical_circularity;             /* 局部物理鸟瞰栅格圆度 */
+    float physical_aspect_ratio;            /* 局部物理鸟瞰栅格宽高比 */
+    float physical_occupancy_ratio;         /* 局部物理鸟瞰栅格占空比 */
+    uint16 physical_pixel_count;            /* 局部鸟瞰前景栅格数 */
+    uint8 physical_valid;                   /* 物理鸟瞰指标有效 */
     /* 世界域 */
     float world_x, world_y;                /* 地面坐标(cm), X向前 Y向左 */
     float distance_cm;                     /* 相对正下方原点的距离(cm) */

@@ -1,5 +1,6 @@
 #include "vision/vision_runtime.h"
 #include <string.h>
+#include <math.h>
 
 static VisionRuntimeDiag_t s_vision_runtime_diag;
 static VisionRuntimeBeaconSlot_t s_vision_runtime_beacon_slots[VISION_RUNTIME_BEACON_SLOT_COUNT];
@@ -20,6 +21,251 @@ void VisionRuntime_SetBinaryThreshold(uint8 threshold)
 
 static uint8 s_vision_visited[MT9V03X_H * MT9V03X_W];
 static uint16 s_vision_queue[MT9V03X_H * MT9V03X_W];
+static uint8 s_vision_component_mask[MT9V03X_H * MT9V03X_W];
+static uint8 s_vision_local_birdview_mask[
+    VISION_RUNTIME_LOCAL_BIRDVIEW_MAX_WIDTH * VISION_RUNTIME_LOCAL_BIRDVIEW_MAX_HEIGHT];
+
+static float VisionRuntime_NormalizedAspect(int width, int height);
+
+static void VisionRuntime_ClearComponentMask(int pixel_count)
+{
+    int i;
+
+    if(pixel_count < 0)
+    {
+        pixel_count = 0;
+    }
+    if(pixel_count > (MT9V03X_H * MT9V03X_W))
+    {
+        pixel_count = MT9V03X_H * MT9V03X_W;
+    }
+
+    for(i = 0; i < pixel_count; ++i)
+    {
+        s_vision_component_mask[s_vision_queue[i]] = 0U;
+    }
+}
+
+/*
+ * 将当前连通域投影到固定物理比例的局部鸟瞰栅格。
+ * 栅格中的每个前景单元代表 SCALE^2 cm^2，面积不使用鞋带公式。
+ */
+static void VisionRuntime_BuildPhysicalBlobMetrics(VisionBlob_t *blob, int pixel_count)
+{
+    const float scale = VISION_RUNTIME_LOCAL_BIRDVIEW_SCALE_CM_PER_PIXEL;
+    float min_x = 0.0f;
+    float max_x = 0.0f;
+    float min_y = 0.0f;
+    float max_y = 0.0f;
+    int valid_points = 0;
+    int local_width;
+    int local_height;
+    int i;
+
+    if(blob == NULL || pixel_count <= 0 || scale <= 0.0f)
+    {
+        return;
+    }
+
+    for(i = 0; i < pixel_count; ++i)
+    {
+        int index = (int)s_vision_queue[i];
+        int row = index / MT9V03X_W;
+        int col = index % MT9V03X_W;
+        float world_x = 0.0f;
+        float world_y = 0.0f;
+
+        if(!IPM_Image2WorldF((float)col, (float)row, &world_x, &world_y))
+        {
+            continue;
+        }
+
+        if(valid_points == 0)
+        {
+            min_x = max_x = world_x;
+            min_y = max_y = world_y;
+        }
+        else
+        {
+            if(world_x < min_x) min_x = world_x;
+            if(world_x > max_x) max_x = world_x;
+            if(world_y < min_y) min_y = world_y;
+            if(world_y > max_y) max_y = world_y;
+        }
+        valid_points++;
+    }
+
+    if(valid_points <= 0 || valid_points * 2 < pixel_count)
+    {
+        return;
+    }
+
+    /* 为每个原图像素的投影足迹预留至少一个物理栅格单元。 */
+    min_x -= scale;
+    max_x += scale;
+    min_y -= scale;
+    max_y += scale;
+
+    local_width = (int)ceilf((max_y - min_y) / scale) + 1;
+    local_height = (int)ceilf((max_x - min_x) / scale) + 1;
+    if(local_width < 1) local_width = 1;
+    if(local_height < 1) local_height = 1;
+
+    if(local_width > (int)VISION_RUNTIME_LOCAL_BIRDVIEW_MAX_WIDTH ||
+       local_height > (int)VISION_RUNTIME_LOCAL_BIRDVIEW_MAX_HEIGHT)
+    {
+        return;
+    }
+
+    memset(s_vision_local_birdview_mask, 0,
+           sizeof(s_vision_local_birdview_mask));
+
+    /* 先按鸟瞰图的逆采样方向读取当前连通域，形成物理比例栅格。 */
+    {
+        int local_y;
+        int local_x;
+
+        for(local_y = 0; local_y < local_height; ++local_y)
+        {
+            for(local_x = 0; local_x < local_width; ++local_x)
+            {
+                float world_x = min_x + ((float)local_y + 0.5f) * scale;
+                float world_y = max_y - ((float)local_x + 0.5f) * scale;
+                int src_x = 0;
+                int src_y = 0;
+
+                if(IPM_World2Image(world_x, world_y, &src_x, &src_y) &&
+                   s_vision_component_mask[src_y * MT9V03X_W + src_x] != 0U)
+                {
+                    s_vision_local_birdview_mask[
+                        local_y * VISION_RUNTIME_LOCAL_BIRDVIEW_MAX_WIDTH + local_x] = 1U;
+                }
+            }
+        }
+    }
+
+    /* 按原图像素四角的投影足迹补栅格，避免高度较高时局部图出现空洞。 */
+    for(i = 0; i < pixel_count; ++i)
+    {
+        int index = (int)s_vision_queue[i];
+        int row = index / MT9V03X_W;
+        int col = index % MT9V03X_W;
+        const float corner_x[4] = {
+            (float)col - 0.5f, (float)col + 0.5f,
+            (float)col - 0.5f, (float)col + 0.5f};
+        const float corner_y[4] = {
+            (float)row - 0.5f, (float)row - 0.5f,
+            (float)row + 0.5f, (float)row + 0.5f};
+        float footprint_min_x = 0.0f;
+        float footprint_max_x = 0.0f;
+        float footprint_min_y = 0.0f;
+        float footprint_max_y = 0.0f;
+        int footprint_valid = 0;
+        int corner;
+
+        for(corner = 0; corner < 4; ++corner)
+        {
+            float world_x = 0.0f;
+            float world_y = 0.0f;
+
+            if(!IPM_Image2WorldF(corner_x[corner], corner_y[corner], &world_x, &world_y))
+            {
+                continue;
+            }
+            if(footprint_valid == 0)
+            {
+                footprint_min_x = footprint_max_x = world_x;
+                footprint_min_y = footprint_max_y = world_y;
+            }
+            else
+            {
+                if(world_x < footprint_min_x) footprint_min_x = world_x;
+                if(world_x > footprint_max_x) footprint_max_x = world_x;
+                if(world_y < footprint_min_y) footprint_min_y = world_y;
+                if(world_y > footprint_max_y) footprint_max_y = world_y;
+            }
+            footprint_valid++;
+        }
+
+        if(footprint_valid == 0)
+        {
+            continue;
+        }
+
+        {
+            int min_local_x = (int)floorf((footprint_min_y - min_y) / scale);
+            int max_local_x = (int)floorf((footprint_max_y - min_y) / scale);
+            int min_local_y = (int)floorf((max_x - footprint_max_x) / scale);
+            int max_local_y = (int)floorf((max_x - footprint_min_x) / scale);
+            int local_y;
+            int local_x;
+
+            if(min_local_x < 0) min_local_x = 0;
+            if(min_local_y < 0) min_local_y = 0;
+            if(max_local_x >= local_width) max_local_x = local_width - 1;
+            if(max_local_y >= local_height) max_local_y = local_height - 1;
+            for(local_y = min_local_y; local_y <= max_local_y; ++local_y)
+            {
+                for(local_x = min_local_x; local_x <= max_local_x; ++local_x)
+                {
+                    s_vision_local_birdview_mask[
+                        local_y * VISION_RUNTIME_LOCAL_BIRDVIEW_MAX_WIDTH + local_x] = 1U;
+                }
+            }
+        }
+    }
+
+    {
+        uint32 occupied = 0U;
+        uint32 exposed_edges = 0U;
+        int row;
+        int col;
+
+        for(row = 0; row < local_height; ++row)
+        {
+            for(col = 0; col < local_width; ++col)
+            {
+                int index = row * VISION_RUNTIME_LOCAL_BIRDVIEW_MAX_WIDTH + col;
+                int neighbor;
+
+                if(s_vision_local_birdview_mask[index] == 0U)
+                {
+                    continue;
+                }
+                occupied++;
+
+                neighbor = (row > 0) ? index - (int)VISION_RUNTIME_LOCAL_BIRDVIEW_MAX_WIDTH : -1;
+                if(neighbor < 0 || s_vision_local_birdview_mask[neighbor] == 0U) exposed_edges++;
+                neighbor = (row + 1 < local_height) ? index + (int)VISION_RUNTIME_LOCAL_BIRDVIEW_MAX_WIDTH : -1;
+                if(neighbor < 0 || s_vision_local_birdview_mask[neighbor] == 0U) exposed_edges++;
+                neighbor = (col > 0) ? index - 1 : -1;
+                if(neighbor < 0 || s_vision_local_birdview_mask[neighbor] == 0U) exposed_edges++;
+                neighbor = (col + 1 < local_width) ? index + 1 : -1;
+                if(neighbor < 0 || s_vision_local_birdview_mask[neighbor] == 0U) exposed_edges++;
+            }
+        }
+
+        if(occupied == 0U || exposed_edges == 0U)
+        {
+            return;
+        }
+
+        blob->physical_pixel_count = (occupied > 65535U) ? 65535U : (uint16)occupied;
+        blob->physical_area_cm2 = (float)occupied * scale * scale;
+        blob->physical_perimeter_cm = (float)exposed_edges * scale;
+        blob->physical_circularity =
+            (4.0f * 3.14159265f * blob->physical_area_cm2) /
+            (blob->physical_perimeter_cm * blob->physical_perimeter_cm);
+        if(blob->physical_circularity > 1.0f)
+        {
+            blob->physical_circularity = 1.0f;
+        }
+        blob->physical_aspect_ratio = VisionRuntime_NormalizedAspect(local_width, local_height);
+        blob->physical_occupancy_ratio =
+            (float)occupied / (float)(local_width * local_height);
+        blob->physical_valid = 1U;
+    }
+}
 
 static void VisionRuntime_InsertBlobAreaRank(int area)
 {
@@ -102,6 +348,11 @@ static void VisionRuntime_UpdateBeaconSlotsFromCurrentFrame(int beacon_count,
         s_vision_runtime_beacon_slots[slot_count].max_row = beacon_results[best_index].max_row;
         s_vision_runtime_beacon_slots[slot_count].min_col = beacon_results[best_index].min_col;
         s_vision_runtime_beacon_slots[slot_count].max_col = beacon_results[best_index].max_col;
+        s_vision_runtime_beacon_slots[slot_count].area_cm2 = beacon_results[best_index].physical_area_cm2;
+        s_vision_runtime_beacon_slots[slot_count].perimeter_cm = beacon_results[best_index].physical_perimeter_cm;
+        s_vision_runtime_beacon_slots[slot_count].circularity = beacon_results[best_index].physical_circularity;
+        s_vision_runtime_beacon_slots[slot_count].physical_pixel_count = beacon_results[best_index].physical_pixel_count;
+        s_vision_runtime_beacon_slots[slot_count].physical_valid = beacon_results[best_index].physical_valid;
         slot_count++;
     }
 }
@@ -261,6 +512,7 @@ static void VisionRuntime_ProcessBlobs(const uint8 image[MT9V03X_H][MT9V03X_W])
 
             s_vision_queue[rear++] = (uint16)start_index;
             s_vision_visited[start_index] = 1U;
+            s_vision_component_mask[start_index] = 1U;
 
             while(front < rear)
             {
@@ -306,6 +558,7 @@ static void VisionRuntime_ProcessBlobs(const uint8 image[MT9V03X_H][MT9V03X_W])
                         if(s_vision_binary[next_index] != 0U && !s_vision_visited[next_index])
                         {
                             s_vision_visited[next_index] = 1U;
+                            s_vision_component_mask[next_index] = 1U;
                             if(rear < (MT9V03X_H * MT9V03X_W))
                             {
                                 s_vision_queue[rear++] = (uint16)next_index;
@@ -358,7 +611,7 @@ static void VisionRuntime_ProcessBlobs(const uint8 image[MT9V03X_H][MT9V03X_W])
                     boundary_count++;
                 }
                 contour.point_count = (uint16)((boundary_count > (int)VISION_RUNTIME_CONTOUR_MAX_POINTS) ?
-                                               VISION_RUNTIME_CONTOUR_MAX_POINTS : boundary_count);
+                                               (int)VISION_RUNTIME_CONTOUR_MAX_POINTS : boundary_count);
                 if(boundary_count > 0)
                 {
                     float perimeter = (float)boundary_count;
@@ -373,6 +626,7 @@ static void VisionRuntime_ProcessBlobs(const uint8 image[MT9V03X_H][MT9V03X_W])
                 {
                     blob.circularity = 0.0f;
                 }
+                VisionRuntime_BuildPhysicalBlobMetrics(&blob, rear);
                 blob.world_valid = IPM_Image2WorldF(blob.centroid_col,
                                                     blob.centroid_row,
                                                     &blob.world_x,
@@ -381,6 +635,7 @@ static void VisionRuntime_ProcessBlobs(const uint8 image[MT9V03X_H][MT9V03X_W])
                 {
                     VisionRuntime_DispatchBlob(&blob, &contour, large_area_threshold);
                 }
+                VisionRuntime_ClearComponentMask(rear);
             }
         }
     }
@@ -413,6 +668,9 @@ static void VisionRuntime_UpdateDiagFromCurrentFrame(int beacon_count,
     s_vision_runtime_diag.beacon_nearest_y_cm = 0.0f;
     s_vision_runtime_diag.beacon_nearest_distance_cm = 0.0f;
     s_vision_runtime_diag.beacon_nearest_area = 0.0f;
+    s_vision_runtime_diag.beacon_nearest_area_cm2 = 0.0f;
+    s_vision_runtime_diag.beacon_nearest_perimeter_cm = 0.0f;
+    s_vision_runtime_diag.beacon_nearest_circularity = 0.0f;
     s_vision_runtime_diag.beacon_nearest_brightness = 0.0f;
     s_vision_runtime_diag.beacon_nearest_occupancy = 0.0f;
     s_vision_runtime_diag.beacon_nearest_aspect = 0.0f;
@@ -430,6 +688,9 @@ static void VisionRuntime_UpdateDiagFromCurrentFrame(int beacon_count,
             s_vision_runtime_diag.beacon_nearest_y_cm = nearest->world_y;
             s_vision_runtime_diag.beacon_nearest_distance_cm = nearest->distance_cm;
             s_vision_runtime_diag.beacon_nearest_area = (float)nearest->area;
+            s_vision_runtime_diag.beacon_nearest_area_cm2 = nearest->physical_area_cm2;
+            s_vision_runtime_diag.beacon_nearest_perimeter_cm = nearest->physical_perimeter_cm;
+            s_vision_runtime_diag.beacon_nearest_circularity = nearest->physical_circularity;
             s_vision_runtime_diag.beacon_nearest_brightness = nearest->average_brightness;
             s_vision_runtime_diag.beacon_nearest_occupancy = nearest->occupancy_ratio;
             s_vision_runtime_diag.beacon_nearest_aspect = nearest->aspect_ratio;

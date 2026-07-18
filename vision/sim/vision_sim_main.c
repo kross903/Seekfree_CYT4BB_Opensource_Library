@@ -7,9 +7,13 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
 
 uint8 mt9v03x_image[MT9V03X_H][MT9V03X_W];
 volatile uint8 mt9v03x_finish_flag = 0U;
+
+#define BIRDVIEW_MAX_ALLOCATION_BYTES (256U * 1024U * 1024U)
+#define BIRDVIEW_HALF_RANGE_CM        (250.0f)
 
 static float parse_float(const char *text, float fallback)
 {
@@ -76,6 +80,19 @@ static int write_pgm_image(const char *path, const uint8 *image, int width, int 
     return 1;
 }
 
+static int parse_int(const char *text, int fallback)
+{
+    char *end = NULL;
+    long value;
+
+    if(text == NULL)
+    {
+        return fallback;
+    }
+    value = strtol(text, &end, 10);
+    return (end == text) ? fallback : (int)value;
+}
+
 static int write_pgm(const char *path, const uint8 *image)
 {
     return write_pgm_image(path, image, MT9V03X_W, MT9V03X_H);
@@ -83,7 +100,9 @@ static int write_pgm(const char *path, const uint8 *image)
 
 static int write_result(const char *path, const char *binary_path,
                         float roll_deg, float pitch_deg, float height_cm,
-                        const VisionRuntimeDiag_t *diag)
+                        uint8 threshold,
+                        const VisionRuntimeDiag_t *diag,
+                        const IPM_BirdViewBounds_t *birdview_bounds)
 {
     FILE *file = NULL;
     VisionRuntimeBeaconSlot_t slots[VISION_RUNTIME_BEACON_SLOT_COUNT] = {0};
@@ -105,9 +124,31 @@ static int write_result(const char *path, const char *binary_path,
     fprintf(file, "  \"width\":%d,\n  \"height\":%d,\n", MT9V03X_W, MT9V03X_H);
     fprintf(file, "  \"roll_deg\":%.6f,\n  \"pitch_deg\":%.6f,\n  \"height_cm\":%.6f,\n",
             roll_deg, pitch_deg, height_cm);
+    if(birdview_bounds != NULL)
+    {
+        fprintf(file,
+                "  \"birdview\":{\"width\":%d,\"height\":%d,\"scale_cm_per_pixel\":%.6f,"
+                "\"min_world_x\":%.6f,\"max_world_x\":%.6f,"
+                "\"min_world_y\":%.6f,\"max_world_y\":%.6f},\n",
+                birdview_bounds->width, birdview_bounds->height,
+                birdview_bounds->scale,
+                birdview_bounds->min_world_x, birdview_bounds->max_world_x,
+                birdview_bounds->min_world_y, birdview_bounds->max_world_y);
+    }
+    else
+    {
+        fprintf(file, "  \"birdview\":null,\n");
+    }
     fprintf(file, "  \"blob_count\":%d,\n  \"beacon_count\":%d,\n  \"beacon_blob_count\":%d,\n",
             diag->blob_count, diag->beacon_count, diag->beacon_blob_count);
-    fprintf(file, "  \"binary_threshold\":%d,\n", VISION_BINARY_THRESHOLD);
+    fprintf(file,
+            "  \"beacon_nearest_metrics\":{\"raw_area_pixels\":%.6f,\"area_cm2\":%.6f,"
+            "\"perimeter_cm\":%.6f,\"circularity\":%.6f},\n",
+            diag->beacon_nearest_area,
+            diag->beacon_nearest_area_cm2,
+            diag->beacon_nearest_perimeter_cm,
+            diag->beacon_nearest_circularity);
+    fprintf(file, "  \"binary_threshold\":%u,\n", (unsigned)threshold);
     fprintf(file, "  \"binary_path\":\"");
     if(binary_path != NULL)
     {
@@ -122,10 +163,15 @@ static int write_result(const char *path, const char *binary_path,
     for(i = 0; i < VISION_RUNTIME_BEACON_SLOT_COUNT; i++)
     {
         fprintf(file,
-                "    {\"valid\":%u,\"x_cm\":%.6f,\"y_cm\":%.6f,\"min_row\":%d,\"max_row\":%d,\"min_col\":%d,\"max_col\":%d}%s\n",
+                "    {\"valid\":%u,\"x_cm\":%.6f,\"y_cm\":%.6f,\"min_row\":%d,\"max_row\":%d,\"min_col\":%d,\"max_col\":%d,"
+                "\"area_cm2\":%.6f,\"perimeter_cm\":%.6f,\"circularity\":%.6f,"
+                "\"physical_pixel_count\":%u,\"physical_valid\":%u}%s\n",
                 (unsigned)slots[i].valid, slots[i].x_cm, slots[i].y_cm,
                 slots[i].min_row, slots[i].max_row,
                 slots[i].min_col, slots[i].max_col,
+                slots[i].area_cm2, slots[i].perimeter_cm, slots[i].circularity,
+                (unsigned)slots[i].physical_pixel_count,
+                (unsigned)slots[i].physical_valid,
                 (i + 1 < VISION_RUNTIME_BEACON_SLOT_COUNT) ? "," : "");
     }
     fprintf(file, "  ],\n  \"vehicle\":{\"valid\":%u,\"x_cm\":%.6f,\"y_cm\":%.6f,\"heading_deg\":%.6f},\n",
@@ -159,27 +205,47 @@ int main(int argc, char **argv)
     const char *output_path = get_option(argc, argv, "--output");
     const char *binary_path = get_option(argc, argv, "--binary");
     const char *undistorted_path = get_option(argc, argv, "--undistorted");
+    const char *undistorted_mask_path = get_option(argc, argv, "--undistorted-mask");
+    const char *undistorted_binary_path = get_option(argc, argv, "--undistorted-binary");
     const char *birdview_path = get_option(argc, argv, "--birdview");
+    const char *birdview_mask_path = get_option(argc, argv, "--birdview-mask");
+    const char *birdview_binary_path = get_option(argc, argv, "--birdview-binary");
     float roll_deg = parse_float(get_option(argc, argv, "--roll"), 0.0f);
     float pitch_deg = parse_float(get_option(argc, argv, "--pitch"), 0.0f);
     float height_cm = parse_float(get_option(argc, argv, "--height"), 100.0f);
+    int threshold_value = parse_int(get_option(argc, argv, "--threshold"), (int)VISION_BINARY_THRESHOLD);
+    uint8 threshold;
+    int binary_output = parse_int(get_option(argc, argv, "--binary-output"), 0);
     VisionRuntimeDiag_t diag = {0};
     uint8 undistorted_image[MT9V03X_H][MT9V03X_W];
-    uint8 birdview_image[IPM_BIRDVIEW_W][IPM_BIRDVIEW_H];
-    const uint8 (*birdview_source)[MT9V03X_W] = mt9v03x_image;
+    uint8 undistorted_mask[MT9V03X_H][MT9V03X_W];
+    uint8 undistorted_binary[MT9V03X_H][MT9V03X_W];
+    uint8 *birdview_image = NULL;
+    uint8 *birdview_mask = NULL;
+    uint8 *birdview_binary = NULL;
+    const uint8 (*binary_source)[MT9V03X_W] = NULL;
+    IPM_BirdViewBounds_t birdview_bounds = {0};
+    IPM_BirdViewBounds_t *birdview_bounds_ptr = NULL;
+    size_t birdview_pixels = 0U;
 
     if(input_path == NULL || output_path == NULL || !read_raw(input_path))
     {
-        fprintf(stderr, "usage: vision_sim --input frame.raw --output result.json [--binary binary.pgm] [--undistorted undistorted.pgm] [--birdview birdview.pgm]\n");
+        fprintf(stderr, "usage: vision_sim --input frame.raw --output result.json [--binary binary.pgm] [--threshold 150] [--binary-output 1] [--undistorted undistorted.pgm] [--undistorted-mask mask.pgm] [--undistorted-binary binary.pgm] [--birdview birdview.pgm] [--birdview-mask mask.pgm] [--birdview-binary binary.pgm]\n");
         return 2;
     }
+
+    if(threshold_value < 1) threshold_value = 1;
+    if(threshold_value > 255) threshold_value = 255;
+    threshold = (uint8)threshold_value;
 
     IPM_Interface_Init();
     VehicleMarkerLocalization_Init();
     BeaconDetect_Init();
+    VisionRuntime_SetBinaryThreshold(threshold);
     mt9v03x_finish_flag = 1U;
     VisionRuntime_ProcessFrameWithPose(roll_deg, pitch_deg, height_cm);
     VisionRuntime_GetDiag(&diag);
+    binary_source = (const uint8 (*)[MT9V03X_W])VisionRuntime_GetBinaryDisplayImage();
 
     if(binary_path != NULL)
     {
@@ -189,20 +255,101 @@ int main(int argc, char **argv)
     {
         IPM_GenerateUndistortedDebugImage(mt9v03x_image, undistorted_image);
         write_pgm(undistorted_path, undistorted_image[0]);
-        birdview_source = undistorted_image;
+        if(undistorted_mask_path != NULL)
+        {
+            IPM_GenerateUndistortedDebugMask(undistorted_mask);
+            write_pgm(undistorted_mask_path, undistorted_mask[0]);
+        }
+        if(binary_output && undistorted_binary_path != NULL)
+        {
+            IPM_GenerateUndistortedDebugImageNearest(binary_source, undistorted_binary);
+            write_pgm(undistorted_binary_path, undistorted_binary[0]);
+        }
     }
     if(birdview_path != NULL)
     {
-        IPM_GenerateBirdView(birdview_source,
-                             birdview_image[0],
-                             IPM_BIRDVIEW_W, IPM_BIRDVIEW_H, IPM_SCALE);
-        write_pgm_image(birdview_path, birdview_image[0],
-                        IPM_BIRDVIEW_W, IPM_BIRDVIEW_H);
+        if(!IPM_CalculateBirdViewBounds(IPM_SCALE, &birdview_bounds) ||
+           !IPM_ClampBirdViewBounds(&birdview_bounds,
+                                    BIRDVIEW_HALF_RANGE_CM,
+                                    BIRDVIEW_HALF_RANGE_CM) ||
+           birdview_bounds.width <= 0 || birdview_bounds.height <= 0)
+        {
+            fprintf(stderr, "birdview has no valid ground projection\n");
+            return 4;
+        }
+        if((size_t)birdview_bounds.width > ((size_t)-1) / (size_t)birdview_bounds.height)
+        {
+            fprintf(stderr, "birdview dimensions overflow\n");
+            return 4;
+        }
+        birdview_pixels = (size_t)birdview_bounds.width * (size_t)birdview_bounds.height;
+        if(birdview_pixels > (size_t)BIRDVIEW_MAX_ALLOCATION_BYTES)
+        {
+            fprintf(stderr,
+                    "birdview dimensions %dx%d require %zu bytes, exceeding the %u-byte limit; no crop performed\n",
+                    birdview_bounds.width, birdview_bounds.height, birdview_pixels,
+                    (unsigned)BIRDVIEW_MAX_ALLOCATION_BYTES);
+            return 4;
+        }
+        birdview_image = (uint8 *)malloc(birdview_pixels);
+        birdview_mask = (uint8 *)malloc(birdview_pixels);
+        if(binary_output)
+        {
+            birdview_binary = (uint8 *)malloc(birdview_pixels);
+        }
+        if(birdview_image == NULL || birdview_mask == NULL ||
+           (binary_output && birdview_binary == NULL))
+        {
+            fprintf(stderr, "birdview allocation failed for %dx%d (%zu bytes)\n",
+                    birdview_bounds.width, birdview_bounds.height, birdview_pixels);
+            free(birdview_image);
+            free(birdview_mask);
+            free(birdview_binary);
+            return 4;
+        }
+        if(!IPM_GenerateBirdViewDynamic(mt9v03x_image, birdview_image,
+                                        birdview_mask, &birdview_bounds) ||
+           !write_pgm_image(birdview_path, birdview_image,
+                            birdview_bounds.width, birdview_bounds.height))
+        {
+            fprintf(stderr, "birdview generation failed\n");
+            free(birdview_image);
+            free(birdview_mask);
+            free(birdview_binary);
+            return 4;
+        }
+        if(birdview_mask_path != NULL)
+        {
+            write_pgm_image(birdview_mask_path, birdview_mask,
+                            birdview_bounds.width, birdview_bounds.height);
+        }
+        if(binary_output && birdview_binary_path != NULL)
+        {
+            if(!IPM_GenerateBirdViewDynamicNearest(binary_source, birdview_binary,
+                                                   birdview_mask, &birdview_bounds))
+            {
+                fprintf(stderr, "binary birdview generation failed\n");
+                free(birdview_image);
+                free(birdview_mask);
+                free(birdview_binary);
+                return 4;
+            }
+            write_pgm_image(birdview_binary_path, birdview_binary,
+                            birdview_bounds.width, birdview_bounds.height);
+        }
+        birdview_bounds_ptr = &birdview_bounds;
     }
-    if(!write_result(output_path, binary_path, roll_deg, pitch_deg, height_cm, &diag))
+    if(!write_result(output_path, binary_path, roll_deg, pitch_deg, height_cm,
+                     threshold, &diag, birdview_bounds_ptr))
     {
         fprintf(stderr, "failed to write result: %s\n", output_path);
+        free(birdview_image);
+        free(birdview_mask);
+        free(birdview_binary);
         return 3;
     }
+    free(birdview_image);
+    free(birdview_mask);
+    free(birdview_binary);
     return 0;
 }

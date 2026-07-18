@@ -31,6 +31,17 @@
 /* 俯视图缩放系数(cm/pixel) */
 #define IPM_SCALE         0.5f
 
+typedef struct
+{
+    float min_world_x;
+    float max_world_x;
+    float min_world_y;
+    float max_world_y;
+    float scale;
+    int width;
+    int height;
+} IPM_BirdViewBounds_t;
+
 /* ====================== 函数声明 ====================== */
 
 #ifdef __cplusplus
@@ -106,6 +117,26 @@ bool IPM_GetNadirPoint(int *img_x, int *img_y);
 void IPM_GenerateBirdView(const uint8 src_img[MT9V03X_H][MT9V03X_W],
                           uint8 *dst_img, int dst_w, int dst_h, float scale);
 
+/* 计算所有有效原图像素在地面上的覆盖范围。 */
+uint8 IPM_CalculateBirdViewBounds(float scale, IPM_BirdViewBounds_t *bounds);
+
+/* 将鸟瞰范围限制在以正下方为中心的物理边界内。 */
+uint8 IPM_ClampBirdViewBounds(IPM_BirdViewBounds_t *bounds,
+                              float half_range_x,
+                              float half_range_y);
+
+/* 按动态地面范围生成鸟瞰图，并返回每个输出像素是否有效。 */
+uint8 IPM_GenerateBirdViewDynamic(const uint8 src_img[MT9V03X_H][MT9V03X_W],
+                                  uint8 *dst_img,
+                                  uint8 *valid_mask,
+                                  const IPM_BirdViewBounds_t *bounds);
+
+/* 使用二值源图和最近邻采样生成鸟瞰图，保持输出为0/255。 */
+uint8 IPM_GenerateBirdViewDynamicNearest(const uint8 src_img[MT9V03X_H][MT9V03X_W],
+                                         uint8 *dst_img,
+                                         uint8 *valid_mask,
+                                         const IPM_BirdViewBounds_t *bounds);
+
 /**
  * @brief 在IPS200屏幕上显示俯视图
  * @param src_img 源摄像头图像
@@ -129,6 +160,11 @@ void IPM_DrawCenterMark(uint8 *img, int w, int h);
  */
 void IPM_GenerateUndistortedDebugImage(const uint8 src_img[MT9V03X_H][MT9V03X_W],
                                        uint8 dst_img[MT9V03X_H][MT9V03X_W]);
+
+void IPM_GenerateUndistortedDebugImageNearest(const uint8 src_img[MT9V03X_H][MT9V03X_W],
+                                              uint8 dst_img[MT9V03X_H][MT9V03X_W]);
+
+void IPM_GenerateUndistortedDebugMask(uint8 dst_mask[MT9V03X_H][MT9V03X_W]);
 
 /* ====================== 状态获取函数 ====================== */
 

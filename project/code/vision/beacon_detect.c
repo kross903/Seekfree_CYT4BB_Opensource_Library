@@ -38,6 +38,13 @@ static void BeaconDetect_FillResultFromBlob(const VisionBlob_t *blob, BeaconResu
     result->average_brightness = blob->average_brightness;
     result->aspect_ratio = blob->aspect_ratio;
     result->occupancy_ratio = blob->occupancy_ratio;
+    result->physical_area_cm2 = blob->physical_area_cm2;
+    result->physical_perimeter_cm = blob->physical_perimeter_cm;
+    result->physical_circularity = blob->physical_circularity;
+    result->physical_aspect_ratio = blob->physical_aspect_ratio;
+    result->physical_occupancy_ratio = blob->physical_occupancy_ratio;
+    result->physical_pixel_count = blob->physical_pixel_count;
+    result->physical_valid = blob->physical_valid;
     result->world_x = blob->world_x;
     result->world_y = blob->world_y;
     result->distance_cm = dist;
@@ -57,6 +64,10 @@ void BeaconDetect_BeginBlobFrame(BeaconResult_t *results, int max_results)
 
 uint8 BeaconDetect_AppendBlob(const VisionBlob_t *blob)
 {
+    float aspect_ratio;
+    float occupancy_ratio;
+    float circularity;
+
     if(blob == NULL || s_beacon_frame_results == NULL || s_beacon_frame_max_results <= 0)
     {
         return 0U;
@@ -66,16 +77,26 @@ uint8 BeaconDetect_AppendBlob(const VisionBlob_t *blob)
         return 0U;
     }
 
-    if(blob->aspect_ratio < g_beacon_config.min_aspect ||
-       blob->aspect_ratio > g_beacon_config.max_aspect)
+    aspect_ratio = blob->aspect_ratio;
+    occupancy_ratio = blob->occupancy_ratio;
+    circularity = blob->circularity;
+    if(blob->physical_valid)
+    {
+        aspect_ratio = blob->physical_aspect_ratio;
+        occupancy_ratio = blob->physical_occupancy_ratio;
+        circularity = blob->physical_circularity;
+    }
+
+    if(aspect_ratio < g_beacon_config.min_aspect ||
+       aspect_ratio > g_beacon_config.max_aspect)
     {
         return 0U;
     }
-    if(blob->occupancy_ratio < g_beacon_config.min_occupancy)
+    if(occupancy_ratio < g_beacon_config.min_occupancy)
     {
         return 0U;
     }
-    if(blob->circularity < g_beacon_config.min_circularity)
+    if(circularity < g_beacon_config.min_circularity)
     {
         return 0U;
     }

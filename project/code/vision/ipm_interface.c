@@ -8,6 +8,8 @@
 #include "ipm_interface.h"
 #include "common/project_headfile.h"
 #include "vision/camera_calibration.h"
+#include <float.h>
+#include <math.h>
 
 /*
  * 模块定位:
@@ -153,11 +155,232 @@ bool IPM_GetNadirPoint(int *img_x, int *img_y)
  *
  * ???????????????????? `drone_ipm_embedded.c`?
  */
+static uint8 IPM_SampleGrayBilinear(const uint8 src_img[MT9V03X_H][MT9V03X_W],
+                                    float x, float y, uint8 *value)
+{
+    int x0;
+    int y0;
+    int x1;
+    int y1;
+    float tx;
+    float ty;
+    float top;
+    float bottom;
+    float sample;
+
+    if(src_img == NULL || value == NULL ||
+       x < 0.0f || x > ((float)MT9V03X_W - 1.0f) ||
+       y < 0.0f || y > ((float)MT9V03X_H - 1.0f))
+    {
+        return 0U;
+    }
+
+    x0 = (int)floorf(x);
+    y0 = (int)floorf(y);
+    x1 = (x0 + 1 < MT9V03X_W) ? (x0 + 1) : x0;
+    y1 = (y0 + 1 < MT9V03X_H) ? (y0 + 1) : y0;
+    tx = x - (float)x0;
+    ty = y - (float)y0;
+    top = ((1.0f - tx) * (float)src_img[y0][x0]) +
+          (tx * (float)src_img[y0][x1]);
+    bottom = ((1.0f - tx) * (float)src_img[y1][x0]) +
+             (tx * (float)src_img[y1][x1]);
+    sample = ((1.0f - ty) * top) + (ty * bottom);
+    if(sample < 0.0f) sample = 0.0f;
+    if(sample > 255.0f) sample = 255.0f;
+    *value = (uint8)(sample + 0.5f);
+    return 1U;
+}
+
+static uint8 IPM_SampleGrayNearest(const uint8 src_img[MT9V03X_H][MT9V03X_W],
+                                   float x, float y, uint8 *value)
+{
+    int ix;
+    int iy;
+
+    if(src_img == NULL || value == NULL ||
+       x < 0.0f || x > ((float)MT9V03X_W - 1.0f) ||
+       y < 0.0f || y > ((float)MT9V03X_H - 1.0f))
+    {
+        return 0U;
+    }
+
+    ix = (int)floorf(x + 0.5f);
+    iy = (int)floorf(y + 0.5f);
+    if(ix < 0) ix = 0;
+    if(ix >= MT9V03X_W) ix = MT9V03X_W - 1;
+    if(iy < 0) iy = 0;
+    if(iy >= MT9V03X_H) iy = MT9V03X_H - 1;
+    *value = src_img[iy][ix];
+    return 1U;
+}
+
 void IPM_GenerateBirdView(const uint8 src_img[MT9V03X_H][MT9V03X_W],
                           uint8 *dst_img, int dst_w, int dst_h, float scale)
 {
-    DroneIPM_Embedded_BirdView((const uint8_t *)src_img, dst_img, 
-                                dst_w, dst_h, scale);
+    int dst_y;
+    int dst_x;
+    float center_px;
+    float center_py;
+
+    if(src_img == NULL || dst_img == NULL || dst_w <= 0 || dst_h <= 0 || scale <= 0.0f)
+    {
+        return;
+    }
+
+    center_px = (float)dst_w / 2.0f;
+    center_py = (float)dst_h / 2.0f;
+    for(dst_y = 0; dst_y < dst_h; dst_y++)
+    {
+        for(dst_x = 0; dst_x < dst_w; dst_x++)
+        {
+            float world_x = ((float)dst_y - center_py) * scale;
+            float world_y = (center_px - (float)dst_x) * scale;
+            float source[2];
+            uint8 sample = 0U;
+
+            if(DroneIPM_Embedded_World2ImageF(world_x, world_y, source) &&
+               IPM_SampleGrayBilinear(src_img, source[0], source[1], &sample))
+            {
+                dst_img[dst_y * dst_w + dst_x] = sample;
+            }
+            else
+            {
+                dst_img[dst_y * dst_w + dst_x] = 0U;
+            }
+        }
+    }
+}
+
+uint8 IPM_CalculateBirdViewBounds(float scale, IPM_BirdViewBounds_t *bounds)
+{
+    float min_x = FLT_MAX;
+    float max_x = -FLT_MAX;
+    float min_y = FLT_MAX;
+    float max_y = -FLT_MAX;
+    int valid_count = 0;
+    int y;
+    int x;
+
+    if(bounds == NULL || scale <= 0.0f)
+    {
+        return 0U;
+    }
+
+    for(y = 0; y < MT9V03X_H; y++)
+    {
+        for(x = 0; x < MT9V03X_W; x++)
+        {
+            float world[2];
+            if(DroneIPM_Embedded_Image2WorldF((float)x, (float)y, world))
+            {
+                if(world[0] < min_x) min_x = world[0];
+                if(world[0] > max_x) max_x = world[0];
+                if(world[1] < min_y) min_y = world[1];
+                if(world[1] > max_y) max_y = world[1];
+                valid_count++;
+            }
+        }
+    }
+
+    if(valid_count == 0)
+    {
+        return 0U;
+    }
+
+    bounds->min_world_x = floorf(min_x / scale) * scale;
+    bounds->max_world_x = ceilf(max_x / scale) * scale;
+    bounds->min_world_y = floorf(min_y / scale) * scale;
+    bounds->max_world_y = ceilf(max_y / scale) * scale;
+    bounds->scale = scale;
+    bounds->width = (int)ceilf((bounds->max_world_y - bounds->min_world_y) / scale);
+    bounds->height = (int)ceilf((bounds->max_world_x - bounds->min_world_x) / scale);
+    if(bounds->width < 1) bounds->width = 1;
+    if(bounds->height < 1) bounds->height = 1;
+    return 1U;
+}
+
+uint8 IPM_ClampBirdViewBounds(IPM_BirdViewBounds_t *bounds,
+                              float half_range_x,
+                              float half_range_y)
+{
+    if(bounds == NULL || bounds->scale <= 0.0f || half_range_x <= 0.0f || half_range_y <= 0.0f)
+    {
+        return 0U;
+    }
+
+    if(bounds->min_world_x < -half_range_x) bounds->min_world_x = -half_range_x;
+    if(bounds->max_world_x > half_range_x) bounds->max_world_x = half_range_x;
+    if(bounds->min_world_y < -half_range_y) bounds->min_world_y = -half_range_y;
+    if(bounds->max_world_y > half_range_y) bounds->max_world_y = half_range_y;
+    if(bounds->min_world_x >= bounds->max_world_x || bounds->min_world_y >= bounds->max_world_y)
+    {
+        return 0U;
+    }
+
+    bounds->width = (int)ceilf((bounds->max_world_y - bounds->min_world_y) / bounds->scale);
+    bounds->height = (int)ceilf((bounds->max_world_x - bounds->min_world_x) / bounds->scale);
+    if(bounds->width < 1) bounds->width = 1;
+    if(bounds->height < 1) bounds->height = 1;
+    return 1U;
+}
+
+static uint8 IPM_GenerateBirdViewDynamicInternal(const uint8 src_img[MT9V03X_H][MT9V03X_W],
+                                                 uint8 *dst_img,
+                                                 uint8 *valid_mask,
+                                                 const IPM_BirdViewBounds_t *bounds,
+                                                 uint8 nearest)
+{
+    int dst_y;
+    int dst_x;
+
+    if(src_img == NULL || dst_img == NULL || valid_mask == NULL || bounds == NULL ||
+       bounds->width <= 0 || bounds->height <= 0 || bounds->scale <= 0.0f)
+    {
+        return 0U;
+    }
+
+    for(dst_y = 0; dst_y < bounds->height; dst_y++)
+    {
+        for(dst_x = 0; dst_x < bounds->width; dst_x++)
+        {
+            float world_x = bounds->max_world_x - ((float)dst_y + 0.5f) * bounds->scale;
+            float world_y = bounds->max_world_y - ((float)dst_x + 0.5f) * bounds->scale;
+            float source[2];
+            uint8 sample = 0U;
+            size_t index = (size_t)dst_y * (size_t)bounds->width + (size_t)dst_x;
+
+            if(DroneIPM_Embedded_World2ImageF(world_x, world_y, source) &&
+               (nearest ? IPM_SampleGrayNearest(src_img, source[0], source[1], &sample) :
+                          IPM_SampleGrayBilinear(src_img, source[0], source[1], &sample)))
+            {
+                dst_img[index] = sample;
+                valid_mask[index] = 255U;
+            }
+            else
+            {
+                dst_img[index] = 0U;
+                valid_mask[index] = 0U;
+            }
+        }
+    }
+    return 1U;
+}
+
+uint8 IPM_GenerateBirdViewDynamic(const uint8 src_img[MT9V03X_H][MT9V03X_W],
+                                  uint8 *dst_img,
+                                  uint8 *valid_mask,
+                                  const IPM_BirdViewBounds_t *bounds)
+{
+    return IPM_GenerateBirdViewDynamicInternal(src_img, dst_img, valid_mask, bounds, 0U);
+}
+
+uint8 IPM_GenerateBirdViewDynamicNearest(const uint8 src_img[MT9V03X_H][MT9V03X_W],
+                                         uint8 *dst_img,
+                                         uint8 *valid_mask,
+                                         const IPM_BirdViewBounds_t *bounds)
+{
+    return IPM_GenerateBirdViewDynamicInternal(src_img, dst_img, valid_mask, bounds, 1U);
 }
 
 /**
@@ -219,8 +442,9 @@ void IPM_DrawCenterMark(uint8 *img, int w, int h)
     }
 }
 
-void IPM_GenerateUndistortedDebugImage(const uint8 src_img[MT9V03X_H][MT9V03X_W],
-                                       uint8 dst_img[MT9V03X_H][MT9V03X_W])
+static void IPM_GenerateUndistortedDebugImageInternal(const uint8 src_img[MT9V03X_H][MT9V03X_W],
+                                                      uint8 dst_img[MT9V03X_H][MT9V03X_W],
+                                                      uint8 nearest)
 {
     int y = 0;
     int x = 0;
@@ -234,17 +458,56 @@ void IPM_GenerateUndistortedDebugImage(const uint8 src_img[MT9V03X_H][MT9V03X_W]
     {
         for(x = 0; x < MT9V03X_W; x++)
         {
-            int sx = 0;
-            int sy = 0;
+            float sx = 0.0f;
+            float sy = 0.0f;
+            uint8 sample = 0U;
 
-            if(CameraCalibration_RectifiedPixelToSource(x, y, &sx, &sy))
+            if(CameraCalibration_RectifiedPointToSource((float)x, (float)y, &sx, &sy) &&
+               (nearest ? IPM_SampleGrayNearest(src_img, sx, sy, &sample) :
+                          IPM_SampleGrayBilinear(src_img, sx, sy, &sample)))
             {
-                dst_img[y][x] = src_img[sy][sx];
+                dst_img[y][x] = sample;
             }
             else
             {
                 dst_img[y][x] = 0U;
             }
+        }
+    }
+}
+
+void IPM_GenerateUndistortedDebugImage(const uint8 src_img[MT9V03X_H][MT9V03X_W],
+                                       uint8 dst_img[MT9V03X_H][MT9V03X_W])
+{
+    IPM_GenerateUndistortedDebugImageInternal(src_img, dst_img, 0U);
+}
+
+void IPM_GenerateUndistortedDebugImageNearest(const uint8 src_img[MT9V03X_H][MT9V03X_W],
+                                              uint8 dst_img[MT9V03X_H][MT9V03X_W])
+{
+    IPM_GenerateUndistortedDebugImageInternal(src_img, dst_img, 1U);
+}
+
+void IPM_GenerateUndistortedDebugMask(uint8 dst_mask[MT9V03X_H][MT9V03X_W])
+{
+    int y;
+    int x;
+
+    if(dst_mask == NULL)
+    {
+        return;
+    }
+
+    for(y = 0; y < MT9V03X_H; y++)
+    {
+        for(x = 0; x < MT9V03X_W; x++)
+        {
+            float sx = 0.0f;
+            float sy = 0.0f;
+            dst_mask[y][x] =
+                (CameraCalibration_RectifiedPointToSource((float)x, (float)y, &sx, &sy) &&
+                 sx >= 0.0f && sx <= ((float)MT9V03X_W - 1.0f) &&
+                 sy >= 0.0f && sy <= ((float)MT9V03X_H - 1.0f)) ? 255U : 0U;
         }
     }
 }

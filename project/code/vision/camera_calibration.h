@@ -51,6 +51,12 @@ uint8 CameraCalibration_UndistortPoint(float distorted_x,
                                        float *undistorted_x,
                                        float *undistorted_y);
 
+/* 将去畸变坐标反查为原始畸变图中的浮点坐标。 */
+uint8 CameraCalibration_RectifiedPointToSource(float rectified_x,
+                                               float rectified_y,
+                                               float *source_x,
+                                               float *source_y);
+
 uint8 CameraCalibration_RectifiedPixelToSource(int dst_x,
                                                int dst_y,
                                                int *src_x,

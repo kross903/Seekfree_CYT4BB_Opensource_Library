@@ -311,8 +311,13 @@ uint8 DroneIPM_Embedded_Image2WorldF(float img_x, float img_y, float *result)
  *
  * 主要被俯视图生成和调试功能复用。
  */
-bool DroneIPM_Embedded_World2Image(float world_x, float world_y, int *result)
+bool DroneIPM_Embedded_World2ImageF(float world_x, float world_y, float *result)
 {
+    if(result == NULL)
+    {
+        return false;
+    }
+
     /* 步骤1: 计算地面点相对于摄像头的向量(世界坐标系) */
     float camera_x = g_ipm.X0 + CAMERA_OFFSET_X_CM;
     float camera_y = g_ipm.Y0 + CAMERA_OFFSET_Y_CM;
@@ -346,13 +351,36 @@ bool DroneIPM_Embedded_World2Image(float world_x, float world_y, int *result)
             return false;
         }
 
-        result[0] = (int)(img_x + 0.5f);
-        result[1] = (int)(img_y + 0.5f);
+        result[0] = img_x;
+        result[1] = img_y;
         return true;
     }
 #else
-    return DroneIPM_Embedded_RayBodyToPixel(vec_body, result);
+    {
+        int rounded[2];
+        if(!DroneIPM_Embedded_RayBodyToPixel(vec_body, rounded))
+        {
+            return false;
+        }
+        result[0] = (float)rounded[0];
+        result[1] = (float)rounded[1];
+        return true;
+    }
 #endif
+}
+
+bool DroneIPM_Embedded_World2Image(float world_x, float world_y, int *result)
+{
+    float image_point[2];
+
+    if(result == NULL || !DroneIPM_Embedded_World2ImageF(world_x, world_y, image_point))
+    {
+        return false;
+    }
+
+    result[0] = (int)(image_point[0] + 0.5f);
+    result[1] = (int)(image_point[1] + 0.5f);
+    return true;
 }
 
 /**
