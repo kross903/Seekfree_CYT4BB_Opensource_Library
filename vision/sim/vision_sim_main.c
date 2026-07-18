@@ -57,7 +57,7 @@ static int read_raw(const char *path)
     return read_count == MT9V03X_IMAGE_SIZE;
 }
 
-static int write_pgm(const char *path, const uint8 *image)
+static int write_pgm_image(const char *path, const uint8 *image, int width, int height)
 {
     FILE *file = NULL;
 
@@ -70,10 +70,15 @@ static int write_pgm(const char *path, const uint8 *image)
     {
         return 0;
     }
-    fprintf(file, "P5\n%d %d\n255\n", MT9V03X_W, MT9V03X_H);
-    fwrite(image, 1U, MT9V03X_IMAGE_SIZE, file);
+    fprintf(file, "P5\n%d %d\n255\n", width, height);
+    fwrite(image, 1U, (size_t)(width * height), file);
     fclose(file);
     return 1;
+}
+
+static int write_pgm(const char *path, const uint8 *image)
+{
+    return write_pgm_image(path, image, MT9V03X_W, MT9V03X_H);
 }
 
 static int write_result(const char *path, const char *binary_path,
@@ -153,14 +158,19 @@ int main(int argc, char **argv)
     const char *input_path = get_option(argc, argv, "--input");
     const char *output_path = get_option(argc, argv, "--output");
     const char *binary_path = get_option(argc, argv, "--binary");
+    const char *undistorted_path = get_option(argc, argv, "--undistorted");
+    const char *birdview_path = get_option(argc, argv, "--birdview");
     float roll_deg = parse_float(get_option(argc, argv, "--roll"), 0.0f);
     float pitch_deg = parse_float(get_option(argc, argv, "--pitch"), 0.0f);
     float height_cm = parse_float(get_option(argc, argv, "--height"), 100.0f);
     VisionRuntimeDiag_t diag = {0};
+    uint8 undistorted_image[MT9V03X_H][MT9V03X_W];
+    uint8 birdview_image[IPM_BIRDVIEW_W][IPM_BIRDVIEW_H];
+    const uint8 (*birdview_source)[MT9V03X_W] = mt9v03x_image;
 
     if(input_path == NULL || output_path == NULL || !read_raw(input_path))
     {
-        fprintf(stderr, "usage: vision_sim --input frame.raw --output result.json [--binary binary.pgm]\n");
+        fprintf(stderr, "usage: vision_sim --input frame.raw --output result.json [--binary binary.pgm] [--undistorted undistorted.pgm] [--birdview birdview.pgm]\n");
         return 2;
     }
 
@@ -174,6 +184,20 @@ int main(int argc, char **argv)
     if(binary_path != NULL)
     {
         write_pgm(binary_path, VisionRuntime_GetBinaryDisplayImage());
+    }
+    if(undistorted_path != NULL)
+    {
+        IPM_GenerateUndistortedDebugImage(mt9v03x_image, undistorted_image);
+        write_pgm(undistorted_path, undistorted_image[0]);
+        birdview_source = undistorted_image;
+    }
+    if(birdview_path != NULL)
+    {
+        IPM_GenerateBirdView(birdview_source,
+                             birdview_image[0],
+                             IPM_BIRDVIEW_W, IPM_BIRDVIEW_H, IPM_SCALE);
+        write_pgm_image(birdview_path, birdview_image[0],
+                        IPM_BIRDVIEW_W, IPM_BIRDVIEW_H);
     }
     if(!write_result(output_path, binary_path, roll_deg, pitch_deg, height_cm, &diag))
     {

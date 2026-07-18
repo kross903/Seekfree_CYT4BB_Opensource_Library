@@ -29,6 +29,8 @@ typedef struct
     float yaw_deg;
     float tof_height_cm;
     float fused_height_cm;
+    uint8 binary_threshold;
+    uint8 reserved[3];
 } SharedVisionInput_t;
 
 typedef struct
@@ -480,6 +482,7 @@ static void CrossCoreCamera_CameraCoreIpcCallback(uint32 ipc_data)
 
 #if CY_CORE_CM7_0
 static uint8 s_cross_core_camera_capture_ready = 0U;
+static uint8 s_control_binary_threshold = (uint8)VISION_BINARY_THRESHOLD;
 
 static void CrossCoreCamera_ControlCorePublishFrame(void)
 {
@@ -545,6 +548,7 @@ void CrossCoreCamera_CameraCoreInit(void)
     g_shared_vision_input->yaw_deg = 0.0f;
     g_shared_vision_input->tof_height_cm = 100.0f;
     g_shared_vision_input->fused_height_cm = 100.0f;
+    g_shared_vision_input->binary_threshold = (uint8)VISION_BINARY_THRESHOLD;
     g_shared_vision_snapshot_metadata->magic = 0U;
     g_shared_vision_snapshot_metadata->image_seq = 0U;
     g_shared_vision_snapshot_metadata->input_seq = 0U;
@@ -606,9 +610,11 @@ void CrossCoreCamera_CameraCoreTask(void)
         input_snapshot.yaw_deg = 0.0f;
         input_snapshot.tof_height_cm = 100.0f;
         input_snapshot.fused_height_cm = 100.0f;
+        input_snapshot.binary_threshold = (uint8)VISION_BINARY_THRESHOLD;
     }
 
     // 执行本帧完整视觉处理：信标识别 + 小车标志识别。
+    VisionRuntime_SetBinaryThreshold(input_snapshot.binary_threshold);
     VisionRuntime_ProcessFrameWithPose(input_snapshot.roll_deg,
                                        input_snapshot.pitch_deg,
                                        input_snapshot.tof_height_cm);
@@ -732,8 +738,22 @@ void CrossCoreCamera_ControlCorePublishInput(float roll_deg,
     g_shared_vision_input->yaw_deg = yaw_deg;
     g_shared_vision_input->tof_height_cm = tof_height_cm;
     g_shared_vision_input->fused_height_cm = fused_height_cm;
+    g_shared_vision_input->binary_threshold = s_control_binary_threshold;
     g_shared_vision_input->seq++;
     CrossCoreCamera_CleanInput();
+}
+
+void CrossCoreCamera_ControlCoreSetBinaryThreshold(uint8 threshold)
+{
+    s_control_binary_threshold = (threshold == 0U) ? 1U : threshold;
+    g_shared_vision_input->binary_threshold = s_control_binary_threshold;
+    g_shared_vision_input->seq++;
+    CrossCoreCamera_CleanInput();
+}
+
+uint8 CrossCoreCamera_ControlCoreGetBinaryThreshold(void)
+{
+    return s_control_binary_threshold;
 }
 
 uint32 CrossCoreCamera_ControlCoreResultPending(void)
@@ -771,6 +791,8 @@ void CrossCoreCamera_ControlCoreAssistantInit(void)
     g_shared_vision_input->yaw_deg = 0.0f;
     g_shared_vision_input->tof_height_cm = 100.0f;
     g_shared_vision_input->fused_height_cm = 100.0f;
+    s_control_binary_threshold = (uint8)VISION_BINARY_THRESHOLD;
+    g_shared_vision_input->binary_threshold = s_control_binary_threshold;
     g_shared_vision_snapshot_metadata->magic = 0U;
     g_shared_vision_snapshot_metadata->image_seq = 0U;
     g_shared_vision_snapshot_metadata->input_seq = 0U;

@@ -5,6 +5,12 @@ static VisionRuntimeDiag_t s_vision_runtime_diag;
 static VisionRuntimeBeaconSlot_t s_vision_runtime_beacon_slots[VISION_RUNTIME_BEACON_SLOT_COUNT];
 static uint8 s_vision_binary[MT9V03X_H * MT9V03X_W];
 static uint8 s_vision_binary_display[MT9V03X_H * MT9V03X_W];
+static uint8 s_vision_binary_threshold = (uint8)VISION_BINARY_THRESHOLD;
+
+void VisionRuntime_SetBinaryThreshold(uint8 threshold)
+{
+    s_vision_binary_threshold = (threshold == 0U) ? 1U : threshold;
+}
 
 #if CY_CORE_CM7_1
 #include "vision/beacon_detect.h"
@@ -123,7 +129,7 @@ static void VisionRuntime_Binarize(const uint8 image[MT9V03X_H][MT9V03X_W])
 
     for(index = 0; index < (MT9V03X_H * MT9V03X_W); index++)
     {
-        if(((const uint8 *)image)[index] >= VISION_BINARY_THRESHOLD)
+        if(((const uint8 *)image)[index] >= s_vision_binary_threshold)
         {
             s_vision_binary[index] = 1U;
             s_vision_binary_display[index] = 255U;

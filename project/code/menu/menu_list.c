@@ -108,6 +108,12 @@ void icm_init_menu()
 #define MT9V03X_ADJUST_HINT_Y           188U
 #define MT9V03X_ADJUST_EXPOSURE_MIN     1U
 #define MT9V03X_ADJUST_EXPOSURE_MAX     65535U
+#define BINARY_ADJUST_THRESHOLD_Y       128U
+#define BINARY_ADJUST_STEP_Y            148U
+#define BINARY_ADJUST_MODE_Y            168U
+#define BINARY_ADJUST_HINT_Y            188U
+#define BINARY_ADJUST_THRESHOLD_MIN     1U
+#define BINARY_ADJUST_THRESHOLD_MAX     255U
 
 static uint8 s_track_light_page_active = 0U;
 static uint8 s_track_light_image_visible = 0U;
@@ -191,6 +197,82 @@ static void mt9v03x_adjust_page(void)
     ips200_show_string(TEST_PAGE_X, y, set_result == 0U ? "SET: OK" : "SET: FAIL");
 
     y = MT9V03X_ADJUST_HINT_Y;
+    test_page_clear_line(y);
+    ips200_set_color(RGB565_CYAN, RGB565_BLACK);
+    ips200_show_string(TEST_PAGE_X, y, "K1- K2+ K3 STEP K4 BACK");
+    ips200_set_color(RGB565_WHITE, RGB565_BLACK);
+}
+
+static void binary_threshold_adjust_page(void)
+{
+    static uint8 threshold = (uint8)VISION_BINARY_THRESHOLD;
+    static uint8 adjust_step = 1U;
+    static uint8 page_active = 0U;
+    uint16 next_threshold = threshold;
+    uint16 y;
+
+    if(!page_active)
+    {
+        page_active = 1U;
+        threshold = CrossCoreCamera_ControlCoreGetBinaryThreshold();
+        key_flag = 0U;
+    }
+    next_threshold = threshold;
+
+    if(key_flag == Button_4)
+    {
+        page_active = 0U;
+        return;
+    }
+
+    if(key_flag == Button_1)
+    {
+        next_threshold = (threshold > adjust_step) ?
+                         (uint16)(threshold - adjust_step) :
+                         (uint16)BINARY_ADJUST_THRESHOLD_MIN;
+        key_flag = 0U;
+    }
+    else if(key_flag == Button_2)
+    {
+        next_threshold = (threshold > (BINARY_ADJUST_THRESHOLD_MAX - adjust_step)) ?
+                         (uint16)BINARY_ADJUST_THRESHOLD_MAX :
+                         (uint16)(threshold + adjust_step);
+        key_flag = 0U;
+    }
+    else if(key_flag == Button_3)
+    {
+        adjust_step = (adjust_step == 1U) ? 10U : 1U;
+        key_flag = 0U;
+    }
+
+    if(next_threshold != threshold)
+    {
+        threshold = (uint8)next_threshold;
+        CrossCoreCamera_ControlCoreSetBinaryThreshold(threshold);
+    }
+
+    ips200_show_gray_image(0U, 0U, mt9v03x_image[0],
+                           MT9V03X_W, MT9V03X_H,
+                           MT9V03X_W, MT9V03X_H, threshold);
+
+    y = BINARY_ADJUST_THRESHOLD_Y;
+    test_page_clear_line(y);
+    ips200_set_color(RGB565_WHITE, RGB565_BLACK);
+    ips200_show_string(TEST_PAGE_X, y, "THRESHOLD:");
+    ips200_show_uint(TEST_VALUE_X, y, threshold, 3U);
+
+    y = BINARY_ADJUST_STEP_Y;
+    test_page_clear_line(y);
+    ips200_set_color(RGB565_WHITE, RGB565_BLACK);
+    ips200_show_string(TEST_PAGE_X, y, "STEP:");
+    ips200_show_uint(TEST_VALUE_X, y, adjust_step, 2U);
+
+    y = BINARY_ADJUST_MODE_Y;
+    test_page_clear_line(y);
+    ips200_set_color(RGB565_GREEN, RGB565_BLACK);
+    ips200_show_string(TEST_PAGE_X, y, "PREVIEW: BINARY");
+
+    y = BINARY_ADJUST_HINT_Y;
     test_page_clear_line(y);
     ips200_set_color(RGB565_CYAN, RGB565_BLACK);
     ips200_show_string(TEST_PAGE_X, y, "K1- K2+ K3 STEP K4 BACK");
@@ -972,6 +1054,7 @@ void init_test_menu(void)
     menu_create_item(&testMenu, "Track Light", track_light_test_page, NULL);
     menu_create_item(&testMenu, "VOFA Status", vofa_status_page, NULL);
     menu_create_item(&testMenu, "MT9V03X Adjust", mt9v03x_adjust_page, NULL);
+    menu_create_item(&testMenu, "Binary Adjust", binary_threshold_adjust_page, NULL);
     
 }
 

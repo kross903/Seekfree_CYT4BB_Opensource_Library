@@ -23,7 +23,7 @@ from capture_serial import capture_frames, list_serial_ports
 
 APP_ROOT = Path(__file__).resolve().parent
 DEFAULT_SOURCE = Path(r"D:\code\project\Seekfree_CYT4BB_Opensource_Library\project\code\vision")
-DEFAULT_FRAMES = Path(r"D:\code\project\摄像头标定\摄像头标定\frames\uart_capture\png")
+DEFAULT_FRAMES = Path(r"D:\code\project\Seekfree_CYT4BB_Opensource_Library\vision\capture")
 SIM_ROOT = APP_ROOT / "sim"
 BUILD_ROOT = APP_ROOT / "build"
 RUN_ROOT = APP_ROOT / "runs"
@@ -143,15 +143,26 @@ class Simulator:
         self.manifest_path().write_text(str(self.source_dir.resolve()), encoding="utf-8", newline="\n")
         return True, log + "\nBuild succeeded: " + str(self.output_path())
 
-    def run(self, raw_path: Path, output_dir: Path, roll: float, pitch: float, height: float) -> tuple[bool, str, Path | None]:
+    def run(
+        self,
+        raw_path: Path,
+        output_dir: Path,
+        roll: float,
+        pitch: float,
+        height: float,
+        undistort: bool = False,
+        birdview: bool = False,
+    ) -> tuple[bool, str, Path | None, Path | None, Path | None]:
         executable = self.output_path()
         if self.needs_rebuild():
             ok, log = self.build()
             if not ok:
-                return False, log, None
+                return False, log, None, None, None
         output_dir.mkdir(parents=True, exist_ok=True)
         result_path = output_dir / "result.json"
         binary_path = output_dir / "binary.pgm"
+        undistorted_path = output_dir / "undistorted.pgm"
+        birdview_path = output_dir / "birdview.pgm"
         command = [
             str(executable),
             "--input", str(raw_path),
@@ -161,11 +172,21 @@ class Simulator:
             "--pitch", str(pitch),
             "--height", str(height),
         ]
+        if undistort:
+            command.extend(("--undistorted", str(undistorted_path)))
+        if birdview:
+            command.extend(("--birdview", str(birdview_path)))
         result = subprocess.run(command, cwd=str(APP_ROOT), capture_output=True, text=True)
         log = "$ " + " ".join(command) + f"\n[returncode={result.returncode}]\n" + (result.stdout or "") + (result.stderr or "")
         if result.returncode != 0 or not result_path.exists():
-            return False, log, None
-        return True, log, result_path
+            return False, log, None, None, None
+        return (
+            True,
+            log,
+            result_path,
+            undistorted_path if undistorted_path.exists() else None,
+            birdview_path if birdview_path.exists() else None,
+        )
 
 
 class VisionToolApp:
@@ -182,16 +203,24 @@ class VisionToolApp:
         self.pitch_var = tk.StringVar(value="0")
         self.yaw_var = tk.StringVar(value="0")
         self.height_var = tk.StringVar(value="100")
+        self.undistort_var = tk.BooleanVar(value=False)
+        self.birdview_var = tk.BooleanVar(value=False)
         self.status_var = tk.StringVar(value="就绪")
         self.frame_info_var = tk.StringVar(value="未选择帧")
         self.frame_telemetry_var = tk.StringVar(value="帧姿态/高度：暂无")
         self.result_info_var = tk.StringVar(value="暂无仿真结果")
         self.preview_image: ImageTk.PhotoImage | None = None
         self.binary_image: ImageTk.PhotoImage | None = None
+        self.current_source_image: Image.Image | None = None
+        self.current_undistorted_image: Image.Image | None = None
+        self.current_birdview_image: Image.Image | None = None
+        self.processed_window: tk.Toplevel | None = None
+        self.processed_label: ttk.Label | None = None
+        self.processed_photo: ImageTk.PhotoImage | None = None
         self.current_frame: Path | None = None
         self.current_result: dict | None = None
         self.ui_queue: queue.Queue[tuple[str, object]] = queue.Queue()
-        self.simulation_queue: queue.Queue[tuple[Path, float, float, float]] = queue.Queue()
+        self.simulation_queue: queue.Queue[tuple[Path, float, float, float, bool, bool]] = queue.Queue()
         self.capture_stop_event = threading.Event()
         self.capture_running = False
         self.capture_out_var = tk.StringVar(value=str(APP_ROOT / "capture"))
@@ -326,10 +355,23 @@ class VisionToolApp:
             ttk.Label(params, text=label).grid(row=row, column=0, sticky="w", pady=3)
             ttk.Entry(params, textvariable=variable).grid(row=row, column=1, sticky="ew", pady=3)
 
-        ttk.Button(parent, text="构建 C 仿真", command=self.start_build).grid(row=6, column=0, columnspan=3, sticky="ew", pady=(12, 4))
-        ttk.Button(parent, text="运行当前帧", command=self.start_run).grid(row=7, column=0, columnspan=3, sticky="ew", pady=4)
-        ttk.Label(parent, textvariable=self.status_var, foreground="#1b6e3a", wraplength=280).grid(row=8, column=0, columnspan=3, sticky="w", pady=(10, 3))
-        ttk.Label(parent, textvariable=self.result_info_var, justify=tk.LEFT, wraplength=280).grid(row=9, column=0, columnspan=3, sticky="w")
+        ttk.Checkbutton(
+            parent,
+            text="显示去畸变图（运行仿真生成）",
+            variable=self.undistort_var,
+            command=self.refresh_processed_preview,
+        ).grid(row=6, column=0, columnspan=3, sticky="w", pady=(8, 0))
+        ttk.Checkbutton(
+            parent,
+            text="显示逆透视图（运行仿真生成）",
+            variable=self.birdview_var,
+            command=self.refresh_processed_preview,
+        ).grid(row=7, column=0, columnspan=3, sticky="w", pady=(4, 0))
+        ttk.Button(parent, text="打开调整图像窗口", command=self.open_processed_window).grid(row=8, column=0, columnspan=3, sticky="ew", pady=(8, 0))
+        ttk.Button(parent, text="构建 C 仿真", command=self.start_build).grid(row=9, column=0, columnspan=3, sticky="ew", pady=(12, 4))
+        ttk.Button(parent, text="运行当前帧", command=self.start_run).grid(row=10, column=0, columnspan=3, sticky="ew", pady=4)
+        ttk.Label(parent, textvariable=self.status_var, foreground="#1b6e3a", wraplength=280).grid(row=11, column=0, columnspan=3, sticky="w", pady=(10, 3))
+        ttk.Label(parent, textvariable=self.result_info_var, justify=tk.LEFT, wraplength=280).grid(row=12, column=0, columnspan=3, sticky="w")
 
     def log(self, message: str) -> None:
         self.log_text.insert(tk.END, message.rstrip() + "\n")
@@ -417,17 +459,24 @@ class VisionToolApp:
             pitch = float(self.pitch_var.get())
             height = float(self.height_var.get())
         except ValueError:
-            self.ui_queue.put(("run", (False, "simulation parameters are invalid", None, APP_ROOT, None)))
+            self.ui_queue.put(("run", (False, "simulation parameters are invalid", None, APP_ROOT, None, None, None)))
             return
-        self.simulation_queue.put((frame_path, roll, pitch, height))
+        self.simulation_queue.put((
+            frame_path,
+            roll,
+            pitch,
+            height,
+            bool(self.undistort_var.get()),
+            bool(self.birdview_var.get()),
+        ))
 
     def simulation_worker(self) -> None:
         while True:
-            frame_path, roll, pitch, height = self.simulation_queue.get()
+            frame_path, roll, pitch, height, undistort, birdview = self.simulation_queue.get()
             try:
-                self.run_worker(frame_path, roll, pitch, height)
+                self.run_worker(frame_path, roll, pitch, height, undistort, birdview)
             except Exception as exc:
-                self.ui_queue.put(("run", (False, str(exc), None, APP_ROOT, None)))
+                self.ui_queue.put(("run", (False, str(exc), None, APP_ROOT, None, None, None)))
 
     def open_source(self) -> None:
         path = Path(self.source_var.get())
@@ -474,11 +523,77 @@ class VisionToolApp:
         except Exception as exc:
             self.status_var.set(f"读取帧失败: {exc}")
             return
+        self.current_source_image = image
+        self.current_undistorted_image = None
+        self.current_birdview_image = None
         self.apply_frame_metadata(path)
         self.frame_info_var.set(f"{path.name}  {image.width}×{image.height}")
+        self.refresh_preview()
+        self.refresh_processed_preview()
+
+    def refresh_preview(self) -> None:
+        if self.current_source_image is None:
+            self.preview_label.configure(image="", text="未选择帧")
+            return
+        image = self.current_source_image
         display = self.fit_image(image, self.preview_label.winfo_width() or 560, self.preview_label.winfo_height() or 360)
         self.preview_image = ImageTk.PhotoImage(display)
         self.preview_label.configure(image=self.preview_image, text="")
+
+    def open_processed_window(self) -> None:
+        if self.processed_window is not None and self.processed_window.winfo_exists():
+            self.processed_window.deiconify()
+            self.processed_window.lift()
+            self.refresh_processed_preview()
+            return
+
+        self.processed_window = tk.Toplevel(self.root)
+        self.processed_window.title("调整图像")
+        self.processed_window.geometry("720x560")
+        self.processed_window.minsize(360, 300)
+        self.processed_label = ttk.Label(self.processed_window, text="请勾选处理选项并运行当前帧", anchor="center")
+        self.processed_label.pack(fill=tk.BOTH, expand=True, padx=12, pady=12)
+        self.processed_window.protocol("WM_DELETE_WINDOW", self.close_processed_window)
+        self.refresh_processed_preview()
+
+    def close_processed_window(self) -> None:
+        if self.processed_window is not None and self.processed_window.winfo_exists():
+            self.processed_window.destroy()
+        self.processed_window = None
+        self.processed_label = None
+        self.processed_photo = None
+
+    def refresh_processed_preview(self) -> None:
+        if self.processed_label is None or self.processed_window is None or not self.processed_window.winfo_exists():
+            return
+
+        if self.birdview_var.get():
+            image = self.current_birdview_image
+            title = "去畸变 + 逆透视图" if self.undistort_var.get() else "逆透视图"
+            missing_text = "请先运行当前帧生成逆透视图"
+        elif self.undistort_var.get():
+            image = self.current_undistorted_image
+            title = "去畸变图"
+            missing_text = "请先运行当前帧生成去畸变图"
+        else:
+            image = None
+            title = "调整图像"
+            missing_text = "请勾选去畸变或逆透视选项"
+
+        if image is None:
+            self.processed_photo = None
+            self.processed_label.configure(image="", text=missing_text)
+            self.processed_window.title(title)
+            return
+
+        display = self.fit_image(
+            image,
+            self.processed_label.winfo_width() or 680,
+            self.processed_label.winfo_height() or 500,
+        )
+        self.processed_photo = ImageTk.PhotoImage(display)
+        self.processed_label.configure(image=self.processed_photo, text="")
+        self.processed_window.title(title)
 
     def apply_frame_metadata(self, path: Path) -> None:
         metadata_path = path.with_suffix(".json")
@@ -508,15 +623,15 @@ class VisionToolApp:
             self.frame_telemetry_var.set("帧姿态/高度：无元数据")
 
     @staticmethod
-    def load_image(path: Path) -> Image.Image:
+    def load_image(path: Path, target_size: tuple[int, int] | None = (WIDTH, HEIGHT)) -> Image.Image:
         if path.suffix.lower() == ".raw":
             payload = path.read_bytes()
             if len(payload) != WIDTH * HEIGHT:
                 raise ValueError(f"RAW 大小为 {len(payload)}，需要 {WIDTH * HEIGHT}")
             return Image.frombytes("L", (WIDTH, HEIGHT), payload)
         image = Image.open(path).convert("L")
-        if image.size != (WIDTH, HEIGHT):
-            image = image.resize((WIDTH, HEIGHT), Image.Resampling.NEAREST)
+        if target_size is not None and image.size != target_size:
+            image = image.resize(target_size, Image.Resampling.NEAREST)
         return image
 
     @staticmethod
@@ -547,9 +662,23 @@ class VisionToolApp:
             messagebox.showerror("参数错误", "Roll、Pitch、高度必须是数字。")
             return
         self.status_var.set("运行中")
-        threading.Thread(target=self.run_worker, args=(self.current_frame, roll, pitch, height), daemon=True).start()
+        undistort = bool(self.undistort_var.get())
+        birdview = bool(self.birdview_var.get())
+        threading.Thread(
+            target=self.run_worker,
+            args=(self.current_frame, roll, pitch, height, undistort, birdview),
+            daemon=True,
+        ).start()
 
-    def run_worker(self, frame_path: Path, roll: float, pitch: float, height: float) -> None:
+    def run_worker(
+        self,
+        frame_path: Path,
+        roll: float,
+        pitch: float,
+        height: float,
+        undistort: bool,
+        birdview: bool,
+    ) -> None:
         source = Path(self.source_var.get())
         run_dir = RUN_ROOT / time.strftime("run_%Y%m%d_%H%M%S")
         run_dir.mkdir(parents=True, exist_ok=True)
@@ -558,11 +687,15 @@ class VisionToolApp:
             raw_path = run_dir / "input.raw"
             raw_path.write_bytes(image.tobytes())
             simulator = Simulator(source)
-            ok, log, result_path = simulator.run(raw_path, run_dir, roll, pitch, height)
+            ok, log, result_path, undistorted_path, birdview_path = simulator.run(
+                raw_path, run_dir, roll, pitch, height, undistort, birdview
+            )
             payload = json.loads(result_path.read_text(encoding="utf-8")) if result_path else None
-            self.ui_queue.put(("run", (ok, log, payload, run_dir, image)))
+            undistorted_image = self.load_image(undistorted_path) if undistorted_path else None
+            birdview_image = self.load_image(birdview_path, target_size=None) if birdview_path else None
+            self.ui_queue.put(("run", (ok, log, payload, run_dir, image, undistorted_image, birdview_image)))
         except Exception as exc:
-            self.ui_queue.put(("run", (False, str(exc), None, run_dir, None)))
+            self.ui_queue.put(("run", (False, str(exc), None, run_dir, None, None, None)))
 
     def process_queue(self) -> None:
         while True:
@@ -599,15 +732,28 @@ class VisionToolApp:
                 self.log(log)
                 self.status_var.set("构建成功" if ok else "构建失败")
             elif event == "run":
-                ok, log, result, run_dir, image = payload
+                ok, log, result, run_dir, image, undistorted_image, birdview_image = payload
                 self.log(log)
                 self.status_var.set("运行完成" if ok else "运行失败")
                 if ok and result and image:
                     self.current_result = result
-                    self.show_result(image, result, Path(run_dir) / "binary.pgm")
+                    self.show_result(
+                        image,
+                        result,
+                        Path(run_dir) / "binary.pgm",
+                        undistorted_image,
+                        birdview_image,
+                    )
         self.root.after(100, self.process_queue)
 
-    def show_result(self, image: Image.Image, result: dict, binary_path: Path) -> None:
+    def show_result(
+        self,
+        image: Image.Image,
+        result: dict,
+        binary_path: Path,
+        undistorted_image: Image.Image | None = None,
+        birdview_image: Image.Image | None = None,
+    ) -> None:
         original = image.convert("RGB")
         binary = Image.open(binary_path).convert("RGB") if binary_path.exists() else image.convert("RGB")
         draw_original = ImageDraw.Draw(original)
@@ -641,16 +787,21 @@ class VisionToolApp:
 
             draw_chevron(draw_original)
             draw_chevron(draw_binary)
-        self.preview_image = ImageTk.PhotoImage(self.fit_image(original, self.preview_label.winfo_width() or 560, self.preview_label.winfo_height() or 360))
+        self.current_source_image = original
+        self.current_undistorted_image = undistorted_image.convert("RGB") if undistorted_image is not None else None
+        self.current_birdview_image = birdview_image.convert("RGB") if birdview_image is not None else None
         self.binary_image = ImageTk.PhotoImage(self.fit_image(binary, self.binary_label.winfo_width() or 560, self.binary_label.winfo_height() or 360))
-        self.preview_label.configure(image=self.preview_image, text="")
         self.binary_label.configure(image=self.binary_image, text="")
+        self.refresh_preview()
+        self.refresh_processed_preview()
         self.result_info_var.set(
             f"连通域: {result.get('blob_count', 0)}\n"
             f"信标: {result.get('beacon_count', 0)}\n"
             f"小车标志有效: {result.get('vehicle', {}).get('valid', 0)}\n"
             f"运行目录: {Path(result.get('binary_path', '')).parent}"
         )
+        if self.undistort_var.get() or self.birdview_var.get():
+            self.open_processed_window()
 
     def editor_modified(self, _event: object = None) -> None:
         if self.editor.edit_modified():
