@@ -466,31 +466,69 @@ uint8 CameraCalibration_RectifiedPointToSource(float rectified_x,
     y0 = (int)floorf(rectified_y);
     x1 = (x0 + 1 < MT9V03X_W) ? (x0 + 1) : x0;
     y1 = (y0 + 1 < MT9V03X_H) ? (y0 + 1) : y0;
-    if(camera_undistort_rect_valid[y0][x0] == 0U ||
-       camera_undistort_rect_valid[y0][x1] == 0U ||
-       camera_undistort_rect_valid[y1][x0] == 0U ||
-       camera_undistort_rect_valid[y1][x1] == 0U)
+    tx = rectified_x - (float)x0;
+    ty = rectified_y - (float)y0;
+    if(camera_undistort_rect_src_x_q8[y0][x0] == CAMERA_UNDISTORT_RECT_MAP_INVALID ||
+       camera_undistort_rect_src_x_q8[y0][x1] == CAMERA_UNDISTORT_RECT_MAP_INVALID ||
+       camera_undistort_rect_src_x_q8[y1][x0] == CAMERA_UNDISTORT_RECT_MAP_INVALID ||
+       camera_undistort_rect_src_x_q8[y1][x1] == CAMERA_UNDISTORT_RECT_MAP_INVALID ||
+       camera_undistort_rect_src_y_q8[y0][x0] == CAMERA_UNDISTORT_RECT_MAP_INVALID ||
+       camera_undistort_rect_src_y_q8[y0][x1] == CAMERA_UNDISTORT_RECT_MAP_INVALID ||
+       camera_undistort_rect_src_y_q8[y1][x0] == CAMERA_UNDISTORT_RECT_MAP_INVALID ||
+       camera_undistort_rect_src_y_q8[y1][x1] == CAMERA_UNDISTORT_RECT_MAP_INVALID)
     {
         return 0U;
     }
 
-    tx = rectified_x - (float)x0;
-    ty = rectified_y - (float)y0;
-    *source_x =
-        ((1.0f - tx) * (1.0f - ty) * (float)camera_undistort_rect_src_x[y0][x0]) +
-        (tx * (1.0f - ty) * (float)camera_undistort_rect_src_x[y0][x1]) +
-        ((1.0f - tx) * ty * (float)camera_undistort_rect_src_x[y1][x0]) +
-        (tx * ty * (float)camera_undistort_rect_src_x[y1][x1]);
-    *source_y =
-        ((1.0f - tx) * (1.0f - ty) * (float)camera_undistort_rect_src_y[y0][x0]) +
-        (tx * (1.0f - ty) * (float)camera_undistort_rect_src_y[y0][x1]) +
-        ((1.0f - tx) * ty * (float)camera_undistort_rect_src_y[y1][x0]) +
-        (tx * ty * (float)camera_undistort_rect_src_y[y1][x1]);
+    *source_x = (
+        ((1.0f - tx) * (1.0f - ty) * (float)camera_undistort_rect_src_x_q8[y0][x0]) +
+        (tx * (1.0f - ty) * (float)camera_undistort_rect_src_x_q8[y0][x1]) +
+        ((1.0f - tx) * ty * (float)camera_undistort_rect_src_x_q8[y1][x0]) +
+        (tx * ty * (float)camera_undistort_rect_src_x_q8[y1][x1])) /
+        (float)(1U << CAMERA_UNDISTORT_RECT_MAP_Q);
+    *source_y = (
+        ((1.0f - tx) * (1.0f - ty) * (float)camera_undistort_rect_src_y_q8[y0][x0]) +
+        (tx * (1.0f - ty) * (float)camera_undistort_rect_src_y_q8[y0][x1]) +
+        ((1.0f - tx) * ty * (float)camera_undistort_rect_src_y_q8[y1][x0]) +
+        (tx * ty * (float)camera_undistort_rect_src_y_q8[y1][x1])) /
+        (float)(1U << CAMERA_UNDISTORT_RECT_MAP_Q);
     return 1U;
 #else
-    return CameraCalibration_RectifiedModelPointToSource(rectified_x, rectified_y,
+    float model_x = CAMERA_CALIBRATION_CX +
+        (rectified_x - 0.5f * ((float)MT9V03X_W - 1.0f)) *
+        CAMERA_UNDISTORT_RECT_SCALE_X;
+    float model_y = CAMERA_CALIBRATION_CY +
+        (rectified_y - 0.5f * ((float)MT9V03X_H - 1.0f)) *
+        CAMERA_UNDISTORT_RECT_SCALE_Y;
+    return CameraCalibration_RectifiedModelPointToSource(model_x, model_y,
                                                          source_x, source_y);
 #endif
+}
+
+uint8 CameraCalibration_SourcePointToRectified(float source_x,
+                                               float source_y,
+                                               float *rectified_x,
+                                               float *rectified_y)
+{
+    float model_x;
+    float model_y;
+
+    if(rectified_x == NULL || rectified_y == NULL ||
+       !CameraCalibration_UndistortPoint(source_x, source_y, &model_x, &model_y))
+    {
+        return 0U;
+    }
+
+    *rectified_x = ((model_x - CAMERA_CALIBRATION_CX) /
+                    CAMERA_UNDISTORT_RECT_SCALE_X) +
+                   0.5f * ((float)MT9V03X_W - 1.0f);
+    *rectified_y = ((model_y - CAMERA_CALIBRATION_CY) /
+                    CAMERA_UNDISTORT_RECT_SCALE_Y) +
+                   0.5f * ((float)MT9V03X_H - 1.0f);
+    return (uint8)(*rectified_x >= 0.0f &&
+                   *rectified_x <= ((float)MT9V03X_W - 1.0f) &&
+                   *rectified_y >= 0.0f &&
+                   *rectified_y <= ((float)MT9V03X_H - 1.0f));
 }
 
 uint8 CameraCalibration_RectifiedPixelToSource(int dst_x,
@@ -506,16 +544,44 @@ uint8 CameraCalibration_RectifiedPixelToSource(int dst_x,
     }
 
 #if CAMERA_UNDISTORT_RECT_MAP_HAS_DATA
-    if(camera_undistort_rect_valid[dst_y][dst_x] == 0U)
+    uint16 source_x_q8;
+    uint16 source_y_q8;
+
+    if(!CameraCalibration_RectifiedPixelToSourceQ8(dst_x, dst_y,
+                                                   &source_x_q8, &source_y_q8))
     {
         return 0U;
     }
-    *src_x = camera_undistort_rect_src_x[dst_y][dst_x];
-    *src_y = camera_undistort_rect_src_y[dst_y][dst_x];
+    *src_x = (int)((source_x_q8 + 128U) >> CAMERA_UNDISTORT_RECT_MAP_Q);
+    *src_y = (int)((source_y_q8 + 128U) >> CAMERA_UNDISTORT_RECT_MAP_Q);
     return 1U;
 #else
     *src_x = dst_x;
     *src_y = dst_y;
+    return 1U;
+#endif
+}
+
+uint8 CameraCalibration_RectifiedPixelToSourceQ8(int dst_x,
+                                                 int dst_y,
+                                                 uint16 *src_x_q8,
+                                                 uint16 *src_y_q8)
+{
+    if(src_x_q8 == NULL || src_y_q8 == NULL ||
+       dst_x < 0 || dst_x >= MT9V03X_W ||
+       dst_y < 0 || dst_y >= MT9V03X_H)
+    {
+        return 0U;
+    }
+
+#if CAMERA_UNDISTORT_RECT_MAP_HAS_DATA
+    *src_x_q8 = camera_undistort_rect_src_x_q8[dst_y][dst_x];
+    *src_y_q8 = camera_undistort_rect_src_y_q8[dst_y][dst_x];
+    return (uint8)(*src_x_q8 != CAMERA_UNDISTORT_RECT_MAP_INVALID &&
+                   *src_y_q8 != CAMERA_UNDISTORT_RECT_MAP_INVALID);
+#else
+    *src_x_q8 = (uint16)((uint16)dst_x << 8);
+    *src_y_q8 = (uint16)((uint16)dst_y << 8);
     return 1U;
 #endif
 }

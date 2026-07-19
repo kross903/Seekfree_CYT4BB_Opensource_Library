@@ -36,7 +36,9 @@ static volatile uint32 s_vehicle_marker_debug_process_fail_count = 0U;
 static volatile uint32 s_vehicle_marker_debug_mark_lost_count = 0U;
 static volatile uint32 s_vehicle_marker_debug_timeout_count = 0U;
 
+#if VEHICLE_MARKER_MODE == VEHICLE_MARKER_MODE_FOUR_POINT
 static uint8 g_vehicle_marker_binary_image[MT9V03X_H * MT9V03X_W];
+#endif
 static VehicleMarkerChevronDebug_t s_vehicle_marker_chevron_debug = {0};
 
 #if VEHICLE_MARKER_MODE == VEHICLE_MARKER_MODE_CHEVRON
@@ -103,6 +105,7 @@ static void vehicle_marker_center_kalman_update(float raw_x, float raw_y,
     }
 }
 
+#if VEHICLE_MARKER_MODE == VEHICLE_MARKER_MODE_FOUR_POINT
 static void vehicle_marker_copy_binary_image(const uint8 *src, uint8 *dst,
                                              int pixel_count)
 {
@@ -118,6 +121,7 @@ static void vehicle_marker_copy_binary_image(const uint8 *src, uint8 *dst,
         dst[i] = src[i];
     }
 }
+#endif
 
 static void vehicle_marker_clear_pose(void)
 {
@@ -244,7 +248,9 @@ void VehicleMarkerLocalization_Init(void)
 {
     vehicle_marker_set_position_lost();
     g_vehicle_marker_pose_update_seq = 0U;
+#if VEHICLE_MARKER_MODE == VEHICLE_MARKER_MODE_FOUR_POINT
     memset(g_vehicle_marker_binary_image, 0, sizeof(g_vehicle_marker_binary_image));
+#endif
     vehicle_marker_reset_loss_debug();
 #if VEHICLE_MARKER_MODE == VEHICLE_MARKER_MODE_CHEVRON
     vehicle_marker_chevron_reset_debug();
@@ -495,7 +501,8 @@ static uint8 vehicle_marker_insert_candidate(
     area_error = fabsf((float)region->count - gate->expected_area) / gate->expected_area;
     candidate.score = area_error * 20.0f + (aspect_ratio - 1.0f) * 10.0f;
 
-    if(!IPM_Image2WorldF(candidate.img.u, candidate.img.v, &world_x, &world_y))
+    if(!IPM_RectifiedImage2WorldF(candidate.img.u, candidate.img.v,
+                                 &world_x, &world_y))
     {
         return 0U;
     }
@@ -1099,7 +1106,8 @@ uint8 VehicleMarkerLocalization_ProcessBinary(const uint8 *binary_image,
         float world_x = 0.0f;
         float world_y = 0.0f;
 
-        if(!IPM_Image2WorldF(img_pts[i].u, img_pts[i].v, &world_x, &world_y))
+        if(!IPM_RectifiedImage2WorldF(img_pts[i].u, img_pts[i].v,
+                                     &world_x, &world_y))
         {
             return vehicle_marker_process_fail(out_pose);
         }
@@ -1506,7 +1514,7 @@ static uint8 vehicle_marker_chevron_world_to_image(const VehicleMarkerWorldPoint
         return 0U;
     }
 
-    if(!IPM_World2Image(world->x, world->y, &img_x, &img_y))
+    if(!IPM_World2RectifiedImage(world->x, world->y, &img_x, &img_y))
     {
         return 0U;
     }
@@ -2119,9 +2127,11 @@ static uint8 vehicle_marker_chevron_process_candidate(const VehicleMarkerChevron
         return 0U;
     }
 
-    if(!IPM_Image2WorldF(apex_img.u, apex_img.v, &apex.x, &apex.y) ||
-       !IPM_Image2WorldF(left_tip_img.u, left_tip_img.v, &left_tip.x, &left_tip.y) ||
-       !IPM_Image2WorldF(right_tip_img.u, right_tip_img.v, &right_tip.x, &right_tip.y))
+    if(!IPM_RectifiedImage2WorldF(apex_img.u, apex_img.v, &apex.x, &apex.y) ||
+       !IPM_RectifiedImage2WorldF(left_tip_img.u, left_tip_img.v,
+                                 &left_tip.x, &left_tip.y) ||
+       !IPM_RectifiedImage2WorldF(right_tip_img.u, right_tip_img.v,
+                                 &right_tip.x, &right_tip.y))
     {
         s_vehicle_marker_chevron_debug.reject_reason =
             VEHICLE_MARKER_CHEVRON_REJECT_WORLD_PROJECTION;
@@ -2283,10 +2293,11 @@ static uint8 vehicle_marker_chevron_process_candidate_legacy(VehicleMarkerPose_t
         float world_x = 0.0f;
         float world_y = 0.0f;
 
-        if(!IPM_Image2WorldF((float)s_vehicle_marker_chevron_candidates[0].contour.point_x[i],
-                             (float)s_vehicle_marker_chevron_candidates[0].contour.point_y[i],
-                             &world_x,
-                             &world_y))
+        if(!IPM_RectifiedImage2WorldF(
+               (float)s_vehicle_marker_chevron_candidates[0].contour.point_x[i],
+               (float)s_vehicle_marker_chevron_candidates[0].contour.point_y[i],
+               &world_x,
+               &world_y))
         {
             continue;
         }
@@ -2585,5 +2596,9 @@ uint8 VehicleMarkerLocalization_ProcessBinary(const uint8 *binary_image,
 
 const uint8 *VehicleMarkerLocalization_GetBinaryImage(void)
 {
+#if VEHICLE_MARKER_MODE == VEHICLE_MARKER_MODE_FOUR_POINT
     return g_vehicle_marker_binary_image;
+#else
+    return NULL;
+#endif
 }

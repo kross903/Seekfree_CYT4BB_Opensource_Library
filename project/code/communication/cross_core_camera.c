@@ -32,8 +32,8 @@ typedef struct
     float yaw_deg;
     float tof_height_cm;
     float fused_height_cm;
-    uint8 binary_threshold;
-    uint8 reserved[3];
+    uint8 binary_thresholds[VISION_BINARY_ZONE_COUNT];
+    uint8 reserved;
 } SharedVisionInput_t;
 
 typedef struct
@@ -141,7 +141,6 @@ __no_init uint8 g_cross_core_camera_image_copy[MT9V03X_H][MT9V03X_W];
 __no_init uint8 g_cross_core_camera_assistant_image[MT9V03X_H][MT9V03X_W];
 
 #if CY_CORE_CM7_1
-static uint8 s_vision_undistorted_image[MT9V03X_H][MT9V03X_W];
 
 static uint8 CrossCoreCamera_CameraCoreAcquireFrame(void)
 {
@@ -353,8 +352,8 @@ static void CrossCoreCamera_CameraCoreDrawVisionScreen(const VisionRuntimeDiag_t
     }
     else if(display_mode == CROSS_CORE_CAMERA_VISION_DISPLAY_UNDISTORT)
     {
-        IPM_GenerateUndistortedDebugImage(mt9v03x_image, s_vision_undistorted_image);
-        ips200_show_gray_image(0U, image_y, s_vision_undistorted_image[0],
+        const uint8 *undistorted_image = VisionRuntime_GetUndistortedImage();
+        ips200_show_gray_image(0U, image_y, (uint8 *)undistorted_image,
                                MT9V03X_W, MT9V03X_H, image_w, image_h, 0U);
     }
     else if(binary_display_image != NULL)
@@ -366,27 +365,31 @@ static void CrossCoreCamera_CameraCoreDrawVisionScreen(const VisionRuntimeDiag_t
         ips200_show_gray_image(0U, image_y, mt9v03x_image[0], MT9V03X_W, MT9V03X_H, image_w, image_h, 0U);
     }
     VisionRuntime_GetBeaconSlots(beacon_slots, VISION_RUNTIME_BEACON_SLOT_COUNT);
-    for(uint8 i = 0U; i < VISION_RUNTIME_BEACON_SLOT_COUNT; i++)
+    if(display_mode != CROSS_CORE_CAMERA_VISION_DISPLAY_RAW)
     {
-        if(!beacon_slots[i].valid)
+        for(uint8 i = 0U; i < VISION_RUNTIME_BEACON_SLOT_COUNT; i++)
         {
-            continue;
-        }
+            if(!beacon_slots[i].valid)
+            {
+                continue;
+            }
 
-        beacon_count++;
-        VisionOverlay_DrawBinaryContour(binary_image,
-                                        beacon_slots[i].min_col,
-                                        beacon_slots[i].max_col,
-                                        beacon_slots[i].min_row,
-                                        beacon_slots[i].max_row,
-                                        RGB565_CYAN,
-                                        image_y);
-        VisionOverlay_DrawWorldPoint4x4(beacon_slots[i].x_cm,
-                                        beacon_slots[i].y_cm,
-                                        RGB565_RED,
-                                        image_y);
+            beacon_count++;
+            VisionOverlay_DrawBinaryContour(binary_image,
+                                            beacon_slots[i].min_col,
+                                            beacon_slots[i].max_col,
+                                            beacon_slots[i].min_row,
+                                            beacon_slots[i].max_row,
+                                            RGB565_CYAN,
+                                            image_y);
+            VisionOverlay_DrawWorldPoint4x4(beacon_slots[i].x_cm,
+                                            beacon_slots[i].y_cm,
+                                            RGB565_RED,
+                                            image_y);
+        }
     }
 
+    if(display_mode != CROSS_CORE_CAMERA_VISION_DISPLAY_RAW)
     {
         VehicleMarkerChevronDebug_t chevron_debug = {0};
 
@@ -527,7 +530,10 @@ static void CrossCoreCamera_CameraCoreIpcCallback(uint32 ipc_data)
 
 #if CY_CORE_CM7_0
 static uint8 s_cross_core_camera_capture_ready = 0U;
-static uint8 s_control_binary_threshold = (uint8)VISION_BINARY_THRESHOLD;
+static uint8 s_control_binary_thresholds[VISION_BINARY_ZONE_COUNT] = {
+    (uint8)VISION_BINARY_THRESHOLD_INNER,
+    (uint8)VISION_BINARY_THRESHOLD_MIDDLE,
+    (uint8)VISION_BINARY_THRESHOLD_OUTER};
 
 static void CrossCoreCamera_ControlCorePublishFrame(void)
 {
@@ -604,7 +610,13 @@ void CrossCoreCamera_CameraCoreInit(void)
     g_shared_vision_input->yaw_deg = 0.0f;
     g_shared_vision_input->tof_height_cm = 100.0f;
     g_shared_vision_input->fused_height_cm = 100.0f;
-    g_shared_vision_input->binary_threshold = (uint8)VISION_BINARY_THRESHOLD;
+    g_shared_vision_input->binary_thresholds[VISION_BINARY_ZONE_INNER] =
+        (uint8)VISION_BINARY_THRESHOLD_INNER;
+    g_shared_vision_input->binary_thresholds[VISION_BINARY_ZONE_MIDDLE] =
+        (uint8)VISION_BINARY_THRESHOLD_MIDDLE;
+    g_shared_vision_input->binary_thresholds[VISION_BINARY_ZONE_OUTER] =
+        (uint8)VISION_BINARY_THRESHOLD_OUTER;
+    g_shared_vision_input->reserved = 0U;
     g_shared_vision_snapshot_metadata->magic = 0U;
     g_shared_vision_snapshot_metadata->image_seq = 0U;
     g_shared_vision_snapshot_metadata->input_seq = 0U;
@@ -666,11 +678,19 @@ void CrossCoreCamera_CameraCoreTask(void)
         input_snapshot.yaw_deg = 0.0f;
         input_snapshot.tof_height_cm = 100.0f;
         input_snapshot.fused_height_cm = 100.0f;
-        input_snapshot.binary_threshold = (uint8)VISION_BINARY_THRESHOLD;
+        input_snapshot.binary_thresholds[VISION_BINARY_ZONE_INNER] =
+            (uint8)VISION_BINARY_THRESHOLD_INNER;
+        input_snapshot.binary_thresholds[VISION_BINARY_ZONE_MIDDLE] =
+            (uint8)VISION_BINARY_THRESHOLD_MIDDLE;
+        input_snapshot.binary_thresholds[VISION_BINARY_ZONE_OUTER] =
+            (uint8)VISION_BINARY_THRESHOLD_OUTER;
     }
 
     // 执行本帧完整视觉处理：信标识别 + 小车标志识别。
-    VisionRuntime_SetBinaryThreshold(input_snapshot.binary_threshold);
+    VisionRuntime_SetBinaryThresholds(
+        input_snapshot.binary_thresholds[VISION_BINARY_ZONE_INNER],
+        input_snapshot.binary_thresholds[VISION_BINARY_ZONE_MIDDLE],
+        input_snapshot.binary_thresholds[VISION_BINARY_ZONE_OUTER]);
     VisionRuntime_ProcessFrameWithPose(input_snapshot.roll_deg,
                                        input_snapshot.pitch_deg,
                                        input_snapshot.tof_height_cm);
@@ -794,22 +814,33 @@ void CrossCoreCamera_ControlCorePublishInput(float roll_deg,
     g_shared_vision_input->yaw_deg = yaw_deg;
     g_shared_vision_input->tof_height_cm = tof_height_cm;
     g_shared_vision_input->fused_height_cm = fused_height_cm;
-    g_shared_vision_input->binary_threshold = s_control_binary_threshold;
+    memcpy((void *)g_shared_vision_input->binary_thresholds,
+           s_control_binary_thresholds,
+           sizeof(s_control_binary_thresholds));
     g_shared_vision_input->seq++;
     CrossCoreCamera_CleanInput();
 }
 
-void CrossCoreCamera_ControlCoreSetBinaryThreshold(uint8 threshold)
+void CrossCoreCamera_ControlCoreSetBinaryThreshold(uint8 zone, uint8 threshold)
 {
-    s_control_binary_threshold = (threshold == 0U) ? 1U : threshold;
-    g_shared_vision_input->binary_threshold = s_control_binary_threshold;
+    if(zone >= VISION_BINARY_ZONE_COUNT)
+    {
+        return;
+    }
+    s_control_binary_thresholds[zone] = (threshold == 0U) ? 1U : threshold;
+    g_shared_vision_input->binary_thresholds[zone] =
+        s_control_binary_thresholds[zone];
     g_shared_vision_input->seq++;
     CrossCoreCamera_CleanInput();
 }
 
-uint8 CrossCoreCamera_ControlCoreGetBinaryThreshold(void)
+uint8 CrossCoreCamera_ControlCoreGetBinaryThreshold(uint8 zone)
 {
-    return s_control_binary_threshold;
+    if(zone >= VISION_BINARY_ZONE_COUNT)
+    {
+        zone = VISION_BINARY_ZONE_MIDDLE;
+    }
+    return s_control_binary_thresholds[zone];
 }
 
 uint32 CrossCoreCamera_ControlCoreResultPending(void)
@@ -855,8 +886,16 @@ void CrossCoreCamera_ControlCoreAssistantInit(void)
     g_shared_vision_input->yaw_deg = 0.0f;
     g_shared_vision_input->tof_height_cm = 100.0f;
     g_shared_vision_input->fused_height_cm = 100.0f;
-    s_control_binary_threshold = (uint8)VISION_BINARY_THRESHOLD;
-    g_shared_vision_input->binary_threshold = s_control_binary_threshold;
+    s_control_binary_thresholds[VISION_BINARY_ZONE_INNER] =
+        (uint8)VISION_BINARY_THRESHOLD_INNER;
+    s_control_binary_thresholds[VISION_BINARY_ZONE_MIDDLE] =
+        (uint8)VISION_BINARY_THRESHOLD_MIDDLE;
+    s_control_binary_thresholds[VISION_BINARY_ZONE_OUTER] =
+        (uint8)VISION_BINARY_THRESHOLD_OUTER;
+    memcpy((void *)g_shared_vision_input->binary_thresholds,
+           s_control_binary_thresholds,
+           sizeof(s_control_binary_thresholds));
+    g_shared_vision_input->reserved = 0U;
     g_shared_vision_snapshot_metadata->magic = 0U;
     g_shared_vision_snapshot_metadata->image_seq = 0U;
     g_shared_vision_snapshot_metadata->input_seq = 0U;

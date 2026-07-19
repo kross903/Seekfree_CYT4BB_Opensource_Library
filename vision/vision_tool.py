@@ -152,7 +152,9 @@ class Simulator:
         height: float,
         undistort: bool = False,
         birdview: bool = False,
-        threshold: int = 150,
+        threshold_inner: int = 160,
+        threshold_middle: int = 150,
+        threshold_outer: int = 170,
         binary_mode: str = "gray",
     ) -> tuple[bool, str, Path | None, Path | None, Path | None, Path | None, Path | None, Path | None, Path | None]:
         executable = self.output_path()
@@ -185,7 +187,10 @@ class Simulator:
             "--roll", str(roll),
             "--pitch", str(pitch),
             "--height", str(height),
-            "--threshold", str(threshold),
+            "--threshold", str(threshold_middle),
+            "--threshold-inner", str(threshold_inner),
+            "--threshold-middle", str(threshold_middle),
+            "--threshold-outer", str(threshold_outer),
             "--binary-mode", binary_mode,
         ]
         if undistort:
@@ -229,10 +234,12 @@ class VisionToolApp:
         self.pitch_var = tk.StringVar(value="0")
         self.yaw_var = tk.StringVar(value="0")
         self.height_var = tk.StringVar(value="100")
+        self.threshold_inner_var = tk.StringVar(value="160")
         self.threshold_var = tk.StringVar(value="150")
+        self.threshold_outer_var = tk.StringVar(value="170")
         self.undistort_var = tk.BooleanVar(value=False)
         self.birdview_var = tk.BooleanVar(value=False)
-        self.binary_mode_var = tk.StringVar(value="gray")
+        self.binary_mode_var = tk.StringVar(value="undistort_binary_ipm")
         self.status_var = tk.StringVar(value="就绪")
         self.frame_info_var = tk.StringVar(value="未选择帧")
         self.frame_telemetry_var = tk.StringVar(value="帧姿态/高度：暂无")
@@ -251,7 +258,9 @@ class VisionToolApp:
         self.current_frame: Path | None = None
         self.current_result: dict | None = None
         self.ui_queue: queue.Queue[tuple[str, object]] = queue.Queue()
-        self.simulation_queue: queue.Queue[tuple[Path, float, float, float, bool, bool, int, str]] = queue.Queue()
+        self.simulation_queue: queue.Queue[
+            tuple[Path, float, float, float, bool, bool, int, int, int, str]
+        ] = queue.Queue()
         self.capture_stop_event = threading.Event()
         self.capture_running = False
         self.capture_out_var = tk.StringVar(value=str(APP_ROOT / "capture"))
@@ -453,11 +462,11 @@ class VisionToolApp:
         ttk.Label(processing, text="10m×10m · 0.5cm/pixel · 2000×2000").grid(
             row=2, column=0, columnspan=2, sticky="w", pady=(0, 8)
         )
-        ttk.Label(processing, text="处理顺序").grid(row=3, column=0, columnspan=2, sticky="w")
+        ttk.Label(processing, text="预览处理顺序").grid(row=3, column=0, columnspan=2, sticky="w")
         for row, (text, value) in enumerate((
             ("灰度处理", "gray"),
             ("先二值化，再去畸变/逆透视", "pre_transform"),
-            ("先去畸变，再二值化、逆透视", "undistort_binary_ipm"),
+            ("无人机实际：去畸变、分区二值化、连通域", "undistort_binary_ipm"),
             ("先去畸变/逆透视，再二值化", "post_transform"),
         ), start=4):
             ttk.Radiobutton(
@@ -467,9 +476,17 @@ class VisionToolApp:
                 variable=self.binary_mode_var,
                 command=self.refresh_processed_preview,
             ).grid(row=row, column=0, columnspan=2, sticky="w", pady=(2, 0))
-        ttk.Label(processing, text="二值阈值").grid(row=8, column=0, sticky="w", pady=(8, 0))
-        ttk.Entry(processing, textvariable=self.threshold_var, width=8).grid(
+        ttk.Label(processing, text="内圈阈值").grid(row=8, column=0, sticky="w", pady=(8, 0))
+        ttk.Entry(processing, textvariable=self.threshold_inner_var, width=8).grid(
             row=8, column=1, sticky="ew", padx=(8, 0), pady=(8, 0)
+        )
+        ttk.Label(processing, text="中圈阈值").grid(row=9, column=0, sticky="w", pady=(4, 0))
+        ttk.Entry(processing, textvariable=self.threshold_var, width=8).grid(
+            row=9, column=1, sticky="ew", padx=(8, 0), pady=(4, 0)
+        )
+        ttk.Label(processing, text="外圈阈值").grid(row=10, column=0, sticky="w", pady=(4, 0))
+        ttk.Entry(processing, textvariable=self.threshold_outer_var, width=8).grid(
+            row=10, column=1, sticky="ew", padx=(8, 0), pady=(4, 0)
         )
         ttk.Label(processing_tab, textvariable=self.status_var, foreground="#1b6e3a").grid(
             row=2, column=0, sticky="w", pady=(8, 4)
@@ -577,8 +594,12 @@ class VisionToolApp:
             roll = float(self.roll_var.get())
             pitch = float(self.pitch_var.get())
             height = float(self.height_var.get())
-            threshold = int(self.threshold_var.get())
-            if threshold < 1 or threshold > 255:
+            thresholds = (
+                int(self.threshold_inner_var.get()),
+                int(self.threshold_var.get()),
+                int(self.threshold_outer_var.get()),
+            )
+            if any(value < 1 or value > 255 for value in thresholds):
                 raise ValueError
         except ValueError:
             self.ui_queue.put(("run", (False, "simulation parameters are invalid", None, APP_ROOT, None, None, None, None, None)))
@@ -590,15 +611,19 @@ class VisionToolApp:
             height,
             bool(self.undistort_var.get()),
             bool(self.birdview_var.get()),
-            threshold,
+            *thresholds,
             self.binary_mode_var.get(),
         ))
 
     def simulation_worker(self) -> None:
         while True:
-            frame_path, roll, pitch, height, undistort, birdview, threshold, binary_mode = self.simulation_queue.get()
+            (frame_path, roll, pitch, height, undistort, birdview,
+             threshold_inner, threshold_middle, threshold_outer,
+             binary_mode) = self.simulation_queue.get()
             try:
-                self.run_worker(frame_path, roll, pitch, height, undistort, birdview, threshold, binary_mode)
+                self.run_worker(frame_path, roll, pitch, height, undistort, birdview,
+                                threshold_inner, threshold_middle, threshold_outer,
+                                binary_mode)
             except Exception as exc:
                 self.ui_queue.put(("run", (False, str(exc), None, APP_ROOT, None, None, None, None, None)))
 
@@ -797,8 +822,12 @@ class VisionToolApp:
             roll = float(self.roll_var.get())
             pitch = float(self.pitch_var.get())
             height = float(self.height_var.get())
-            threshold = int(self.threshold_var.get())
-            if threshold < 1 or threshold > 255:
+            thresholds = (
+                int(self.threshold_inner_var.get()),
+                int(self.threshold_var.get()),
+                int(self.threshold_outer_var.get()),
+            )
+            if any(value < 1 or value > 255 for value in thresholds):
                 raise ValueError
         except ValueError:
             messagebox.showerror("参数错误", "Roll、Pitch、高度必须是数字，阈值必须为 1 到 255。")
@@ -809,7 +838,8 @@ class VisionToolApp:
         binary_mode = self.binary_mode_var.get()
         threading.Thread(
             target=self.run_worker,
-            args=(self.current_frame, roll, pitch, height, undistort, birdview, threshold, binary_mode),
+            args=(self.current_frame, roll, pitch, height, undistort, birdview,
+                  *thresholds, binary_mode),
             daemon=True,
         ).start()
 
@@ -821,7 +851,9 @@ class VisionToolApp:
         height: float,
         undistort: bool,
         birdview: bool,
-        threshold: int,
+        threshold_inner: int,
+        threshold_middle: int,
+        threshold_outer: int,
         binary_mode: str,
     ) -> None:
         source = Path(self.source_var.get())
@@ -833,7 +865,8 @@ class VisionToolApp:
             raw_path.write_bytes(image.tobytes())
             simulator = Simulator(source)
             ok, log, result_path, undistorted_path, birdview_path, undistorted_mask_path, birdview_mask_path, undistorted_binary_path, birdview_binary_path = simulator.run(
-                raw_path, run_dir, roll, pitch, height, undistort, birdview, threshold, binary_mode
+                raw_path, run_dir, roll, pitch, height, undistort, birdview,
+                threshold_inner, threshold_middle, threshold_outer, binary_mode
             )
             payload = json.loads(result_path.read_text(encoding="utf-8")) if result_path else None
             binary_enabled = binary_mode != "gray"
@@ -978,7 +1011,7 @@ class VisionToolApp:
         binary_mode_text = {
             "gray": "灰度处理",
             "pre_transform": "先二值化再变换",
-            "undistort_binary_ipm": "去畸变后二值化再逆透视",
+            "undistort_binary_ipm": "去畸变、分区二值化、连通域",
             "post_transform": "先变换再二值化",
         }.get(str(result.get("binary_mode", "gray")), "未知")
         chevron = result.get("chevron", {})
@@ -1001,8 +1034,11 @@ class VisionToolApp:
         self.set_result_info(
             f"连通域: {result.get('blob_count', 0)}\n"
             f"信标: {result.get('beacon_count', 0)}\n"
-            f"二值阈值: {result.get('binary_threshold', '?')}\n"
-            f"处理顺序: {binary_mode_text}\n"
+            f"分区阈值: "
+            f"{result.get('binary_thresholds', {}).get('inner', '?')}/"
+            f"{result.get('binary_thresholds', {}).get('middle', '?')}/"
+            f"{result.get('binary_thresholds', {}).get('outer', '?')}\n"
+            f"预览顺序: {binary_mode_text}\n"
             f"小车标志有效: {result.get('vehicle', {}).get('valid', 0)}\n"
             f"{chevron_info}\n"
             f"运行目录: {binary_path.parent}"

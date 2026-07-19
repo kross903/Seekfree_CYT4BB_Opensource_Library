@@ -26,7 +26,7 @@ uint8 VisionOverlay_WorldToImage(float world_x, float world_y, int *img_x, int *
         return 0U;
     }
 
-    if(!IPM_World2Image(world_x, world_y, &proj_x, &proj_y))
+    if(!IPM_World2RectifiedImage(world_x, world_y, &proj_x, &proj_y))
     {
         return 0U;
     }

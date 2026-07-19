@@ -5,25 +5,63 @@
 static VisionRuntimeDiag_t s_vision_runtime_diag;
 static VisionRuntimeBeaconSlot_t s_vision_runtime_beacon_slots[VISION_RUNTIME_BEACON_SLOT_COUNT];
 static uint8 s_vision_binary[MT9V03X_H * MT9V03X_W];
-static uint8 s_vision_binary_display[MT9V03X_H * MT9V03X_W];
-static uint8 s_vision_binary_threshold = (uint8)VISION_BINARY_THRESHOLD;
+static uint8 s_vision_binary_thresholds[VISION_BINARY_ZONE_COUNT] = {
+    (uint8)VISION_BINARY_THRESHOLD_INNER,
+    (uint8)VISION_BINARY_THRESHOLD_MIDDLE,
+    (uint8)VISION_BINARY_THRESHOLD_OUTER};
 
 void VisionRuntime_SetBinaryThreshold(uint8 threshold)
 {
-    s_vision_binary_threshold = (threshold == 0U) ? 1U : threshold;
+    uint8 value = (threshold == 0U) ? 1U : threshold;
+    VisionRuntime_SetBinaryThresholds(value, value, value);
+}
+
+void VisionRuntime_SetBinaryThresholds(uint8 inner, uint8 middle, uint8 outer)
+{
+    s_vision_binary_thresholds[VISION_BINARY_ZONE_INNER] =
+        (inner == 0U) ? 1U : inner;
+    s_vision_binary_thresholds[VISION_BINARY_ZONE_MIDDLE] =
+        (middle == 0U) ? 1U : middle;
+    s_vision_binary_thresholds[VISION_BINARY_ZONE_OUTER] =
+        (outer == 0U) ? 1U : outer;
+}
+
+void VisionRuntime_GetBinaryThresholds(uint8 thresholds[VISION_BINARY_ZONE_COUNT])
+{
+    if(thresholds != NULL)
+    {
+        memcpy(thresholds, s_vision_binary_thresholds,
+               sizeof(s_vision_binary_thresholds));
+    }
 }
 
 #if CY_CORE_CM7_1
 #include "vision/beacon_detect.h"
+#include "vision/camera_calibration.h"
 #include "vision/ipm_interface.h"
 #include "vision/vehicle_marker_localization.h"
 #include "zf_device_mt9v03x.h"
 
-static uint8 s_vision_visited[MT9V03X_H * MT9V03X_W];
+#define VISION_RUNTIME_IMAGE_PIXEL_COUNT \
+    (MT9V03X_H * MT9V03X_W)
+#define VISION_RUNTIME_IMAGE_BITSET_BYTES \
+    ((VISION_RUNTIME_IMAGE_PIXEL_COUNT + 7U) / 8U)
+#define VISION_RUNTIME_LOCAL_BIRDVIEW_PIXEL_COUNT \
+    (VISION_RUNTIME_LOCAL_BIRDVIEW_MAX_WIDTH * VISION_RUNTIME_LOCAL_BIRDVIEW_MAX_HEIGHT)
+#define VISION_RUNTIME_LOCAL_BIRDVIEW_BITSET_BYTES \
+    ((VISION_RUNTIME_LOCAL_BIRDVIEW_PIXEL_COUNT + 7U) / 8U)
+#define VISION_RUNTIME_BIT_GET(buffer, index) \
+    (((buffer)[(index) >> 3] >> ((index) & 7)) & 1U)
+#define VISION_RUNTIME_BIT_SET(buffer, index) \
+    ((buffer)[(index) >> 3] |= (uint8)(1U << ((index) & 7)))
+#define VISION_RUNTIME_BIT_CLEAR(buffer, index) \
+    ((buffer)[(index) >> 3] &= (uint8)~(uint8)(1U << ((index) & 7)))
+
+static uint8 s_vision_visited[VISION_RUNTIME_IMAGE_BITSET_BYTES];
 static uint16 s_vision_queue[MT9V03X_H * MT9V03X_W];
-static uint8 s_vision_component_mask[MT9V03X_H * MT9V03X_W];
-static uint8 s_vision_local_birdview_mask[
-    VISION_RUNTIME_LOCAL_BIRDVIEW_MAX_WIDTH * VISION_RUNTIME_LOCAL_BIRDVIEW_MAX_HEIGHT];
+static uint8 s_vision_component_mask[VISION_RUNTIME_IMAGE_BITSET_BYTES];
+static uint8 s_vision_local_birdview_mask[VISION_RUNTIME_LOCAL_BIRDVIEW_BITSET_BYTES];
+static uint8 s_vision_undistorted[MT9V03X_H][MT9V03X_W];
 
 static float VisionRuntime_NormalizedAspect(int width, int height);
 
@@ -42,7 +80,7 @@ static void VisionRuntime_ClearComponentMask(int pixel_count)
 
     for(i = 0; i < pixel_count; ++i)
     {
-        s_vision_component_mask[s_vision_queue[i]] = 0U;
+        VISION_RUNTIME_BIT_CLEAR(s_vision_component_mask, s_vision_queue[i]);
     }
 }
 
@@ -75,7 +113,7 @@ static void VisionRuntime_BuildPhysicalBlobMetrics(VisionBlob_t *blob, int pixel
         float world_x = 0.0f;
         float world_y = 0.0f;
 
-        if(!IPM_Image2WorldF((float)col, (float)row, &world_x, &world_y))
+        if(!IPM_RectifiedImage2WorldF((float)col, (float)row, &world_x, &world_y))
         {
             continue;
         }
@@ -134,11 +172,13 @@ static void VisionRuntime_BuildPhysicalBlobMetrics(VisionBlob_t *blob, int pixel
                 int src_x = 0;
                 int src_y = 0;
 
-                if(IPM_World2Image(world_x, world_y, &src_x, &src_y) &&
-                   s_vision_component_mask[src_y * MT9V03X_W + src_x] != 0U)
+                if(IPM_World2RectifiedImage(world_x, world_y, &src_x, &src_y) &&
+                   VISION_RUNTIME_BIT_GET(s_vision_component_mask,
+                                          src_y * MT9V03X_W + src_x) != 0U)
                 {
-                    s_vision_local_birdview_mask[
-                        local_y * VISION_RUNTIME_LOCAL_BIRDVIEW_MAX_WIDTH + local_x] = 1U;
+                    VISION_RUNTIME_BIT_SET(
+                        s_vision_local_birdview_mask,
+                        local_y * VISION_RUNTIME_LOCAL_BIRDVIEW_MAX_WIDTH + local_x);
                 }
             }
         }
@@ -168,7 +208,8 @@ static void VisionRuntime_BuildPhysicalBlobMetrics(VisionBlob_t *blob, int pixel
             float world_x = 0.0f;
             float world_y = 0.0f;
 
-            if(!IPM_Image2WorldF(corner_x[corner], corner_y[corner], &world_x, &world_y))
+            if(!IPM_RectifiedImage2WorldF(corner_x[corner], corner_y[corner],
+                                         &world_x, &world_y))
             {
                 continue;
             }
@@ -208,8 +249,9 @@ static void VisionRuntime_BuildPhysicalBlobMetrics(VisionBlob_t *blob, int pixel
             {
                 for(local_x = min_local_x; local_x <= max_local_x; ++local_x)
                 {
-                    s_vision_local_birdview_mask[
-                        local_y * VISION_RUNTIME_LOCAL_BIRDVIEW_MAX_WIDTH + local_x] = 1U;
+                    VISION_RUNTIME_BIT_SET(
+                        s_vision_local_birdview_mask,
+                        local_y * VISION_RUNTIME_LOCAL_BIRDVIEW_MAX_WIDTH + local_x);
                 }
             }
         }
@@ -228,20 +270,20 @@ static void VisionRuntime_BuildPhysicalBlobMetrics(VisionBlob_t *blob, int pixel
                 int index = row * VISION_RUNTIME_LOCAL_BIRDVIEW_MAX_WIDTH + col;
                 int neighbor;
 
-                if(s_vision_local_birdview_mask[index] == 0U)
+                if(VISION_RUNTIME_BIT_GET(s_vision_local_birdview_mask, index) == 0U)
                 {
                     continue;
                 }
                 occupied++;
 
                 neighbor = (row > 0) ? index - (int)VISION_RUNTIME_LOCAL_BIRDVIEW_MAX_WIDTH : -1;
-                if(neighbor < 0 || s_vision_local_birdview_mask[neighbor] == 0U) exposed_edges++;
+                if(neighbor < 0 || VISION_RUNTIME_BIT_GET(s_vision_local_birdview_mask, neighbor) == 0U) exposed_edges++;
                 neighbor = (row + 1 < local_height) ? index + (int)VISION_RUNTIME_LOCAL_BIRDVIEW_MAX_WIDTH : -1;
-                if(neighbor < 0 || s_vision_local_birdview_mask[neighbor] == 0U) exposed_edges++;
+                if(neighbor < 0 || VISION_RUNTIME_BIT_GET(s_vision_local_birdview_mask, neighbor) == 0U) exposed_edges++;
                 neighbor = (col > 0) ? index - 1 : -1;
-                if(neighbor < 0 || s_vision_local_birdview_mask[neighbor] == 0U) exposed_edges++;
+                if(neighbor < 0 || VISION_RUNTIME_BIT_GET(s_vision_local_birdview_mask, neighbor) == 0U) exposed_edges++;
                 neighbor = (col + 1 < local_width) ? index + 1 : -1;
-                if(neighbor < 0 || s_vision_local_birdview_mask[neighbor] == 0U) exposed_edges++;
+                if(neighbor < 0 || VISION_RUNTIME_BIT_GET(s_vision_local_birdview_mask, neighbor) == 0U) exposed_edges++;
             }
         }
 
@@ -376,19 +418,61 @@ static float VisionRuntime_NormalizedAspect(int width, int height)
 
 static void VisionRuntime_Binarize(const uint8 image[MT9V03X_H][MT9V03X_W])
 {
-    int index = 0;
+    const float inner_ratio_sq = 0.40f * 0.40f;
+    const float middle_ratio_sq = 0.72f * 0.72f;
+    const sint32 center_x_q8 = (sint32)(CAMERA_CALIBRATION_CX * 256.0f + 0.5f);
+    const sint32 center_y_q8 = (sint32)(CAMERA_CALIBRATION_CY * 256.0f + 0.5f);
+    const sint32 far_x_q8 = (center_x_q8 >
+        (((sint32)MT9V03X_W - 1) * 256 - center_x_q8)) ?
+        center_x_q8 : (((sint32)MT9V03X_W - 1) * 256 - center_x_q8);
+    const sint32 far_y_q8 = (center_y_q8 >
+        (((sint32)MT9V03X_H - 1) * 256 - center_y_q8)) ?
+        center_y_q8 : (((sint32)MT9V03X_H - 1) * 256 - center_y_q8);
+    const uint32 max_radius_sq =
+        (uint32)(far_x_q8 * far_x_q8) + (uint32)(far_y_q8 * far_y_q8);
+    const uint32 inner_radius_sq = (uint32)((float)max_radius_sq * inner_ratio_sq);
+    const uint32 middle_radius_sq = (uint32)((float)max_radius_sq * middle_ratio_sq);
+    int row;
+    int col;
 
-    for(index = 0; index < (MT9V03X_H * MT9V03X_W); index++)
+    IPM_GenerateUndistortedDebugImage(image, s_vision_undistorted);
+    for(row = 0; row < MT9V03X_H; row++)
     {
-        if(((const uint8 *)image)[index] >= s_vision_binary_threshold)
+        for(col = 0; col < MT9V03X_W; col++)
         {
-            s_vision_binary[index] = 1U;
-            s_vision_binary_display[index] = 255U;
-        }
-        else
-        {
-            s_vision_binary[index] = 0U;
-            s_vision_binary_display[index] = 0U;
+            uint16 source_x_q8 = 0U;
+            uint16 source_y_q8 = 0U;
+            uint8 threshold;
+            int index = row * MT9V03X_W + col;
+
+            if(!CameraCalibration_RectifiedPixelToSourceQ8(col, row,
+                                                           &source_x_q8,
+                                                           &source_y_q8))
+            {
+                s_vision_binary[index] = 0U;
+                continue;
+            }
+
+            {
+                sint32 dx = (sint32)source_x_q8 - center_x_q8;
+                sint32 dy = (sint32)source_y_q8 - center_y_q8;
+                uint32 radius_sq = (uint32)(dx * dx) + (uint32)(dy * dy);
+
+                if(radius_sq <= inner_radius_sq)
+                {
+                    threshold = s_vision_binary_thresholds[VISION_BINARY_ZONE_INNER];
+                }
+                else if(radius_sq <= middle_radius_sq)
+                {
+                    threshold = s_vision_binary_thresholds[VISION_BINARY_ZONE_MIDDLE];
+                }
+                else
+                {
+                    threshold = s_vision_binary_thresholds[VISION_BINARY_ZONE_OUTER];
+                }
+            }
+            s_vision_binary[index] =
+                (s_vision_undistorted[row][col] >= threshold) ? 255U : 0U;
         }
     }
 }
@@ -505,14 +589,15 @@ static void VisionRuntime_ProcessBlobs(const uint8 image[MT9V03X_H][MT9V03X_W])
             int min_col = col;
             int max_col = col;
 
-            if(s_vision_binary[start_index] == 0U || s_vision_visited[start_index])
+            if(s_vision_binary[start_index] == 0U ||
+               VISION_RUNTIME_BIT_GET(s_vision_visited, start_index))
             {
                 continue;
             }
 
             s_vision_queue[rear++] = (uint16)start_index;
-            s_vision_visited[start_index] = 1U;
-            s_vision_component_mask[start_index] = 1U;
+            VISION_RUNTIME_BIT_SET(s_vision_visited, start_index);
+            VISION_RUNTIME_BIT_SET(s_vision_component_mask, start_index);
 
             while(front < rear)
             {
@@ -525,7 +610,7 @@ static void VisionRuntime_ProcessBlobs(const uint8 image[MT9V03X_H][MT9V03X_W])
                 pixel_count++;
                 row_sum += current_row;
                 col_sum += current_col;
-                brightness_sum += image[current_row][current_col];
+                brightness_sum += s_vision_undistorted[current_row][current_col];
 
                 if(current_row < min_row) min_row = current_row;
                 if(current_row > max_row) max_row = current_row;
@@ -555,10 +640,11 @@ static void VisionRuntime_ProcessBlobs(const uint8 image[MT9V03X_H][MT9V03X_W])
                         }
 
                         next_index = next_row * MT9V03X_W + next_col;
-                        if(s_vision_binary[next_index] != 0U && !s_vision_visited[next_index])
+                        if(s_vision_binary[next_index] != 0U &&
+                           !VISION_RUNTIME_BIT_GET(s_vision_visited, next_index))
                         {
-                            s_vision_visited[next_index] = 1U;
-                            s_vision_component_mask[next_index] = 1U;
+                            VISION_RUNTIME_BIT_SET(s_vision_visited, next_index);
+                            VISION_RUNTIME_BIT_SET(s_vision_component_mask, next_index);
                             if(rear < (MT9V03X_H * MT9V03X_W))
                             {
                                 s_vision_queue[rear++] = (uint16)next_index;
@@ -627,10 +713,10 @@ static void VisionRuntime_ProcessBlobs(const uint8 image[MT9V03X_H][MT9V03X_W])
                     blob.circularity = 0.0f;
                 }
                 VisionRuntime_BuildPhysicalBlobMetrics(&blob, rear);
-                blob.world_valid = IPM_Image2WorldF(blob.centroid_col,
-                                                    blob.centroid_row,
-                                                    &blob.world_x,
-                                                    &blob.world_y);
+                blob.world_valid = IPM_RectifiedImage2WorldF(blob.centroid_col,
+                                                             blob.centroid_row,
+                                                             &blob.world_x,
+                                                             &blob.world_y);
                 if(blob.world_valid)
                 {
                     VisionRuntime_DispatchBlob(&blob, &contour, large_area_threshold);
@@ -773,7 +859,16 @@ const uint8 *VisionRuntime_GetBinaryImage(void)
 
 const uint8 *VisionRuntime_GetBinaryDisplayImage(void)
 {
-    return s_vision_binary_display;
+    return s_vision_binary;
+}
+
+const uint8 *VisionRuntime_GetUndistortedImage(void)
+{
+#if CY_CORE_CM7_1
+    return &s_vision_undistorted[0][0];
+#else
+    return NULL;
+#endif
 }
 
 void VisionRuntime_GetDiag(VisionRuntimeDiag_t *diag)

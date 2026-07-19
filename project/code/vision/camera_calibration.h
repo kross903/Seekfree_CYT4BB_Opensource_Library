@@ -57,6 +57,12 @@ uint8 CameraCalibration_RectifiedPointToSource(float rectified_x,
                                                float *source_x,
                                                float *source_y);
 
+/* 将原始畸变图中的浮点坐标转换为188x120运行时去畸变坐标。 */
+uint8 CameraCalibration_SourcePointToRectified(float source_x,
+                                               float source_y,
+                                               float *rectified_x,
+                                               float *rectified_y);
+
 /* 使用标定模型反查任意去畸变坐标，不受188x120离线映射表边界限制。 */
 uint8 CameraCalibration_RectifiedModelPointToSource(float rectified_x,
                                                     float rectified_y,
@@ -67,6 +73,12 @@ uint8 CameraCalibration_RectifiedPixelToSource(int dst_x,
                                                int dst_y,
                                                int *src_x,
                                                int *src_y);
+
+/* 获取运行时去畸变像素对应的Q8原图坐标，供定点双线性采样。 */
+uint8 CameraCalibration_RectifiedPixelToSourceQ8(int dst_x,
+                                                 int dst_y,
+                                                 uint16 *src_x_q8,
+                                                 uint16 *src_y_q8);
 
 #ifdef __cplusplus
 }

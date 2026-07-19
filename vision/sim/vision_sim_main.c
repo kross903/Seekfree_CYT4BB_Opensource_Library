@@ -11,6 +11,7 @@
 
 uint8 mt9v03x_image[MT9V03X_H][MT9V03X_W];
 volatile uint8 mt9v03x_finish_flag = 0U;
+static uint8 s_runtime_undistorted_mask[MT9V03X_H][MT9V03X_W];
 
 #define BIRDVIEW_MAX_ALLOCATION_BYTES (256U * 1024U * 1024U)
 #define BIRDVIEW_HALF_RANGE_CM        (500.0f)
@@ -118,7 +119,7 @@ static void threshold_image(uint8 *image, size_t pixel_count, uint8 threshold)
 
 static int write_result(const char *path, const char *binary_path,
                         float roll_deg, float pitch_deg, float height_cm,
-                        uint8 threshold,
+                        const uint8 thresholds[VISION_BINARY_ZONE_COUNT],
                         int binary_mode,
                         const VisionRuntimeDiag_t *diag,
                         const IPM_UndistortCanvas_t *undistort_canvas,
@@ -168,20 +169,38 @@ static int write_result(const char *path, const char *binary_path,
             diag->beacon_nearest_area_cm2,
             diag->beacon_nearest_perimeter_cm,
             diag->beacon_nearest_circularity);
-    fprintf(file, "  \"binary_threshold\":%u,\n", (unsigned)threshold);
+    fprintf(file, "  \"binary_threshold\":%u,\n",
+            (unsigned)thresholds[VISION_BINARY_ZONE_MIDDLE]);
+    fprintf(file,
+            "  \"binary_thresholds\":{\"inner\":%u,\"middle\":%u,\"outer\":%u},\n",
+            (unsigned)thresholds[VISION_BINARY_ZONE_INNER],
+            (unsigned)thresholds[VISION_BINARY_ZONE_MIDDLE],
+            (unsigned)thresholds[VISION_BINARY_ZONE_OUTER]);
+    fprintf(file,
+            "  \"recognition_pipeline\":\"undistort_partitioned_connected_components\",\n");
     fprintf(file, "  \"binary_mode\":\"%s\",\n",
             (binary_mode == BINARY_MODE_PRE_TRANSFORM) ? "pre_transform" :
             ((binary_mode == BINARY_MODE_UNDISTORT_BINARY) ? "undistort_binary_ipm" :
              ((binary_mode == BINARY_MODE_POST_TRANSFORM) ? "post_transform" : "gray")));
     if(undistort_canvas != NULL)
     {
-        fprintf(file,
-                "  \"undistorted\":{\"width\":%d,\"height\":%d,"
-                "\"min_rectified_x\":%.6f,\"max_rectified_x\":%.6f,"
-                "\"min_rectified_y\":%.6f,\"max_rectified_y\":%.6f},\n",
-                undistort_canvas->width, undistort_canvas->height,
-                undistort_canvas->min_rectified_x, undistort_canvas->max_rectified_x,
-                undistort_canvas->min_rectified_y, undistort_canvas->max_rectified_y);
+        if(binary_mode == BINARY_MODE_UNDISTORT_BINARY)
+        {
+            fprintf(file,
+                    "  \"undistorted\":{\"width\":%d,\"height\":%d,"
+                    "\"runtime_full_fov_downsample\":1},\n",
+                    MT9V03X_W, MT9V03X_H);
+        }
+        else
+        {
+            fprintf(file,
+                    "  \"undistorted\":{\"width\":%d,\"height\":%d,"
+                    "\"min_rectified_x\":%.6f,\"max_rectified_x\":%.6f,"
+                    "\"min_rectified_y\":%.6f,\"max_rectified_y\":%.6f},\n",
+                    undistort_canvas->width, undistort_canvas->height,
+                    undistort_canvas->min_rectified_x, undistort_canvas->max_rectified_x,
+                    undistort_canvas->min_rectified_y, undistort_canvas->max_rectified_y);
+        }
     }
     else
     {
@@ -269,8 +288,16 @@ int main(int argc, char **argv)
     float pitch_deg = parse_float(get_option(argc, argv, "--pitch"), 0.0f);
     float height_cm = parse_float(get_option(argc, argv, "--height"), 100.0f);
     const char *binary_mode_text = get_option(argc, argv, "--binary-mode");
-    int threshold_value = parse_int(get_option(argc, argv, "--threshold"), (int)VISION_BINARY_THRESHOLD);
+    int threshold_value = parse_int(get_option(argc, argv, "--threshold"),
+                                    (int)VISION_BINARY_THRESHOLD_MIDDLE);
+    int threshold_inner_value = parse_int(get_option(argc, argv, "--threshold-inner"),
+                                          (int)VISION_BINARY_THRESHOLD_INNER);
+    int threshold_middle_value = parse_int(get_option(argc, argv, "--threshold-middle"),
+                                           threshold_value);
+    int threshold_outer_value = parse_int(get_option(argc, argv, "--threshold-outer"),
+                                          (int)VISION_BINARY_THRESHOLD_OUTER);
     uint8 threshold;
+    uint8 thresholds[VISION_BINARY_ZONE_COUNT];
     int binary_mode = BINARY_MODE_GRAY;
     VisionRuntimeDiag_t diag = {0};
     uint8 *undistorted_image = NULL;
@@ -289,13 +316,22 @@ int main(int argc, char **argv)
 
     if(input_path == NULL || output_path == NULL || !read_raw(input_path))
     {
-        fprintf(stderr, "usage: vision_sim --input frame.raw --output result.json [--binary binary.pgm] [--threshold 150] [--binary-mode gray|pre_transform|undistort_binary_ipm|post_transform] [--undistorted undistorted.pgm] [--undistorted-mask mask.pgm] [--undistorted-binary binary.pgm] [--birdview birdview.pgm] [--birdview-mask mask.pgm] [--birdview-binary binary.pgm]\n");
+        fprintf(stderr, "usage: vision_sim --input frame.raw --output result.json [--binary binary.pgm] [--threshold-inner 160] [--threshold-middle 150] [--threshold-outer 170] [--binary-mode gray|pre_transform|undistort_binary_ipm|post_transform] [--undistorted undistorted.pgm] [--undistorted-mask mask.pgm] [--undistorted-binary binary.pgm] [--birdview birdview.pgm] [--birdview-mask mask.pgm] [--birdview-binary binary.pgm]\n");
         return 2;
     }
 
     if(threshold_value < 1) threshold_value = 1;
     if(threshold_value > 255) threshold_value = 255;
     threshold = (uint8)threshold_value;
+    if(threshold_inner_value < 1) threshold_inner_value = 1;
+    if(threshold_inner_value > 255) threshold_inner_value = 255;
+    if(threshold_middle_value < 1) threshold_middle_value = 1;
+    if(threshold_middle_value > 255) threshold_middle_value = 255;
+    if(threshold_outer_value < 1) threshold_outer_value = 1;
+    if(threshold_outer_value > 255) threshold_outer_value = 255;
+    thresholds[VISION_BINARY_ZONE_INNER] = (uint8)threshold_inner_value;
+    thresholds[VISION_BINARY_ZONE_MIDDLE] = (uint8)threshold_middle_value;
+    thresholds[VISION_BINARY_ZONE_OUTER] = (uint8)threshold_outer_value;
     if(binary_mode_text != NULL && strcmp(binary_mode_text, "pre_transform") == 0)
     {
         binary_mode = BINARY_MODE_PRE_TRANSFORM;
@@ -316,11 +352,15 @@ int main(int argc, char **argv)
     IPM_Interface_Init();
     VehicleMarkerLocalization_Init();
     BeaconDetect_Init();
-    VisionRuntime_SetBinaryThreshold(threshold);
+    VisionRuntime_SetBinaryThresholds(
+        thresholds[VISION_BINARY_ZONE_INNER],
+        thresholds[VISION_BINARY_ZONE_MIDDLE],
+        thresholds[VISION_BINARY_ZONE_OUTER]);
     mt9v03x_finish_flag = 1U;
     VisionRuntime_ProcessFrameWithPose(roll_deg, pitch_deg, height_cm);
     VisionRuntime_GetDiag(&diag);
     binary_source = (const uint8 (*)[MT9V03X_W])VisionRuntime_GetBinaryDisplayImage();
+    IPM_GenerateUndistortedDebugMask(s_runtime_undistorted_mask);
 
     if(binary_path != NULL)
     {
@@ -373,13 +413,28 @@ int main(int argc, char **argv)
         }
         if(undistorted_path != NULL)
         {
-            write_pgm_image(undistorted_path, undistorted_image,
-                            undistort_canvas.width, undistort_canvas.height);
+            if(binary_mode == BINARY_MODE_UNDISTORT_BINARY)
+            {
+                write_pgm(undistorted_path,
+                          VisionRuntime_GetUndistortedImage());
+            }
+            else
+            {
+                write_pgm_image(undistorted_path, undistorted_image,
+                                undistort_canvas.width, undistort_canvas.height);
+            }
         }
         if(undistorted_mask_path != NULL)
         {
-            write_pgm_image(undistorted_mask_path, undistorted_mask,
-                            undistort_canvas.width, undistort_canvas.height);
+            if(binary_mode == BINARY_MODE_UNDISTORT_BINARY)
+            {
+                write_pgm(undistorted_mask_path, s_runtime_undistorted_mask[0]);
+            }
+            else
+            {
+                write_pgm_image(undistorted_mask_path, undistorted_mask,
+                                undistort_canvas.width, undistort_canvas.height);
+            }
         }
         if(binary_mode != BINARY_MODE_GRAY)
         {
@@ -395,8 +450,16 @@ int main(int argc, char **argv)
             }
             if(undistorted_binary_path != NULL)
             {
-                write_pgm_image(undistorted_binary_path, undistorted_binary,
-                                undistort_canvas.width, undistort_canvas.height);
+                if(binary_mode == BINARY_MODE_UNDISTORT_BINARY)
+                {
+                    write_pgm(undistorted_binary_path,
+                              VisionRuntime_GetBinaryDisplayImage());
+                }
+                else
+                {
+                    write_pgm_image(undistorted_binary_path, undistorted_binary,
+                                    undistort_canvas.width, undistort_canvas.height);
+                }
             }
         }
         undistort_canvas_ptr = &undistort_canvas;
@@ -492,12 +555,9 @@ int main(int argc, char **argv)
             }
             else if(binary_mode == BINARY_MODE_UNDISTORT_BINARY)
             {
-                if(undistorted_binary == NULL || undistort_canvas_ptr == NULL ||
-                   !IPM_GenerateBirdViewFromUndistortedBinary(undistorted_binary,
-                                                              undistort_canvas_ptr,
-                                                              birdview_binary,
-                                                              birdview_mask,
-                                                              &birdview_bounds))
+                if(!IPM_GenerateBirdViewFromRuntimeBinary(
+                       &binary_source[0][0], birdview_binary,
+                       birdview_mask, &birdview_bounds))
                 {
                     fprintf(stderr, "undistorted binary birdview generation failed\n");
                     free(birdview_image);
@@ -520,7 +580,7 @@ int main(int argc, char **argv)
         birdview_bounds_ptr = &birdview_bounds;
     }
     if(!write_result(output_path, binary_path, roll_deg, pitch_deg, height_cm,
-                     threshold, binary_mode, &diag,
+                     thresholds, binary_mode, &diag,
                      undistort_canvas_ptr, birdview_bounds_ptr))
     {
         fprintf(stderr, "failed to write result: %s\n", output_path);

@@ -30,8 +30,8 @@ void CrossCoreCamera_ControlCorePublishInput(float roll_deg,
                                               float yaw_deg,
                                               float tof_height_cm,
                                               float fused_height_cm);
-void CrossCoreCamera_ControlCoreSetBinaryThreshold(uint8 threshold);
-uint8 CrossCoreCamera_ControlCoreGetBinaryThreshold(void);
+void CrossCoreCamera_ControlCoreSetBinaryThreshold(uint8 zone, uint8 threshold);
+uint8 CrossCoreCamera_ControlCoreGetBinaryThreshold(uint8 zone);
 uint32 CrossCoreCamera_ControlCoreResultPending(void);
 uint8 CrossCoreCamera_ControlCoreRequestAssistantSnapshot(void);
 uint8 CrossCoreCamera_ControlCoreSendAssistantFrame(void);

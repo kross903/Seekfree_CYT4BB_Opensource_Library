@@ -61,6 +61,19 @@ def c_array_2d(name: str, values: list[list[int]], c_type: str) -> str:
     return f"const {c_type} {name}[MT9V03X_H][MT9V03X_W] = {{\n" + ",\n".join(rows) + "\n};\n"
 
 
+def write_generated(path: Path, text: str) -> None:
+    """Write generated text while preserving the target's existing EOL style."""
+    newline = "\n"
+    if path.exists():
+        raw = path.read_bytes()
+        existing = raw.decode("utf-8-sig").replace("\r\n", "\n")
+        if existing == text:
+            return
+        if b"\r\n" in raw:
+            newline = "\r\n"
+    path.write_text(text, encoding="utf-8", newline=newline)
+
+
 def generate_headers(calibration_path: Path | str, output_dir: Path | str, q: int = 14) -> dict:
     calibration_path = Path(calibration_path)
     output_dir = Path(output_dir)
@@ -113,7 +126,7 @@ def generate_headers(calibration_path: Path | str, output_dir: Path | str, q: in
 #endif /* CAMERA_CALIBRATION_PARAMS_H_ */
 """
     params_path = output_dir / "camera_calibration_params.h"
-    params_path.write_text(params, encoding="utf-8")
+    write_generated(params_path, params)
 
     scale = 1 << q
     xs, ys, zs, valid = [], [], [], []
@@ -148,24 +161,43 @@ def generate_headers(calibration_path: Path | str, output_dir: Path | str, q: in
     ray += c_array_2d("camera_ray_table_valid", valid, "uint8")
     ray += "\n#endif /* CAMERA_RAY_TABLE_H_ */\n"
     ray_path = output_dir / "camera_ray_table.h"
-    ray_path.write_text(ray, encoding="utf-8")
+    write_generated(ray_path, ray)
 
     k = np.array([[cfg["fx"], 0, cfg["cx"]], [0, cfg["fy"], cfg["cy"]], [0, 0, 1]], dtype=np.float64)
     d = np.array([[cfg["k1"]], [cfg["k2"]], [cfg["k3"]], [cfg["k4"]]], dtype=np.float64)
-    map1, map2 = cv2.fisheye.initUndistortRectifyMap(k, d, np.eye(3), k, (w, h), cv2.CV_32FC1)
-    mx, my, mv = [], [], []
+
+    # Keep the complete configured rectified field of view, but downsample it
+    # back to the camera's 188x120 runtime resolution.  The generated source
+    # coordinates use Q8 so firmware can perform true subpixel bilinear sampling
+    # without evaluating the fisheye model for every frame.
+    rect_scale_x = undistort_w / w
+    rect_scale_y = undistort_h / h
+    rect_k = np.array(
+        [
+            [cfg["fx"] / rect_scale_x, 0, (w - 1) * 0.5],
+            [0, cfg["fy"] / rect_scale_y, (h - 1) * 0.5],
+            [0, 0, 1],
+        ],
+        dtype=np.float64,
+    )
+    map1, map2 = cv2.fisheye.initUndistortRectifyMap(
+        k, d, np.eye(3), rect_k, (w, h), cv2.CV_32FC1
+    )
+    map_q = 8
+    map_scale = 1 << map_q
+    map_invalid = 0xFFFF
+    mx, my = [], []
     for y in range(h):
-        mxr, myr, mvr = [], [], []
+        mxr, myr = [], []
         for x in range(w):
-            sx = int(round(float(map1[y, x])))
-            sy = int(round(float(map2[y, x])))
-            ok = 0 <= sx < w and 0 <= sy < h
-            mxr.append(sx if ok else -1)
-            myr.append(sy if ok else -1)
-            mvr.append(1 if ok else 0)
+            sx = float(map1[y, x])
+            sy = float(map2[y, x])
+            # Bilinear sampling needs the complete 2x2 source neighborhood.
+            ok = 0.0 <= sx < (w - 1) and 0.0 <= sy < (h - 1)
+            mxr.append(int(round(sx * map_scale)) if ok else map_invalid)
+            myr.append(int(round(sy * map_scale)) if ok else map_invalid)
         mx.append(mxr)
         my.append(myr)
-        mv.append(mvr)
 
     rect = f"""/**
  * @file camera_undistort_rect_map.h
@@ -176,14 +208,17 @@ def generate_headers(calibration_path: Path | str, output_dir: Path | str, q: in
 #define CAMERA_UNDISTORT_RECT_MAP_H_
 
 #define CAMERA_UNDISTORT_RECT_MAP_HAS_DATA    (1)
+#define CAMERA_UNDISTORT_RECT_MAP_Q           ({map_q})
+#define CAMERA_UNDISTORT_RECT_MAP_INVALID     (0xFFFFU)
+#define CAMERA_UNDISTORT_RECT_SCALE_X         ({c_float(rect_scale_x)})
+#define CAMERA_UNDISTORT_RECT_SCALE_Y         ({c_float(rect_scale_y)})
 
 """
-    rect += c_array_2d("camera_undistort_rect_src_x", mx, "int16")
-    rect += c_array_2d("camera_undistort_rect_src_y", my, "int16")
-    rect += c_array_2d("camera_undistort_rect_valid", mv, "uint8")
+    rect += c_array_2d("camera_undistort_rect_src_x_q8", mx, "uint16")
+    rect += c_array_2d("camera_undistort_rect_src_y_q8", my, "uint16")
     rect += "\n#endif /* CAMERA_UNDISTORT_RECT_MAP_H_ */\n"
     rect_path = output_dir / "camera_undistort_rect_map.h"
-    rect_path.write_text(rect, encoding="utf-8")
+    write_generated(rect_path, rect)
 
     return {
         "params_path": params_path,

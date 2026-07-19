@@ -6,6 +6,11 @@
 #include <stddef.h>
 #include <string.h>
 
+/* IAR storage qualifier; host simulation uses normal process memory. */
+#ifndef __no_init
+#define __no_init
+#endif
+
 typedef uint8_t uint8;
 typedef uint16_t uint16;
 typedef uint32_t uint32;

@@ -98,6 +98,10 @@ void IPM_Image2World(int img_x, int img_y, float *world_x, float *world_y);
  */
 uint8 IPM_Image2WorldF(float img_x, float img_y, float *world_x, float *world_y);
 
+/* 188x120运行时去畸变坐标与地面物理坐标互转。 */
+uint8 IPM_RectifiedImage2WorldF(float img_x, float img_y,
+                               float *world_x, float *world_y);
+
 /**
  * @brief 地面物理坐标转换为图像坐标
  * @param world_x 地面X坐标(cm)
@@ -107,6 +111,8 @@ uint8 IPM_Image2WorldF(float img_x, float img_y, float *world_x, float *world_y)
  * @return true成功, false点在图像外
  */
 bool IPM_World2Image(float world_x, float world_y, int *img_x, int *img_y);
+bool IPM_World2RectifiedImage(float world_x, float world_y,
+                              int *img_x, int *img_y);
 
 /**
  * @brief 获取正下方点在图像中的位置
@@ -159,6 +165,12 @@ uint8 IPM_GenerateBirdViewFromUndistortedBinary(const uint8 *src_img,
                                                 uint8 *dst_img,
                                                 uint8 *valid_mask,
                                                 const IPM_BirdViewBounds_t *bounds);
+
+/* 使用188x120运行时去畸变二值图生成动态鸟瞰图。 */
+uint8 IPM_GenerateBirdViewFromRuntimeBinary(const uint8 *src_img,
+                                            uint8 *dst_img,
+                                            uint8 *valid_mask,
+                                            const IPM_BirdViewBounds_t *bounds);
 
 /**
  * @brief 在IPS200屏幕上显示俯视图
