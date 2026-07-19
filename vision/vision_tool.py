@@ -909,11 +909,29 @@ class VisionToolApp:
         if birdview_mask is not None:
             mask_files.append("birdview_mask.pgm")
         mask_info = f"\n掩码文件: {', '.join(mask_files)}" if mask_files else ""
+        chevron = result.get("chevron", {})
+        physical = chevron.get("physical", {}) if isinstance(chevron, dict) else {}
+        reject_reason = int(chevron.get("reject_reason", 0)) if isinstance(chevron, dict) else 0
+        reject_text = {
+            0: "通过",
+            1: "无物理候选",
+            2: "图像几何失败",
+            3: "物理投影失败",
+            4: "物理几何不符",
+        }.get(reject_reason, f"未知({reject_reason})")
+        chevron_info = (
+            f"\n小车候选: {chevron.get('candidate_count', 0)}，拒绝: {reject_text}"
+            f"\n物理面积: {physical.get('area_cm2', 0):.2f} cm²，圆度: {physical.get('circularity', 0):.3f}"
+            f"\n两臂: {physical.get('left_arm_cm', 0):.2f}/{physical.get('right_arm_cm', 0):.2f} cm"
+            f"，夹角: {physical.get('arm_angle_deg', 0):.2f}°"
+            f"\n底边/高: {physical.get('base_cm', 0):.2f}/{physical.get('triangle_height_cm', 0):.2f} cm"
+        )
         self.result_info_var.set(
             f"连通域: {result.get('blob_count', 0)}\n"
             f"信标: {result.get('beacon_count', 0)}\n"
             f"二值阈值: {result.get('binary_threshold', '?')}\n"
             f"小车标志有效: {result.get('vehicle', {}).get('valid', 0)}\n"
+            f"{chevron_info}\n"
             f"运行目录: {binary_path.parent}"
             f"{birdview_info}\n"
             f"{mask_info}"

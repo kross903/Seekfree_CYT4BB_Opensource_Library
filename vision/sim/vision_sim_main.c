@@ -192,8 +192,25 @@ static int write_result(const char *path, const char *binary_path,
             chevron.left_line_end_img.u, chevron.left_line_end_img.v);
     fprintf(file, "\"right_line_start_img\":{\"u\":%.3f,\"v\":%.3f},",
             chevron.right_line_start_img.u, chevron.right_line_start_img.v);
-    fprintf(file, "\"right_line_end_img\":{\"u\":%.3f,\"v\":%.3f}}\n",
+    fprintf(file, "\"right_line_end_img\":{\"u\":%.3f,\"v\":%.3f},",
             chevron.right_line_end_img.u, chevron.right_line_end_img.v);
+    fprintf(file,
+            "\"physical\":{\"area_cm2\":%.6f,\"occupancy\":%.6f,\"circularity\":%.6f,"
+            "\"left_arm_cm\":%.6f,\"right_arm_cm\":%.6f,\"arm_angle_deg\":%.6f,"
+            "\"base_cm\":%.6f,\"triangle_height_cm\":%.6f},",
+            chevron.physical_area_cm2,
+            chevron.physical_occupancy_ratio,
+            chevron.physical_circularity,
+            chevron.left_arm_cm,
+            chevron.right_arm_cm,
+            chevron.arm_angle_deg,
+            chevron.base_cm,
+            chevron.triangle_height_cm);
+    fprintf(file,
+            "\"candidate_count\":%u,\"geometry_reject_count\":%u,\"reject_reason\":%u}\n",
+            (unsigned)chevron.candidate_count,
+            (unsigned)chevron.geometry_reject_count,
+            (unsigned)chevron.reject_reason);
     fprintf(file, "}\n");
     fclose(file);
     return 1;
