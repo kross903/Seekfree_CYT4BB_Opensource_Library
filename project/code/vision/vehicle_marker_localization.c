@@ -1282,7 +1282,8 @@ typedef struct
     uint8 valid;
 } VehicleMarkerChevronCandidate_t;
 
-static VehicleMarkerChevronCandidate_t
+#pragma location = 0x20000000
+__no_init static VehicleMarkerChevronCandidate_t
     s_vehicle_marker_chevron_candidates[VEHICLE_MARKER_CHEVRON_MAX_FRAME_CANDIDATES];
 static uint8 s_vehicle_marker_chevron_candidate_count = 0U;
 static VehicleMarkerWorldPoint_t s_vehicle_marker_chevron_world_pts[VISION_RUNTIME_CONTOUR_MAX_POINTS];
