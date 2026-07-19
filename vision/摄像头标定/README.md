@@ -54,3 +54,5 @@ CYT4BB7_Drone\Seekfree_CYT4BB_Opensource_Library\project\code\vision\
 - 默认使用完整的 `188x120` 传感器矩形，`valid_radius_px=0` 表示不做圆形裁剪。
 - 如果实测确认镜头边缘存在无成像区或误差不可接受，再通过 `--valid-radius-px` 传入正数限制有效半径。
 - Python/OpenCV 只用于离线生成参数和表，固件端只使用 C 头文件。
+- 去畸变预览输出为 `376x240`，保持标定焦距对应的原像素尺度，并将主点置于画布中心；有限画布会舍弃针孔投影中无限拉伸的四角极端区域。
+- `camera_calibration.json` 中的 `undistort_width`、`undistort_height` 会同步生成到固件参数头文件，供上位机 C 仿真使用。

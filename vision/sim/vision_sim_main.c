@@ -329,18 +329,18 @@ int main(int argc, char **argv)
     if(undistorted_path != NULL ||
        (birdview_path != NULL && binary_mode == BINARY_MODE_UNDISTORT_BINARY))
     {
-        if(!IPM_CalculateFullUndistortCanvas(&undistort_canvas) ||
+        if(!IPM_SetUndistortCanvas(&undistort_canvas) ||
            undistort_canvas.width <= 0 || undistort_canvas.height <= 0 ||
            (size_t)undistort_canvas.width > ((size_t)-1) / (size_t)undistort_canvas.height)
         {
-            fprintf(stderr, "full undistort canvas calculation failed\n");
+            fprintf(stderr, "undistort canvas setup failed\n");
             return 4;
         }
         undistorted_pixels = (size_t)undistort_canvas.width * (size_t)undistort_canvas.height;
         if(undistorted_pixels > (size_t)BIRDVIEW_MAX_ALLOCATION_BYTES)
         {
             fprintf(stderr,
-                    "full undistort dimensions %dx%d require %zu bytes, exceeding the %u-byte limit\n",
+                    "undistort dimensions %dx%d require %zu bytes, exceeding the %u-byte limit\n",
                     undistort_canvas.width, undistort_canvas.height, undistorted_pixels,
                     (unsigned)BIRDVIEW_MAX_ALLOCATION_BYTES);
             return 4;
@@ -355,7 +355,7 @@ int main(int argc, char **argv)
         if(undistorted_image == NULL || undistorted_mask == NULL ||
            (binary_mode != BINARY_MODE_GRAY && undistorted_binary == NULL))
         {
-            fprintf(stderr, "full undistort allocation failed for %dx%d\n",
+            fprintf(stderr, "undistort allocation failed for %dx%d\n",
                     undistort_canvas.width, undistort_canvas.height);
             free(undistorted_image);
             free(undistorted_mask);
@@ -365,7 +365,7 @@ int main(int argc, char **argv)
         if(!IPM_GenerateFullUndistortedImage(mt9v03x_image, undistorted_image,
                                              undistorted_mask, &undistort_canvas))
         {
-            fprintf(stderr, "full undistort generation failed\n");
+            fprintf(stderr, "undistort generation failed\n");
             free(undistorted_image);
             free(undistorted_mask);
             free(undistorted_binary);

@@ -12,7 +12,12 @@ from tkinter import filedialog, messagebox, scrolledtext, ttk
 
 from PIL import Image, ImageTk
 
-from calibrate_fisheye import run_calibration
+from calibrate_fisheye import (
+    load_calibration,
+    read_grayscale_image,
+    run_calibration,
+    undistort_fisheye_image,
+)
 from capture_seekfree_frames import capture_frames, list_serial_ports
 from generate_firmware_headers import generate_headers
 
@@ -157,7 +162,16 @@ class CameraToolApp:
         ttk.Label(parent, text="有效半径(px)").grid(row=5, column=0, sticky="w", pady=(8, 0))
         ttk.Entry(parent, textvariable=self.valid_radius_var).grid(row=5, column=1, sticky="ew", padx=(8, 8), pady=(8, 0))
 
-        ttk.Button(parent, text="开始标定", command=self.start_calibration).grid(row=6, column=0, columnspan=3, sticky="ew", pady=(12, 0))
+        button_bar = ttk.Frame(parent)
+        button_bar.grid(row=6, column=0, columnspan=3, sticky="ew", pady=(12, 0))
+        button_bar.columnconfigure(0, weight=1)
+        button_bar.columnconfigure(1, weight=1)
+        ttk.Button(button_bar, text="开始标定", command=self.start_calibration).grid(
+            row=0, column=0, sticky="ew", padx=(0, 6)
+        )
+        ttk.Button(button_bar, text="预览去畸变", command=self.preview_undistortion).grid(
+            row=0, column=1, sticky="ew", padx=(6, 0)
+        )
 
         ttk.Label(parent, text="结果").grid(row=7, column=0, sticky="nw", pady=(12, 0))
         ttk.Label(parent, textvariable=self.calib_summary_var, justify=tk.LEFT).grid(row=7, column=1, columnspan=2, sticky="w", padx=(8, 0), pady=(12, 0))
@@ -291,6 +305,62 @@ class CameraToolApp:
             daemon=True,
         )
         worker.start()
+
+    def preview_undistortion(self) -> None:
+        image_path = filedialog.askopenfilename(
+            initialdir=self.frames_dir_var.get() or str(DEFAULT_FRAMES_DIR),
+            filetypes=[
+                ("图像", "*.png *.jpg *.jpeg *.bmp *.pgm"),
+                ("所有文件", "*.*"),
+            ],
+        )
+        if not image_path:
+            return
+
+        calibration_path = Path(self.header_calibration_var.get())
+        try:
+            source = read_grayscale_image(Path(image_path))
+            if source is None:
+                raise ValueError(f"无法读取图像: {image_path}")
+            calibration = load_calibration(calibration_path)
+            undistorted = undistort_fisheye_image(source, calibration)
+        except (OSError, RuntimeError, TypeError, ValueError) as exc:
+            messagebox.showerror("去畸变预览失败", str(exc))
+            return
+
+        preview = tk.Toplevel(self.root)
+        preview.title("去畸变预览")
+        preview.geometry("1180x430")
+        preview.columnconfigure(0, weight=1)
+        preview.columnconfigure(1, weight=1)
+        preview.rowconfigure(1, weight=1)
+
+        ttk.Label(preview, text="原图", anchor="center").grid(
+            row=0, column=0, sticky="ew", padx=8, pady=(8, 4)
+        )
+        ttk.Label(
+            preview,
+            text=f"去畸变 {undistorted.shape[1]}×{undistorted.shape[0]}（原焦距尺度）",
+            anchor="center",
+        ).grid(
+            row=0, column=1, sticky="ew", padx=8, pady=(8, 4)
+        )
+
+        size = (564, 360)
+        source_photo = ImageTk.PhotoImage(
+            Image.fromarray(source).resize(size, Image.Resampling.NEAREST)
+        )
+        undistorted_photo = ImageTk.PhotoImage(
+            Image.fromarray(undistorted).resize(size, Image.Resampling.NEAREST)
+        )
+        ttk.Label(preview, image=source_photo, anchor="center").grid(
+            row=1, column=0, sticky="nsew", padx=8, pady=(4, 8)
+        )
+        ttk.Label(preview, image=undistorted_photo, anchor="center").grid(
+            row=1, column=1, sticky="nsew", padx=8, pady=(4, 8)
+        )
+        preview.source_photo = source_photo
+        preview.undistorted_photo = undistorted_photo
 
     def calibration_worker(
         self,

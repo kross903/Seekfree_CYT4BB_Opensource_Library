@@ -189,8 +189,8 @@ void IPM_GenerateUndistortedDebugImageNearest(const uint8 src_img[MT9V03X_H][MT9
 
 void IPM_GenerateUndistortedDebugMask(uint8 dst_mask[MT9V03X_H][MT9V03X_W]);
 
-/* 原像素尺度、不裁剪的完整去畸变画布。 */
-uint8 IPM_CalculateFullUndistortCanvas(IPM_UndistortCanvas_t *canvas);
+/* 使用标定配置设置原焦距尺度、居中的有限视场去畸变画布。 */
+uint8 IPM_SetUndistortCanvas(IPM_UndistortCanvas_t *canvas);
 uint8 IPM_GenerateFullUndistortedImage(const uint8 src_img[MT9V03X_H][MT9V03X_W],
                                        uint8 *dst_img,
                                        uint8 *valid_mask,

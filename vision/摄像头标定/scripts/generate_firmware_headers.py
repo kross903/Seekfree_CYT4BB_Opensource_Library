@@ -70,6 +70,12 @@ def generate_headers(calibration_path: Path | str, output_dir: Path | str, q: in
     w, h = int(cfg["image_width"]), int(cfg["image_height"])
     if (w, h) != (188, 120):
         raise SystemExit(f"Expected 188x120 calibration, got {w}x{h}")
+    undistort_w = int(cfg.get("undistort_width", 376))
+    undistort_h = int(cfg.get("undistort_height", 240))
+    if undistort_w <= 0 or undistort_h <= 0:
+        raise SystemExit(
+            f"Expected positive undistort dimensions, got {undistort_w}x{undistort_h}"
+        )
 
     params = f"""/**
  * @file camera_calibration_params.h
@@ -85,6 +91,8 @@ def generate_headers(calibration_path: Path | str, output_dir: Path | str, q: in
 #define CAMERA_CALIBRATION_HAS_GENERATED_PARAMS     (1)
 #define CAMERA_CALIBRATION_IMAGE_WIDTH              ({w})
 #define CAMERA_CALIBRATION_IMAGE_HEIGHT             ({h})
+#define CAMERA_CALIBRATION_UNDISTORT_WIDTH           ({undistort_w})
+#define CAMERA_CALIBRATION_UNDISTORT_HEIGHT          ({undistort_h})
 #define CAMERA_CALIBRATION_FALLBACK_DIAGONAL_FOV_DEG (170.0f)
 #define CAMERA_CALIBRATION_FX                       ({c_float(cfg["fx"])})
 #define CAMERA_CALIBRATION_FY                       ({c_float(cfg["fy"])})

@@ -959,7 +959,7 @@ class VisionToolApp:
         if isinstance(undistorted_meta, dict):
             undistorted_info = (
                 f"\n去畸变尺寸: {undistorted_meta.get('width', '?')}×{undistorted_meta.get('height', '?')}"
-                f"（原尺度完整视场）"
+                f"（原焦距尺度，限制极端边缘）"
             )
         birdview_meta = result.get("birdview")
         birdview_info = ""

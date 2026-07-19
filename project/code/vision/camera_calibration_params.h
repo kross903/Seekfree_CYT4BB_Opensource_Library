@@ -2,7 +2,7 @@
  * @file camera_calibration_params.h
  * @brief 由 scripts/generate_firmware_headers.py 自动生成。
  *
- * 初版标定：10 张有效图片，RMS 0.198817 px。
+ * 初版标定：16 张有效图片，RMS 0.222251 px。
  * 相机安装角和相对机体位置不是棋盘格内参标定的输出，当前为 0，需实机测量。
  */
 
@@ -12,15 +12,17 @@
 #define CAMERA_CALIBRATION_HAS_GENERATED_PARAMS     (1)
 #define CAMERA_CALIBRATION_IMAGE_WIDTH              (188)
 #define CAMERA_CALIBRATION_IMAGE_HEIGHT             (120)
+#define CAMERA_CALIBRATION_UNDISTORT_WIDTH           (376)
+#define CAMERA_CALIBRATION_UNDISTORT_HEIGHT          (240)
 #define CAMERA_CALIBRATION_FALLBACK_DIAGONAL_FOV_DEG (170.0f)
-#define CAMERA_CALIBRATION_FX                       (79.9405212f)
-#define CAMERA_CALIBRATION_FY                       (80.064407f)
-#define CAMERA_CALIBRATION_CX                       (96.0476949f)
-#define CAMERA_CALIBRATION_CY                       (59.6924987f)
-#define CAMERA_CALIBRATION_K1                       (-0.00971921042f)
-#define CAMERA_CALIBRATION_K2                       (-0.0145698917f)
-#define CAMERA_CALIBRATION_K3                       (0.00376024812f)
-#define CAMERA_CALIBRATION_K4                       (0.0013695079f)
+#define CAMERA_CALIBRATION_FX                       (79.3939798f)
+#define CAMERA_CALIBRATION_FY                       (79.5726397f)
+#define CAMERA_CALIBRATION_CX                       (95.4078135f)
+#define CAMERA_CALIBRATION_CY                       (59.9547985f)
+#define CAMERA_CALIBRATION_K1                       (-0.00872509374f)
+#define CAMERA_CALIBRATION_K2                       (-0.024983056f)
+#define CAMERA_CALIBRATION_K3                       (0.0206813988f)
+#define CAMERA_CALIBRATION_K4                       (-0.00718848343f)
 #define CAMERA_CALIBRATION_VALID_RADIUS_PX          (0.0f)
 #define CAMERA_MOUNT_ROLL_OFFSET_DEG                (0.0f)
 #define CAMERA_MOUNT_PITCH_OFFSET_DEG               (0.0f)

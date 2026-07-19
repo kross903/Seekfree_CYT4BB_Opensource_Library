@@ -15,6 +15,13 @@ import numpy as np
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".bmp", ".pgm"}
 DEFAULT_DETECTION_SCALE = 2.0
 DEFAULT_MIN_VALID_IMAGES = 10
+DEFAULT_UNDISTORT_WIDTH = 376
+DEFAULT_UNDISTORT_HEIGHT = 240
+FISHEYE_CALIBRATION_FLAG_NAMES = (
+    "CALIB_RECOMPUTE_EXTRINSIC",
+    "CALIB_CHECK_COND",
+    "CALIB_FIX_SKEW",
+)
 
 
 class CalibrationInputError(RuntimeError):
@@ -103,6 +110,106 @@ def read_grayscale_image(path: Path) -> np.ndarray | None:
     if encoded.size == 0:
         return None
     return cv2.imdecode(encoded, cv2.IMREAD_GRAYSCALE)
+
+
+def get_fisheye_calibration_flags() -> int:
+    """兼容 OpenCV 4 的 fisheye 常量和 OpenCV 5 的顶层常量。"""
+    flags = 0
+    for name in FISHEYE_CALIBRATION_FLAG_NAMES:
+        if hasattr(cv2.fisheye, name):
+            flags |= int(getattr(cv2.fisheye, name))
+        elif hasattr(cv2, name):
+            flags |= int(getattr(cv2, name))
+        else:
+            raise RuntimeError(f"当前 OpenCV 缺少鱼眼标定常量: {name}")
+    return flags
+
+
+def load_calibration(path: Path | str) -> dict:
+    calibration_path = Path(path)
+    try:
+        result = json.loads(calibration_path.read_text(encoding="utf-8-sig"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise CalibrationInputError(f"无法读取标定 JSON: {calibration_path}: {exc}") from exc
+
+    required = (
+        "image_width",
+        "image_height",
+        "fx",
+        "fy",
+        "cx",
+        "cy",
+        "k1",
+        "k2",
+        "k3",
+        "k4",
+    )
+    missing = [name for name in required if name not in result]
+    if missing:
+        raise CalibrationInputError(f"标定 JSON 缺少字段: {', '.join(missing)}")
+    return result
+
+
+def build_undistort_maps(calibration: dict) -> tuple[np.ndarray, np.ndarray]:
+    """按原焦距尺度生成居中的有限视场去畸变反查表。"""
+    width = int(calibration["image_width"])
+    height = int(calibration["image_height"])
+    output_width = int(calibration.get("undistort_width", DEFAULT_UNDISTORT_WIDTH))
+    output_height = int(calibration.get("undistort_height", DEFAULT_UNDISTORT_HEIGHT))
+    if width <= 0 or height <= 0 or output_width <= 0 or output_height <= 0:
+        raise CalibrationInputError("标定图像尺寸和去畸变输出尺寸必须大于 0。")
+
+    k = np.array(
+        [
+            [calibration["fx"], 0.0, calibration["cx"]],
+            [0.0, calibration["fy"], calibration["cy"]],
+            [0.0, 0.0, 1.0],
+        ],
+        dtype=np.float64,
+    )
+    d = np.array(
+        [
+            calibration["k1"],
+            calibration["k2"],
+            calibration["k3"],
+            calibration["k4"],
+        ],
+        dtype=np.float64,
+    ).reshape(4, 1)
+    rectified_k = k.copy()
+    rectified_k[0, 2] = (output_width - 1.0) * 0.5
+    rectified_k[1, 2] = (output_height - 1.0) * 0.5
+    return cv2.fisheye.initUndistortRectifyMap(
+        k,
+        d,
+        np.eye(3, dtype=np.float64),
+        rectified_k,
+        (output_width, output_height),
+        cv2.CV_32FC1,
+    )
+
+
+def undistort_fisheye_image(image: np.ndarray, calibration: dict) -> np.ndarray:
+    """输出原焦距尺度的有限视场去畸变图，原图保持不变。"""
+    if image is None or image.ndim not in (2, 3):
+        raise CalibrationInputError("预览图像格式无效。")
+
+    width = int(calibration["image_width"])
+    height = int(calibration["image_height"])
+    if (image.shape[1], image.shape[0]) != (width, height):
+        raise CalibrationInputError(
+            f"预览图像尺寸为 {image.shape[1]}x{image.shape[0]}，"
+            f"标定尺寸为 {width}x{height}。"
+        )
+
+    map_x, map_y = build_undistort_maps(calibration)
+    return cv2.remap(
+        image,
+        map_x,
+        map_y,
+        interpolation=cv2.INTER_LINEAR,
+        borderMode=cv2.BORDER_CONSTANT,
+    )
 
 
 def run_calibration(
@@ -195,11 +302,7 @@ def run_calibration(
     d = np.zeros((4, 1), dtype=np.float64)
     rvecs = []
     tvecs = []
-    calib_flags = (
-        cv2.fisheye.CALIB_RECOMPUTE_EXTRINSIC
-        | cv2.fisheye.CALIB_CHECK_COND
-        | cv2.fisheye.CALIB_FIX_SKEW
-    )
+    calib_flags = get_fisheye_calibration_flags()
     rms, k, d, rvecs, tvecs = cv2.fisheye.calibrate(
         object_points,
         image_points,
@@ -246,6 +349,8 @@ def run_calibration(
         "k3": float(d[2, 0]),
         "k4": float(d[3, 0]),
         "valid_radius_px": float(resolved_valid_radius),
+        "undistort_width": DEFAULT_UNDISTORT_WIDTH,
+        "undistort_height": DEFAULT_UNDISTORT_HEIGHT,
         "mount_roll_offset_deg": 0.0,
         "mount_pitch_offset_deg": 0.0,
         "mount_yaw_offset_deg": 0.0,
@@ -272,6 +377,8 @@ def run_calibration(
         f"- fx/fy/cx/cy: {result['fx']:.6f}, {result['fy']:.6f}, {result['cx']:.6f}, {result['cy']:.6f}",
         f"- k1..k4: {result['k1']:.8f}, {result['k2']:.8f}, {result['k3']:.8f}, {result['k4']:.8f}",
         f"- valid radius px: {resolved_valid_radius:.2f}",
+        f"- undistort output: {DEFAULT_UNDISTORT_WIDTH}x{DEFAULT_UNDISTORT_HEIGHT}",
+        "- undistort projection: rectilinear, original focal scale, centered finite canvas",
     ]
     report_path = output_dir / "calibration_report.md"
     report_path.write_text("\n".join(report) + "\n", encoding="utf-8")

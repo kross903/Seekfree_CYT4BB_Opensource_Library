@@ -12,3 +12,5 @@
 - fx/fy/cx/cy: 79.393980, 79.572640, 95.407813, 59.954799
 - k1..k4: -0.00872509, -0.02498306, 0.02068140, -0.00718848
 - valid radius px: 0.00
+- undistort output: 376x240
+- undistort projection: rectilinear, original focal scale, centered finite canvas

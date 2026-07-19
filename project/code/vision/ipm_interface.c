@@ -583,52 +583,27 @@ void IPM_GenerateUndistortedDebugImageNearest(const uint8 src_img[MT9V03X_H][MT9
     IPM_GenerateUndistortedDebugImageInternal(src_img, dst_img, 1U);
 }
 
-uint8 IPM_CalculateFullUndistortCanvas(IPM_UndistortCanvas_t *canvas)
+uint8 IPM_SetUndistortCanvas(IPM_UndistortCanvas_t *canvas)
 {
-    float min_x = FLT_MAX;
-    float max_x = -FLT_MAX;
-    float min_y = FLT_MAX;
-    float max_y = -FLT_MAX;
-    int valid_count = 0;
-    int y;
-    int x;
-
     if(canvas == NULL)
     {
         return 0U;
     }
 
-    for(y = 0; y < MT9V03X_H; y++)
-    {
-        for(x = 0; x < MT9V03X_W; x++)
-        {
-            float rectified_x = 0.0f;
-            float rectified_y = 0.0f;
-            if(CameraCalibration_UndistortPoint((float)x, (float)y,
-                                                &rectified_x, &rectified_y) &&
-               isfinite(rectified_x) && isfinite(rectified_y))
-            {
-                if(rectified_x < min_x) min_x = rectified_x;
-                if(rectified_x > max_x) max_x = rectified_x;
-                if(rectified_y < min_y) min_y = rectified_y;
-                if(rectified_y > max_y) max_y = rectified_y;
-                valid_count++;
-            }
-        }
-    }
-
-    if(valid_count == 0)
+    canvas->width = CAMERA_CALIBRATION_UNDISTORT_WIDTH;
+    canvas->height = CAMERA_CALIBRATION_UNDISTORT_HEIGHT;
+    if(canvas->width <= 0 || canvas->height <= 0)
     {
         return 0U;
     }
 
-    canvas->min_rectified_x = floorf(min_x);
-    canvas->max_rectified_x = ceilf(max_x);
-    canvas->min_rectified_y = floorf(min_y);
-    canvas->max_rectified_y = ceilf(max_y);
-    canvas->width = (int)(canvas->max_rectified_x - canvas->min_rectified_x) + 1;
-    canvas->height = (int)(canvas->max_rectified_y - canvas->min_rectified_y) + 1;
-    return (canvas->width > 0 && canvas->height > 0) ? 1U : 0U;
+    canvas->min_rectified_x = CAMERA_CALIBRATION_CX -
+        0.5f * ((float)canvas->width - 1.0f);
+    canvas->max_rectified_x = canvas->min_rectified_x + (float)canvas->width - 1.0f;
+    canvas->min_rectified_y = CAMERA_CALIBRATION_CY -
+        0.5f * ((float)canvas->height - 1.0f);
+    canvas->max_rectified_y = canvas->min_rectified_y + (float)canvas->height - 1.0f;
+    return 1U;
 }
 
 static uint8 IPM_GenerateFullUndistortedImageInternal(const uint8 src_img[MT9V03X_H][MT9V03X_W],

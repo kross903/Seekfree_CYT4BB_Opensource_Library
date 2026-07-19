@@ -174,6 +174,8 @@
   "k3": 0.02068139882595062,
   "k4": -0.0071884834262221425,
   "valid_radius_px": 0.0,
+  "undistort_width": 376,
+  "undistort_height": 240,
   "mount_roll_offset_deg": 0.0,
   "mount_pitch_offset_deg": 0.0,
   "mount_yaw_offset_deg": 0.0,
