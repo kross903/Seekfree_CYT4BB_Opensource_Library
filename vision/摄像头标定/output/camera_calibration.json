@@ -1,0 +1,183 @@
+{
+  "model": "opencv_fisheye",
+  "image_width": 188,
+  "image_height": 120,
+  "rms": 0.22225104789935285,
+  "used_count": 16,
+  "used_images": [
+    "frame_0007_188x120_type2.png",
+    "frame_0009_188x120_type2.png",
+    "frame_0010_188x120_type2.png",
+    "frame_0011_188x120_type2.png",
+    "frame_0012_188x120_type2.png",
+    "frame_0013_188x120_type2.png",
+    "png\\frame_0001_188x120_type2.png",
+    "png\\frame_0002_188x120_type2.png",
+    "png\\frame_0003_188x120_type2.png",
+    "png\\frame_0005_188x120_type2.png",
+    "png\\frame_0006_188x120_type2.png",
+    "png\\frame_0007_188x120_type2.png",
+    "png\\frame_0008_188x120_type2.png",
+    "png\\frame_0009_188x120_type2.png",
+    "png\\frame_0010_188x120_type2.png",
+    "png\\frame_0013_188x120_type2.png"
+  ],
+  "rejected_images": [
+    {
+      "file": "frame_0000_188x120_type2.png",
+      "reason": "corners_not_found"
+    },
+    {
+      "file": "frame_0001_188x120_type2.png",
+      "reason": "corners_not_found"
+    },
+    {
+      "file": "frame_0002_188x120_type2.png",
+      "reason": "corners_not_found"
+    },
+    {
+      "file": "frame_0003_188x120_type2.png",
+      "reason": "corners_not_found"
+    },
+    {
+      "file": "frame_0004_188x120_type2.png",
+      "reason": "corners_not_found"
+    },
+    {
+      "file": "frame_0005_188x120_type2.png",
+      "reason": "corners_not_found"
+    },
+    {
+      "file": "frame_0006_188x120_type2.png",
+      "reason": "corners_not_found"
+    },
+    {
+      "file": "frame_0008_188x120_type2.png",
+      "reason": "corners_not_found"
+    },
+    {
+      "file": "png\\frame_0000_188x120_type2.png",
+      "reason": "corners_not_found"
+    },
+    {
+      "file": "png\\frame_0004_188x120_type2.png",
+      "reason": "corners_not_found"
+    },
+    {
+      "file": "png\\frame_0011_188x120_type2.png",
+      "reason": "corners_not_found"
+    },
+    {
+      "file": "png\\frame_0012_188x120_type2.png",
+      "reason": "corners_not_found"
+    },
+    {
+      "file": "png\\frame_0014_188x120_type2.png",
+      "reason": "corners_not_found"
+    },
+    {
+      "file": "png\\frame_0015_188x120_type2.png",
+      "reason": "corners_not_found"
+    },
+    {
+      "file": "png\\frame_0016_188x120_type2.png",
+      "reason": "corners_not_found"
+    },
+    {
+      "file": "png\\frame_0017_188x120_type2.png",
+      "reason": "corners_not_found"
+    },
+    {
+      "file": "png\\frame_0018_188x120_type2.png",
+      "reason": "corners_not_found"
+    }
+  ],
+  "discovered_count": 33,
+  "readable_count": 33,
+  "detection_scale": 2.0,
+  "detectors": {
+    "findChessboardCornersSB": 15,
+    "findChessboardCorners": 1
+  },
+  "per_view_errors": [
+    {
+      "file": "frame_0007_188x120_type2.png",
+      "rms_px": 0.212320938706398
+    },
+    {
+      "file": "frame_0009_188x120_type2.png",
+      "rms_px": 0.19740527868270874
+    },
+    {
+      "file": "frame_0010_188x120_type2.png",
+      "rms_px": 0.2331259548664093
+    },
+    {
+      "file": "frame_0011_188x120_type2.png",
+      "rms_px": 0.22678354382514954
+    },
+    {
+      "file": "frame_0012_188x120_type2.png",
+      "rms_px": 0.3781643211841583
+    },
+    {
+      "file": "frame_0013_188x120_type2.png",
+      "rms_px": 0.1946488320827484
+    },
+    {
+      "file": "png\\frame_0001_188x120_type2.png",
+      "rms_px": 0.24591587483882904
+    },
+    {
+      "file": "png\\frame_0002_188x120_type2.png",
+      "rms_px": 0.17164188623428345
+    },
+    {
+      "file": "png\\frame_0003_188x120_type2.png",
+      "rms_px": 0.22060845792293549
+    },
+    {
+      "file": "png\\frame_0005_188x120_type2.png",
+      "rms_px": 0.2346297800540924
+    },
+    {
+      "file": "png\\frame_0006_188x120_type2.png",
+      "rms_px": 0.21707205474376678
+    },
+    {
+      "file": "png\\frame_0007_188x120_type2.png",
+      "rms_px": 0.1658870428800583
+    },
+    {
+      "file": "png\\frame_0008_188x120_type2.png",
+      "rms_px": 0.20803797245025635
+    },
+    {
+      "file": "png\\frame_0009_188x120_type2.png",
+      "rms_px": 0.20435307919979095
+    },
+    {
+      "file": "png\\frame_0010_188x120_type2.png",
+      "rms_px": 0.19003444910049438
+    },
+    {
+      "file": "png\\frame_0013_188x120_type2.png",
+      "rms_px": 0.1736590713262558
+    }
+  ],
+  "fx": 79.39397982336334,
+  "fy": 79.57263969975604,
+  "cx": 95.40781349241657,
+  "cy": 59.95479852294392,
+  "k1": -0.008725093738380353,
+  "k2": -0.024983056045532494,
+  "k3": 0.02068139882595062,
+  "k4": -0.0071884834262221425,
+  "valid_radius_px": 0.0,
+  "mount_roll_offset_deg": 0.0,
+  "mount_pitch_offset_deg": 0.0,
+  "mount_yaw_offset_deg": 0.0,
+  "offset_x_cm": 0.0,
+  "offset_y_cm": 0.0,
+  "offset_z_cm": 0.0
+}

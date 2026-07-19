@@ -215,6 +215,31 @@ static uint8 IPM_SampleGrayNearest(const uint8 src_img[MT9V03X_H][MT9V03X_W],
     return 1U;
 }
 
+static uint8 IPM_SampleDynamicNearest(const uint8 *src_img,
+                                      int width, int height,
+                                      float x, float y,
+                                      uint8 *value)
+{
+    int ix;
+    int iy;
+
+    if(src_img == NULL || value == NULL || width <= 0 || height <= 0 ||
+       x < 0.0f || x > ((float)width - 1.0f) ||
+       y < 0.0f || y > ((float)height - 1.0f))
+    {
+        return 0U;
+    }
+
+    ix = (int)floorf(x + 0.5f);
+    iy = (int)floorf(y + 0.5f);
+    if(ix < 0) ix = 0;
+    if(ix >= width) ix = width - 1;
+    if(iy < 0) iy = 0;
+    if(iy >= height) iy = height - 1;
+    *value = src_img[(size_t)iy * (size_t)width + (size_t)ix];
+    return 1U;
+}
+
 void IPM_GenerateBirdView(const uint8 src_img[MT9V03X_H][MT9V03X_W],
                           uint8 *dst_img, int dst_w, int dst_h, float scale)
 {
@@ -325,6 +350,26 @@ uint8 IPM_ClampBirdViewBounds(IPM_BirdViewBounds_t *bounds,
     return 1U;
 }
 
+uint8 IPM_SetFixedBirdViewBounds(float scale,
+                                 float half_range_x,
+                                 float half_range_y,
+                                 IPM_BirdViewBounds_t *bounds)
+{
+    if(bounds == NULL || scale <= 0.0f || half_range_x <= 0.0f || half_range_y <= 0.0f)
+    {
+        return 0U;
+    }
+
+    bounds->min_world_x = -half_range_x;
+    bounds->max_world_x = half_range_x;
+    bounds->min_world_y = -half_range_y;
+    bounds->max_world_y = half_range_y;
+    bounds->scale = scale;
+    bounds->width = (int)ceilf((2.0f * half_range_y) / scale);
+    bounds->height = (int)ceilf((2.0f * half_range_x) / scale);
+    return (bounds->width > 0 && bounds->height > 0) ? 1U : 0U;
+}
+
 static uint8 IPM_GenerateBirdViewDynamicInternal(const uint8 src_img[MT9V03X_H][MT9V03X_W],
                                                  uint8 *dst_img,
                                                  uint8 *valid_mask,
@@ -381,6 +426,56 @@ uint8 IPM_GenerateBirdViewDynamicNearest(const uint8 src_img[MT9V03X_H][MT9V03X_
                                          const IPM_BirdViewBounds_t *bounds)
 {
     return IPM_GenerateBirdViewDynamicInternal(src_img, dst_img, valid_mask, bounds, 1U);
+}
+
+uint8 IPM_GenerateBirdViewFromUndistortedBinary(const uint8 *src_img,
+                                                const IPM_UndistortCanvas_t *src_canvas,
+                                                uint8 *dst_img,
+                                                uint8 *valid_mask,
+                                                const IPM_BirdViewBounds_t *bounds)
+{
+    int dst_y;
+    int dst_x;
+
+    if(src_img == NULL || src_canvas == NULL || dst_img == NULL || valid_mask == NULL ||
+       bounds == NULL || src_canvas->width <= 0 || src_canvas->height <= 0 ||
+       bounds->width <= 0 || bounds->height <= 0 || bounds->scale <= 0.0f)
+    {
+        return 0U;
+    }
+
+    for(dst_y = 0; dst_y < bounds->height; dst_y++)
+    {
+        for(dst_x = 0; dst_x < bounds->width; dst_x++)
+        {
+            float world_x = bounds->max_world_x - ((float)dst_y + 0.5f) * bounds->scale;
+            float world_y = bounds->max_world_y - ((float)dst_x + 0.5f) * bounds->scale;
+            float distorted[2];
+            float rectified_x = 0.0f;
+            float rectified_y = 0.0f;
+            uint8 sample = 0U;
+            size_t index = (size_t)dst_y * (size_t)bounds->width + (size_t)dst_x;
+
+            if(DroneIPM_Embedded_World2ImageF(world_x, world_y, distorted) &&
+               CameraCalibration_UndistortPoint(distorted[0], distorted[1],
+                                                &rectified_x, &rectified_y) &&
+               IPM_SampleDynamicNearest(src_img,
+                                        src_canvas->width, src_canvas->height,
+                                        rectified_x - src_canvas->min_rectified_x,
+                                        rectified_y - src_canvas->min_rectified_y,
+                                        &sample))
+            {
+                dst_img[index] = sample;
+                valid_mask[index] = 255U;
+            }
+            else
+            {
+                dst_img[index] = 0U;
+                valid_mask[index] = 0U;
+            }
+        }
+    }
+    return 1U;
 }
 
 /**
@@ -486,6 +581,116 @@ void IPM_GenerateUndistortedDebugImageNearest(const uint8 src_img[MT9V03X_H][MT9
                                               uint8 dst_img[MT9V03X_H][MT9V03X_W])
 {
     IPM_GenerateUndistortedDebugImageInternal(src_img, dst_img, 1U);
+}
+
+uint8 IPM_CalculateFullUndistortCanvas(IPM_UndistortCanvas_t *canvas)
+{
+    float min_x = FLT_MAX;
+    float max_x = -FLT_MAX;
+    float min_y = FLT_MAX;
+    float max_y = -FLT_MAX;
+    int valid_count = 0;
+    int y;
+    int x;
+
+    if(canvas == NULL)
+    {
+        return 0U;
+    }
+
+    for(y = 0; y < MT9V03X_H; y++)
+    {
+        for(x = 0; x < MT9V03X_W; x++)
+        {
+            float rectified_x = 0.0f;
+            float rectified_y = 0.0f;
+            if(CameraCalibration_UndistortPoint((float)x, (float)y,
+                                                &rectified_x, &rectified_y) &&
+               isfinite(rectified_x) && isfinite(rectified_y))
+            {
+                if(rectified_x < min_x) min_x = rectified_x;
+                if(rectified_x > max_x) max_x = rectified_x;
+                if(rectified_y < min_y) min_y = rectified_y;
+                if(rectified_y > max_y) max_y = rectified_y;
+                valid_count++;
+            }
+        }
+    }
+
+    if(valid_count == 0)
+    {
+        return 0U;
+    }
+
+    canvas->min_rectified_x = floorf(min_x);
+    canvas->max_rectified_x = ceilf(max_x);
+    canvas->min_rectified_y = floorf(min_y);
+    canvas->max_rectified_y = ceilf(max_y);
+    canvas->width = (int)(canvas->max_rectified_x - canvas->min_rectified_x) + 1;
+    canvas->height = (int)(canvas->max_rectified_y - canvas->min_rectified_y) + 1;
+    return (canvas->width > 0 && canvas->height > 0) ? 1U : 0U;
+}
+
+static uint8 IPM_GenerateFullUndistortedImageInternal(const uint8 src_img[MT9V03X_H][MT9V03X_W],
+                                                      uint8 *dst_img,
+                                                      uint8 *valid_mask,
+                                                      const IPM_UndistortCanvas_t *canvas,
+                                                      uint8 nearest)
+{
+    int y;
+    int x;
+
+    if(src_img == NULL || dst_img == NULL || valid_mask == NULL || canvas == NULL ||
+       canvas->width <= 0 || canvas->height <= 0)
+    {
+        return 0U;
+    }
+
+    for(y = 0; y < canvas->height; y++)
+    {
+        for(x = 0; x < canvas->width; x++)
+        {
+            float source_x = 0.0f;
+            float source_y = 0.0f;
+            uint8 sample = 0U;
+            size_t index = (size_t)y * (size_t)canvas->width + (size_t)x;
+            float rectified_x = canvas->min_rectified_x + (float)x;
+            float rectified_y = canvas->min_rectified_y + (float)y;
+
+            if(CameraCalibration_RectifiedModelPointToSource(rectified_x, rectified_y,
+                                                             &source_x, &source_y) &&
+               (nearest ? IPM_SampleGrayNearest(src_img, source_x, source_y, &sample) :
+                          IPM_SampleGrayBilinear(src_img, source_x, source_y, &sample)))
+            {
+                dst_img[index] = sample;
+                valid_mask[index] = 255U;
+            }
+            else
+            {
+                dst_img[index] = 0U;
+                valid_mask[index] = 0U;
+            }
+        }
+    }
+    return 1U;
+}
+
+uint8 IPM_GenerateFullUndistortedImage(const uint8 src_img[MT9V03X_H][MT9V03X_W],
+                                       uint8 *dst_img,
+                                       uint8 *valid_mask,
+                                       const IPM_UndistortCanvas_t *canvas)
+{
+    return IPM_GenerateFullUndistortedImageInternal(src_img, dst_img, valid_mask,
+                                                    canvas, 0U);
+}
+
+uint8 IPM_GenerateFullUndistortedImageNearest(const uint8 src_img[MT9V03X_H][MT9V03X_W],
+                                              uint8 *dst_img,
+                                              uint8 *valid_mask,
+                                              const IPM_UndistortCanvas_t *canvas)
+{
+    return IPM_GenerateFullUndistortedImageInternal(src_img, dst_img, valid_mask,
+                                                    canvas, 1U);
 }
 
 void IPM_GenerateUndistortedDebugMask(uint8 dst_mask[MT9V03X_H][MT9V03X_W])

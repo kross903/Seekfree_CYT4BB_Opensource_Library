@@ -1,0 +1,103 @@
+{
+  "frames_dir": "D:\\code\\project\\Seekfree_CYT4BB_Opensource_Library\\vision\\摄像头标定\\frames\\uart_capture",
+  "pattern_cols": 11,
+  "pattern_rows": 8,
+  "square_size_cm": 2.0,
+  "detection_scale": 2.0,
+  "min_valid_images": 10,
+  "discovered_count": 33,
+  "readable_count": 33,
+  "valid_count": 16,
+  "detectors": {
+    "findChessboardCornersSB": 15,
+    "findChessboardCorners": 1
+  },
+  "used_images": [
+    "frame_0007_188x120_type2.png",
+    "frame_0009_188x120_type2.png",
+    "frame_0010_188x120_type2.png",
+    "frame_0011_188x120_type2.png",
+    "frame_0012_188x120_type2.png",
+    "frame_0013_188x120_type2.png",
+    "png\\frame_0001_188x120_type2.png",
+    "png\\frame_0002_188x120_type2.png",
+    "png\\frame_0003_188x120_type2.png",
+    "png\\frame_0005_188x120_type2.png",
+    "png\\frame_0006_188x120_type2.png",
+    "png\\frame_0007_188x120_type2.png",
+    "png\\frame_0008_188x120_type2.png",
+    "png\\frame_0009_188x120_type2.png",
+    "png\\frame_0010_188x120_type2.png",
+    "png\\frame_0013_188x120_type2.png"
+  ],
+  "rejected_images": [
+    {
+      "file": "frame_0000_188x120_type2.png",
+      "reason": "corners_not_found"
+    },
+    {
+      "file": "frame_0001_188x120_type2.png",
+      "reason": "corners_not_found"
+    },
+    {
+      "file": "frame_0002_188x120_type2.png",
+      "reason": "corners_not_found"
+    },
+    {
+      "file": "frame_0003_188x120_type2.png",
+      "reason": "corners_not_found"
+    },
+    {
+      "file": "frame_0004_188x120_type2.png",
+      "reason": "corners_not_found"
+    },
+    {
+      "file": "frame_0005_188x120_type2.png",
+      "reason": "corners_not_found"
+    },
+    {
+      "file": "frame_0006_188x120_type2.png",
+      "reason": "corners_not_found"
+    },
+    {
+      "file": "frame_0008_188x120_type2.png",
+      "reason": "corners_not_found"
+    },
+    {
+      "file": "png\\frame_0000_188x120_type2.png",
+      "reason": "corners_not_found"
+    },
+    {
+      "file": "png\\frame_0004_188x120_type2.png",
+      "reason": "corners_not_found"
+    },
+    {
+      "file": "png\\frame_0011_188x120_type2.png",
+      "reason": "corners_not_found"
+    },
+    {
+      "file": "png\\frame_0012_188x120_type2.png",
+      "reason": "corners_not_found"
+    },
+    {
+      "file": "png\\frame_0014_188x120_type2.png",
+      "reason": "corners_not_found"
+    },
+    {
+      "file": "png\\frame_0015_188x120_type2.png",
+      "reason": "corners_not_found"
+    },
+    {
+      "file": "png\\frame_0016_188x120_type2.png",
+      "reason": "corners_not_found"
+    },
+    {
+      "file": "png\\frame_0017_188x120_type2.png",
+      "reason": "corners_not_found"
+    },
+    {
+      "file": "png\\frame_0018_188x120_type2.png",
+      "reason": "corners_not_found"
+    }
+  ]
+}
