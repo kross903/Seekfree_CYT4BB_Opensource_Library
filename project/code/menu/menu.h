@@ -5,7 +5,7 @@
 #include "key.h"
 
 // ==================== 菜单容量限制 ====================
-#define MAX_MENU_ITEMS 10
+#define MAX_MENU_ITEMS 12
 #define MAX_MENU_NAME_LEN 20
 
 // 单个菜单项，可以绑定执行函数，也可以指向子菜单。

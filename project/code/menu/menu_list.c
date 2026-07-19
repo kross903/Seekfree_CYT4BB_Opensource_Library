@@ -1,4 +1,7 @@
 #include "common/project_headfile.h"
+#include "motor_hardware/small_driver_uart_control.h"
+
+#include <stdio.h>
 
 /* ????? */
 Menu mainMenu;
@@ -99,6 +102,16 @@ void icm_init_menu()
 #define TEST_VALUE_X            132U
 #define TEST_RIGHT_VALUE_X      188U
 #define TEST_ROW_Y(row)         ((uint16)(56U + (uint16)(row) * 20U))
+#define SENSOR_LEFT_LABEL_X     4U
+#define SENSOR_LEFT_VALUE_X     70U
+#define SENSOR_RIGHT_LABEL_X    124U
+#define SENSOR_RIGHT_VALUE_X    196U
+#define SENSOR_TOF_WARN_AGE_MS  80U
+#define SENSOR_TOF_STALE_AGE_MS 100U
+#define SENSOR_ESC_WARN_AGE_MS  400U
+#define SENSOR_STATUS_LOOP_PERIOD_MS 5U
+#define SENSOR_STATUS_REFRESH_MS 50U
+#define SENSOR_STATUS_FRAME_WINDOW_MS 1000U
 #define VISION_VIEW_SNAPSHOT_WAIT_TICKS 120U
 #define VISION_VIEW_SNAPSHOT_WAIT_MS    5U
 #define TRACK_LIGHT_RELEASE_TIMEOUT_TICKS 40U
@@ -121,6 +134,14 @@ static uint8 s_track_light_release_pending = 0U;
 static uint8 s_track_light_exit_pending = 0U;
 static uint8 s_track_light_release_wait_ticks = 0U;
 static uint8 s_track_light_status_tick_div = 0U;
+static uint8 s_sensor_status_page_active = 0U;
+static uint8 s_sensor_status_view = 0U;
+static uint16 s_sensor_status_refresh_ms = 0U;
+static uint16 s_sensor_status_frame_window_ms = 0U;
+static uint32 s_sensor_status_frame_previous_count = 0U;
+static uint32 s_sensor_status_frame_accumulated = 0U;
+static float s_sensor_status_image_fps = 0.0f;
+static uint8 s_sensor_status_frame_rate_valid = 0U;
 
 static void test_page_clear_line(uint16 y);
 
@@ -311,6 +332,167 @@ static void test_page_show_float(uint16 y, const char *label, float value, uint8
     ips200_show_float(TEST_VALUE_X, y, value, digits, point_digits);
 }
 
+static void sensor_page_clear_line(uint16 y)
+{
+    ips200_set_font(IPS200_6X8_FONT);
+    ips200_set_color(RGB565_WHITE, RGB565_BLACK);
+    ips200_show_string(0U, y, "                                        ");
+}
+
+static void sensor_page_show_text(uint16 label_x, uint16 value_x, uint16 y,
+                                  const char *label, const char *value, uint16 color)
+{
+    ips200_set_color(RGB565_WHITE, RGB565_BLACK);
+    ips200_show_string(label_x, y, (char *)label);
+    ips200_set_color(color, RGB565_BLACK);
+    ips200_show_string(value_x, y, (char *)value);
+    ips200_set_color(RGB565_WHITE, RGB565_BLACK);
+}
+
+static void sensor_page_show_float(uint16 label_x, uint16 value_x, uint16 y,
+                                   const char *label, float value,
+                                   uint8 digits, uint8 point_digits, uint16 color)
+{
+    ips200_set_color(RGB565_WHITE, RGB565_BLACK);
+    ips200_show_string(label_x, y, (char *)label);
+    ips200_set_color(color, RGB565_BLACK);
+    ips200_show_float(value_x, y, value, digits, point_digits);
+    ips200_set_color(RGB565_WHITE, RGB565_BLACK);
+}
+
+static void sensor_page_show_int(uint16 label_x, uint16 value_x, uint16 y,
+                                 const char *label, int32 value, uint8 digits, uint16 color)
+{
+    ips200_set_color(RGB565_WHITE, RGB565_BLACK);
+    ips200_show_string(label_x, y, (char *)label);
+    ips200_set_color(color, RGB565_BLACK);
+    ips200_show_int(value_x, y, value, digits);
+    ips200_set_color(RGB565_WHITE, RGB565_BLACK);
+}
+
+static uint16 sensor_page_bool_color(uint8 value)
+{
+    return value ? RGB565_GREEN : RGB565_RED;
+}
+
+static const char *sensor_page_yes_no(uint8 value)
+{
+    return value ? "YES" : "NO";
+}
+
+static uint16 sensor_page_age_color(uint16 age_ms, uint16 warn_ms, uint16 stale_ms)
+{
+    if(age_ms >= stale_ms)
+    {
+        return RGB565_RED;
+    }
+    if(age_ms >= warn_ms)
+    {
+        return RGB565_YELLOW;
+    }
+    return RGB565_GREEN;
+}
+
+static const char *sensor_page_tof_source_name(uint8 source)
+{
+    switch((DualTofSource_t)source)
+    {
+        case DUAL_TOF_SOURCE_TOF1: return "T1";
+        case DUAL_TOF_SOURCE_TOF2: return "T2";
+        case DUAL_TOF_SOURCE_EQUAL: return "T1=T2";
+        default: return "NONE";
+    }
+}
+
+static const char *sensor_page_tof_state_name(uint8 state)
+{
+    switch((HeightTofState_t)state)
+    {
+        case HEIGHT_TOF_STATE_LIVE: return "LIVE";
+        case HEIGHT_TOF_STATE_HELD_REJECTED: return "HELD";
+        case HEIGHT_TOF_STATE_REACQUIRING: return "REACQ";
+        default: return "INVALID";
+    }
+}
+
+static uint16 sensor_page_tof_state_color(uint8 state)
+{
+    if(state == (uint8)HEIGHT_TOF_STATE_LIVE)
+    {
+        return RGB565_GREEN;
+    }
+    if(state == (uint8)HEIGHT_TOF_STATE_HELD_REJECTED ||
+       state == (uint8)HEIGHT_TOF_STATE_REACQUIRING)
+    {
+        return RGB565_YELLOW;
+    }
+    return RGB565_RED;
+}
+
+static void sensor_page_draw_header(void)
+{
+    ips200_set_font(IPS200_8X16_FONT);
+    ui_menu_draw_function_header(s_sensor_status_view ? "Sensor IMU/Power" : "Sensor ToF/Flow");
+    ips200_set_font(IPS200_6X8_FONT);
+}
+
+static void sensor_page_draw_hint(void)
+{
+    uint16 y = TEST_ROW_Y(11U);
+
+    sensor_page_clear_line(y);
+    ips200_set_color(RGB565_CYAN, RGB565_BLACK);
+    ips200_show_string(SENSOR_LEFT_LABEL_X, y, "K1/K2 VIEW    K4 BACK");
+    ips200_set_color(RGB565_WHITE, RGB565_BLACK);
+}
+
+static void sensor_status_service_link(void)
+{
+    if(Car_Copy_Screen_Flag)
+    {
+        Car_Copy_Screen_Flag = 0U;
+        core_link_user_tick((uint16)(FLOW_SENSOR_UPDATE_US / 1000U));
+        core_link_user_service_beacon_link();
+    }
+}
+
+static void sensor_status_sample_frame_rate(void)
+{
+    VehicleMarkerLossDebug_t loss_debug = {0};
+    uint32 frame_delta = 0U;
+
+    VehicleMarkerLocalization_GetLossDebug(&loss_debug);
+    if(loss_debug.process_count >= s_sensor_status_frame_previous_count)
+    {
+        frame_delta = loss_debug.process_count - s_sensor_status_frame_previous_count;
+    }
+    else
+    {
+        s_sensor_status_frame_accumulated = 0U;
+        s_sensor_status_frame_window_ms = 0U;
+    }
+
+    s_sensor_status_frame_previous_count = loss_debug.process_count;
+    s_sensor_status_frame_accumulated += frame_delta;
+    if(s_sensor_status_frame_window_ms < (uint16)(SENSOR_STATUS_FRAME_WINDOW_MS - SENSOR_STATUS_LOOP_PERIOD_MS))
+    {
+        s_sensor_status_frame_window_ms += SENSOR_STATUS_LOOP_PERIOD_MS;
+    }
+    else
+    {
+        s_sensor_status_frame_window_ms = SENSOR_STATUS_FRAME_WINDOW_MS;
+    }
+
+    if(s_sensor_status_frame_window_ms >= SENSOR_STATUS_FRAME_WINDOW_MS)
+    {
+        s_sensor_status_image_fps = ((float)s_sensor_status_frame_accumulated * 1000.0f) /
+                                    (float)s_sensor_status_frame_window_ms;
+        s_sensor_status_frame_rate_valid = 1U;
+        s_sensor_status_frame_accumulated = 0U;
+        s_sensor_status_frame_window_ms = 0U;
+    }
+}
+
 static void vision_view_send_snapshot(void)
 {
     uint8 wait_count = 0U;
@@ -485,6 +667,348 @@ static void flow_status_page(void)
     test_page_show_float(TEST_ROW_Y(9U), "CONF:", flow_state.flow_confidence, 1U, 3U);
     test_page_show_float(TEST_ROW_Y(10U), "RESID:", flow_state.flow_residual_norm_cms, 4U, 1U);
     test_page_show_int(TEST_ROW_Y(11U), "STALE:", (int32)tof_stale_ticks, 4U);
+}
+
+static void sensor_status_draw_tof_flow(void)
+{
+    HeightManagerDiag_t height_diag = {0};
+    PMWFlowState_t flow_state = {0};
+    uint8 tof1_online;
+    uint8 tof2_online;
+    uint16 tof1_color;
+    uint16 tof2_color;
+    uint16 flow_color;
+    uint16 fused_color;
+    uint16 y;
+
+    HeightManager_Get_Diag(&height_diag);
+    PMW_Flow_GetState(&flow_state);
+
+    tof1_online = (uint8)(height_diag.tof1_initialized &&
+                          height_diag.tof1_valid &&
+                          height_diag.tof1_age_ms < SENSOR_TOF_STALE_AGE_MS);
+    tof2_online = (uint8)(height_diag.tof2_initialized &&
+                          height_diag.tof2_valid &&
+                          height_diag.tof2_age_ms < SENSOR_TOF_STALE_AGE_MS);
+    tof1_color = tof1_online ? sensor_page_age_color(height_diag.tof1_age_ms,
+                                                     SENSOR_TOF_WARN_AGE_MS,
+                                                     SENSOR_TOF_STALE_AGE_MS) : RGB565_RED;
+    tof2_color = tof2_online ? sensor_page_age_color(height_diag.tof2_age_ms,
+                                                     SENSOR_TOF_WARN_AGE_MS,
+                                                     SENSOR_TOF_STALE_AGE_MS) : RGB565_RED;
+    flow_color = sensor_page_bool_color(flow_state.valid);
+    fused_color = sensor_page_bool_color(flow_state.fused_velocity_valid);
+
+    y = TEST_ROW_Y(0U);
+    sensor_page_clear_line(y);
+    sensor_page_show_float(SENSOR_LEFT_LABEL_X, SENSOR_LEFT_VALUE_X, y,
+                           "T1 CM", height_diag.tof1_raw_cm, 4U, 1U, tof1_color);
+    sensor_page_show_float(SENSOR_RIGHT_LABEL_X, SENSOR_RIGHT_VALUE_X, y,
+                           "T2 CM", height_diag.tof2_raw_cm, 4U, 1U, tof2_color);
+
+    y = TEST_ROW_Y(1U);
+    sensor_page_clear_line(y);
+    sensor_page_show_float(SENSOR_LEFT_LABEL_X, SENSOR_LEFT_VALUE_X, y,
+                           "SEL CM", height_diag.tof_selected_cm, 4U, 1U,
+                           sensor_page_bool_color(height_diag.tof_valid));
+    sensor_page_show_text(SENSOR_RIGHT_LABEL_X, SENSOR_RIGHT_VALUE_X, y,
+                          "SOURCE", sensor_page_tof_source_name(height_diag.tof_source), RGB565_CYAN);
+
+    y = TEST_ROW_Y(2U);
+    sensor_page_clear_line(y);
+    sensor_page_show_text(SENSOR_LEFT_LABEL_X, SENSOR_LEFT_VALUE_X, y,
+                          "T1 ON", sensor_page_yes_no(tof1_online), sensor_page_bool_color(tof1_online));
+    sensor_page_show_text(SENSOR_RIGHT_LABEL_X, SENSOR_RIGHT_VALUE_X, y,
+                          "T2 ON", sensor_page_yes_no(tof2_online), sensor_page_bool_color(tof2_online));
+
+    y = TEST_ROW_Y(3U);
+    sensor_page_clear_line(y);
+    sensor_page_show_int(SENSOR_LEFT_LABEL_X, SENSOR_LEFT_VALUE_X, y,
+                         "T1 AGE", (int32)height_diag.tof1_age_ms, 5U,
+                         sensor_page_age_color(height_diag.tof1_age_ms,
+                                               SENSOR_TOF_WARN_AGE_MS,
+                                               SENSOR_TOF_STALE_AGE_MS));
+    sensor_page_show_int(SENSOR_RIGHT_LABEL_X, SENSOR_RIGHT_VALUE_X, y,
+                         "T2 AGE", (int32)height_diag.tof2_age_ms, 5U,
+                         sensor_page_age_color(height_diag.tof2_age_ms,
+                                               SENSOR_TOF_WARN_AGE_MS,
+                                               SENSOR_TOF_STALE_AGE_MS));
+
+    y = TEST_ROW_Y(4U);
+    sensor_page_clear_line(y);
+    sensor_page_show_float(SENSOR_LEFT_LABEL_X, SENSOR_LEFT_VALUE_X, y,
+                           "VX RAW", flow_state.velocity_x_raw_cms, 4U, 1U, flow_color);
+    sensor_page_show_float(SENSOR_RIGHT_LABEL_X, SENSOR_RIGHT_VALUE_X, y,
+                           "VY RAW", flow_state.velocity_y_raw_cms, 4U, 1U, flow_color);
+
+    y = TEST_ROW_Y(5U);
+    sensor_page_clear_line(y);
+    sensor_page_show_float(SENSOR_LEFT_LABEL_X, SENSOR_LEFT_VALUE_X, y,
+                           "VX FUSE", flow_state.velocity_x_fused_cms, 4U, 1U, fused_color);
+    sensor_page_show_float(SENSOR_RIGHT_LABEL_X, SENSOR_RIGHT_VALUE_X, y,
+                           "VY FUSE", flow_state.velocity_y_fused_cms, 4U, 1U, fused_color);
+
+    y = TEST_ROW_Y(6U);
+    sensor_page_clear_line(y);
+    sensor_page_show_text(SENSOR_LEFT_LABEL_X, SENSOR_LEFT_VALUE_X, y,
+                          "FLOW OK", sensor_page_yes_no(flow_state.valid), flow_color);
+    sensor_page_show_text(SENSOR_RIGHT_LABEL_X, SENSOR_RIGHT_VALUE_X, y,
+                          "FUSED OK", sensor_page_yes_no(flow_state.fused_velocity_valid), fused_color);
+
+    y = TEST_ROW_Y(7U);
+    sensor_page_clear_line(y);
+    sensor_page_show_text(SENSOR_LEFT_LABEL_X, SENSOR_LEFT_VALUE_X, y,
+                          "FLOW USE", sensor_page_yes_no(flow_state.flow_used),
+                          flow_state.flow_used ? RGB565_GREEN : RGB565_YELLOW);
+    sensor_page_show_float(SENSOR_RIGHT_LABEL_X, SENSOR_RIGHT_VALUE_X, y,
+                           "CONF", flow_state.flow_confidence, 1U, 3U,
+                           flow_state.flow_used ? RGB565_GREEN : RGB565_YELLOW);
+
+    y = TEST_ROW_Y(8U);
+    sensor_page_clear_line(y);
+    sensor_page_show_float(SENSOR_LEFT_LABEL_X, SENSOR_LEFT_VALUE_X, y,
+                           "FLOW DT", flow_state.dt_s * 1000.0f, 3U, 1U,
+                           flow_state.valid ? RGB565_GREEN : RGB565_RED);
+    sensor_page_show_float(SENSOR_RIGHT_LABEL_X, SENSOR_RIGHT_VALUE_X, y,
+                           "FLOW HEIGHT", flow_state.range_cm, 4U, 1U,
+                           (flow_state.range_cm > 0.0f) ? RGB565_GREEN : RGB565_RED);
+
+    y = TEST_ROW_Y(9U);
+    sensor_page_clear_line(y);
+    sensor_page_show_text(SENSOR_LEFT_LABEL_X, SENSOR_LEFT_VALUE_X, y,
+                          "TOF STATE", sensor_page_tof_state_name(height_diag.tof_state),
+                          sensor_page_tof_state_color(height_diag.tof_state));
+    sensor_page_show_int(SENSOR_RIGHT_LABEL_X, SENSOR_RIGHT_VALUE_X, y,
+                         "TOF AGE", (int32)height_diag.tof_raw_age_ms, 5U,
+                         sensor_page_age_color(height_diag.tof_raw_age_ms,
+                                               SENSOR_TOF_WARN_AGE_MS,
+                                               SENSOR_TOF_STALE_AGE_MS));
+
+    sensor_page_clear_line(TEST_ROW_Y(10U));
+    sensor_page_draw_hint();
+}
+
+static void sensor_status_draw_imu_power(void)
+{
+    BatteryStatus battery_status = {0};
+    ICM_Health_t imu_health = {0};
+    SmallDriverEscStatus esc_status = {0};
+    CoreLinkBeaconDiag_t car_diag = {0};
+    PositionLoopDiag_t pos_diag = {0};
+    char esc_code_text[24];
+    uint8 imu_fresh;
+    uint8 esc_online;
+    uint8 esc_fault_active = 0U;
+    uint8 i;
+    uint16 battery_color;
+    uint16 esc_age_color;
+    uint16 y;
+
+    BatteryMonitor_GetStatus(&battery_status);
+    ICM_GetHealth(&imu_health);
+    small_driver_get_esc_status(&esc_status);
+    core_link_user_get_beacon_diag(&car_diag);
+    Position_Loop_Get_Diag(&pos_diag);
+
+    imu_fresh = (uint8)(!imu_health.sample_stale && imu_health.sample_sequence != 0U);
+    esc_online = (uint8)(esc_status.valid && !esc_status.stale);
+    for(i = 0U; i < 4U; i++)
+    {
+        if(esc_status.active_fault[i] != (uint8)SMALL_DRIVER_ESC_FAULT_NONE)
+        {
+            esc_fault_active = 1U;
+        }
+    }
+
+    if(!battery_status.local_valid || battery_status.low_warning)
+    {
+        battery_color = RGB565_RED;
+    }
+    else if(battery_status.local_filtered_voltage_v < BATTERY_LOW_RECOVER_THRESHOLD)
+    {
+        battery_color = RGB565_YELLOW;
+    }
+    else
+    {
+        battery_color = RGB565_GREEN;
+    }
+
+    if(!esc_status.valid || esc_status.age_ms >= SMALL_DRIVER_ESC_STATUS_STALE_MS)
+    {
+        esc_age_color = RGB565_RED;
+    }
+    else if(esc_status.age_ms >= SENSOR_ESC_WARN_AGE_MS)
+    {
+        esc_age_color = RGB565_YELLOW;
+    }
+    else
+    {
+        esc_age_color = RGB565_GREEN;
+    }
+
+    (void)snprintf(esc_code_text, sizeof(esc_code_text),
+                   "M1:%u M2:%u M3:%u M4:%u",
+                   (unsigned int)esc_status.active_fault[0],
+                   (unsigned int)esc_status.active_fault[1],
+                   (unsigned int)esc_status.active_fault[2],
+                   (unsigned int)esc_status.active_fault[3]);
+
+    y = TEST_ROW_Y(0U);
+    sensor_page_clear_line(y);
+    sensor_page_show_float(SENSOR_LEFT_LABEL_X, SENSOR_LEFT_VALUE_X, y,
+                           "ROLL", current_roll, 3U, 1U, RGB565_CYAN);
+    sensor_page_show_float(SENSOR_RIGHT_LABEL_X, SENSOR_RIGHT_VALUE_X, y,
+                           "PITCH", current_pitch, 3U, 1U, RGB565_CYAN);
+
+    y = TEST_ROW_Y(1U);
+    sensor_page_clear_line(y);
+    sensor_page_show_float(SENSOR_LEFT_LABEL_X, SENSOR_LEFT_VALUE_X, y,
+                           "YAW", current_yaw, 3U, 1U, RGB565_CYAN);
+    sensor_page_show_text(SENSOR_RIGHT_LABEL_X, SENSOR_RIGHT_VALUE_X, y,
+                          "IMU FRESH", sensor_page_yes_no(imu_fresh), sensor_page_bool_color(imu_fresh));
+
+    y = TEST_ROW_Y(2U);
+    sensor_page_clear_line(y);
+    sensor_page_show_float(SENSOR_LEFT_LABEL_X, SENSOR_LEFT_VALUE_X, y,
+                           "ACC R", Roll_acc_F, 4U, 1U, RGB565_WHITE);
+    sensor_page_show_float(SENSOR_RIGHT_LABEL_X, SENSOR_RIGHT_VALUE_X, y,
+                           "ACC P", Pitch_acc_F, 4U, 1U, RGB565_WHITE);
+
+    y = TEST_ROW_Y(3U);
+    sensor_page_clear_line(y);
+    sensor_page_show_float(SENSOR_LEFT_LABEL_X, SENSOR_LEFT_VALUE_X, y,
+                           "ACC Y", Yaw_acc_F, 4U, 1U, RGB565_WHITE);
+    sensor_page_show_float(SENSOR_RIGHT_LABEL_X, SENSOR_RIGHT_VALUE_X, y,
+                           "ACC NORM", acc_norm_filtered, 4U, 1U, RGB565_WHITE);
+
+    y = TEST_ROW_Y(4U);
+    sensor_page_clear_line(y);
+    sensor_page_show_float(SENSOR_LEFT_LABEL_X, SENSOR_LEFT_VALUE_X, y,
+                           "GYRO R", current_gyro_roll, 4U, 1U, RGB565_WHITE);
+    sensor_page_show_float(SENSOR_RIGHT_LABEL_X, SENSOR_RIGHT_VALUE_X, y,
+                           "GYRO P", current_gyro_pitch, 4U, 1U, RGB565_WHITE);
+
+    y = TEST_ROW_Y(5U);
+    sensor_page_clear_line(y);
+    sensor_page_show_float(SENSOR_LEFT_LABEL_X, SENSOR_LEFT_VALUE_X, y,
+                           "GYRO Y", current_gyro_yaw, 4U, 1U, RGB565_WHITE);
+    sensor_page_show_float(SENSOR_RIGHT_LABEL_X, SENSOR_RIGHT_VALUE_X, y,
+                           "DT US", imu_health.sample_interval_us, 4U, 1U,
+                           imu_fresh ? RGB565_GREEN : RGB565_RED);
+
+    y = TEST_ROW_Y(6U);
+    sensor_page_clear_line(y);
+    sensor_page_show_float(SENSOR_LEFT_LABEL_X, SENSOR_LEFT_VALUE_X, y,
+                           "BAT V", battery_status.local_filtered_voltage_v, 2U, 2U, battery_color);
+    sensor_page_show_text(SENSOR_RIGHT_LABEL_X, SENSOR_RIGHT_VALUE_X, y,
+                          "ESC ON", sensor_page_yes_no(esc_online), sensor_page_bool_color(esc_online));
+
+    y = TEST_ROW_Y(7U);
+    sensor_page_clear_line(y);
+    sensor_page_show_int(SENSOR_LEFT_LABEL_X, SENSOR_LEFT_VALUE_X, y,
+                         "ESC MS", (int32)esc_status.age_ms, 5U, esc_age_color);
+
+    y = TEST_ROW_Y(8U);
+    sensor_page_clear_line(y);
+    sensor_page_show_text(SENSOR_LEFT_LABEL_X, SENSOR_LEFT_VALUE_X, y,
+                          "ESC CODE", esc_code_text,
+                          esc_fault_active ? RGB565_RED : RGB565_GREEN);
+
+    sensor_page_clear_line(TEST_ROW_Y(9U));
+    sensor_page_show_float(SENSOR_LEFT_LABEL_X, SENSOR_LEFT_VALUE_X, TEST_ROW_Y(9U),
+                           "POS ERR X", pos_diag.error_x_cm, 4U, 1U, RGB565_CYAN);
+    sensor_page_show_float(SENSOR_RIGHT_LABEL_X, SENSOR_RIGHT_VALUE_X, TEST_ROW_Y(9U),
+                           "POS ERR Y", pos_diag.error_y_cm, 4U, 1U, RGB565_CYAN);
+
+    sensor_page_clear_line(TEST_ROW_Y(10U));
+    sensor_page_show_text(SENSOR_LEFT_LABEL_X, SENSOR_LEFT_VALUE_X, TEST_ROW_Y(10U),
+                          "CAR LINK", sensor_page_yes_no(car_diag.valid),
+                          sensor_page_bool_color(car_diag.valid));
+    sensor_page_show_float(SENSOR_RIGHT_LABEL_X, SENSOR_RIGHT_VALUE_X, TEST_ROW_Y(10U),
+                           "IMG FPS", s_sensor_status_image_fps, 3U, 1U,
+                           (s_sensor_status_frame_rate_valid && s_sensor_status_image_fps > 0.0f) ?
+                           RGB565_GREEN : RGB565_RED);
+    sensor_page_draw_hint();
+}
+
+static void sensor_status_page(void)
+{
+    uint8 refresh_now = 0U;
+
+    if(!s_sensor_status_page_active)
+    {
+        s_sensor_status_page_active = 1U;
+        s_sensor_status_view = 0U;
+        s_sensor_status_refresh_ms = SENSOR_STATUS_REFRESH_MS;
+        s_sensor_status_frame_window_ms = 0U;
+        s_sensor_status_frame_accumulated = 0U;
+        s_sensor_status_image_fps = 0.0f;
+        s_sensor_status_frame_rate_valid = 0U;
+        {
+            VehicleMarkerLossDebug_t loss_debug = {0};
+            VehicleMarkerLocalization_GetLossDebug(&loss_debug);
+            s_sensor_status_frame_previous_count = loss_debug.process_count;
+        }
+        sensor_page_draw_header();
+        refresh_now = 1U;
+    }
+
+    if(key_flag == Button_1 || key_flag == Button_2)
+    {
+        s_sensor_status_view ^= 1U;
+        key_flag = 0U;
+        sensor_page_draw_header();
+        refresh_now = 1U;
+    }
+    else if(key_flag == Button_4 || g_menu_exit_flag || menu_is_monitor_view())
+    {
+        s_sensor_status_page_active = 0U;
+        s_sensor_status_view = 0U;
+        s_sensor_status_refresh_ms = 0U;
+        s_sensor_status_frame_window_ms = 0U;
+        s_sensor_status_frame_accumulated = 0U;
+        s_sensor_status_image_fps = 0.0f;
+        s_sensor_status_frame_rate_valid = 0U;
+        ips200_set_font(IPS200_8X16_FONT);
+        return;
+    }
+
+    sensor_status_service_link();
+    sensor_status_sample_frame_rate();
+
+    if(!refresh_now)
+    {
+        if(s_sensor_status_refresh_ms < (uint16)(SENSOR_STATUS_REFRESH_MS - SENSOR_STATUS_LOOP_PERIOD_MS))
+        {
+            s_sensor_status_refresh_ms += SENSOR_STATUS_LOOP_PERIOD_MS;
+        }
+        else
+        {
+            s_sensor_status_refresh_ms = SENSOR_STATUS_REFRESH_MS;
+        }
+
+        if(s_sensor_status_refresh_ms >= SENSOR_STATUS_REFRESH_MS)
+        {
+            s_sensor_status_refresh_ms = 0U;
+            refresh_now = 1U;
+        }
+    }
+
+    if(!refresh_now)
+    {
+        return;
+    }
+
+    s_sensor_status_refresh_ms = 0U;
+    ips200_set_font(IPS200_6X8_FONT);
+    if(s_sensor_status_view == 0U)
+    {
+        sensor_status_draw_tof_flow();
+    }
+    else
+    {
+        sensor_status_draw_imu_power();
+    }
 }
 
 static void vofa_status_page(void)
@@ -1050,6 +1574,7 @@ void init_test_menu(void)
     menu_create_item(&testMenu, "Fly Test", fly_test_page, NULL);
     menu_create_item(&testMenu, "IMU Status", imu_status_page, NULL);
     menu_create_item(&testMenu, "Flow Status", flow_status_page, NULL);
+    menu_create_item(&testMenu, "Sensor Status", sensor_status_page, NULL);
     menu_create_item(&testMenu, "Vision View", vision_view_page, NULL);
     menu_create_item(&testMenu, "Track Light", track_light_test_page, NULL);
     menu_create_item(&testMenu, "VOFA Status", vofa_status_page, NULL);

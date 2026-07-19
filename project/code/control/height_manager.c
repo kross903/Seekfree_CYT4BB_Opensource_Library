@@ -786,6 +786,8 @@ void HeightManager_Task_10ms(void)
     s_height_diag.tof1_valid = tof_sample.tof1_valid;
     s_height_diag.tof2_valid = tof_sample.tof2_valid;
     s_height_diag.tof_source = tof_sample.source;
+    s_height_diag.tof1_initialized = tof_sample.tof1_initialized;
+    s_height_diag.tof2_initialized = tof_sample.tof2_initialized;
     s_height_diag.tof1_age_ms = tof_sample.tof1_age_ms;
     s_height_diag.tof2_age_ms = tof_sample.tof2_age_ms;
     s_height_diag.tof1_invalid_count = tof_sample.tof1_invalid_count;

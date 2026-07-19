@@ -419,6 +419,17 @@ void core_link_user_tick (uint16 elapsed_ms)
     }
 }
 
+void core_link_user_get_beacon_diag(CoreLinkBeaconDiag_t *diag)
+{
+    if(NULL == diag)
+    {
+        return;
+    }
+
+    diag->valid = s_core_link_user_beacon_uplink_valid ? 1U : 0U;
+    diag->age_ms = s_core_link_user_beacon_uplink_age_ms;
+}
+
 void core_link_user_service_beacon_link(void)
 {
     core_link_user_send_beacon_map_downlink_if_due();

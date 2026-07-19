@@ -9,6 +9,8 @@
 
 #include <string.h>
 
+extern uint8 dl1b_init_flag;
+
 #define DUAL_TOF2_SCL_PIN              (P06_0)
 #define DUAL_TOF2_SDA_PIN              (P06_1)
 #define DUAL_TOF2_XS_PIN               (P06_2)
@@ -30,7 +32,6 @@
 
 static soft_iic_info_struct s_tof2_iic;
 static uint8 s_tof2_initialized = 0U;
-static uint8 s_tof2_finish_flag = 0U;
 static uint16 s_tof1_raw_mm = 8192U;
 static uint16 s_tof2_distance_mm = 8192U;
 static uint32 s_tof1_invalid_count = 0U;
@@ -73,7 +74,6 @@ static uint8 dual_tof2_read_distance(void)
     uint8 data_buffer[3] = {0U};
     uint16 distance_mm;
 
-    s_tof2_finish_flag = 0U;
     if(!s_tof2_initialized)
     {
         return 0U;
@@ -114,7 +114,6 @@ static uint8 dual_tof2_read_distance(void)
     }
 
     s_tof2_distance_mm = distance_mm;
-    s_tof2_finish_flag = 1U;
     return 1U;
 }
 
@@ -190,7 +189,6 @@ static uint8 dual_tof2_init_sensor(void)
 uint8 DualTof_Init(void)
 {
     s_tof2_initialized = 0U;
-    s_tof2_finish_flag = 0U;
     s_tof1_raw_mm = 8192U;
     s_tof2_distance_mm = 8192U;
     s_tof1_last_valid_mm = 0U;

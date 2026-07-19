@@ -84,6 +84,8 @@ typedef struct
     uint8 tof1_valid;
     uint8 tof2_valid;
     uint8 tof_source;
+    uint8 tof1_initialized;
+    uint8 tof2_initialized;
     uint16 tof1_age_ms;
     uint16 tof2_age_ms;
     uint32 tof1_invalid_count;
