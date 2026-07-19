@@ -1,4 +1,5 @@
 #include "control/height_manager.h"
+#include "control/dual_tof_manager.h"
 #include "common/project_headfile.h"
 #include <math.h>
 #include <string.h>
@@ -155,6 +156,10 @@ static void height_publish_tof_snapshot(uint8 new_sample)
     uint8 publish_index = (uint8)(s_tof_snapshot_active ^ 1U);
 
     snapshot.raw_los_cm = s_height_diag.tof_raw_cm;
+    snapshot.tof1_raw_cm = s_height_diag.tof1_raw_cm;
+    snapshot.tof2_raw_cm = s_height_diag.tof2_raw_cm;
+    snapshot.tof_selected_cm = s_height_diag.tof_selected_cm;
+    snapshot.tof_disagreement_cm = s_height_diag.tof_disagreement_cm;
     snapshot.compensated_center_cm = s_height_diag.tof_comp_cm;
     snapshot.flow_height_cm = s_tof_accepted_flow_cm;
     snapshot.filtered_height_cm = tof_height_true_filt * 100.0f;
@@ -171,6 +176,9 @@ static void height_publish_tof_snapshot(uint8 new_sample)
     snapshot.new_sample = new_sample;
     snapshot.valid = tof_valid;
     snapshot.state = (uint8)s_tof_state;
+    snapshot.tof1_valid = s_height_diag.tof1_valid;
+    snapshot.tof2_valid = s_height_diag.tof2_valid;
+    snapshot.tof_source = s_height_diag.tof_source;
 
     s_tof_snapshot_buffer[publish_index] = snapshot;
     s_tof_snapshot_active = publish_index;
@@ -756,6 +764,7 @@ void HeightManager_Init(float initial_height_cm)
 
 void HeightManager_Task_10ms(void)
 {
+    DualTofSample_t tof_sample;
     uint8 tof_raw_new_sample = 0U;
     uint8 tof_sample_accepted = 0U;
     float raw_los_cm;
@@ -771,11 +780,22 @@ void HeightManager_Task_10ms(void)
         }
     }
 
-    dl1b_get_distance();
+    DualTof_Poll(&tof_sample);
+    s_height_diag.tof1_raw_cm = (float)tof_sample.tof1_raw_mm * 0.1f;
+    s_height_diag.tof2_raw_cm = (float)tof_sample.tof2_raw_mm * 0.1f;
+    s_height_diag.tof1_valid = tof_sample.tof1_valid;
+    s_height_diag.tof2_valid = tof_sample.tof2_valid;
+    s_height_diag.tof_source = tof_sample.source;
+    s_height_diag.tof1_age_ms = tof_sample.tof1_age_ms;
+    s_height_diag.tof2_age_ms = tof_sample.tof2_age_ms;
+    s_height_diag.tof1_invalid_count = tof_sample.tof1_invalid_count;
+    s_height_diag.tof2_invalid_count = tof_sample.tof2_invalid_count;
+    s_height_diag.tof2_bus_error_count = tof_sample.tof2_bus_error_count;
+    s_height_diag.tof_disagreement_cm = (float)tof_sample.disagreement_mm * 0.1f;
 
-    if(dl1b_finsh_flag && dl1b_distance_mm <= 4000)
+    if(tof_sample.selected_new_sample && tof_sample.selected_valid)
     {
-        raw_los_cm = (float)dl1b_distance_mm * 0.1f;
+        raw_los_cm = (float)tof_sample.selected_mm * 0.1f;
         tof_raw_new_sample = 1U;
         s_tof_sample_sequence++;
         if(s_tof_sample_sequence >= 1000000U)
@@ -783,6 +803,7 @@ void HeightManager_Task_10ms(void)
             s_tof_sample_sequence = 0U;
         }
         s_height_diag.tof_raw_cm = raw_los_cm;
+        s_height_diag.tof_selected_cm = raw_los_cm;
 
         if(raw_los_cm >= TOF_VALID_MIN_M * 100.0f &&
            raw_los_cm <= TOF_VALID_MAX_M * 100.0f)

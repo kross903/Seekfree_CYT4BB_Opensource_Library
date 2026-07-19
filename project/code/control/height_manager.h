@@ -25,6 +25,10 @@ typedef enum
 typedef struct
 {
     float raw_los_cm;
+    float tof1_raw_cm;
+    float tof2_raw_cm;
+    float tof_selected_cm;
+    float tof_disagreement_cm;
     float compensated_center_cm;
     float flow_height_cm;
     float filtered_height_cm;
@@ -41,11 +45,18 @@ typedef struct
     uint8 new_sample;
     uint8 valid;
     uint8 state;
+    uint8 tof1_valid;
+    uint8 tof2_valid;
+    uint8 tof_source;
 } HeightTofSnapshot_t;
 
 typedef struct
 {
     float tof_raw_cm;
+    float tof1_raw_cm;
+    float tof2_raw_cm;
+    float tof_selected_cm;
+    float tof_disagreement_cm;
     float tof_comp_cm;
     float tof_median_cm;
     float tof_height_filt_cm;
@@ -70,6 +81,14 @@ typedef struct
     uint8 tof_candidate_count;
     uint8 tof_reject_count;
     uint8 tof_state;
+    uint8 tof1_valid;
+    uint8 tof2_valid;
+    uint8 tof_source;
+    uint16 tof1_age_ms;
+    uint16 tof2_age_ms;
+    uint32 tof1_invalid_count;
+    uint32 tof2_invalid_count;
+    uint32 tof2_bus_error_count;
     uint8 acc_used;
     uint8 cascade_enabled;
 } HeightManagerDiag_t;

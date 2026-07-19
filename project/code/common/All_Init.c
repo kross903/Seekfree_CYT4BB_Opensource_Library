@@ -1,5 +1,6 @@
 #include "common/All_Init.h"
 #include "common/project_headfile.h"
+#include "control/dual_tof_manager.h"
 
 bool Send_state = 0;
 
@@ -48,6 +49,7 @@ static void init_display_and_basic_peripherals(void)
 
     adc_init(BATTERY_ADC_CHANNEL, ADC_12BIT);
     dl1b_init();
+    DualTof_Init();
 }
 
 void BoardBuzzer_RequestDoubleBeep(void)

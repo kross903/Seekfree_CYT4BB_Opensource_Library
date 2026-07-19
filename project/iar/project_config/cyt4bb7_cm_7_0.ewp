@@ -1214,6 +1214,12 @@
             <name>$PROJ_DIR$\..\..\code\control\height_manager.h</name>
         </file>
         <file>
+            <name>$PROJ_DIR$\..\..\code\control\dual_tof_manager.c</name>
+        </file>
+        <file>
+            <name>$PROJ_DIR$\..\..\code\control\dual_tof_manager.h</name>
+        </file>
+        <file>
             <name>$PROJ_DIR$\..\..\code\icm\icm.c</name>
         </file>
         <file>

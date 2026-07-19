@@ -34,7 +34,7 @@ static void send_sixteen_date(float date_1, float date_2, float date_3, float da
                               float date_9, float date_10, float date_11, float date_12,
                               float date_13, float date_14, float date_15, float date_16);
 
-/* 保留的回传模式：F2/F3/F4/F5/F6/F7/F8/F9/FA/FC/FD/FE/FI/FU/FY/FZ。 */
+/* 保留的回传模式：F1/F2/F3/F4/F5/F6/F7/F8/F9/FA/FC/FD/FE/FI/FU/FY/FZ。 */
 static int send_back_flag = 0;
 static uint8 send_back_command = 'R';
 
@@ -1112,6 +1112,7 @@ void USART_PID_Adjust(void)
                 case '7': send_back_flag = 7; break;
                 case '8': send_back_flag = 8; break;
                 case '9': send_back_flag = 9; break;
+                case '1': send_back_flag = 19; break;
                 case 'A':
                 case 'a': send_back_flag = 10; break;
                 case 'C':
@@ -1507,6 +1508,32 @@ void send_date_back(void)
                               (float)pos_diag.active,
                               (float)pos_diag.ir_track_valid,
                               (float)pos_diag.velocity_ready);
+            break;
+        }
+
+        case 19:
+        {
+            HeightManagerDiag_t height_diag = {0};
+
+            HeightManager_Get_Diag(&height_diag);
+
+            /* F1 command, internal mode 19: dual ToF input diagnostics. */
+            send_sixteen_date(height_diag.tof1_raw_cm,
+                              height_diag.tof2_raw_cm,
+                              height_diag.tof_selected_cm,
+                              height_diag.tof_disagreement_cm,
+                              (float)height_diag.tof_source,
+                              (float)height_diag.tof1_valid,
+                              (float)height_diag.tof2_valid,
+                              (float)height_diag.tof1_age_ms,
+                              (float)height_diag.tof2_age_ms,
+                              height_diag.tof_raw_cm,
+                              (float)height_diag.tof_state,
+                              (float)height_diag.tof_raw_age_ms,
+                              (float)height_diag.tof_valid,
+                              (float)height_diag.tof1_invalid_count,
+                              (float)height_diag.tof2_invalid_count,
+                              (float)height_diag.tof2_bus_error_count);
             break;
         }
 
