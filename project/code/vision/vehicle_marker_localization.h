@@ -27,6 +27,12 @@ extern "C" {
 #define VEHICLE_MARKER_POSITION_LOST_HOLD_MS   (500U)
 #define VEHICLE_MARKER_TASK_PERIOD_MS          (5U)
 
+#define VEHICLE_MARKER_CHEVRON_REJECT_NONE              (0U)
+#define VEHICLE_MARKER_CHEVRON_REJECT_NO_CANDIDATE      (1U)
+#define VEHICLE_MARKER_CHEVRON_REJECT_IMAGE_GEOMETRY    (2U)
+#define VEHICLE_MARKER_CHEVRON_REJECT_WORLD_PROJECTION  (3U)
+#define VEHICLE_MARKER_CHEVRON_REJECT_PHYSICAL_GEOMETRY (4U)
+
 typedef struct
 {
     float u;
@@ -69,6 +75,17 @@ typedef struct
     VehicleMarkerPoint2D_t right_line_start_img;
     VehicleMarkerPoint2D_t right_line_end_img;
     float heading_deg;
+    float physical_area_cm2;
+    float physical_occupancy_ratio;
+    float physical_circularity;
+    float left_arm_cm;
+    float right_arm_cm;
+    float arm_angle_deg;
+    float base_cm;
+    float triangle_height_cm;
+    uint8 candidate_count;
+    uint8 geometry_reject_count;
+    uint8 reject_reason;
 } VehicleMarkerChevronDebug_t;
 
 typedef struct

@@ -412,6 +412,36 @@ uint8 CameraCalibration_UndistortPoint(float distorted_x,
     return 1U;
 }
 
+uint8 CameraCalibration_RectifiedModelPointToSource(float rectified_x,
+                                                    float rectified_y,
+                                                    float *source_x,
+                                                    float *source_y)
+{
+    float ray_body[3];
+    float length;
+
+    if(source_x == NULL || source_y == NULL)
+    {
+        return 0U;
+    }
+
+    ray_body[0] = (rectified_y - CAMERA_CALIBRATION_CY) / CAMERA_CALIBRATION_FY;
+    ray_body[1] = (rectified_x - CAMERA_CALIBRATION_CX) / CAMERA_CALIBRATION_FX;
+    ray_body[2] = 1.0f;
+    length = sqrtf((ray_body[0] * ray_body[0]) +
+                   (ray_body[1] * ray_body[1]) +
+                   (ray_body[2] * ray_body[2]));
+    if(length < 1e-6f)
+    {
+        return 0U;
+    }
+    ray_body[0] /= length;
+    ray_body[1] /= length;
+    ray_body[2] /= length;
+
+    return CameraCalibration_BodyRayToPixel(ray_body, source_x, source_y);
+}
+
 uint8 CameraCalibration_RectifiedPointToSource(float rectified_x,
                                                float rectified_y,
                                                float *source_x,
@@ -458,30 +488,8 @@ uint8 CameraCalibration_RectifiedPointToSource(float rectified_x,
         (tx * ty * (float)camera_undistort_rect_src_y[y1][x1]);
     return 1U;
 #else
-    float ray_body[3];
-    float length;
-
-    if(source_x == NULL || source_y == NULL)
-    {
-        return 0U;
-    }
-
-    /* 去畸变坐标使用与 CameraCalibration_UndistortPoint 相同的正交投影。 */
-    ray_body[0] = (rectified_y - CAMERA_CALIBRATION_CY) / CAMERA_CALIBRATION_FY;
-    ray_body[1] = (rectified_x - CAMERA_CALIBRATION_CX) / CAMERA_CALIBRATION_FX;
-    ray_body[2] = 1.0f;
-    length = sqrtf((ray_body[0] * ray_body[0]) +
-                   (ray_body[1] * ray_body[1]) +
-                   (ray_body[2] * ray_body[2]));
-    if(length < 1e-6f)
-    {
-        return 0U;
-    }
-    ray_body[0] /= length;
-    ray_body[1] /= length;
-    ray_body[2] /= length;
-
-    return CameraCalibration_BodyRayToPixel(ray_body, source_x, source_y);
+    return CameraCalibration_RectifiedModelPointToSource(rectified_x, rectified_y,
+                                                         source_x, source_y);
 #endif
 }
 

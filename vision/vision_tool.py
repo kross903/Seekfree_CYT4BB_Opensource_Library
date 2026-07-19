@@ -153,7 +153,7 @@ class Simulator:
         undistort: bool = False,
         birdview: bool = False,
         threshold: int = 150,
-        binary_output: bool = False,
+        binary_mode: str = "gray",
     ) -> tuple[bool, str, Path | None, Path | None, Path | None, Path | None, Path | None, Path | None, Path | None]:
         executable = self.output_path()
         if self.needs_rebuild():
@@ -165,10 +165,18 @@ class Simulator:
         binary_path = output_dir / "binary.pgm"
         undistorted_path = output_dir / "undistorted.pgm"
         undistorted_mask_path = output_dir / "undistorted_mask.pgm"
-        undistorted_binary_path = output_dir / "undistorted_binary.pgm"
+        undistorted_binary_name = {
+            "undistort_binary_ipm": "undistorted_then_binary.pgm",
+            "post_transform": "undistorted_post_binary.pgm",
+        }.get(binary_mode, "undistorted_binary.pgm")
+        undistorted_binary_path = output_dir / undistorted_binary_name
         birdview_path = output_dir / "birdview.pgm"
         birdview_mask_path = output_dir / "birdview_mask.pgm"
-        birdview_binary_path = output_dir / "birdview_binary.pgm"
+        birdview_binary_name = {
+            "undistort_binary_ipm": "birdview_undistort_binary.pgm",
+            "post_transform": "birdview_post_binary.pgm",
+        }.get(binary_mode, "birdview_binary.pgm")
+        birdview_binary_path = output_dir / birdview_binary_name
         command = [
             str(executable),
             "--input", str(raw_path),
@@ -178,18 +186,17 @@ class Simulator:
             "--pitch", str(pitch),
             "--height", str(height),
             "--threshold", str(threshold),
+            "--binary-mode", binary_mode,
         ]
-        if binary_output:
-            command.extend(("--binary-output", "1"))
         if undistort:
             command.extend(("--undistorted", str(undistorted_path)))
             command.extend(("--undistorted-mask", str(undistorted_mask_path)))
-            if binary_output:
+            if binary_mode != "gray":
                 command.extend(("--undistorted-binary", str(undistorted_binary_path)))
         if birdview:
             command.extend(("--birdview", str(birdview_path)))
             command.extend(("--birdview-mask", str(birdview_mask_path)))
-            if binary_output:
+            if binary_mode != "gray":
                 command.extend(("--birdview-binary", str(birdview_binary_path)))
         result = subprocess.run(command, cwd=str(APP_ROOT), capture_output=True, text=True)
         log = "$ " + " ".join(command) + f"\n[returncode={result.returncode}]\n" + (result.stdout or "") + (result.stderr or "")
@@ -225,11 +232,12 @@ class VisionToolApp:
         self.threshold_var = tk.StringVar(value="150")
         self.undistort_var = tk.BooleanVar(value=False)
         self.birdview_var = tk.BooleanVar(value=False)
-        self.binary_output_var = tk.BooleanVar(value=False)
+        self.binary_mode_var = tk.StringVar(value="gray")
         self.status_var = tk.StringVar(value="就绪")
         self.frame_info_var = tk.StringVar(value="未选择帧")
         self.frame_telemetry_var = tk.StringVar(value="帧姿态/高度：暂无")
         self.result_info_var = tk.StringVar(value="暂无仿真结果")
+        self.result_text: scrolledtext.ScrolledText | None = None
         self.preview_image: ImageTk.PhotoImage | None = None
         self.binary_image: ImageTk.PhotoImage | None = None
         self.current_source_image: Image.Image | None = None
@@ -243,7 +251,7 @@ class VisionToolApp:
         self.current_frame: Path | None = None
         self.current_result: dict | None = None
         self.ui_queue: queue.Queue[tuple[str, object]] = queue.Queue()
-        self.simulation_queue: queue.Queue[tuple[Path, float, float, float, bool, bool, int, bool]] = queue.Queue()
+        self.simulation_queue: queue.Queue[tuple[Path, float, float, float, bool, bool, int, str]] = queue.Queue()
         self.capture_stop_event = threading.Event()
         self.capture_running = False
         self.capture_out_var = tk.StringVar(value=str(APP_ROOT / "capture"))
@@ -285,28 +293,36 @@ class VisionToolApp:
         left = ttk.Frame(main, padding=(0, 0, 6, 0))
         center = ttk.Frame(main, padding=(6, 0))
         right = ttk.Frame(main, padding=(6, 0, 0, 0))
-        main.add(left, weight=1)
+        main.add(left, weight=3)
         main.add(center, weight=4)
-        main.add(right, weight=2)
+        main.add(right, weight=3)
         self.build_source_panel(left)
         self.build_preview_panel(center)
         self.build_control_panel(right)
+        self.root.after_idle(lambda: self.set_initial_pane_positions(main))
 
         log_frame = ttk.LabelFrame(root_frame, text="构建与运行日志", padding=4)
         log_frame.grid(row=2, column=0, sticky="ew", pady=(8, 0))
         self.log_text = scrolledtext.ScrolledText(log_frame, height=8, wrap=tk.NONE)
         self.log_text.pack(fill=tk.BOTH, expand=True)
 
+    def set_initial_pane_positions(self, pane: ttk.PanedWindow) -> None:
+        width = pane.winfo_width()
+        if width < 900:
+            return
+        pane.sashpos(0, int(width * 0.34))
+        pane.sashpos(1, int(width * 0.70))
+
     def build_source_panel(self, parent: ttk.Frame) -> None:
         parent.rowconfigure(1, weight=1)
         parent.rowconfigure(3, weight=2)
         parent.columnconfigure(0, weight=1)
         ttk.Label(parent, text="C/H 源文件").grid(row=0, column=0, sticky="w")
-        self.source_list = tk.Listbox(parent, exportselection=False)
+        self.source_list = tk.Listbox(parent, width=42, exportselection=False)
         self.source_list.grid(row=1, column=0, sticky="nsew", pady=(4, 8))
         self.source_list.bind("<<ListboxSelect>>", self.load_selected_source)
         ttk.Label(parent, text="源码编辑器").grid(row=2, column=0, sticky="w")
-        self.editor = scrolledtext.ScrolledText(parent, wrap=tk.NONE, undo=True)
+        self.editor = scrolledtext.ScrolledText(parent, width=42, wrap=tk.NONE, undo=True)
         self.editor.grid(row=3, column=0, sticky="nsew", pady=(4, 4))
         self.editor.bind("<<Modified>>", self.editor_modified)
         button_bar = ttk.Frame(parent)
@@ -334,45 +350,33 @@ class VisionToolApp:
     def build_control_panel(self, parent: ttk.Frame) -> None:
         parent.rowconfigure(0, weight=1)
         parent.columnconfigure(0, weight=1)
-        scroll_host = ttk.Frame(parent)
-        scroll_host.grid(row=0, column=0, sticky="nsew")
-        scroll_host.rowconfigure(0, weight=1)
-        scroll_host.columnconfigure(0, weight=1)
-        control_canvas = tk.Canvas(scroll_host, highlightthickness=0, borderwidth=0)
-        control_scrollbar = ttk.Scrollbar(scroll_host, orient=tk.VERTICAL, command=control_canvas.yview)
-        control_canvas.configure(yscrollcommand=control_scrollbar.set)
-        control_canvas.grid(row=0, column=0, sticky="nsew")
-        control_scrollbar.grid(row=0, column=1, sticky="ns")
-        control_content = ttk.Frame(control_canvas)
-        control_window = control_canvas.create_window((0, 0), window=control_content, anchor="nw")
-        control_content.bind(
-            "<Configure>",
-            lambda _event: control_canvas.configure(scrollregion=control_canvas.bbox("all")),
-        )
-        control_canvas.bind(
-            "<Configure>",
-            lambda event: control_canvas.itemconfigure(control_window, width=event.width),
-        )
+
+        notebook = ttk.Notebook(parent)
+        notebook.grid(row=0, column=0, sticky="nsew")
+        capture_tab = ttk.Frame(notebook, padding=6)
+        processing_tab = ttk.Frame(notebook, padding=6)
+        notebook.add(capture_tab, text="抓图与帧")
+        notebook.add(processing_tab, text="处理与结果")
+        notebook.select(processing_tab)
 
         action_bar = ttk.Frame(parent)
         action_bar.grid(row=1, column=0, sticky="ew", pady=(8, 0))
         action_bar.columnconfigure(0, weight=1)
         action_bar.columnconfigure(1, weight=1)
-        action_bar.columnconfigure(2, weight=1)
-        ttk.Button(action_bar, text="打开调整图像窗口", command=self.open_processed_window).grid(
-            row=0, column=0, sticky="ew", padx=(0, 4)
+        ttk.Button(action_bar, text="运行当前帧", command=self.start_run).grid(
+            row=0, column=0, columnspan=2, sticky="ew", pady=(0, 6)
         )
         ttk.Button(action_bar, text="构建 C 仿真", command=self.start_build).grid(
-            row=0, column=1, sticky="ew", padx=4
+            row=1, column=0, sticky="ew", padx=(0, 4)
         )
-        ttk.Button(action_bar, text="运行当前帧", command=self.start_run).grid(
-            row=0, column=2, sticky="ew", padx=(4, 0)
+        ttk.Button(action_bar, text="打开调整图像窗口", command=self.open_processed_window).grid(
+            row=1, column=1, sticky="ew", padx=(4, 0)
         )
 
-        parent = control_content
-        parent.columnconfigure(1, weight=1)
-        capture = ttk.LabelFrame(parent, text="串口抓图（自动仿真）", padding=6)
-        capture.grid(row=0, column=0, columnspan=3, sticky="ew", pady=(0, 10))
+        capture_tab.columnconfigure(0, weight=1)
+        capture_tab.rowconfigure(2, weight=1)
+        capture = ttk.LabelFrame(capture_tab, text="串口抓图（自动仿真）", padding=6)
+        capture.grid(row=0, column=0, sticky="ew", pady=(0, 10))
         capture.columnconfigure(1, weight=1)
         ttk.Label(capture, text="串口").grid(row=0, column=0, sticky="w")
         self.capture_port_combo = ttk.Combobox(capture, textvariable=self.capture_port_var)
@@ -395,48 +399,98 @@ class VisionToolApp:
         self.capture_stop_button.grid(row=4, column=2, columnspan=2, sticky="ew", pady=(5, 0), padx=(3, 0))
         ttk.Label(capture, textvariable=self.capture_status_var).grid(row=5, column=0, columnspan=4, sticky="w", pady=(5, 0))
 
-        ttk.Label(parent, text="输入帧目录").grid(row=1, column=0, sticky="w")
-        ttk.Entry(parent, textvariable=self.frames_var).grid(row=1, column=1, sticky="ew", padx=5)
-        ttk.Button(parent, text="选择", command=self.choose_frames).grid(row=1, column=2)
-        ttk.Label(parent, text="帧列表").grid(row=2, column=0, columnspan=3, sticky="w", pady=(12, 3))
-        self.frame_list = tk.Listbox(parent, height=10, exportselection=False)
-        self.frame_list.grid(row=3, column=0, columnspan=3, sticky="ew")
+        frame_path_bar = ttk.Frame(capture_tab)
+        frame_path_bar.grid(row=1, column=0, sticky="ew", pady=(0, 10))
+        frame_path_bar.columnconfigure(1, weight=1)
+        ttk.Label(frame_path_bar, text="输入帧目录").grid(row=0, column=0, sticky="w")
+        ttk.Entry(frame_path_bar, textvariable=self.frames_var).grid(row=0, column=1, sticky="ew", padx=5)
+        ttk.Button(frame_path_bar, text="选择", command=self.choose_frames).grid(row=0, column=2)
+
+        frame_list_group = ttk.LabelFrame(capture_tab, text="帧列表", padding=4)
+        frame_list_group.grid(row=2, column=0, sticky="nsew")
+        frame_list_group.rowconfigure(0, weight=1)
+        frame_list_group.columnconfigure(0, weight=1)
+        self.frame_list = tk.Listbox(frame_list_group, exportselection=False)
+        self.frame_list.grid(row=0, column=0, sticky="nsew")
+        frame_scrollbar = ttk.Scrollbar(frame_list_group, orient=tk.VERTICAL, command=self.frame_list.yview)
+        frame_scrollbar.grid(row=0, column=1, sticky="ns")
+        self.frame_list.configure(yscrollcommand=frame_scrollbar.set)
         self.frame_list.bind("<<ListboxSelect>>", self.select_frame)
-        ttk.Button(parent, text="刷新帧", command=self.refresh_frames).grid(row=4, column=0, columnspan=3, sticky="ew", pady=(4, 12))
+        ttk.Button(frame_list_group, text="刷新帧", command=self.refresh_frames).grid(
+            row=1, column=0, columnspan=2, sticky="ew", pady=(4, 0)
+        )
 
-        params = ttk.LabelFrame(parent, text="仿真参数", padding=6)
-        params.grid(row=5, column=0, columnspan=3, sticky="ew")
+        processing_tab.columnconfigure(0, weight=1)
+        processing_tab.rowconfigure(3, weight=1)
+        params = ttk.LabelFrame(processing_tab, text="仿真参数", padding=6)
+        params.grid(row=0, column=0, sticky="ew")
         params.columnconfigure(1, weight=1)
-        for row, (label, variable) in enumerate((
-            ("Roll (deg)", self.roll_var),
-            ("Pitch (deg)", self.pitch_var),
-            ("Yaw (deg, record)", self.yaw_var),
-            ("ToF height (cm)", self.height_var),
-            ("Binary threshold (1-255)", self.threshold_var),
-        )):
-            ttk.Label(params, text=label).grid(row=row, column=0, sticky="w", pady=3)
-            ttk.Entry(params, textvariable=variable).grid(row=row, column=1, sticky="ew", pady=3)
+        params.columnconfigure(3, weight=1)
+        for row, left, right in (
+            (0, ("Roll (deg)", self.roll_var), ("Pitch (deg)", self.pitch_var)),
+            (1, ("Yaw (deg)", self.yaw_var), ("ToF height (cm)", self.height_var)),
+        ):
+            ttk.Label(params, text=left[0]).grid(row=row, column=0, sticky="w", pady=3)
+            ttk.Entry(params, textvariable=left[1], width=10).grid(row=row, column=1, sticky="ew", padx=(5, 10), pady=3)
+            ttk.Label(params, text=right[0]).grid(row=row, column=2, sticky="w", pady=3)
+            ttk.Entry(params, textvariable=right[1], width=10).grid(row=row, column=3, sticky="ew", padx=(5, 0), pady=3)
 
+        processing = ttk.LabelFrame(processing_tab, text="图像处理", padding=6)
+        processing.grid(row=1, column=0, sticky="ew", pady=(8, 0))
+        processing.columnconfigure(1, weight=1)
         ttk.Checkbutton(
-            parent,
-            text="显示去畸变图（运行仿真生成）",
+            processing,
+            text="去畸变",
             variable=self.undistort_var,
             command=self.refresh_processed_preview,
-        ).grid(row=6, column=0, columnspan=3, sticky="w", pady=(8, 0))
+        ).grid(row=0, column=0, columnspan=2, sticky="w")
         ttk.Checkbutton(
-            parent,
-            text="显示逆透视图（运行仿真生成）",
+            processing,
+            text="逆透视",
             variable=self.birdview_var,
             command=self.refresh_processed_preview,
-        ).grid(row=7, column=0, columnspan=3, sticky="w", pady=(4, 0))
-        ttk.Checkbutton(
-            parent,
-            text="先二值化原图，再进行去畸变/逆透视",
-            variable=self.binary_output_var,
-            command=self.refresh_processed_preview,
-        ).grid(row=8, column=0, columnspan=3, sticky="w", pady=(4, 0))
-        ttk.Label(parent, textvariable=self.status_var, foreground="#1b6e3a", wraplength=280).grid(row=9, column=0, columnspan=3, sticky="w", pady=(10, 3))
-        ttk.Label(parent, textvariable=self.result_info_var, justify=tk.LEFT, wraplength=280).grid(row=10, column=0, columnspan=3, sticky="w")
+        ).grid(row=1, column=0, columnspan=2, sticky="w", pady=(4, 0))
+        ttk.Label(processing, text="10m×10m · 0.5cm/pixel · 2000×2000").grid(
+            row=2, column=0, columnspan=2, sticky="w", pady=(0, 8)
+        )
+        ttk.Label(processing, text="处理顺序").grid(row=3, column=0, columnspan=2, sticky="w")
+        for row, (text, value) in enumerate((
+            ("灰度处理", "gray"),
+            ("先二值化，再去畸变/逆透视", "pre_transform"),
+            ("先去畸变，再二值化、逆透视", "undistort_binary_ipm"),
+            ("先去畸变/逆透视，再二值化", "post_transform"),
+        ), start=4):
+            ttk.Radiobutton(
+                processing,
+                text=text,
+                value=value,
+                variable=self.binary_mode_var,
+                command=self.refresh_processed_preview,
+            ).grid(row=row, column=0, columnspan=2, sticky="w", pady=(2, 0))
+        ttk.Label(processing, text="二值阈值").grid(row=8, column=0, sticky="w", pady=(8, 0))
+        ttk.Entry(processing, textvariable=self.threshold_var, width=8).grid(
+            row=8, column=1, sticky="ew", padx=(8, 0), pady=(8, 0)
+        )
+        ttk.Label(processing_tab, textvariable=self.status_var, foreground="#1b6e3a").grid(
+            row=2, column=0, sticky="w", pady=(8, 4)
+        )
+        result_group = ttk.LabelFrame(processing_tab, text="运行结果", padding=4)
+        result_group.grid(row=3, column=0, sticky="nsew")
+        result_group.rowconfigure(0, weight=1)
+        result_group.columnconfigure(0, weight=1)
+        self.result_text = scrolledtext.ScrolledText(result_group, height=8, wrap=tk.WORD)
+        self.result_text.grid(row=0, column=0, sticky="nsew")
+        self.result_text.insert("1.0", self.result_info_var.get())
+        self.result_text.configure(state=tk.DISABLED)
+
+    def set_result_info(self, text: str) -> None:
+        self.result_info_var.set(text)
+        if self.result_text is None:
+            return
+        self.result_text.configure(state=tk.NORMAL)
+        self.result_text.delete("1.0", tk.END)
+        self.result_text.insert("1.0", text)
+        self.result_text.configure(state=tk.DISABLED)
 
     def log(self, message: str) -> None:
         self.log_text.insert(tk.END, message.rstrip() + "\n")
@@ -537,14 +591,14 @@ class VisionToolApp:
             bool(self.undistort_var.get()),
             bool(self.birdview_var.get()),
             threshold,
-            bool(self.binary_output_var.get()),
+            self.binary_mode_var.get(),
         ))
 
     def simulation_worker(self) -> None:
         while True:
-            frame_path, roll, pitch, height, undistort, birdview, threshold, binary_output = self.simulation_queue.get()
+            frame_path, roll, pitch, height, undistort, birdview, threshold, binary_mode = self.simulation_queue.get()
             try:
-                self.run_worker(frame_path, roll, pitch, height, undistort, birdview, threshold, binary_output)
+                self.run_worker(frame_path, roll, pitch, height, undistort, birdview, threshold, binary_mode)
             except Exception as exc:
                 self.ui_queue.put(("run", (False, str(exc), None, APP_ROOT, None, None, None, None, None)))
 
@@ -646,15 +700,19 @@ class VisionToolApp:
         if self.processed_label is None or self.processed_window is None or not self.processed_window.winfo_exists():
             return
 
+        binary_mode = self.binary_mode_var.get()
+        binary_suffix = {
+            "pre_transform": "（先二值化）",
+            "undistort_binary_ipm": "（去畸变后二值化）",
+            "post_transform": "（变换后二值化）",
+        }.get(binary_mode, "")
         if self.birdview_var.get():
             image = self.current_birdview_image
-            title = "去畸变 + 逆透视二值图" if self.undistort_var.get() and self.binary_output_var.get() else (
-                "去畸变 + 逆透视图" if self.undistort_var.get() else ("逆透视二值图" if self.binary_output_var.get() else "逆透视图")
-            )
+            title = ("去畸变 + 逆透视图" if self.undistort_var.get() else "逆透视图") + binary_suffix
             missing_text = "请先运行当前帧生成逆透视图"
         elif self.undistort_var.get():
             image = self.current_undistorted_image
-            title = "去畸变二值图" if self.binary_output_var.get() else "去畸变图"
+            title = "去畸变图" + binary_suffix
             missing_text = "请先运行当前帧生成去畸变图"
         else:
             image = None
@@ -748,10 +806,10 @@ class VisionToolApp:
         self.status_var.set("运行中")
         undistort = bool(self.undistort_var.get())
         birdview = bool(self.birdview_var.get())
-        binary_output = bool(self.binary_output_var.get())
+        binary_mode = self.binary_mode_var.get()
         threading.Thread(
             target=self.run_worker,
-            args=(self.current_frame, roll, pitch, height, undistort, birdview, threshold, binary_output),
+            args=(self.current_frame, roll, pitch, height, undistort, birdview, threshold, binary_mode),
             daemon=True,
         ).start()
 
@@ -764,7 +822,7 @@ class VisionToolApp:
         undistort: bool,
         birdview: bool,
         threshold: int,
-        binary_output: bool,
+        binary_mode: str,
     ) -> None:
         source = Path(self.source_var.get())
         run_dir = RUN_ROOT / time.strftime("run_%Y%m%d_%H%M%S")
@@ -775,14 +833,15 @@ class VisionToolApp:
             raw_path.write_bytes(image.tobytes())
             simulator = Simulator(source)
             ok, log, result_path, undistorted_path, birdview_path, undistorted_mask_path, birdview_mask_path, undistorted_binary_path, birdview_binary_path = simulator.run(
-                raw_path, run_dir, roll, pitch, height, undistort, birdview, threshold, binary_output
+                raw_path, run_dir, roll, pitch, height, undistort, birdview, threshold, binary_mode
             )
             payload = json.loads(result_path.read_text(encoding="utf-8")) if result_path else None
-            undistorted_image_path = undistorted_binary_path if binary_output and undistorted_binary_path else undistorted_path
-            birdview_image_path = birdview_binary_path if binary_output and birdview_binary_path else birdview_path
-            undistorted_image = self.load_image(undistorted_image_path) if undistorted_image_path else None
+            binary_enabled = binary_mode != "gray"
+            undistorted_image_path = undistorted_binary_path if binary_enabled and undistorted_binary_path else undistorted_path
+            birdview_image_path = birdview_binary_path if binary_enabled and birdview_binary_path else birdview_path
+            undistorted_image = self.load_image(undistorted_image_path, target_size=None) if undistorted_image_path else None
             birdview_image = self.load_image(birdview_image_path, target_size=None) if birdview_image_path else None
-            undistorted_mask = self.load_image(undistorted_mask_path) if undistorted_mask_path else None
+            undistorted_mask = self.load_image(undistorted_mask_path, target_size=None) if undistorted_mask_path else None
             birdview_mask = self.load_image(birdview_mask_path, target_size=None) if birdview_mask_path else None
             self.ui_queue.put((
                 "run",
@@ -895,6 +954,13 @@ class VisionToolApp:
         self.binary_label.configure(image=self.binary_image, text="")
         self.refresh_preview()
         self.refresh_processed_preview()
+        undistorted_meta = result.get("undistorted")
+        undistorted_info = ""
+        if isinstance(undistorted_meta, dict):
+            undistorted_info = (
+                f"\n去畸变尺寸: {undistorted_meta.get('width', '?')}×{undistorted_meta.get('height', '?')}"
+                f"（原尺度完整视场）"
+            )
         birdview_meta = result.get("birdview")
         birdview_info = ""
         if isinstance(birdview_meta, dict):
@@ -909,12 +975,38 @@ class VisionToolApp:
         if birdview_mask is not None:
             mask_files.append("birdview_mask.pgm")
         mask_info = f"\n掩码文件: {', '.join(mask_files)}" if mask_files else ""
-        self.result_info_var.set(
+        binary_mode_text = {
+            "gray": "灰度处理",
+            "pre_transform": "先二值化再变换",
+            "undistort_binary_ipm": "去畸变后二值化再逆透视",
+            "post_transform": "先变换再二值化",
+        }.get(str(result.get("binary_mode", "gray")), "未知")
+        chevron = result.get("chevron", {})
+        physical = chevron.get("physical", {}) if isinstance(chevron, dict) else {}
+        reject_reason = int(chevron.get("reject_reason", 0)) if isinstance(chevron, dict) else 0
+        reject_text = {
+            0: "通过",
+            1: "无物理候选",
+            2: "图像几何失败",
+            3: "物理投影失败",
+            4: "物理几何不符",
+        }.get(reject_reason, f"未知({reject_reason})")
+        chevron_info = (
+            f"\n小车候选: {chevron.get('candidate_count', 0)}，拒绝: {reject_text}"
+            f"\n物理面积: {physical.get('area_cm2', 0):.2f} cm²，圆度: {physical.get('circularity', 0):.3f}"
+            f"\n两臂: {physical.get('left_arm_cm', 0):.2f}/{physical.get('right_arm_cm', 0):.2f} cm"
+            f"，夹角: {physical.get('arm_angle_deg', 0):.2f}°"
+            f"\n底边/高: {physical.get('base_cm', 0):.2f}/{physical.get('triangle_height_cm', 0):.2f} cm"
+        )
+        self.set_result_info(
             f"连通域: {result.get('blob_count', 0)}\n"
             f"信标: {result.get('beacon_count', 0)}\n"
             f"二值阈值: {result.get('binary_threshold', '?')}\n"
+            f"处理顺序: {binary_mode_text}\n"
             f"小车标志有效: {result.get('vehicle', {}).get('valid', 0)}\n"
+            f"{chevron_info}\n"
             f"运行目录: {binary_path.parent}"
+            f"{undistorted_info}"
             f"{birdview_info}\n"
             f"{mask_info}"
         )

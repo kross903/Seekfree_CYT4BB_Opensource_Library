@@ -42,6 +42,16 @@ typedef struct
     int height;
 } IPM_BirdViewBounds_t;
 
+typedef struct
+{
+    float min_rectified_x;
+    float max_rectified_x;
+    float min_rectified_y;
+    float max_rectified_y;
+    int width;
+    int height;
+} IPM_UndistortCanvas_t;
+
 /* ====================== 函数声明 ====================== */
 
 #ifdef __cplusplus
@@ -125,6 +135,12 @@ uint8 IPM_ClampBirdViewBounds(IPM_BirdViewBounds_t *bounds,
                               float half_range_x,
                               float half_range_y);
 
+/* 设置以正下方为中心的固定物理画布。 */
+uint8 IPM_SetFixedBirdViewBounds(float scale,
+                                 float half_range_x,
+                                 float half_range_y,
+                                 IPM_BirdViewBounds_t *bounds);
+
 /* 按动态地面范围生成鸟瞰图，并返回每个输出像素是否有效。 */
 uint8 IPM_GenerateBirdViewDynamic(const uint8 src_img[MT9V03X_H][MT9V03X_W],
                                   uint8 *dst_img,
@@ -136,6 +152,13 @@ uint8 IPM_GenerateBirdViewDynamicNearest(const uint8 src_img[MT9V03X_H][MT9V03X_
                                          uint8 *dst_img,
                                          uint8 *valid_mask,
                                          const IPM_BirdViewBounds_t *bounds);
+
+/* 使用完整去畸变二值画布生成鸟瞰图。 */
+uint8 IPM_GenerateBirdViewFromUndistortedBinary(const uint8 *src_img,
+                                                const IPM_UndistortCanvas_t *src_canvas,
+                                                uint8 *dst_img,
+                                                uint8 *valid_mask,
+                                                const IPM_BirdViewBounds_t *bounds);
 
 /**
  * @brief 在IPS200屏幕上显示俯视图
@@ -165,6 +188,17 @@ void IPM_GenerateUndistortedDebugImageNearest(const uint8 src_img[MT9V03X_H][MT9
                                               uint8 dst_img[MT9V03X_H][MT9V03X_W]);
 
 void IPM_GenerateUndistortedDebugMask(uint8 dst_mask[MT9V03X_H][MT9V03X_W]);
+
+/* 原像素尺度、不裁剪的完整去畸变画布。 */
+uint8 IPM_CalculateFullUndistortCanvas(IPM_UndistortCanvas_t *canvas);
+uint8 IPM_GenerateFullUndistortedImage(const uint8 src_img[MT9V03X_H][MT9V03X_W],
+                                       uint8 *dst_img,
+                                       uint8 *valid_mask,
+                                       const IPM_UndistortCanvas_t *canvas);
+uint8 IPM_GenerateFullUndistortedImageNearest(const uint8 src_img[MT9V03X_H][MT9V03X_W],
+                                              uint8 *dst_img,
+                                              uint8 *valid_mask,
+                                              const IPM_UndistortCanvas_t *canvas);
 
 /* ====================== 状态获取函数 ====================== */
 

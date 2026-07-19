@@ -57,6 +57,12 @@ uint8 CameraCalibration_RectifiedPointToSource(float rectified_x,
                                                float *source_x,
                                                float *source_y);
 
+/* 使用标定模型反查任意去畸变坐标，不受188x120离线映射表边界限制。 */
+uint8 CameraCalibration_RectifiedModelPointToSource(float rectified_x,
+                                                    float rectified_y,
+                                                    float *source_x,
+                                                    float *source_y);
+
 uint8 CameraCalibration_RectifiedPixelToSource(int dst_x,
                                                int dst_y,
                                                int *src_x,
