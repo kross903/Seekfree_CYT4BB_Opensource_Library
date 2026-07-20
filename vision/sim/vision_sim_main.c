@@ -264,6 +264,8 @@ static int write_result(const char *path, const char *binary_path,
             (unsigned)beacon_threshold);
     fprintf(file, "  \"coarse_threshold\":%u,\n",
             (unsigned)VisionRuntime_GetCoarseThreshold());
+    fprintf(file, "  \"vehicle_min_raw_box_area\":%u,\n",
+            (unsigned)VISION_RUNTIME_VEHICLE_MIN_RAW_BOX_AREA);
     fprintf(file,
             "  \"binary_thresholds\":{\"inner\":%u,\"middle\":%u,\"outer\":%u},\n",
             (unsigned)vehicle_threshold,
@@ -351,7 +353,7 @@ static int write_result(const char *path, const char *binary_path,
                 "\"raw_min_col\":%d,\"raw_max_col\":%d,"
                 "\"fine_min_row\":%d,\"fine_max_row\":%d,"
                 "\"fine_min_col\":%d,\"fine_max_col\":%d,"
-                "\"vehicle_valid\":%u,\"beacon_valid\":%u,"
+                "\"vehicle_valid\":%u,\"vehicle_skipped_small_box\":%u,\"beacon_valid\":%u,"
                 "\"raw_box_area_pixels\":%d,\"detection_confidence\":%u,\"x_cm\":%.6f,\"y_cm\":%.6f,"
                 "\"area_cm2\":%.6f,\"circularity\":%.6f,"
                 "\"confidence_box_size\":%.6f,\"confidence_stability\":%.6f,"
@@ -362,6 +364,7 @@ static int write_result(const char *path, const char *binary_path,
                 candidates[i].fine_min_row, candidates[i].fine_max_row,
                 candidates[i].fine_min_col, candidates[i].fine_max_col,
                 (unsigned)candidates[i].vehicle_valid,
+                (unsigned)candidates[i].vehicle_skipped_small_box,
                 (unsigned)candidates[i].beacon_valid,
                 candidates[i].raw_box_area_pixels,
                 (unsigned)candidates[i].detection_confidence,

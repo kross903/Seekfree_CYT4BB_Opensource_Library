@@ -621,6 +621,7 @@ typedef struct
 typedef struct
 {
     uint8 vehicle_valid;
+    uint8 vehicle_skipped_small_box;
     uint8 beacon_valid;
     int raw_box_area_pixels;
     uint8 detection_confidence;
@@ -2184,17 +2185,28 @@ static void VisionRuntime_ProcessBlobs(
     for(i = 0U; i < s_vision_candidate_count; ++i)
     {
         uint8 vehicle_confirmed = 0U;
+        int raw_box_area =
+            (s_vision_candidates[i].max_col - s_vision_candidates[i].min_col + 1) *
+            (s_vision_candidates[i].max_row - s_vision_candidates[i].min_row + 1);
+        uint8 skip_vehicle = (uint8)(
+            raw_box_area < (int)VISION_RUNTIME_VEHICLE_MIN_RAW_BOX_AREA);
+
+        s_vision_candidate_annotations[i].raw_box_area_pixels = raw_box_area;
+        s_vision_candidate_annotations[i].vehicle_skipped_small_box = skip_vehicle;
 
         if(VisionRuntime_BuildFineCandidateBinaries(
                image, &s_vision_candidates[i], i))
         {
-            vehicle_confirmed = VisionRuntime_ProcessFineROI(
-                &s_vision_candidates[i],
-                VISION_RUNTIME_FINE_TARGET_VEHICLE, i,
-                s_vision_vehicle_binary);
-            if(vehicle_confirmed)
+            if(!skip_vehicle)
             {
-                s_vision_candidate_annotations[i].vehicle_valid = 1U;
+                vehicle_confirmed = VisionRuntime_ProcessFineROI(
+                    &s_vision_candidates[i],
+                    VISION_RUNTIME_FINE_TARGET_VEHICLE, i,
+                    s_vision_vehicle_binary);
+                if(vehicle_confirmed)
+                {
+                    s_vision_candidate_annotations[i].vehicle_valid = 1U;
+                }
             }
             if(!vehicle_confirmed)
             {
@@ -2430,8 +2442,11 @@ uint8 VisionRuntime_GetCandidateBoxes(VisionRuntimeCandidateBox_t *boxes, uint8 
         boxes[i].fine_max_col = max_x;
         boxes[i].area = s_vision_candidates[i].area;
         boxes[i].raw_box_area_pixels =
-            s_vision_candidate_annotations[i].raw_box_area_pixels;
+            (s_vision_candidates[i].max_col - s_vision_candidates[i].min_col + 1) *
+            (s_vision_candidates[i].max_row - s_vision_candidates[i].min_row + 1);
         boxes[i].vehicle_valid = s_vision_candidate_annotations[i].vehicle_valid;
+        boxes[i].vehicle_skipped_small_box =
+            s_vision_candidate_annotations[i].vehicle_skipped_small_box;
         boxes[i].beacon_valid = s_vision_candidate_annotations[i].beacon_valid;
         boxes[i].detection_confidence =
             s_vision_candidate_annotations[i].detection_confidence;

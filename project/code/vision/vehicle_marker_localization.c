@@ -282,8 +282,14 @@ void VehicleMarkerLocalization_ServiceLostProtection(void)
 #define VEHICLE_MARKER_CHEVRON_MAX_TRIANGLE_HEIGHT_CM      (24.0f)
 #define VEHICLE_MARKER_CHEVRON_MIN_CONTOUR_POINTS          (8U)
 #define VEHICLE_MARKER_CHEVRON_POINT_EPS                   (1e-4f)
+#define VEHICLE_MARKER_CHEVRON_SEED_SAMPLE_POINTS          (64U)
 #define VEHICLE_MARKER_CHEVRON_GROUP_MAX_POINTS            (VISION_RUNTIME_CONTOUR_MAX_POINTS + 1U)
 #define VEHICLE_MARKER_CHEVRON_MAX_FRAME_CANDIDATES        (4U)
+
+#if VEHICLE_MARKER_CHEVRON_SEED_SAMPLE_POINTS < 3U || \
+    VEHICLE_MARKER_CHEVRON_SEED_SAMPLE_POINTS > VISION_RUNTIME_CONTOUR_MAX_POINTS
+#error "Invalid chevron seed contour sample count"
+#endif
 
 typedef struct
 {
@@ -1074,6 +1080,8 @@ static uint8 vehicle_marker_chevron_extract_image_geometry(
     VehicleMarkerPoint2D_t seed_tip_b;
     VehicleMarkerImageLine_t line_a = {0};
     VehicleMarkerImageLine_t line_b = {0};
+    uint16 seed_indices[VEHICLE_MARKER_CHEVRON_SEED_SAMPLE_POINTS];
+    uint16 seed_count = 0U;
     uint16 pair_i = 0U;
     uint16 pair_j = 0U;
     uint16 third_i = 0U;
@@ -1099,21 +1107,35 @@ static uint8 vehicle_marker_chevron_extract_image_geometry(
     if(contour->point_count < VEHICLE_MARKER_CHEVRON_MIN_CONTOUR_POINTS)
         return 0U;
 
-    for(i = 0U; i + 1U < contour->point_count; ++i)
+    seed_count = contour->point_count;
+    if(seed_count > VEHICLE_MARKER_CHEVRON_SEED_SAMPLE_POINTS)
+        seed_count = VEHICLE_MARKER_CHEVRON_SEED_SAMPLE_POINTS;
+    for(i = 0U; i < seed_count; ++i)
     {
+        seed_indices[i] = (seed_count == contour->point_count) ? i :
+            (uint16)(((uint32)i * (uint32)(contour->point_count - 1U)) /
+                     (uint32)(seed_count - 1U));
+    }
+
+    for(i = 0U; i + 1U < seed_count; ++i)
+    {
+        uint16 contour_i = seed_indices[i];
         VehicleMarkerPoint2D_t point_i = {
-            (float)contour->point_x[i], (float)contour->point_y[i], 0.0f};
-        for(j = (uint16)(i + 1U); j < contour->point_count; ++j)
+            (float)contour->point_x[contour_i],
+            (float)contour->point_y[contour_i], 0.0f};
+        for(j = (uint16)(i + 1U); j < seed_count; ++j)
         {
+            uint16 contour_j = seed_indices[j];
             VehicleMarkerPoint2D_t point_j = {
-                (float)contour->point_x[j], (float)contour->point_y[j], 0.0f};
+                (float)contour->point_x[contour_j],
+                (float)contour->point_y[contour_j], 0.0f};
             float dist_sq =
                 vehicle_marker_chevron_image_distance_sq(&point_i, &point_j);
             if(dist_sq > best_pair_dist_sq)
             {
                 best_pair_dist_sq = dist_sq;
-                pair_i = i;
-                pair_j = j;
+                pair_i = contour_i;
+                pair_j = contour_j;
             }
         }
     }
@@ -1122,16 +1144,18 @@ static uint8 vehicle_marker_chevron_extract_image_geometry(
     triangle[1].v = (float)contour->point_y[pair_i];
     triangle[2].u = (float)contour->point_x[pair_j];
     triangle[2].v = (float)contour->point_y[pair_j];
-    for(i = 0U; i < contour->point_count; ++i)
+    for(i = 0U; i < seed_count; ++i)
     {
+        uint16 contour_i = seed_indices[i];
         VehicleMarkerPoint2D_t point = {
-            (float)contour->point_x[i], (float)contour->point_y[i], 0.0f};
+            (float)contour->point_x[contour_i],
+            (float)contour->point_y[contour_i], 0.0f};
         float dist_sq = vehicle_marker_chevron_image_point_to_line_distance_sq(
             &point, &triangle[1], &triangle[2]);
         if(dist_sq > best_third_dist_sq)
         {
             best_third_dist_sq = dist_sq;
-            third_i = i;
+            third_i = contour_i;
         }
     }
     if(best_third_dist_sq <= VEHICLE_MARKER_CHEVRON_POINT_EPS) return 0U;

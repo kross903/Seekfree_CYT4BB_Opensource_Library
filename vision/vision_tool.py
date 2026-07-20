@@ -897,12 +897,18 @@ class VisionToolApp:
                 "小车" if candidate.get("vehicle_valid") else
                 ("信标" if candidate.get("beacon_valid") else "未通过")
             )
+            vehicle_route = (
+                "跳过箭头，直接识别信标"
+                if candidate.get("vehicle_skipped_small_box")
+                else "箭头优先"
+            )
             ttk.Label(
                 tab,
                 text=(
                     f"候选 {index}  框: ({min_col},{min_row})-({max_col},{max_row})  "
                     f"类型: {candidate_type}  "
                     f"候选框面积: {int(candidate.get('raw_box_area_pixels', 0))} 像素  "
+                    f"分流: {vehicle_route}  "
                     f"实际面积: {candidate.get('area_cm2', 0):.2f} cm²  "
                     f"圆度: {candidate.get('circularity', 0):.3f}  "
                     f"位置: ({candidate.get('x_cm', 0):.1f}, {candidate.get('y_cm', 0):.1f}) cm  "
@@ -1350,6 +1356,7 @@ class VisionToolApp:
             f"{result.get('recognition_thresholds', {}).get('vehicle', '?')}/"
             f"{result.get('recognition_thresholds', {}).get('beacon', '?')}\n"
             f"粗筛阈值: {result.get('coarse_threshold', '?')}\n"
+            f"箭头分流面积阈值: {result.get('vehicle_min_raw_box_area', '?')} 像素\n"
             f"预览顺序: {binary_mode_text}\n"
             f"小车标志有效: {result.get('vehicle', {}).get('valid', 0)}\n"
             f"{beacon_detail}"

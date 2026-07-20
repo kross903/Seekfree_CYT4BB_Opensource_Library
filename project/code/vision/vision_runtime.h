@@ -24,6 +24,7 @@
 #define VISION_RUNTIME_LOCAL_BIRDVIEW_MAX_HEIGHT (128U)
 #define VISION_RUNTIME_BEACON_BOX_AREA_MIN_PIXELS (12.0f)
 #define VISION_RUNTIME_BEACON_BOX_AREA_MAX_PIXELS (100.0f)
+#define VISION_RUNTIME_VEHICLE_MIN_RAW_BOX_AREA   (150U)
 
 /* Candidate refinement pipeline selection. */
 #define VISION_RUNTIME_PIPELINE_UNDISTORT_THEN_IPM (0U)
@@ -162,6 +163,7 @@ typedef struct
     int area;
     int raw_box_area_pixels;
     uint8 vehicle_valid;
+    uint8 vehicle_skipped_small_box;
     uint8 beacon_valid;
     uint8 detection_confidence;
     float beacon_x_cm;
