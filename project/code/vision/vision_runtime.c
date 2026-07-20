@@ -461,6 +461,8 @@ static void VisionRuntime_UpdateBeaconSlotsFromCurrentFrame(int beacon_count,
             beacon_results[best_index].raw_box_area_pixels;
         s_vision_runtime_beacon_slots[slot_count].detection_confidence =
             beacon_results[best_index].detection_confidence;
+        s_vision_runtime_beacon_slots[slot_count].position_sigma_cm =
+            beacon_results[best_index].position_sigma_cm;
         s_vision_runtime_beacon_slots[slot_count].confidence_box_size =
             beacon_results[best_index].confidence_box_size;
         s_vision_runtime_beacon_slots[slot_count].confidence_box_size_min =
@@ -580,6 +582,8 @@ static void VisionRuntime_UpdateBeaconSlotsFromCurrentFrame(
             beacon_results[best_index].raw_box_area_pixels;
         s_vision_runtime_beacon_slots[slot_count].detection_confidence =
             beacon_results[best_index].detection_confidence;
+        s_vision_runtime_beacon_slots[slot_count].position_sigma_cm =
+            beacon_results[best_index].position_sigma_cm;
         s_vision_runtime_beacon_slots[slot_count].confidence_box_size =
             beacon_results[best_index].confidence_box_size;
         s_vision_runtime_beacon_slots[slot_count].confidence_box_size_min =
@@ -631,6 +635,7 @@ typedef struct
     uint8 beacon_valid;
     int raw_box_area_pixels;
     uint8 detection_confidence;
+    uint8 position_sigma_cm;
     float beacon_x_cm;
     float beacon_y_cm;
     float beacon_area_cm2;
@@ -2088,6 +2093,8 @@ static uint8 VisionRuntime_DispatchFineComponent(
                     blob.raw_box_area_pixels;
                 s_vision_candidate_annotations[candidate_index].detection_confidence =
                     blob.detection_confidence;
+                s_vision_candidate_annotations[candidate_index].position_sigma_cm =
+                    blob.position_sigma_cm;
                 s_vision_candidate_annotations[candidate_index].beacon_x_cm = blob.world_x;
                 s_vision_candidate_annotations[candidate_index].beacon_y_cm = blob.world_y;
                 s_vision_candidate_annotations[candidate_index].beacon_area_cm2 =
@@ -2452,6 +2459,8 @@ uint8 VisionRuntime_GetCandidateBoxes(VisionRuntimeCandidateBox_t *boxes, uint8 
         boxes[i].beacon_valid = s_vision_candidate_annotations[i].beacon_valid;
         boxes[i].detection_confidence =
             s_vision_candidate_annotations[i].detection_confidence;
+        boxes[i].position_sigma_cm =
+            s_vision_candidate_annotations[i].position_sigma_cm;
         boxes[i].beacon_x_cm = s_vision_candidate_annotations[i].beacon_x_cm;
         boxes[i].beacon_y_cm = s_vision_candidate_annotations[i].beacon_y_cm;
         boxes[i].beacon_area_cm2 = s_vision_candidate_annotations[i].beacon_area_cm2;

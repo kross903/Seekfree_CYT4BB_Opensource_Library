@@ -3,10 +3,10 @@
 
 #define SHARED_VISION_INPUT_ADDR                    0x28001000u
 #define SHARED_VISION_RESULT_ADDR                   0x28001100u
-#define SHARED_VISION_SCREEN_CTRL_ADDR              0x28001420u
-#define SHARED_VISION_SNAPSHOT_METADATA_ADDR        0x28001440u
-#define SHARED_VISION_FRAME_CTRL_ADDR               0x28001460u
-#define SHARED_VISION_CTRL_END_ADDR                 0x28001480u
+#define SHARED_VISION_SCREEN_CTRL_ADDR              0x28001480u
+#define SHARED_VISION_SNAPSHOT_METADATA_ADDR        0x280014A0u
+#define SHARED_VISION_FRAME_CTRL_ADDR               0x280014C0u
+#define SHARED_VISION_CTRL_END_ADDR                 0x280014E0u
 #define SHARED_VISION_MAGIC                         0x56495331u
 #define SHARED_VISION_SCREEN_MAGIC                  0x56534331u
 #define SHARED_VISION_SNAPSHOT_METADATA_MAGIC       0x56534D31u
@@ -49,6 +49,10 @@ typedef struct
     uint16 lost_elapsed_ms;
     uint16 reserved16;
     uint32 pose_update_seq;
+    uint32 input_seq;
+    float yaw_deg;
+    uint8 yaw_valid;
+    uint8 yaw_reserved[3];
 } SharedVisionResult_t;
 
 typedef struct
@@ -597,6 +601,8 @@ static void CrossCoreCamera_CleanScreenCtrl(void)
 }
 
 static volatile uint8 s_vision_ipc_result_pending = 0U;
+static float s_control_vision_yaw_deg = 0.0f;
+static uint8 s_control_vision_yaw_valid = 0U;
 
 static void CrossCoreCamera_ControlCoreIpcCallback(uint32 ipc_data)
 {
@@ -664,6 +670,7 @@ void CrossCoreCamera_CameraCoreTask(void)
     SharedVisionInput_t input_snapshot;
     // 本帧视觉诊断信息：用于屏幕显示和跨核回传。
     VisionRuntimeDiag_t diag_snapshot;
+    uint8 input_valid;
     // 本帧信标结果槽位：用于把 1 核识别结果同步给 0 核。
     VisionRuntimeBeaconSlot_t beacon_slots[VISION_RUNTIME_BEACON_SLOT_COUNT] = {0};
     // 小车定位丢失调试信息。
@@ -681,6 +688,8 @@ void CrossCoreCamera_CameraCoreTask(void)
     // 从共享内存读取 0 核发布的姿态与高度输入。
     CrossCoreCamera_InvalidateInput();
     input_snapshot = *g_shared_vision_input;
+    input_valid = (uint8)((input_snapshot.magic == SHARED_VISION_MAGIC) &&
+                          (input_snapshot.seq != 0U));
     // 若共享区尚未初始化，则使用默认姿态和默认高度兜底。
     if(input_snapshot.magic != SHARED_VISION_MAGIC)
     {
@@ -720,6 +729,9 @@ void CrossCoreCamera_CameraCoreTask(void)
     g_shared_vision_result->lost_flag = g_vehicle_marker_position_lost_flag;
     g_shared_vision_result->lost_elapsed_ms = g_vehicle_marker_position_lost_elapsed_ms;
     g_shared_vision_result->pose_update_seq = g_vehicle_marker_pose_update_seq;
+    g_shared_vision_result->input_seq = input_snapshot.seq;
+    g_shared_vision_result->yaw_deg = input_snapshot.yaw_deg;
+    g_shared_vision_result->yaw_valid = input_valid;
     g_shared_vision_result->seq++;
     // 写回共享结果前清缓存，并通过 IPC 通知 0 核“新结果已就绪”。
     CrossCoreCamera_CleanResult();
@@ -759,8 +771,26 @@ uint8 CrossCoreCamera_ControlCoreFetchFrame(void)
     VisionRuntime_SetDiag(&result_snapshot.diag);
     VisionRuntime_SetBeaconSlots(result_snapshot.beacon_slots, VISION_RUNTIME_BEACON_SLOT_COUNT);
     VehicleMarkerLocalization_SetLossDebug(&result_snapshot.loss_debug);
+    s_control_vision_yaw_deg = result_snapshot.yaw_deg;
+    s_control_vision_yaw_valid = result_snapshot.yaw_valid;
     return 1U;
 #else
+    return 0U;
+#endif
+}
+
+uint8 CrossCoreCamera_ControlCoreGetVisionYaw(float *yaw_deg)
+{
+#if CY_CORE_CM7_0
+    if((NULL == yaw_deg) || !s_control_vision_yaw_valid)
+    {
+        return 0U;
+    }
+
+    *yaw_deg = s_control_vision_yaw_deg;
+    return 1U;
+#else
+    (void)yaw_deg;
     return 0U;
 #endif
 }
@@ -882,6 +912,8 @@ void CrossCoreCamera_ControlCoreAssistantInit(void)
     uint8 reserved_index;
 
     ipc_communicate_init(IPC_PORT_1, CrossCoreCamera_ControlCoreIpcCallback);
+    s_control_vision_yaw_deg = 0.0f;
+    s_control_vision_yaw_valid = 0U;
     s_cross_core_camera_capture_ready = (mt9v03x_init() == 0U) ? 1U : 0U;
     g_shared_vision_frame_ctrl->magic = SHARED_VISION_FRAME_CTRL_MAGIC;
     g_shared_vision_frame_ctrl->write_seq = 0U;

@@ -1,12 +1,21 @@
 #include "common/project_headfile.h"
-#include <math.h>
 
 #define CORE_LINK_USER_KEY_QUEUE_SIZE       (8U)
 #define CORE_LINK_USER_KEY_ACTIVE_THRESHOLD (0.5f)
 #define CORE_LINK_USER_SCREEN_SWITCH_THRESHOLD (0.5f)
-#define CORE_LINK_USER_BEACON_MAP_PERIOD_MS (50U)
+#define CORE_LINK_USER_BEACON_OBSERVATION_PERIOD_MS (50U)
 #define CORE_LINK_USER_BEACON_TIMEOUT_MS    (200U)
-#define CORE_LINK_USER_BEACON_ID_MATCH_THRESHOLD_CM (80.0f)
+#define CORE_LINK_USER_BEACON_TRACK_GATE_MIN_CM (30.0f)
+#define CORE_LINK_USER_BEACON_TRACK_MAX_MISS_FRAMES (5U)
+
+typedef struct
+{
+    float x_cm;
+    float y_cm;
+    uint8 track_id;
+    uint8 miss_count;
+    uint8 valid;
+} core_link_user_beacon_track_struct;
 
 static volatile uint8 s_core_link_user_key_queue[CORE_LINK_USER_KEY_QUEUE_SIZE] = {0};
 static volatile uint8 s_core_link_user_key_queue_head = 0;
@@ -19,9 +28,12 @@ static char s_core_link_user_text_receive[CORE_LINK_PAYLOAD_MAX_LEN + 1] = "none
 static uint16 s_core_link_user_beacon_tx_elapsed_ms = 0U;
 static uint16 s_core_link_user_beacon_uplink_age_ms = 60000U;
 static uint8 s_core_link_user_beacon_uplink_valid = 0U;
-static uint8 s_core_link_user_car_yaw_valid = 0U;
-static float s_core_link_user_car_yaw_deg = 0.0f;
 static core_link_beacon_map_uplink_packet_struct s_core_link_user_beacon_uplink = {0};
+static core_link_user_beacon_track_struct
+    s_core_link_user_beacon_tracks[CORE_LINK_BEACON_TRACK_MAX_COUNT] = {0};
+static uint16 s_core_link_user_beacon_sequence = 0U;
+static uint8 s_core_link_user_next_track_id = 1U;
+static uint8 s_core_link_user_tracker_reset_pending = 1U;
 
 static uint8 core_link_user_queue_next_index (uint8 index)
 {
@@ -50,6 +62,17 @@ static void core_link_user_write_i16_le(uint8 *data, int16 value)
     data[1] = (uint8)(((uint16)value >> 8) & 0xFFU);
 }
 
+static void core_link_user_write_u16_le(uint8 *data, uint16 value)
+{
+    if(NULL == data)
+    {
+        return;
+    }
+
+    data[0] = (uint8)(value & 0xFFU);
+    data[1] = (uint8)((value >> 8) & 0xFFU);
+}
+
 static float core_link_user_wrap_angle(float angle_deg)
 {
     while(angle_deg > 180.0f)
@@ -61,11 +84,6 @@ static float core_link_user_wrap_angle(float angle_deg)
         angle_deg += 360.0f;
     }
     return angle_deg;
-}
-
-static float core_link_user_angle_distance(float a_deg, float b_deg)
-{
-    return fabsf(core_link_user_wrap_angle(a_deg - b_deg));
 }
 
 static float core_link_user_distance_squared_cm(float x1_cm, float y1_cm, float x2_cm, float y2_cm)
@@ -108,118 +126,243 @@ static int16 core_link_user_deg_to_ddeg_i16(float deg)
     return (int16)((ddeg >= 0.0f) ? (ddeg + 0.5f) : (ddeg - 0.5f));
 }
 
-static uint8 core_link_user_get_uplink_car_yaw_deg(float *yaw_deg)
+static uint8 core_link_user_get_uplink_car_absolute_yaw_deg(float *yaw_deg)
 {
     if((NULL == yaw_deg)
        || !s_core_link_user_beacon_uplink_valid
-       || (0U == s_core_link_user_beacon_uplink.car_visible))
+       || (s_core_link_user_beacon_uplink_age_ms > CORE_LINK_USER_BEACON_TIMEOUT_MS))
     {
         return 0U;
     }
 
-    *yaw_deg = core_link_user_wrap_angle(((float)s_core_link_user_beacon_uplink.car_yaw_ddeg) * 0.1f);
+    /* 0x13 car_absolute_yaw_ddeg is the car's heading in the common yaw
+     * reference. It remains valid even when car_visible is zero; that flag
+     * only guards the UAV-relative position and beacon-map fields. */
+    *yaw_deg = core_link_user_wrap_angle(
+        ((float)s_core_link_user_beacon_uplink.car_absolute_yaw_ddeg) * 0.1f);
     return 1U;
 }
 
-static uint8 core_link_user_estimate_car_yaw_deg(float *yaw_deg)
+static uint8 core_link_user_track_id_in_use(uint8 track_id)
 {
-    float center_x = 0.0f;
-    float center_y = 0.0f;
-    float cov_xx = 0.0f;
-    float cov_xy = 0.0f;
-    float cov_yy = 0.0f;
-    float heading_deg;
-    float alt_heading_deg;
-    float reference_yaw_deg = 0.0f;
-    uint8 reference_yaw_valid = 0U;
     uint8 i;
 
-    if(NULL == yaw_deg || !g_vehicle_marker_pose.valid || (g_vehicle_marker_pose.detected_point_count < 3U))
+    for(i = 0U; i < CORE_LINK_BEACON_TRACK_MAX_COUNT; ++i)
     {
-        return 0U;
-    }
-
-    for(i = 0U; i < g_vehicle_marker_pose.detected_point_count; ++i)
-    {
-        center_x += g_vehicle_marker_pose.world_pts[i].x;
-        center_y += g_vehicle_marker_pose.world_pts[i].y;
-    }
-
-    center_x /= (float)g_vehicle_marker_pose.detected_point_count;
-    center_y /= (float)g_vehicle_marker_pose.detected_point_count;
-
-    for(i = 0U; i < g_vehicle_marker_pose.detected_point_count; ++i)
-    {
-        float dx = g_vehicle_marker_pose.world_pts[i].x - center_x;
-        float dy = g_vehicle_marker_pose.world_pts[i].y - center_y;
-
-        cov_xx += dx * dx;
-        cov_xy += dx * dy;
-        cov_yy += dy * dy;
-    }
-
-    heading_deg = atan2f(2.0f * cov_xy, cov_xx - cov_yy) * 0.5f * RAD2DEG;
-    heading_deg = core_link_user_wrap_angle(heading_deg);
-    alt_heading_deg = core_link_user_wrap_angle(heading_deg + 180.0f);
-
-    reference_yaw_valid = core_link_user_get_uplink_car_yaw_deg(&reference_yaw_deg);
-    if(!reference_yaw_valid && s_core_link_user_car_yaw_valid)
-    {
-        reference_yaw_deg = s_core_link_user_car_yaw_deg;
-        reference_yaw_valid = 1U;
-    }
-
-    if(reference_yaw_valid)
-    {
-        if(core_link_user_angle_distance(alt_heading_deg, reference_yaw_deg)
-           < core_link_user_angle_distance(heading_deg, reference_yaw_deg))
+        if(s_core_link_user_beacon_tracks[i].valid &&
+           (s_core_link_user_beacon_tracks[i].track_id == track_id))
         {
-            heading_deg = alt_heading_deg;
+            return 1U;
+        }
+    }
+    return 0U;
+}
+
+static uint8 core_link_user_allocate_track_id(void)
+{
+    uint16 attempts;
+
+    for(attempts = 0U; attempts < 255U; ++attempts)
+    {
+        uint8 track_id = s_core_link_user_next_track_id;
+
+        s_core_link_user_next_track_id++;
+        if(0U == s_core_link_user_next_track_id)
+        {
+            s_core_link_user_next_track_id = 1U;
+        }
+        if((0U != track_id) && !core_link_user_track_id_in_use(track_id))
+        {
+            return track_id;
+        }
+    }
+    return 0U;
+}
+
+static uint8 core_link_user_allocate_track_slot(
+    const uint8 track_used[CORE_LINK_BEACON_TRACK_MAX_COUNT])
+{
+    uint8 best = 0xFFU;
+    uint8 i;
+
+    for(i = 0U; i < CORE_LINK_BEACON_TRACK_MAX_COUNT; ++i)
+    {
+        if(track_used[i])
+        {
+            continue;
+        }
+        if(!s_core_link_user_beacon_tracks[i].valid)
+        {
+            return i;
+        }
+        if((0xFFU == best) ||
+           (s_core_link_user_beacon_tracks[i].miss_count >
+            s_core_link_user_beacon_tracks[best].miss_count))
+        {
+            best = i;
+        }
+    }
+    return best;
+}
+
+static void core_link_user_update_beacon_tracks(
+    const VisionRuntimeBeaconSlot_t slots[VISION_RUNTIME_BEACON_SLOT_COUNT],
+    uint8 slot_track_id[VISION_RUNTIME_BEACON_SLOT_COUNT])
+{
+    uint8 slot_used[VISION_RUNTIME_BEACON_SLOT_COUNT] = {0};
+    uint8 track_used[CORE_LINK_BEACON_TRACK_MAX_COUNT] = {0};
+    uint8 i;
+
+    memset(slot_track_id, 0, VISION_RUNTIME_BEACON_SLOT_COUNT);
+    for(;;)
+    {
+        uint8 best_slot = 0xFFU;
+        uint8 best_track = 0xFFU;
+        float best_distance_sq = 0.0f;
+        uint8 track;
+
+        for(i = 0U; i < VISION_RUNTIME_BEACON_SLOT_COUNT; ++i)
+        {
+            float gate_cm;
+
+            if(slot_used[i] || !slots[i].valid)
+            {
+                continue;
+            }
+            gate_cm = 3.0f * (float)slots[i].position_sigma_cm;
+            if(gate_cm < CORE_LINK_USER_BEACON_TRACK_GATE_MIN_CM)
+            {
+                gate_cm = CORE_LINK_USER_BEACON_TRACK_GATE_MIN_CM;
+            }
+            for(track = 0U; track < CORE_LINK_BEACON_TRACK_MAX_COUNT; ++track)
+            {
+                float distance_sq;
+
+                if(track_used[track] || !s_core_link_user_beacon_tracks[track].valid)
+                {
+                    continue;
+                }
+                distance_sq = core_link_user_distance_squared_cm(
+                    slots[i].x_cm, slots[i].y_cm,
+                    s_core_link_user_beacon_tracks[track].x_cm,
+                    s_core_link_user_beacon_tracks[track].y_cm);
+                if((distance_sq <= gate_cm * gate_cm) &&
+                   ((0xFFU == best_track) || (distance_sq < best_distance_sq)))
+                {
+                    best_slot = i;
+                    best_track = track;
+                    best_distance_sq = distance_sq;
+                }
+            }
+        }
+
+        if(0xFFU == best_track)
+        {
+            break;
+        }
+        slot_used[best_slot] = 1U;
+        track_used[best_track] = 1U;
+        slot_track_id[best_slot] = s_core_link_user_beacon_tracks[best_track].track_id;
+        s_core_link_user_beacon_tracks[best_track].x_cm = slots[best_slot].x_cm;
+        s_core_link_user_beacon_tracks[best_track].y_cm = slots[best_slot].y_cm;
+        s_core_link_user_beacon_tracks[best_track].miss_count = 0U;
+    }
+
+    for(i = 0U; i < CORE_LINK_BEACON_TRACK_MAX_COUNT; ++i)
+    {
+        if(s_core_link_user_beacon_tracks[i].valid && !track_used[i])
+        {
+            s_core_link_user_beacon_tracks[i].miss_count++;
+            if(s_core_link_user_beacon_tracks[i].miss_count >=
+               CORE_LINK_USER_BEACON_TRACK_MAX_MISS_FRAMES)
+            {
+                memset(&s_core_link_user_beacon_tracks[i], 0,
+                       sizeof(s_core_link_user_beacon_tracks[i]));
+            }
         }
     }
 
-    s_core_link_user_car_yaw_deg = heading_deg;
-    s_core_link_user_car_yaw_valid = 1U;
-    *yaw_deg = heading_deg;
-    return 1U;
+    for(i = 0U; i < VISION_RUNTIME_BEACON_SLOT_COUNT; ++i)
+    {
+        uint8 track;
+        uint8 track_id;
+
+        if(!slots[i].valid || slot_used[i])
+        {
+            continue;
+        }
+        track = core_link_user_allocate_track_slot(track_used);
+        if(0xFFU == track)
+        {
+            continue;
+        }
+        track_id = core_link_user_allocate_track_id();
+        if(0U == track_id)
+        {
+            continue;
+        }
+        memset(&s_core_link_user_beacon_tracks[track], 0,
+               sizeof(s_core_link_user_beacon_tracks[track]));
+        s_core_link_user_beacon_tracks[track].valid = 1U;
+        s_core_link_user_beacon_tracks[track].track_id = track_id;
+        s_core_link_user_beacon_tracks[track].x_cm = slots[i].x_cm;
+        s_core_link_user_beacon_tracks[track].y_cm = slots[i].y_cm;
+        track_used[track] = 1U;
+        slot_track_id[i] = track_id;
+    }
 }
 
-static void core_link_user_send_beacon_map_downlink(const core_link_beacon_map_packet_struct *packet)
+static void core_link_user_send_beacon_observations(
+    const core_link_beacon_observation_packet_struct *packet)
 {
-    uint8 payload[CORE_LINK_BEACON_MAP_PAYLOAD_LEN] = {0};
+    uint8 payload[CORE_LINK_BEACON_OBSERVATION_PAYLOAD_MAX_LEN] = {0};
+    uint8 payload_len;
     uint8 i;
 
-    if(NULL == packet)
+    if((NULL == packet) ||
+       (packet->count > CORE_LINK_BEACON_OBSERVATION_MAX_COUNT))
     {
         return;
     }
 
-    payload[0] = packet->car_visible;
-    core_link_user_write_i16_le(&payload[1], packet->car_x_mm);
-    core_link_user_write_i16_le(&payload[3], packet->car_y_mm);
-    core_link_user_write_i16_le(&payload[5], packet->car_yaw_ddeg);
-
-    for(i = 0U; i < CORE_LINK_BEACON_MAP_COUNT; ++i)
+    core_link_user_write_u16_le(&payload[0], packet->sequence);
+    payload[2] = packet->count;
+    payload[3] = packet->frame_flags;
+    payload[4] = packet->car_visible;
+    payload[5] = packet->reserved;
+    core_link_user_write_i16_le(&payload[6], packet->car_x_mm);
+    core_link_user_write_i16_le(&payload[8], packet->car_y_mm);
+    core_link_user_write_i16_le(&payload[10], packet->uav_yaw_ddeg);
+    core_link_user_write_i16_le(&payload[12], packet->car_yaw_rel_uav_ddeg);
+    for(i = 0U; i < packet->count; ++i)
     {
-        uint8 offset = (uint8)(7U + i * 6U);
+        uint8 offset = (uint8)(CORE_LINK_BEACON_OBSERVATION_HEADER_LEN +
+                               i * CORE_LINK_BEACON_OBSERVATION_WIRE_LEN);
 
-        payload[offset] = packet->beacon[i].id;
-        core_link_user_write_i16_le(&payload[offset + 1U], packet->beacon[i].x_mm);
-        core_link_user_write_i16_le(&payload[offset + 3U], packet->beacon[i].y_mm);
-        payload[offset + 5U] = packet->beacon[i].state;
+        payload[offset] = packet->observation[i].track_id;
+        core_link_user_write_i16_le(&payload[offset + 1U], packet->observation[i].x_mm);
+        core_link_user_write_i16_le(&payload[offset + 3U], packet->observation[i].y_mm);
+        payload[offset + 5U] = packet->observation[i].detection_confidence;
+        payload[offset + 6U] = packet->observation[i].position_sigma_cm;
+        payload[offset + 7U] = packet->observation[i].flags;
     }
 
-    core_link_send_frame(CORE_LINK_PROTOCOL_BEACON_MAP, payload, CORE_LINK_BEACON_MAP_PAYLOAD_LEN);
+    payload_len = (uint8)(CORE_LINK_BEACON_OBSERVATION_HEADER_LEN +
+                          packet->count * CORE_LINK_BEACON_OBSERVATION_WIRE_LEN);
+    core_link_send_frame(CORE_LINK_PROTOCOL_BEACON_OBSERVATIONS,
+                         payload, payload_len);
 }
 
-static void core_link_user_build_beacon_map_downlink(core_link_beacon_map_packet_struct *packet)
+static void core_link_user_build_beacon_observations(
+    core_link_beacon_observation_packet_struct *packet)
 {
-    VisionRuntimeDiag_t diag = {0};
     VisionRuntimeBeaconSlot_t slots[VISION_RUNTIME_BEACON_SLOT_COUNT] = {0};
-    uint8 uplink_slot_used[CORE_LINK_BEACON_MAP_COUNT] = {0};
-    float car_yaw_deg = 0.0f;
-    uint8 car_visible = 0U;
-    uint8 yaw_valid = 0U;
+    uint8 slot_track_id[VISION_RUNTIME_BEACON_SLOT_COUNT] = {0};
+    float car_absolute_yaw_deg = 0.0f;
+    float car_yaw_rel_uav_deg = 0.0f;
+    float uav_yaw_deg = 0.0f;
+    uint8 uav_yaw_valid;
+    uint8 car_visible;
     uint8 i;
 
     if(NULL == packet)
@@ -228,92 +371,85 @@ static void core_link_user_build_beacon_map_downlink(core_link_beacon_map_packet
     }
 
     memset(packet, 0, sizeof(*packet));
-    VisionRuntime_GetDiag(&diag);
+    packet->sequence = ++s_core_link_user_beacon_sequence;
     VisionRuntime_GetBeaconSlots(slots, VISION_RUNTIME_BEACON_SLOT_COUNT);
+    core_link_user_update_beacon_tracks(slots, slot_track_id);
 
-    car_visible = (uint8)((g_vehicle_marker_pose.valid && !g_vehicle_marker_position_lost_flag) ? 1U : 0U);
-    yaw_valid = core_link_user_estimate_car_yaw_deg(&car_yaw_deg);
-    if(car_visible && yaw_valid)
+    car_visible = (uint8)(g_vehicle_marker_pose.valid &&
+                          !g_vehicle_marker_position_lost_flag);
+    uav_yaw_valid = CrossCoreCamera_ControlCoreGetVisionYaw(&uav_yaw_deg);
+    if(uav_yaw_valid)
+    {
+        packet->frame_flags |= CORE_LINK_BEACON_FRAME_FLAG_UAV_YAW_VALID;
+        packet->uav_yaw_ddeg = core_link_user_deg_to_ddeg_i16(uav_yaw_deg);
+    }
+    if(car_visible)
     {
         packet->car_visible = 1U;
+        packet->frame_flags |= CORE_LINK_BEACON_FRAME_FLAG_CAR_POSITION_VALID;
         packet->car_x_mm = core_link_user_cm_to_mm_i16(g_vehicle_marker_pose.x);
-        /* UAV side has migrated to X-forward / Y-left semantics.
-         * The packet layout is unchanged; downstream consumers must not assume
-         * legacy "Y-right positive" without an explicit compatibility layer. */
         packet->car_y_mm = core_link_user_cm_to_mm_i16(g_vehicle_marker_pose.y);
-        packet->car_yaw_ddeg = core_link_user_deg_to_ddeg_i16(car_yaw_deg);
-    }
-
-    for(i = 0U; i < CORE_LINK_BEACON_MAP_COUNT; ++i)
-    {
-        if(slots[i].valid)
+        if(uav_yaw_valid &&
+           core_link_user_get_uplink_car_absolute_yaw_deg(&car_absolute_yaw_deg))
         {
-            uint8 best_uplink_slot = 0xFFU;
-            float best_distance_sq = CORE_LINK_USER_BEACON_ID_MATCH_THRESHOLD_CM
-                                   * CORE_LINK_USER_BEACON_ID_MATCH_THRESHOLD_CM;
-            uint8 j;
-
-            if(s_core_link_user_beacon_uplink_valid)
-            {
-                for(j = 0U; j < CORE_LINK_BEACON_MAP_COUNT; ++j)
-                {
-                    float uplink_x_cm;
-                    float uplink_y_cm;
-                    float distance_sq;
-
-                    if(uplink_slot_used[j]
-                       || (0U == s_core_link_user_beacon_uplink.beacon[j].state)
-                       || (0U == s_core_link_user_beacon_uplink.beacon[j].id)
-                       || (s_core_link_user_beacon_uplink.beacon[j].id > 5U))
-                    {
-                        continue;
-                    }
-
-                    uplink_x_cm = ((float)s_core_link_user_beacon_uplink.beacon[j].x_mm) * 0.1f;
-                    uplink_y_cm = ((float)s_core_link_user_beacon_uplink.beacon[j].y_mm) * 0.1f;
-                    distance_sq = core_link_user_distance_squared_cm(slots[i].x_cm,
-                                                                     slots[i].y_cm,
-                                                                     uplink_x_cm,
-                                                                     uplink_y_cm);
-                    if(distance_sq <= best_distance_sq)
-                    {
-                        best_distance_sq = distance_sq;
-                        best_uplink_slot = j;
-                    }
-                }
-            }
-
-            if(best_uplink_slot < CORE_LINK_BEACON_MAP_COUNT)
-            {
-                packet->beacon[i].id = s_core_link_user_beacon_uplink.beacon[best_uplink_slot].id;
-                uplink_slot_used[best_uplink_slot] = 1U;
-            }
-            else
-            {
-                packet->beacon[i].id = 0U;
-            }
-
-            packet->beacon[i].x_mm = core_link_user_cm_to_mm_i16(slots[i].x_cm);
-            packet->beacon[i].y_mm = core_link_user_cm_to_mm_i16(slots[i].y_cm);
-            packet->beacon[i].state = 1U;
+            /* Both angles use the same absolute yaw reference. Subtracting
+             * the exact yaw used by this vision frame gives the car heading
+             * in the UAV image/ground coordinate frame. */
+            car_yaw_rel_uav_deg = core_link_user_wrap_angle(
+                car_absolute_yaw_deg - uav_yaw_deg);
+            packet->frame_flags |= CORE_LINK_BEACON_FRAME_FLAG_CAR_YAW_VALID;
+            packet->car_yaw_rel_uav_ddeg =
+                core_link_user_deg_to_ddeg_i16(car_yaw_rel_uav_deg);
         }
     }
+    if(s_core_link_user_tracker_reset_pending)
+    {
+        packet->frame_flags |= CORE_LINK_BEACON_FRAME_FLAG_TRACKER_RESET;
+        s_core_link_user_tracker_reset_pending = 0U;
+    }
 
-    (void)diag;
+    for(i = 0U; (i < VISION_RUNTIME_BEACON_SLOT_COUNT) &&
+                (packet->count < CORE_LINK_BEACON_OBSERVATION_MAX_COUNT); ++i)
+    {
+        BeaconObservation *observation;
+        uint8 sigma_cm;
+
+        if(!slots[i].valid || (0U == slot_track_id[i]))
+        {
+            continue;
+        }
+        observation = &packet->observation[packet->count];
+        sigma_cm = slots[i].position_sigma_cm;
+        if(sigma_cm < CORE_LINK_BEACON_POSITION_SIGMA_MIN_CM)
+        {
+            sigma_cm = CORE_LINK_BEACON_POSITION_SIGMA_MIN_CM;
+        }
+        else if(sigma_cm > CORE_LINK_BEACON_POSITION_SIGMA_MAX_CM)
+        {
+            sigma_cm = CORE_LINK_BEACON_POSITION_SIGMA_MAX_CM;
+        }
+        observation->track_id = slot_track_id[i];
+        observation->x_mm = core_link_user_cm_to_mm_i16(slots[i].x_cm);
+        observation->y_mm = core_link_user_cm_to_mm_i16(slots[i].y_cm);
+        observation->detection_confidence = slots[i].detection_confidence;
+        observation->position_sigma_cm = sigma_cm;
+        observation->flags = CORE_LINK_BEACON_OBSERVATION_FLAG_LIT;
+        packet->count++;
+    }
 }
 
-static void core_link_user_send_beacon_map_downlink_if_due(void)
+static void core_link_user_send_beacon_observations_if_due(void)
 {
-    core_link_beacon_map_packet_struct packet;
+    core_link_beacon_observation_packet_struct packet;
 
-    if(s_core_link_user_beacon_tx_elapsed_ms < CORE_LINK_USER_BEACON_MAP_PERIOD_MS)
+    if(s_core_link_user_beacon_tx_elapsed_ms < CORE_LINK_USER_BEACON_OBSERVATION_PERIOD_MS)
     {
         return;
     }
 
-    s_core_link_user_beacon_tx_elapsed_ms -= CORE_LINK_USER_BEACON_MAP_PERIOD_MS;
-    core_link_user_build_beacon_map_downlink(&packet);
-    core_link_user_send_beacon_map_downlink(&packet);
+    s_core_link_user_beacon_tx_elapsed_ms -= CORE_LINK_USER_BEACON_OBSERVATION_PERIOD_MS;
+    core_link_user_build_beacon_observations(&packet);
+    core_link_user_send_beacon_observations(&packet);
 }
 
 static void core_link_user_push_key_event (uint8 key)
@@ -365,7 +501,11 @@ void core_link_user_init (void)
     s_core_link_user_beacon_tx_elapsed_ms = 0U;
     s_core_link_user_beacon_uplink_age_ms = 60000U;
     s_core_link_user_beacon_uplink_valid = 0U;
-    s_core_link_user_car_yaw_valid = 0U;
+    s_core_link_user_beacon_sequence = 0U;
+    s_core_link_user_next_track_id = 1U;
+    s_core_link_user_tracker_reset_pending = 1U;
+    memset(s_core_link_user_beacon_tracks, 0,
+           sizeof(s_core_link_user_beacon_tracks));
     memset((void *)&s_core_link_user_beacon_uplink, 0, sizeof(s_core_link_user_beacon_uplink));
     memset(s_core_link_user_text_receive, 0, sizeof(s_core_link_user_text_receive));
 }
@@ -432,7 +572,7 @@ void core_link_user_get_beacon_diag(CoreLinkBeaconDiag_t *diag)
 
 void core_link_user_service_beacon_link(void)
 {
-    core_link_user_send_beacon_map_downlink_if_due();
+    core_link_user_send_beacon_observations_if_due();
 }
 
 uint8 core_link_user_is_screen_mirror_enabled (void)
@@ -615,7 +755,8 @@ void core_link_on_frame_received (uint8 protocol_id, const uint8 *payload, uint8
         s_core_link_user_beacon_uplink.car_visible = payload[0];
         s_core_link_user_beacon_uplink.car_x_mm = core_link_user_read_i16_le(&payload[1]);
         s_core_link_user_beacon_uplink.car_y_mm = core_link_user_read_i16_le(&payload[3]);
-        s_core_link_user_beacon_uplink.car_yaw_ddeg = core_link_user_read_i16_le(&payload[5]);
+        s_core_link_user_beacon_uplink.car_absolute_yaw_ddeg =
+            core_link_user_read_i16_le(&payload[5]);
 
         for(i = 0U; i < CORE_LINK_BEACON_MAP_COUNT; ++i)
         {

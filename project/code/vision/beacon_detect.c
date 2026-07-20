@@ -62,6 +62,8 @@ static float BeaconDetect_GetBoxSizeMinimum(const VisionBlob_t *blob)
 static void BeaconDetect_UpdateConfidence(VisionBlob_t *blob)
 {
     float score;
+    float position_quality;
+    float sigma_cm;
     float area_score;
     float box_size = 0.0f;
     float stability = 0.0f;
@@ -110,6 +112,25 @@ static void BeaconDetect_UpdateConfidence(VisionBlob_t *blob)
     score = 64.0f / 255.0f + score * (191.0f / 255.0f);
     score = BeaconDetect_Clamp01(score);
     blob->detection_confidence = (uint8)(score * 255.0f + 0.5f);
+
+    position_quality = 0.35f * box_size +
+                       0.25f * stability +
+                       0.20f * blob->confidence_area +
+                       0.20f * edge;
+    position_quality = BeaconDetect_Clamp01(position_quality);
+    sigma_cm = (float)BEACON_POSITION_SIGMA_MIN_CM +
+               (1.0f - position_quality) * (1.0f - position_quality) *
+               (float)(BEACON_POSITION_SIGMA_MAX_CM -
+                       BEACON_POSITION_SIGMA_MIN_CM);
+    if(sigma_cm < (float)BEACON_POSITION_SIGMA_MIN_CM)
+    {
+        sigma_cm = (float)BEACON_POSITION_SIGMA_MIN_CM;
+    }
+    else if(sigma_cm > (float)BEACON_POSITION_SIGMA_MAX_CM)
+    {
+        sigma_cm = (float)BEACON_POSITION_SIGMA_MAX_CM;
+    }
+    blob->position_sigma_cm = (uint8)(sigma_cm + 0.5f);
 }
 
 static void BeaconDetect_FillResultFromBlob(const VisionBlob_t *blob, BeaconResult_t *result)
@@ -148,6 +169,7 @@ static void BeaconDetect_FillResultFromBlob(const VisionBlob_t *blob, BeaconResu
     result->physical_valid = blob->physical_valid;
     result->raw_box_area_pixels = blob->raw_box_area_pixels;
     result->detection_confidence = blob->detection_confidence;
+    result->position_sigma_cm = blob->position_sigma_cm;
     result->confidence_box_size = blob->confidence_box_size;
     result->confidence_box_size_min = blob->confidence_box_size_min;
     result->confidence_stability = blob->confidence_stability;

@@ -35,6 +35,8 @@
 #define BEACON_CONFIDENCE_EDGE_WEIGHT      (0.10f)
 #define BEACON_BOX_SIZE_MIN_EDGE           (0.05f)
 #define BEACON_BOX_SIZE_MIN_CENTER         (0.50f)
+#define BEACON_POSITION_SIGMA_MIN_CM        (5U)
+#define BEACON_POSITION_SIGMA_MAX_CM        (15U)
 
 /* ====================== 数据结构 ====================== */
 
@@ -67,6 +69,7 @@ typedef struct {
     float distance_cm;                     /* 相对正下方原点的距离(cm) */
     float angle_deg;                       /* 方位角(度), 正前方为0 */
     uint8 detection_confidence;            /* 0..255 */
+    uint8 position_sigma_cm;               /* Equivalent single-axis 1 sigma, cm */
     float confidence_box_size;
     float confidence_box_size_min;
     float confidence_stability;

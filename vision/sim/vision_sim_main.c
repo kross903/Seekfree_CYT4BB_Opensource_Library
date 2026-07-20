@@ -322,7 +322,8 @@ static int write_result(const char *path, const char *binary_path,
                 "\"raw_min_row\":%d,\"raw_max_row\":%d,\"raw_min_col\":%d,\"raw_max_col\":%d,"
                 "\"area_cm2\":%.6f,\"perimeter_cm\":%.6f,\"circularity\":%.6f,"
                 "\"physical_pixel_count\":%u,\"physical_valid\":%u,"
-                "\"raw_box_area_pixels\":%d,\"detection_confidence\":%u,\"confidence_box_size\":%.6f,"
+                "\"raw_box_area_pixels\":%d,\"detection_confidence\":%u,\"position_sigma_cm\":%u,"
+                "\"confidence_box_size\":%.6f,"
                 "\"confidence_box_size_min\":%.6f,"
                 "\"confidence_stability\":%.6f,\"confidence_area\":%.6f,"
                 "\"confidence_edge\":%.6f}%s\n",
@@ -336,6 +337,7 @@ static int write_result(const char *path, const char *binary_path,
                 (unsigned)slots[i].physical_valid,
                 slots[i].raw_box_area_pixels,
                 (unsigned)slots[i].detection_confidence,
+                (unsigned)slots[i].position_sigma_cm,
                 slots[i].confidence_box_size,
                 slots[i].confidence_box_size_min,
                 slots[i].confidence_stability,
@@ -356,7 +358,8 @@ static int write_result(const char *path, const char *binary_path,
                 "\"fine_min_row\":%d,\"fine_max_row\":%d,"
                 "\"fine_min_col\":%d,\"fine_max_col\":%d,"
                 "\"vehicle_valid\":%u,\"vehicle_skipped_small_box\":%u,\"beacon_valid\":%u,"
-                "\"raw_box_area_pixels\":%d,\"detection_confidence\":%u,\"x_cm\":%.6f,\"y_cm\":%.6f,"
+                "\"raw_box_area_pixels\":%d,\"detection_confidence\":%u,\"position_sigma_cm\":%u,"
+                "\"x_cm\":%.6f,\"y_cm\":%.6f,"
                 "\"area_cm2\":%.6f,\"circularity\":%.6f,"
                 "\"confidence_box_size\":%.6f,\"confidence_box_size_min\":%.6f,"
                 "\"confidence_stability\":%.6f,"
@@ -371,6 +374,7 @@ static int write_result(const char *path, const char *binary_path,
                 (unsigned)candidates[i].beacon_valid,
                 candidates[i].raw_box_area_pixels,
                 (unsigned)candidates[i].detection_confidence,
+                (unsigned)candidates[i].position_sigma_cm,
                 candidates[i].beacon_x_cm,
                 candidates[i].beacon_y_cm,
                 candidates[i].beacon_area_cm2,

@@ -24,6 +24,7 @@ typedef enum
     CORE_LINK_PROTOCOL_SCREEN_CMD   = 0x11,                                     // IPS200 mirror command stream
     CORE_LINK_PROTOCOL_BEACON_MAP   = 0x12,                                     // Fixed-length beacon map packet
     CORE_LINK_PROTOCOL_BEACON_MAP_UPLINK = 0x13,                                // Fixed-length car uplink beacon map packet
+    CORE_LINK_PROTOCOL_BEACON_OBSERVATIONS = 0x14,                              // Variable-count beacon observations
 }core_link_protocol_enum;
 
 typedef enum
@@ -89,11 +90,67 @@ typedef struct
     uint8 car_visible;
     int16 car_x_mm;
     int16 car_y_mm;
-    int16 car_yaw_ddeg;
+    /* 0x12 legacy downlink: car heading in the UAV coordinate frame. */
+    int16 car_yaw_rel_uav_ddeg;
     core_link_beacon_entry_struct beacon[CORE_LINK_BEACON_MAP_COUNT];
 } core_link_beacon_map_packet_struct;
 
-typedef core_link_beacon_map_packet_struct core_link_beacon_map_uplink_packet_struct;
+typedef struct
+{
+    uint8 car_visible;
+    int16 car_x_mm;
+    int16 car_y_mm;
+    /* 0x13 uplink: absolute car heading in the yaw reference shared with UAV. */
+    int16 car_absolute_yaw_ddeg;
+    core_link_beacon_entry_struct beacon[CORE_LINK_BEACON_MAP_COUNT];
+} core_link_beacon_map_uplink_packet_struct;
+
+#define CORE_LINK_BEACON_OBSERVATION_MAX_COUNT     (6U)
+#define CORE_LINK_BEACON_OBSERVATION_HEADER_LEN    (14U)
+#define CORE_LINK_BEACON_OBSERVATION_WIRE_LEN      (8U)
+#define CORE_LINK_BEACON_TRACK_MAX_COUNT           (12U)
+#define CORE_LINK_BEACON_OBSERVATION_FLAG_LIT      (0x01U)
+#define CORE_LINK_BEACON_POSITION_SIGMA_MIN_CM     (5U)
+#define CORE_LINK_BEACON_POSITION_SIGMA_MAX_CM     (15U)
+#define CORE_LINK_BEACON_FRAME_FLAG_CAR_POSITION_VALID (0x01U)
+#define CORE_LINK_BEACON_FRAME_FLAG_CAR_YAW_VALID      (0x02U)
+#define CORE_LINK_BEACON_FRAME_FLAG_UAV_YAW_VALID      (0x04U)
+#define CORE_LINK_BEACON_FRAME_FLAG_TRACKER_RESET      (0x08U)
+#define CORE_LINK_BEACON_OBSERVATION_PAYLOAD_MAX_LEN \
+    (CORE_LINK_BEACON_OBSERVATION_HEADER_LEN + \
+     CORE_LINK_BEACON_OBSERVATION_MAX_COUNT * CORE_LINK_BEACON_OBSERVATION_WIRE_LEN)
+
+#if CORE_LINK_BEACON_OBSERVATION_PAYLOAD_MAX_LEN > CORE_LINK_PAYLOAD_MAX_LEN
+#error "Beacon observation payload exceeds core link payload limit"
+#endif
+
+/* 0x14 little-endian header: sequence, count, flags, car visibility,
+ * car position in UAV X-forward/Y-left, UAV attitude yaw, then car yaw
+ * relative to the UAV frame. Track IDs are session-local only. */
+
+typedef struct
+{
+    uint8 track_id;
+    int16 x_mm;
+    int16 y_mm;
+    uint8 detection_confidence;
+    uint8 position_sigma_cm;
+    uint8 flags;
+} BeaconObservation;
+
+typedef struct
+{
+    uint16 sequence;
+    uint8 count;
+    uint8 frame_flags;
+    uint8 car_visible;
+    uint8 reserved;
+    int16 car_x_mm;
+    int16 car_y_mm;
+    int16 uav_yaw_ddeg;
+    int16 car_yaw_rel_uav_ddeg;
+    BeaconObservation observation[CORE_LINK_BEACON_OBSERVATION_MAX_COUNT];
+} core_link_beacon_observation_packet_struct;
 
 void core_link_init             (void);                                         // Init UART4, FIFO, and parser
 void core_link_task             (void);                                         // Run receive, unpack, and dispatch in main loop

@@ -378,7 +378,7 @@ void core_link_send_beacon_map_uplink(const core_link_beacon_map_uplink_packet_s
     payload[0] = packet->car_visible;
     core_link_write_i16_le(&payload[1], packet->car_x_mm);
     core_link_write_i16_le(&payload[3], packet->car_y_mm);
-    core_link_write_i16_le(&payload[5], packet->car_yaw_ddeg);
+    core_link_write_i16_le(&payload[5], packet->car_absolute_yaw_ddeg);
 
     for(i = 0U; i < CORE_LINK_BEACON_MAP_COUNT; ++i)
     {

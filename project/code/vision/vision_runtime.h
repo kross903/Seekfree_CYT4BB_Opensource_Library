@@ -15,7 +15,7 @@
 #define VISION_BINARY_ZONE_MIDDLE      (1U)
 #define VISION_BINARY_ZONE_OUTER       (2U)
 #define VISION_BINARY_ZONE_COUNT       (3U)
-#define VISION_RUNTIME_BEACON_SLOT_COUNT (5U)
+#define VISION_RUNTIME_BEACON_SLOT_COUNT (6U)
 #define VISION_RUNTIME_BLOB_AREA_COUNT (16U)
 #define VISION_RUNTIME_BEACON_SPLIT_AREA_THRESHOLD (4)
 #define VISION_RUNTIME_CONTOUR_MAX_POINTS (640U)
@@ -80,6 +80,7 @@ typedef struct
     float confidence_area;
     float confidence_edge;
     uint8 detection_confidence;
+    uint8 position_sigma_cm;
     float world_x;
     float world_y;
     uint8 world_valid;
@@ -149,6 +150,7 @@ typedef struct
     uint8 physical_valid;
     int raw_box_area_pixels;
     uint8 detection_confidence;
+    uint8 position_sigma_cm;
     float confidence_box_size;
     float confidence_box_size_min;
     float confidence_stability;
@@ -172,6 +174,7 @@ typedef struct
     uint8 vehicle_skipped_small_box;
     uint8 beacon_valid;
     uint8 detection_confidence;
+    uint8 position_sigma_cm;
     float beacon_x_cm;
     float beacon_y_cm;
     float beacon_area_cm2;
