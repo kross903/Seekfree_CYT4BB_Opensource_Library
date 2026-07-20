@@ -33,6 +33,7 @@ FINE_WIDTH = 376
 FINE_HEIGHT = 240
 FINE_STRIDE = (FINE_WIDTH + 7) // 8
 COARSE_THRESHOLD = 40
+COARSE_MIN_AREA = 10
 
 
 class Simulator:
@@ -817,6 +818,8 @@ class VisionToolApp:
                                 continue
                             visited[neighbor] = 1
                             queue.append((nx, ny))
+                if area < COARSE_MIN_AREA:
+                    continue
                 candidates.append({
                     "valid": 1,
                     "raw_min_col": min_x,

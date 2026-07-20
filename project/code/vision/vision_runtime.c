@@ -572,7 +572,7 @@ static float VisionRuntime_NormalizedAspect(int width, int height)
 }
 
 #define VISION_RUNTIME_MAX_CANDIDATES (16U)
-#define VISION_RUNTIME_CANDIDATE_MIN_AREA (1)
+#define VISION_RUNTIME_CANDIDATE_MIN_AREA (10)
 #define VISION_RUNTIME_CANDIDATE_MARGIN (2)
 
 typedef struct
