@@ -1,0 +1,17 @@
+{
+  "image_type": 2,
+  "width": 188,
+  "height": 120,
+  "payload_size": 22560,
+  "boundary_num": 0,
+  "telemetry": {
+    "version": 1,
+    "image_seq": 9,
+    "input_seq": 39866,
+    "roll_deg": -2.4370453357696533,
+    "pitch_deg": -4.880625247955322,
+    "yaw_deg": 27.857702255249023,
+    "tof_height_cm": 92.23954772949219,
+    "fused_height_cm": 92.23954772949219
+  }
+}

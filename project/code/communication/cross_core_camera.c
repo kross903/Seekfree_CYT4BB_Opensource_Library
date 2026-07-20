@@ -428,6 +428,15 @@ static void CrossCoreCamera_CameraCoreDrawVisionScreen(const VisionRuntimeDiag_t
         }
     }
 
+    ips200_draw_line(0U, image_y, (uint16)(image_w - 1U), image_y, RGB565_YELLOW);
+    ips200_draw_line(0U, (uint16)(image_y + image_h - 1U),
+                     (uint16)(image_w - 1U), (uint16)(image_y + image_h - 1U),
+                     RGB565_YELLOW);
+    ips200_draw_line(0U, image_y, 0U, (uint16)(image_y + image_h - 1U), RGB565_YELLOW);
+    ips200_draw_line((uint16)(image_w - 1U), image_y,
+                     (uint16)(image_w - 1U), (uint16)(image_y + image_h - 1U),
+                     RGB565_YELLOW);
+
     has_vehicle = (uint8)((g_vehicle_marker_pose.valid && !g_vehicle_marker_position_lost_flag) ? 1U : 0U);
     if(diag != NULL && diag->beacon_count >= 0)
     {
