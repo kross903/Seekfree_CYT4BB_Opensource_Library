@@ -8,22 +8,10 @@
 extern "C" {
 #endif
 
-// ==================== 模式切换 ====================
-#define VEHICLE_MARKER_MODE_FOUR_POINT  (0)// 四点定位模式
-#define VEHICLE_MARKER_MODE_CHEVRON     (1)// V型标志定位模式
-
-#ifndef VEHICLE_MARKER_MODE
-#define VEHICLE_MARKER_MODE VEHICLE_MARKER_MODE_CHEVRON
-#endif
-
 // ==================== 配置参数 ====================
+/* Pose storage keeps four slots for the existing cross-core data layout;
+ * chevron recognition uses apex, left tip and right tip. */
 #define VEHICLE_MARKER_POINT_COUNT             (4)
-#define VEHICLE_MARKER_MIN_DETECT_POINTS       (3)
-#define VEHICLE_MARKER_SQUARE_SIDE_M           (0.10f)
-#define VEHICLE_MARKER_THRESHOLD               (150)
-#define VEHICLE_MARKER_MAX_CANDIDATES          (20)
-#define VEHICLE_MARKER_MIN_POINT_DIST_PX       (4.0f)
-#define VEHICLE_MARKER_CENTROID_RADIUS         (3)
 #define VEHICLE_MARKER_POSITION_LOST_HOLD_MS   (500U)
 #define VEHICLE_MARKER_TASK_PERIOD_MS          (5U)
 
@@ -116,19 +104,11 @@ void VehicleMarkerLocalization_GetBlobRejectDebug(int *area_low_count,
                                                   int *insert_count);
 void VehicleMarkerLocalization_BeginBlobFrame(void);
 uint8 VehicleMarkerLocalization_AppendBlob(const VisionBlob_t *blob, const VisionContour_t *contour);
+/* Appends the blob and performs the full chevron geometry check without
+ * committing a pose. A true result is safe for candidate short-circuiting. */
+uint8 VehicleMarkerLocalization_AppendAndValidateBlob(
+    const VisionBlob_t *blob, const VisionContour_t *contour);
 uint8 VehicleMarkerLocalization_EndBlobFrame(VehicleMarkerPose_t *out_pose);
-
-uint8 VehicleMarkerLocalization_Process(const uint8 image[MT9V03X_H][MT9V03X_W],
-                                        VehicleMarkerPose_t *out_pose);
-uint8 VehicleMarkerLocalization_ProcessBinary(const uint8 *binary_image,
-                                              VehicleMarkerPose_t *out_pose);
-
-uint8 VehicleMarkerLocalization_FindPoints(const uint8 image[MT9V03X_H][MT9V03X_W],
-                                           VehicleMarkerPoint2D_t out_pts[VEHICLE_MARKER_POINT_COUNT]);
-uint8 VehicleMarkerLocalization_FindPointsBinary(const uint8 *binary_image,
-                                                 VehicleMarkerPoint2D_t out_pts[VEHICLE_MARKER_POINT_COUNT]);
-
-const uint8 *VehicleMarkerLocalization_GetBinaryImage(void);
 
 extern VehicleMarkerPose_t g_vehicle_marker_pose;
 extern volatile uint8 g_vehicle_marker_position_lost_flag;

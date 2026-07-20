@@ -3,12 +3,14 @@
 #include <math.h>
 
 BeaconConfig_t g_beacon_config = {
-    .binary_threshold = 170,
-    .area_threshold   = 15,
-    .min_aspect       = 0.3f,
-    .max_aspect       = 6.0f,
-    .min_occupancy    = 0.65f,
-    .min_circularity  = 0.72f
+    .binary_threshold = 10,
+    .area_threshold   = 1,
+    .min_aspect       = 0.25f,
+    .max_aspect       = 1.5f,
+    .min_occupancy    = 0.30f,
+    .min_circularity  = 0.47f,
+    .min_physical_area_cm2 = 10.0f,
+    .max_physical_area_cm2 = 300.0f
 };
 
 static BeaconResult_t *s_beacon_frame_results = NULL;
@@ -77,15 +79,26 @@ uint8 BeaconDetect_AppendBlob(const VisionBlob_t *blob)
         return 0U;
     }
 
+    if(blob->area < g_beacon_config.area_threshold)
+    {
+        return 0U;
+    }
+
     aspect_ratio = blob->aspect_ratio;
     occupancy_ratio = blob->occupancy_ratio;
     circularity = blob->circularity;
-    if(blob->physical_valid)
+    if(!blob->physical_valid)
     {
-        aspect_ratio = blob->physical_aspect_ratio;
-        occupancy_ratio = blob->physical_occupancy_ratio;
-        circularity = blob->physical_circularity;
+        return 0U;
     }
+    if(blob->physical_area_cm2 < g_beacon_config.min_physical_area_cm2 ||
+       blob->physical_area_cm2 > g_beacon_config.max_physical_area_cm2)
+    {
+        return 0U;
+    }
+    aspect_ratio = blob->physical_aspect_ratio;
+    occupancy_ratio = blob->physical_occupancy_ratio;
+    circularity = blob->physical_circularity;
 
     if(aspect_ratio < g_beacon_config.min_aspect ||
        aspect_ratio > g_beacon_config.max_aspect)

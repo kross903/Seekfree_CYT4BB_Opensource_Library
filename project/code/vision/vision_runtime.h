@@ -3,17 +3,21 @@
 
 #include "zf_common_headfile.h"
 
-#define VISION_BINARY_THRESHOLD_INNER  (160U)
-#define VISION_BINARY_THRESHOLD_MIDDLE (150U)
-#define VISION_BINARY_THRESHOLD_OUTER  (170U)
-#define VISION_BINARY_THRESHOLD        VISION_BINARY_THRESHOLD_MIDDLE
+#define VISION_BINARY_THRESHOLD_VEHICLE (110U)
+#define VISION_BINARY_THRESHOLD_BEACON  (10U)
+/* Legacy names keep the shared-memory interface source compatible. */
+#define VISION_BINARY_THRESHOLD_INNER  VISION_BINARY_THRESHOLD_VEHICLE
+#define VISION_BINARY_THRESHOLD_MIDDLE VISION_BINARY_THRESHOLD_BEACON
+#define VISION_BINARY_THRESHOLD_OUTER  VISION_BINARY_THRESHOLD_BEACON
+#define VISION_BINARY_THRESHOLD        VISION_BINARY_THRESHOLD_BEACON
+#define VISION_RUNTIME_COARSE_THRESHOLD (40U)
 #define VISION_BINARY_ZONE_INNER       (0U)
 #define VISION_BINARY_ZONE_MIDDLE      (1U)
 #define VISION_BINARY_ZONE_OUTER       (2U)
 #define VISION_BINARY_ZONE_COUNT       (3U)
 #define VISION_RUNTIME_BEACON_SLOT_COUNT (5U)
 #define VISION_RUNTIME_BLOB_AREA_COUNT (16U)
-#define VISION_RUNTIME_BEACON_SPLIT_AREA_THRESHOLD (17)
+#define VISION_RUNTIME_BEACON_SPLIT_AREA_THRESHOLD (4)
 #define VISION_RUNTIME_CONTOUR_MAX_POINTS (640U)
 #define VISION_RUNTIME_LOCAL_BIRDVIEW_SCALE_CM_PER_PIXEL (0.5f)
 #define VISION_RUNTIME_LOCAL_BIRDVIEW_MAX_WIDTH (128U)
@@ -122,15 +126,33 @@ typedef struct
     uint8 physical_valid;
 } VisionRuntimeBeaconSlot_t;
 
+typedef struct
+{
+    int raw_min_row;
+    int raw_max_row;
+    int raw_min_col;
+    int raw_max_col;
+    int fine_min_row;
+    int fine_max_row;
+    int fine_min_col;
+    int fine_max_col;
+    int area;
+} VisionRuntimeCandidateBox_t;
+
 void VisionRuntime_ProcessFrame(float height_cm);
 void VisionRuntime_ProcessFrameWithPose(float roll_deg, float pitch_deg, float height_cm);
 void VisionRuntime_SetBinaryThreshold(uint8 threshold);
 void VisionRuntime_SetBinaryThresholds(uint8 inner, uint8 middle, uint8 outer);
 void VisionRuntime_GetBinaryThresholds(uint8 thresholds[VISION_BINARY_ZONE_COUNT]);
+void VisionRuntime_SetRecognitionThresholds(uint8 vehicle, uint8 beacon);
+void VisionRuntime_GetRecognitionThresholds(uint8 *vehicle, uint8 *beacon);
+void VisionRuntime_SetCoarseThreshold(uint8 threshold);
+uint8 VisionRuntime_GetCoarseThreshold(void);
 void VisionRuntime_GetDiag(VisionRuntimeDiag_t *diag);
 void VisionRuntime_SetDiag(const VisionRuntimeDiag_t *diag);
 void VisionRuntime_GetBeaconSlots(VisionRuntimeBeaconSlot_t *slots, uint8 max_slots);
 void VisionRuntime_SetBeaconSlots(const VisionRuntimeBeaconSlot_t *slots, uint8 max_slots);
+uint8 VisionRuntime_GetCandidateBoxes(VisionRuntimeCandidateBox_t *boxes, uint8 max_boxes);
 /* Returns the row-aligned MSB-first 1-bit 376x240 binary bitmap. */
 const uint8 *VisionRuntime_GetBinaryImage(void);
 const uint8 *VisionRuntime_GetBinaryDisplayImage(void);

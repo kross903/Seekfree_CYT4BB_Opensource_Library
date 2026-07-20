@@ -466,11 +466,7 @@ static void CrossCoreCamera_CameraCoreDrawVisionScreen(const VisionRuntimeDiag_t
     ips200_show_string(0U, 152U, "B:");
     ips200_show_int(16U, 152U, beacon_count, 1U);
     ips200_show_string(56U, 152U, "MODE:");
-#if VEHICLE_MARKER_MODE == VEHICLE_MARKER_MODE_CHEVRON
     ips200_show_string(104U, 152U, "CHEV");
-#else
-    ips200_show_string(104U, 152U, "4PT ");
-#endif
 
     ips200_show_string(0U, 176U, "CAR:");
     ips200_show_string(32U, 176U, has_vehicle ? "YES" : "NO ");

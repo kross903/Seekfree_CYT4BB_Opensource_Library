@@ -32,6 +32,7 @@ HEIGHT = 120
 FINE_WIDTH = 376
 FINE_HEIGHT = 240
 FINE_STRIDE = (FINE_WIDTH + 7) // 8
+COARSE_THRESHOLD = 40
 
 
 class Simulator:
@@ -162,9 +163,9 @@ class Simulator:
         height: float,
         undistort: bool = False,
         birdview: bool = False,
-        threshold_inner: int = 160,
-        threshold_middle: int = 150,
-        threshold_outer: int = 170,
+        vehicle_threshold: int = 110,
+        beacon_threshold: int = 10,
+        coarse_threshold: int = COARSE_THRESHOLD,
         binary_mode: str = "gray",
     ) -> tuple[bool, str, Path | None, Path | None, Path | None, Path | None, Path | None, Path | None, Path | None]:
         self.pipeline_mode = 1 if binary_mode == "post_transform" else 0
@@ -198,10 +199,10 @@ class Simulator:
             "--roll", str(roll),
             "--pitch", str(pitch),
             "--height", str(height),
-            "--threshold", str(threshold_middle),
-            "--threshold-inner", str(threshold_inner),
-            "--threshold-middle", str(threshold_middle),
-            "--threshold-outer", str(threshold_outer),
+            "--threshold", str(beacon_threshold),
+            "--vehicle-threshold", str(vehicle_threshold),
+            "--beacon-threshold", str(beacon_threshold),
+            "--coarse-threshold", str(coarse_threshold),
             "--binary-mode", binary_mode,
         ]
         if undistort:
@@ -245,9 +246,9 @@ class VisionToolApp:
         self.pitch_var = tk.StringVar(value="0")
         self.yaw_var = tk.StringVar(value="0")
         self.height_var = tk.StringVar(value="100")
-        self.threshold_inner_var = tk.StringVar(value="160")
-        self.threshold_var = tk.StringVar(value="150")
-        self.threshold_outer_var = tk.StringVar(value="170")
+        self.vehicle_threshold_var = tk.StringVar(value="110")
+        self.beacon_threshold_var = tk.StringVar(value="10")
+        self.coarse_threshold_var = tk.StringVar(value=str(COARSE_THRESHOLD))
         self.undistort_var = tk.BooleanVar(value=False)
         self.birdview_var = tk.BooleanVar(value=False)
         self.binary_mode_var = tk.StringVar(value="undistort_binary_ipm")
@@ -267,7 +268,12 @@ class VisionToolApp:
         self.processed_label: ttk.Label | None = None
         self.processed_photo: ImageTk.PhotoImage | None = None
         self.candidate_window: tk.Toplevel | None = None
+        self.candidate_notebook: ttk.Notebook | None = None
+        self.candidate_resize_job: str | None = None
         self.candidate_photos: list[ImageTk.PhotoImage] = []
+        self.current_candidate_source: Image.Image | None = None
+        self.current_candidate_binary: Image.Image | None = None
+        self.current_candidate_birdview: Image.Image | None = None
         self.current_frame: Path | None = None
         self.current_result: dict | None = None
         self.ui_queue: queue.Queue[tuple[str, object]] = queue.Queue()
@@ -395,6 +401,10 @@ class VisionToolApp:
             row=1, column=1, sticky="ew", padx=(4, 0)
         )
 
+        ttk.Button(action_bar, text="打开连通域候选区", command=self.open_current_candidate_window).grid(
+            row=2, column=0, columnspan=2, sticky="ew", pady=(6, 0)
+        )
+
         capture_tab.columnconfigure(0, weight=1)
         capture_tab.rowconfigure(2, weight=1)
         capture = ttk.LabelFrame(capture_tab, text="串口抓图（自动仿真）", padding=6)
@@ -479,7 +489,7 @@ class VisionToolApp:
         for row, (text, value) in enumerate((
             ("灰度处理", "gray"),
             ("先二值化，再去畸变/逆透视", "pre_transform"),
-            ("无人机实际：去畸变、分区二值化、连通域", "undistort_binary_ipm"),
+            ("无人机实际：候选去畸变、双阈值短路识别", "undistort_binary_ipm"),
             ("先去畸变/逆透视，再二值化", "post_transform"),
         ), start=4):
             ttk.Radiobutton(
@@ -489,16 +499,16 @@ class VisionToolApp:
                 variable=self.binary_mode_var,
                 command=self.refresh_processed_preview,
             ).grid(row=row, column=0, columnspan=2, sticky="w", pady=(2, 0))
-        ttk.Label(processing, text="内圈阈值").grid(row=8, column=0, sticky="w", pady=(8, 0))
-        ttk.Entry(processing, textvariable=self.threshold_inner_var, width=8).grid(
+        ttk.Label(processing, text="箭头精筛阈值").grid(row=8, column=0, sticky="w", pady=(8, 0))
+        ttk.Entry(processing, textvariable=self.vehicle_threshold_var, width=8).grid(
             row=8, column=1, sticky="ew", padx=(8, 0), pady=(8, 0)
         )
-        ttk.Label(processing, text="中圈阈值").grid(row=9, column=0, sticky="w", pady=(4, 0))
-        ttk.Entry(processing, textvariable=self.threshold_var, width=8).grid(
+        ttk.Label(processing, text="信标精筛阈值").grid(row=9, column=0, sticky="w", pady=(4, 0))
+        ttk.Entry(processing, textvariable=self.beacon_threshold_var, width=8).grid(
             row=9, column=1, sticky="ew", padx=(8, 0), pady=(4, 0)
         )
-        ttk.Label(processing, text="外圈阈值").grid(row=10, column=0, sticky="w", pady=(4, 0))
-        ttk.Entry(processing, textvariable=self.threshold_outer_var, width=8).grid(
+        ttk.Label(processing, text="粗筛固定阈值").grid(row=10, column=0, sticky="w", pady=(4, 0))
+        ttk.Entry(processing, textvariable=self.coarse_threshold_var, width=8).grid(
             row=10, column=1, sticky="ew", padx=(8, 0), pady=(4, 0)
         )
         ttk.Label(processing_tab, textvariable=self.status_var, foreground="#1b6e3a").grid(
@@ -608,11 +618,11 @@ class VisionToolApp:
             pitch = float(self.pitch_var.get())
             height = float(self.height_var.get())
             thresholds = (
-                int(self.threshold_inner_var.get()),
-                int(self.threshold_var.get()),
-                int(self.threshold_outer_var.get()),
+                int(self.vehicle_threshold_var.get()),
+                int(self.beacon_threshold_var.get()),
             )
-            if any(value < 1 or value > 255 for value in thresholds):
+            coarse_threshold = int(self.coarse_threshold_var.get())
+            if any(value < 1 or value > 255 for value in (*thresholds, coarse_threshold)):
                 raise ValueError
         except ValueError:
             self.ui_queue.put(("run", (False, "simulation parameters are invalid", None, APP_ROOT, None, None, None, None, None)))
@@ -625,18 +635,19 @@ class VisionToolApp:
             bool(self.undistort_var.get()),
             bool(self.birdview_var.get()),
             *thresholds,
+            coarse_threshold,
             self.binary_mode_var.get(),
         ))
 
     def simulation_worker(self) -> None:
         while True:
             (frame_path, roll, pitch, height, undistort, birdview,
-             threshold_inner, threshold_middle, threshold_outer,
-             binary_mode) = self.simulation_queue.get()
+             vehicle_threshold, beacon_threshold,
+             coarse_threshold, binary_mode) = self.simulation_queue.get()
             try:
                 self.run_worker(frame_path, roll, pitch, height, undistort, birdview,
-                                threshold_inner, threshold_middle, threshold_outer,
-                                binary_mode)
+                                vehicle_threshold, beacon_threshold,
+                                coarse_threshold, binary_mode)
             except Exception as exc:
                 self.ui_queue.put(("run", (False, str(exc), None, APP_ROOT, None, None, None, None, None)))
 
@@ -690,6 +701,9 @@ class VisionToolApp:
         self.current_birdview_image = None
         self.current_undistorted_mask = None
         self.current_birdview_mask = None
+        self.current_candidate_source = image.copy()
+        self.current_candidate_binary = None
+        self.current_candidate_birdview = None
         self.apply_frame_metadata(path)
         self.frame_info_var.set(f"{path.name}  {image.width}×{image.height}")
         self.refresh_preview()
@@ -735,16 +749,102 @@ class VisionToolApp:
         self.processed_photo = None
 
     def close_candidate_window(self) -> None:
+        if self.candidate_resize_job is not None and self.candidate_window is not None:
+            try:
+                self.candidate_window.after_cancel(self.candidate_resize_job)
+            except tk.TclError:
+                pass
+        self.candidate_resize_job = None
         if self.candidate_window is not None and self.candidate_window.winfo_exists():
             self.candidate_window.destroy()
         self.candidate_window = None
+        self.candidate_notebook = None
         self.candidate_photos = []
+
+    def open_current_candidate_window(self) -> None:
+        if self.current_result is None or self.current_candidate_source is None or self.current_candidate_binary is None:
+            messagebox.showinfo("候选区域", "请先运行当前帧仿真")
+            return
+        candidates = self.find_coarse_candidates(
+            self.current_candidate_source,
+            int(self.current_result.get("coarse_threshold", COARSE_THRESHOLD)),
+        )
+        runtime_candidates = self.current_result.get("coarse_candidates")
+        if isinstance(runtime_candidates, list) and runtime_candidates:
+            candidates = runtime_candidates
+        self.open_candidate_window(
+            self.current_candidate_source,
+            self.current_candidate_binary,
+            self.current_result,
+            candidates,
+            self.current_candidate_birdview,
+        )
+
+    @staticmethod
+    def find_coarse_candidates(image: Image.Image, threshold: int) -> list[dict]:
+        gray = image.convert("L")
+        width, height = gray.size
+        pixels = gray.load()
+        visited = bytearray(width * height)
+        candidates: list[dict] = []
+        threshold = max(1, min(255, threshold))
+        for y in range(height):
+            for x in range(width):
+                index = y * width + x
+                if visited[index] or pixels[x, y] < threshold:
+                    continue
+                queue = [(x, y)]
+                visited[index] = 1
+                area = 0
+                min_x = max_x = x
+                min_y = max_y = y
+                while queue:
+                    cx, cy = queue.pop()
+                    area += 1
+                    min_x = min(min_x, cx)
+                    max_x = max(max_x, cx)
+                    min_y = min(min_y, cy)
+                    max_y = max(max_y, cy)
+                    for dy in (-1, 0, 1):
+                        for dx in (-1, 0, 1):
+                            if dx == 0 and dy == 0:
+                                continue
+                            nx, ny = cx + dx, cy + dy
+                            if not (0 <= nx < width and 0 <= ny < height):
+                                continue
+                            neighbor = ny * width + nx
+                            if visited[neighbor] or pixels[nx, ny] < threshold:
+                                continue
+                            visited[neighbor] = 1
+                            queue.append((nx, ny))
+                candidates.append({
+                    "valid": 1,
+                    "raw_min_col": min_x,
+                    "raw_max_col": max_x,
+                    "raw_min_row": min_y,
+                    "raw_max_row": max_y,
+                    "fine_min_col": min_x * 2,
+                    "fine_max_col": (max_x + 1) * 2 - 1,
+                    "fine_min_row": min_y * 2,
+                    "fine_max_row": (max_y + 1) * 2 - 1,
+                    "min_col": min_x * 2,
+                    "max_col": (max_x + 1) * 2 - 1,
+                    "min_row": min_y * 2,
+                    "max_row": (max_y + 1) * 2 - 1,
+                    "raw_area_pixels": area,
+                    "area_cm2": 0.0,
+                    "circularity": 0.0,
+                })
+        candidates.sort(key=lambda item: item["raw_area_pixels"], reverse=True)
+        return candidates[:16]
 
     def open_candidate_window(
         self,
         image: Image.Image,
         binary: Image.Image,
         result: dict,
+        candidates: list[dict] | None = None,
+        birdview: Image.Image | None = None,
     ) -> None:
         self.close_candidate_window()
         window = tk.Toplevel(self.root)
@@ -753,11 +853,13 @@ class VisionToolApp:
         window.geometry("980x680")
         window.minsize(640, 420)
         notebook = ttk.Notebook(window)
+        self.candidate_notebook = notebook
         notebook.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
-        candidates = [
-            item for item in result.get("beacons", [])
-            if item.get("valid") and item.get("max_col", -1) >= item.get("min_col", 0)
-        ]
+        if candidates is None:
+            candidates = [
+                item for item in result.get("beacons", [])
+                if item.get("valid") and item.get("max_col", -1) >= item.get("min_col", 0)
+            ]
         if not candidates:
             ttk.Label(window, text="当前帧没有有效候选区域").pack(pady=8)
             window.protocol("WM_DELETE_WINDOW", self.close_candidate_window)
@@ -766,22 +868,27 @@ class VisionToolApp:
         source = image.convert("RGB")
         fine_binary = binary.convert("RGB")
         for index, candidate in enumerate(candidates, start=1):
-            min_col = max(0, int(candidate.get("min_col", 0)))
-            max_col = min(FINE_WIDTH - 1, int(candidate.get("max_col", 0)))
-            min_row = max(0, int(candidate.get("min_row", 0)))
-            max_row = min(FINE_HEIGHT - 1, int(candidate.get("max_row", 0)))
+            min_col = max(0, int(candidate.get("fine_min_col", candidate.get("min_col", 0))))
+            max_col = min(FINE_WIDTH - 1, int(candidate.get("fine_max_col", candidate.get("max_col", 0))))
+            min_row = max(0, int(candidate.get("fine_min_row", candidate.get("min_row", 0))))
+            max_row = min(FINE_HEIGHT - 1, int(candidate.get("fine_max_row", candidate.get("max_row", 0))))
             if min_col > max_col or min_row > max_row:
                 continue
             # 固件坐标是 376x240；原图裁剪需映射回 188x120。
-            left = max(0, min_col // 2)
-            top = max(0, min_row // 2)
-            right = min(WIDTH, (max_col + 2) // 2)
-            bottom = min(HEIGHT, (max_row + 2) // 2)
+            raw_min_col = max(0, int(candidate.get("raw_min_col", min_col // 2)))
+            raw_max_col = min(WIDTH - 1, int(candidate.get("raw_max_col", max_col // 2)))
+            raw_min_row = max(0, int(candidate.get("raw_min_row", min_row // 2)))
+            raw_max_row = min(HEIGHT - 1, int(candidate.get("raw_max_row", max_row // 2)))
+            left = raw_min_col
+            top = raw_min_row
+            right = min(WIDTH, raw_max_col + 1)
+            bottom = min(HEIGHT, raw_max_row + 1)
             original_crop = source.crop((left, top, max(right, left + 1), max(bottom, top + 1)))
             binary_crop = fine_binary.crop((min_col, min_row, max_col + 1, max_row + 1))
             tab = ttk.Frame(notebook, padding=8)
             tab.columnconfigure(0, weight=1)
             tab.columnconfigure(1, weight=1)
+            tab.columnconfigure(2, weight=1)
             tab.rowconfigure(1, weight=1)
             ttk.Label(
                 tab,
@@ -790,30 +897,80 @@ class VisionToolApp:
                     f"面积: {candidate.get('area_cm2', 0):.2f} cm²  "
                     f"圆度: {candidate.get('circularity', 0):.3f}"
                 ),
-            ).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 6))
+            ).grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 6))
             left_label = ttk.Label(tab, text="原图候选区", anchor="center")
             right_label = ttk.Label(tab, text="376×240 二值候选区", anchor="center")
             left_label.grid(row=1, column=0, sticky="nsew", padx=(0, 4))
             right_label.grid(row=1, column=1, sticky="nsew", padx=(4, 0))
-            tab.bind(
-                "<Configure>",
-                lambda _event, l=left_label, r=right_label,
-                       oi=original_crop, bi=binary_crop: self._refresh_candidate_tab(
-                           l, r, oi, bi
-                       ),
+            birdview_label = ttk.Label(tab, text="逆透视图（本帧全图）", anchor="center")
+            birdview_label.grid(row=1, column=2, sticky="nsew", padx=(4, 0))
+            tab._vision_candidate_view = (
+                left_label,
+                right_label,
+                birdview_label,
+                original_crop,
+                binary_crop,
+                birdview,
             )
+            tab._vision_candidate_size = None
             notebook.add(tab, text=f"候选 {index}")
+        notebook.bind("<Configure>", self._schedule_candidate_refresh)
+        notebook.bind("<<NotebookTabChanged>>", self._schedule_candidate_refresh)
+        window.after_idle(self._schedule_candidate_refresh)
         window.protocol("WM_DELETE_WINDOW", self.close_candidate_window)
+
+    def _schedule_candidate_refresh(self, _event: object = None) -> None:
+        window = self.candidate_window
+        if window is None or not window.winfo_exists():
+            return
+        if self.candidate_resize_job is not None:
+            try:
+                window.after_cancel(self.candidate_resize_job)
+            except tk.TclError:
+                pass
+        self.candidate_resize_job = window.after(120, self._refresh_selected_candidate_tab)
+
+    def _refresh_selected_candidate_tab(self) -> None:
+        self.candidate_resize_job = None
+        notebook = self.candidate_notebook
+        if notebook is None or not notebook.winfo_exists():
+            return
+        selected = notebook.select()
+        if not selected:
+            return
+        tab = notebook.nametowidget(selected)
+        view = getattr(tab, "_vision_candidate_view", None)
+        if view is None:
+            return
+        width = max(160, (tab.winfo_width() - 32) // 3)
+        height = max(120, tab.winfo_height() - 48)
+        size = (width, height)
+        if getattr(tab, "_vision_candidate_size", None) == size:
+            return
+        tab._vision_candidate_size = size
+        left_label, right_label, birdview_label, original, binary, birdview = view
+        self._refresh_candidate_tab(
+            left_label,
+            right_label,
+            birdview_label,
+            original,
+            binary,
+            birdview,
+            width,
+            height,
+        )
 
     def _refresh_candidate_tab(
         self,
         left_label: ttk.Label,
         right_label: ttk.Label,
+        birdview_label: ttk.Label,
         original: Image.Image,
         binary: Image.Image,
+        birdview: Image.Image | None,
+        width: int,
+        height: int,
     ) -> None:
-        width = max(160, (left_label.winfo_width() or 420))
-        height = max(120, (left_label.winfo_height() or 300))
         left_photo = ImageTk.PhotoImage(self.fit_image(original, width, height))
         right_photo = ImageTk.PhotoImage(self.fit_image(binary, width, height))
         left_label.configure(image=left_photo, text="")
@@ -822,6 +979,13 @@ class VisionToolApp:
         # retain every historical PhotoImage.
         left_label._vision_photo = left_photo
         right_label._vision_photo = right_photo
+        if birdview is not None:
+            birdview_photo = ImageTk.PhotoImage(self.fit_image(birdview, width, height))
+            birdview_label.configure(image=birdview_photo, text="")
+            birdview_label._vision_photo = birdview_photo
+        else:
+            birdview_label.configure(image="", text="未生成逆透视图")
+            birdview_label._vision_photo = None
 
     def refresh_processed_preview(self) -> None:
         if self.processed_label is None or self.processed_window is None or not self.processed_window.winfo_exists():
@@ -925,11 +1089,11 @@ class VisionToolApp:
             pitch = float(self.pitch_var.get())
             height = float(self.height_var.get())
             thresholds = (
-                int(self.threshold_inner_var.get()),
-                int(self.threshold_var.get()),
-                int(self.threshold_outer_var.get()),
+                int(self.vehicle_threshold_var.get()),
+                int(self.beacon_threshold_var.get()),
             )
-            if any(value < 1 or value > 255 for value in thresholds):
+            coarse_threshold = int(self.coarse_threshold_var.get())
+            if any(value < 1 or value > 255 for value in (*thresholds, coarse_threshold)):
                 raise ValueError
         except ValueError:
             messagebox.showerror("参数错误", "Roll、Pitch、高度必须是数字，阈值必须为 1 到 255。")
@@ -941,7 +1105,7 @@ class VisionToolApp:
         threading.Thread(
             target=self.run_worker,
             args=(self.current_frame, roll, pitch, height, undistort, birdview,
-                  *thresholds, binary_mode),
+                  *thresholds, coarse_threshold, binary_mode),
             daemon=True,
         ).start()
 
@@ -953,9 +1117,9 @@ class VisionToolApp:
         height: float,
         undistort: bool,
         birdview: bool,
-        threshold_inner: int,
-        threshold_middle: int,
-        threshold_outer: int,
+        vehicle_threshold: int,
+        beacon_threshold: int,
+        coarse_threshold: int,
         binary_mode: str,
     ) -> None:
         source = Path(self.source_var.get())
@@ -967,8 +1131,9 @@ class VisionToolApp:
             raw_path.write_bytes(image.tobytes())
             simulator = Simulator(source)
             ok, log, result_path, undistorted_path, birdview_path, undistorted_mask_path, birdview_mask_path, undistorted_binary_path, birdview_binary_path = simulator.run(
-                raw_path, run_dir, roll, pitch, height, undistort, birdview,
-                threshold_inner, threshold_middle, threshold_outer, binary_mode
+                raw_path, run_dir, roll, pitch, height, undistort, True,
+                vehicle_threshold, beacon_threshold,
+                coarse_threshold, binary_mode
             )
             payload = json.loads(result_path.read_text(encoding="utf-8")) if result_path else None
             binary_enabled = binary_mode != "gray"
@@ -1083,6 +1248,9 @@ class VisionToolApp:
             draw_chevron(draw_original)
             draw_chevron(draw_binary)
         self.current_source_image = original
+        self.current_candidate_source = image.copy()
+        self.current_candidate_binary = binary.copy()
+        self.current_candidate_birdview = birdview_image.convert("RGB") if birdview_image is not None else None
         self.current_undistorted_image = undistorted_image.convert("RGB") if undistorted_image is not None else None
         self.current_birdview_image = birdview_image.convert("RGB") if birdview_image is not None else None
         self.current_undistorted_mask = undistorted_mask.convert("L") if undistorted_mask is not None else None
@@ -1138,10 +1306,10 @@ class VisionToolApp:
         self.set_result_info(
             f"连通域: {result.get('blob_count', 0)}\n"
             f"信标: {result.get('beacon_count', 0)}\n"
-            f"分区阈值: "
-            f"{result.get('binary_thresholds', {}).get('inner', '?')}/"
-            f"{result.get('binary_thresholds', {}).get('middle', '?')}/"
-            f"{result.get('binary_thresholds', {}).get('outer', '?')}\n"
+            f"箭头/信标精筛阈值: "
+            f"{result.get('recognition_thresholds', {}).get('vehicle', '?')}/"
+            f"{result.get('recognition_thresholds', {}).get('beacon', '?')}\n"
+            f"粗筛阈值: {result.get('coarse_threshold', '?')}\n"
             f"预览顺序: {binary_mode_text}\n"
             f"小车标志有效: {result.get('vehicle', {}).get('valid', 0)}\n"
             f"{chevron_info}\n"
@@ -1152,7 +1320,20 @@ class VisionToolApp:
         )
         if self.undistort_var.get() or self.birdview_var.get():
             self.open_processed_window()
-        self.open_candidate_window(image, binary, result)
+        candidates = self.find_coarse_candidates(
+            image,
+            int(result.get("coarse_threshold", COARSE_THRESHOLD)),
+        )
+        runtime_candidates = result.get("coarse_candidates")
+        if isinstance(runtime_candidates, list) and runtime_candidates:
+            candidates = runtime_candidates
+        self.open_candidate_window(
+            image,
+            binary,
+            result,
+            candidates,
+            self.current_candidate_birdview,
+        )
 
     def editor_modified(self, _event: object = None) -> None:
         if self.editor.edit_modified():

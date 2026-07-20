@@ -65,6 +65,8 @@ typedef struct {
     float max_aspect;                      /* 最大宽高比 */
     float min_occupancy;                   /* 最小占空比 */
     float min_circularity;                 /* 最小圆度 */
+    float min_physical_area_cm2;
+    float max_physical_area_cm2;
 } BeaconConfig_t;
 
 /* ====================== 全局变量 ====================== */

@@ -155,7 +155,7 @@ static void threshold_image(uint8 *image, size_t pixel_count, uint8 threshold)
 
 static int write_result(const char *path, const char *binary_path,
                         float roll_deg, float pitch_deg, float height_cm,
-                        const uint8 thresholds[VISION_BINARY_ZONE_COUNT],
+                        uint8 vehicle_threshold, uint8 beacon_threshold,
                         int binary_mode,
                         const VisionRuntimeDiag_t *diag,
                         const IPM_UndistortCanvas_t *undistort_canvas,
@@ -163,7 +163,9 @@ static int write_result(const char *path, const char *binary_path,
 {
     FILE *file = NULL;
     VisionRuntimeBeaconSlot_t slots[VISION_RUNTIME_BEACON_SLOT_COUNT] = {0};
+    VisionRuntimeCandidateBox_t candidates[16U] = {0};
     VehicleMarkerChevronDebug_t chevron = {0};
+    uint8 candidate_count;
     int i;
 
     if(path == NULL || diag == NULL)
@@ -171,6 +173,8 @@ static int write_result(const char *path, const char *binary_path,
         return 0;
     }
     VisionRuntime_GetBeaconSlots(slots, VISION_RUNTIME_BEACON_SLOT_COUNT);
+    candidate_count = VisionRuntime_GetCandidateBoxes(
+        candidates, 16U);
     VehicleMarkerLocalization_GetChevronDebug(&chevron);
     file = fopen(path, "w");
     if(file == NULL)
@@ -199,6 +203,14 @@ static int write_result(const char *path, const char *binary_path,
     fprintf(file, "  \"blob_count\":%d,\n  \"beacon_count\":%d,\n  \"beacon_blob_count\":%d,\n",
             diag->blob_count, diag->beacon_count, diag->beacon_blob_count);
     fprintf(file,
+            "  \"vehicle_blob_rejects\":{\"area_low\":%d,\"area_high\":%d,"
+            "\"size_or_occupancy\":%d,\"circularity\":%d,\"accepted\":%d},\n",
+            diag->ir_reject_area_low_count,
+            diag->ir_reject_area_high_count,
+            diag->ir_reject_size_count,
+            diag->ir_reject_aspect_count,
+            diag->ir_reject_insert_count);
+    fprintf(file,
             "  \"beacon_nearest_metrics\":{\"raw_area_pixels\":%.6f,\"area_cm2\":%.6f,"
             "\"perimeter_cm\":%.6f,\"circularity\":%.6f},\n",
             diag->beacon_nearest_area,
@@ -206,14 +218,19 @@ static int write_result(const char *path, const char *binary_path,
             diag->beacon_nearest_perimeter_cm,
             diag->beacon_nearest_circularity);
     fprintf(file, "  \"binary_threshold\":%u,\n",
-            (unsigned)thresholds[VISION_BINARY_ZONE_MIDDLE]);
+            (unsigned)beacon_threshold);
+    fprintf(file, "  \"coarse_threshold\":%u,\n",
+            (unsigned)VisionRuntime_GetCoarseThreshold());
     fprintf(file,
             "  \"binary_thresholds\":{\"inner\":%u,\"middle\":%u,\"outer\":%u},\n",
-            (unsigned)thresholds[VISION_BINARY_ZONE_INNER],
-            (unsigned)thresholds[VISION_BINARY_ZONE_MIDDLE],
-            (unsigned)thresholds[VISION_BINARY_ZONE_OUTER]);
+            (unsigned)vehicle_threshold,
+            (unsigned)beacon_threshold,
+            (unsigned)beacon_threshold);
     fprintf(file,
-            "  \"recognition_pipeline\":\"undistort_partitioned_connected_components\",\n");
+            "  \"recognition_thresholds\":{\"vehicle\":%u,\"beacon\":%u},\n",
+            (unsigned)vehicle_threshold, (unsigned)beacon_threshold);
+    fprintf(file,
+            "  \"recognition_pipeline\":\"vehicle_first_dual_threshold_short_circuit\",\n");
     fprintf(file, "  \"binary_mode\":\"%s\",\n",
             (binary_mode == BINARY_MODE_PRE_TRANSFORM) ? "pre_transform" :
             ((binary_mode == BINARY_MODE_UNDISTORT_BINARY) ? "undistort_binary_ipm" :
@@ -271,6 +288,22 @@ static int write_result(const char *path, const char *binary_path,
             (unsigned)g_vehicle_marker_pose.valid,
             g_vehicle_marker_pose.x, g_vehicle_marker_pose.y,
             g_vehicle_marker_pose.heading_deg);
+    fprintf(file, "  \"coarse_candidates\":[\n");
+    for(i = 0; i < (int)candidate_count; ++i)
+    {
+        fprintf(file,
+                "    {\"area\":%d,\"raw_min_row\":%d,\"raw_max_row\":%d,"
+                "\"raw_min_col\":%d,\"raw_max_col\":%d,"
+                "\"fine_min_row\":%d,\"fine_max_row\":%d,"
+                "\"fine_min_col\":%d,\"fine_max_col\":%d}%s\n",
+                candidates[i].area,
+                candidates[i].raw_min_row, candidates[i].raw_max_row,
+                candidates[i].raw_min_col, candidates[i].raw_max_col,
+                candidates[i].fine_min_row, candidates[i].fine_max_row,
+                candidates[i].fine_min_col, candidates[i].fine_max_col,
+                (i + 1 < (int)candidate_count) ? "," : "");
+    }
+    fprintf(file, "  ],\n");
     fprintf(file, "  \"chevron\":{\"valid\":%u,\"heading_deg\":%.6f,",
             (unsigned)chevron.valid, chevron.heading_deg);
     fprintf(file, "\"apex_img\":{\"u\":%.3f,\"v\":%.3f},",
@@ -325,15 +358,20 @@ int main(int argc, char **argv)
     float height_cm = parse_float(get_option(argc, argv, "--height"), 100.0f);
     const char *binary_mode_text = get_option(argc, argv, "--binary-mode");
     int threshold_value = parse_int(get_option(argc, argv, "--threshold"),
-                                    (int)VISION_BINARY_THRESHOLD_MIDDLE);
-    int threshold_inner_value = parse_int(get_option(argc, argv, "--threshold-inner"),
-                                          (int)VISION_BINARY_THRESHOLD_INNER);
-    int threshold_middle_value = parse_int(get_option(argc, argv, "--threshold-middle"),
-                                           threshold_value);
-    int threshold_outer_value = parse_int(get_option(argc, argv, "--threshold-outer"),
-                                          (int)VISION_BINARY_THRESHOLD_OUTER);
+                                    (int)VISION_BINARY_THRESHOLD_BEACON);
+    int vehicle_threshold_value = parse_int(
+        get_option(argc, argv, "--vehicle-threshold"),
+        parse_int(get_option(argc, argv, "--threshold-inner"),
+                  (int)VISION_BINARY_THRESHOLD_VEHICLE));
+    int beacon_threshold_value = parse_int(
+        get_option(argc, argv, "--beacon-threshold"),
+        parse_int(get_option(argc, argv, "--threshold-middle"),
+                  threshold_value));
+    int coarse_threshold_value = parse_int(get_option(argc, argv, "--coarse-threshold"),
+                                           (int)VISION_RUNTIME_COARSE_THRESHOLD);
     uint8 threshold;
-    uint8 thresholds[VISION_BINARY_ZONE_COUNT];
+    uint8 vehicle_threshold;
+    uint8 beacon_threshold;
     int binary_mode = BINARY_MODE_GRAY;
     VisionRuntimeDiag_t diag = {0};
     uint8 *undistorted_image = NULL;
@@ -352,22 +390,21 @@ int main(int argc, char **argv)
 
     if(input_path == NULL || output_path == NULL || !read_raw(input_path))
     {
-        fprintf(stderr, "usage: vision_sim --input frame.raw --output result.json [--binary binary.pgm] [--threshold-inner 160] [--threshold-middle 150] [--threshold-outer 170] [--binary-mode gray|pre_transform|undistort_binary_ipm|post_transform] [--undistorted undistorted.pgm] [--undistorted-mask mask.pgm] [--undistorted-binary binary.pgm] [--birdview birdview.pgm] [--birdview-mask mask.pgm] [--birdview-binary binary.pgm]\n");
+        fprintf(stderr, "usage: vision_sim --input frame.raw --output result.json [--binary binary.pgm] [--vehicle-threshold 110] [--beacon-threshold 10] [--coarse-threshold 40] [--binary-mode gray|pre_transform|undistort_binary_ipm|post_transform] [--undistorted undistorted.pgm] [--undistorted-mask mask.pgm] [--undistorted-binary binary.pgm] [--birdview birdview.pgm] [--birdview-mask mask.pgm] [--birdview-binary binary.pgm]\n");
         return 2;
     }
 
     if(threshold_value < 1) threshold_value = 1;
     if(threshold_value > 255) threshold_value = 255;
-    threshold = (uint8)threshold_value;
-    if(threshold_inner_value < 1) threshold_inner_value = 1;
-    if(threshold_inner_value > 255) threshold_inner_value = 255;
-    if(threshold_middle_value < 1) threshold_middle_value = 1;
-    if(threshold_middle_value > 255) threshold_middle_value = 255;
-    if(threshold_outer_value < 1) threshold_outer_value = 1;
-    if(threshold_outer_value > 255) threshold_outer_value = 255;
-    thresholds[VISION_BINARY_ZONE_INNER] = (uint8)threshold_inner_value;
-    thresholds[VISION_BINARY_ZONE_MIDDLE] = (uint8)threshold_middle_value;
-    thresholds[VISION_BINARY_ZONE_OUTER] = (uint8)threshold_outer_value;
+    if(vehicle_threshold_value < 1) vehicle_threshold_value = 1;
+    if(vehicle_threshold_value > 255) vehicle_threshold_value = 255;
+    if(beacon_threshold_value < 1) beacon_threshold_value = 1;
+    if(beacon_threshold_value > 255) beacon_threshold_value = 255;
+    if(coarse_threshold_value < 1) coarse_threshold_value = 1;
+    if(coarse_threshold_value > 255) coarse_threshold_value = 255;
+    vehicle_threshold = (uint8)vehicle_threshold_value;
+    beacon_threshold = (uint8)beacon_threshold_value;
+    threshold = beacon_threshold;
     if(binary_mode_text != NULL && strcmp(binary_mode_text, "pre_transform") == 0)
     {
         binary_mode = BINARY_MODE_PRE_TRANSFORM;
@@ -388,10 +425,9 @@ int main(int argc, char **argv)
     IPM_Interface_Init();
     VehicleMarkerLocalization_Init();
     BeaconDetect_Init();
-    VisionRuntime_SetBinaryThresholds(
-        thresholds[VISION_BINARY_ZONE_INNER],
-        thresholds[VISION_BINARY_ZONE_MIDDLE],
-        thresholds[VISION_BINARY_ZONE_OUTER]);
+    VisionRuntime_SetRecognitionThresholds(vehicle_threshold,
+                                           beacon_threshold);
+    VisionRuntime_SetCoarseThreshold((uint8)coarse_threshold_value);
     mt9v03x_finish_flag = 1U;
     VisionRuntime_ProcessFrameWithPose(roll_deg, pitch_deg, height_cm);
     VisionRuntime_GetDiag(&diag);
@@ -617,7 +653,7 @@ int main(int argc, char **argv)
         birdview_bounds_ptr = &birdview_bounds;
     }
     if(!write_result(output_path, binary_path, roll_deg, pitch_deg, height_cm,
-                     thresholds, binary_mode, &diag,
+                     vehicle_threshold, beacon_threshold, binary_mode, &diag,
                      undistort_canvas_ptr, birdview_bounds_ptr))
     {
         fprintf(stderr, "failed to write result: %s\n", output_path);
