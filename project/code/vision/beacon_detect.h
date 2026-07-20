@@ -25,6 +25,14 @@
 #define BEACON_MAX_DETECTIONS   50          /* 单帧最大检测数量 */
 #define BEACON_IMG_ROWS         MT9V03X_H   /* 120 */
 #define BEACON_IMG_COLS         MT9V03X_W   /* 188 */
+#define BEACON_DETECTION_CONFIDENCE_MIN (96U)
+#define BEACON_PHYSICAL_AREA_MIN_CM2      (500.0f)
+#define BEACON_PHYSICAL_AREA_IDEAL_CM2    (700.0f)
+#define BEACON_PHYSICAL_AREA_MAX_CM2      (1000.0f)
+#define BEACON_CONFIDENCE_BOX_SIZE_WEIGHT (0.30f)
+#define BEACON_CONFIDENCE_STABILITY_WEIGHT (0.40f)
+#define BEACON_CONFIDENCE_AREA_WEIGHT      (0.20f)
+#define BEACON_CONFIDENCE_EDGE_WEIGHT      (0.10f)
 
 /* ====================== 数据结构 ====================== */
 
@@ -39,6 +47,8 @@ typedef struct {
     int   area;                            /* 连通域像素面积 */
     int   min_row, max_row;                 /* 连通域外接框行范围 */
     int   min_col, max_col;                 /* 连通域外接框列范围 */
+    int raw_min_row, raw_max_row;
+    int raw_min_col, raw_max_col;
     float average_brightness;              /* 区域平均亮度 */
     float aspect_ratio;                    /* 外接矩形宽高比 */
     float occupancy_ratio;                 /* 面积 / 外接矩形面积 */
@@ -49,10 +59,16 @@ typedef struct {
     float physical_occupancy_ratio;         /* 局部物理鸟瞰栅格占空比 */
     uint16 physical_pixel_count;            /* 局部鸟瞰前景栅格数 */
     uint8 physical_valid;                   /* 物理鸟瞰指标有效 */
+    int raw_box_area_pixels;                 /* 原图候选框像素面积 */
     /* 世界域 */
     float world_x, world_y;                /* 地面坐标(cm), X向前 Y向左 */
     float distance_cm;                     /* 相对正下方原点的距离(cm) */
     float angle_deg;                       /* 方位角(度), 正前方为0 */
+    uint8 detection_confidence;            /* 0..255 */
+    float confidence_box_size;
+    float confidence_stability;
+    float confidence_area;
+    float confidence_edge;
 } BeaconResult_t;
 
 /**
@@ -92,7 +108,7 @@ void BeaconDetect_Init(void);
  * @note 调用前需要先通过 IPM_Interface_UpdateFromIMU() 更新姿态与高度
  */
 void BeaconDetect_BeginBlobFrame(BeaconResult_t *results, int max_results);
-uint8 BeaconDetect_AppendBlob(const VisionBlob_t *blob);
+uint8 BeaconDetect_AppendBlob(VisionBlob_t *blob);
 int BeaconDetect_EndBlobFrame(void);
 
 /**

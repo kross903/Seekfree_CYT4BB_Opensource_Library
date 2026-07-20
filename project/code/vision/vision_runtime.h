@@ -22,6 +22,8 @@
 #define VISION_RUNTIME_LOCAL_BIRDVIEW_SCALE_CM_PER_PIXEL (0.5f)
 #define VISION_RUNTIME_LOCAL_BIRDVIEW_MAX_WIDTH (128U)
 #define VISION_RUNTIME_LOCAL_BIRDVIEW_MAX_HEIGHT (128U)
+#define VISION_RUNTIME_BEACON_BOX_AREA_MIN_PIXELS (12.0f)
+#define VISION_RUNTIME_BEACON_BOX_AREA_MAX_PIXELS (100.0f)
 
 /* Candidate refinement pipeline selection. */
 #define VISION_RUNTIME_PIPELINE_UNDISTORT_THEN_IPM (0U)
@@ -62,6 +64,16 @@ typedef struct
     float physical_occupancy_ratio;
     uint16 physical_pixel_count;
     uint8 physical_valid;
+    int raw_min_row;
+    int raw_max_row;
+    int raw_min_col;
+    int raw_max_col;
+    int raw_box_area_pixels;
+    float confidence_box_size;
+    float confidence_stability;
+    float confidence_area;
+    float confidence_edge;
+    uint8 detection_confidence;
     float world_x;
     float world_y;
     uint8 world_valid;
@@ -108,6 +120,7 @@ typedef struct
     float beacon_nearest_brightness;
     float beacon_nearest_occupancy;
     float beacon_nearest_aspect;
+    uint8 beacon_nearest_confidence;
 } VisionRuntimeDiag_t;
 
 typedef struct
@@ -119,11 +132,21 @@ typedef struct
     int max_row;
     int min_col;
     int max_col;
+    int raw_min_row;
+    int raw_max_row;
+    int raw_min_col;
+    int raw_max_col;
     float area_cm2;
     float perimeter_cm;
     float circularity;
     uint16 physical_pixel_count;
     uint8 physical_valid;
+    int raw_box_area_pixels;
+    uint8 detection_confidence;
+    float confidence_box_size;
+    float confidence_stability;
+    float confidence_area;
+    float confidence_edge;
 } VisionRuntimeBeaconSlot_t;
 
 typedef struct
@@ -137,6 +160,18 @@ typedef struct
     int fine_min_col;
     int fine_max_col;
     int area;
+    int raw_box_area_pixels;
+    uint8 vehicle_valid;
+    uint8 beacon_valid;
+    uint8 detection_confidence;
+    float beacon_x_cm;
+    float beacon_y_cm;
+    float beacon_area_cm2;
+    float beacon_circularity;
+    float confidence_box_size;
+    float confidence_stability;
+    float confidence_area;
+    float confidence_edge;
 } VisionRuntimeCandidateBox_t;
 
 void VisionRuntime_ProcessFrame(float height_cm);

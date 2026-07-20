@@ -444,11 +444,27 @@ static void VisionRuntime_UpdateBeaconSlotsFromCurrentFrame(int beacon_count,
         s_vision_runtime_beacon_slots[slot_count].max_row = beacon_results[best_index].max_row;
         s_vision_runtime_beacon_slots[slot_count].min_col = beacon_results[best_index].min_col;
         s_vision_runtime_beacon_slots[slot_count].max_col = beacon_results[best_index].max_col;
+        s_vision_runtime_beacon_slots[slot_count].raw_min_row = beacon_results[best_index].raw_min_row;
+        s_vision_runtime_beacon_slots[slot_count].raw_max_row = beacon_results[best_index].raw_max_row;
+        s_vision_runtime_beacon_slots[slot_count].raw_min_col = beacon_results[best_index].raw_min_col;
+        s_vision_runtime_beacon_slots[slot_count].raw_max_col = beacon_results[best_index].raw_max_col;
         s_vision_runtime_beacon_slots[slot_count].area_cm2 = beacon_results[best_index].physical_area_cm2;
         s_vision_runtime_beacon_slots[slot_count].perimeter_cm = beacon_results[best_index].physical_perimeter_cm;
         s_vision_runtime_beacon_slots[slot_count].circularity = beacon_results[best_index].physical_circularity;
         s_vision_runtime_beacon_slots[slot_count].physical_pixel_count = beacon_results[best_index].physical_pixel_count;
         s_vision_runtime_beacon_slots[slot_count].physical_valid = beacon_results[best_index].physical_valid;
+        s_vision_runtime_beacon_slots[slot_count].raw_box_area_pixels =
+            beacon_results[best_index].raw_box_area_pixels;
+        s_vision_runtime_beacon_slots[slot_count].detection_confidence =
+            beacon_results[best_index].detection_confidence;
+        s_vision_runtime_beacon_slots[slot_count].confidence_box_size =
+            beacon_results[best_index].confidence_box_size;
+        s_vision_runtime_beacon_slots[slot_count].confidence_stability =
+            beacon_results[best_index].confidence_stability;
+        s_vision_runtime_beacon_slots[slot_count].confidence_area =
+            beacon_results[best_index].confidence_area;
+        s_vision_runtime_beacon_slots[slot_count].confidence_edge =
+            beacon_results[best_index].confidence_edge;
         slot_count++;
     }
 }
@@ -545,11 +561,27 @@ static void VisionRuntime_UpdateBeaconSlotsFromCurrentFrame(
         s_vision_runtime_beacon_slots[slot_count].max_row = beacon_results[best_index].max_row;
         s_vision_runtime_beacon_slots[slot_count].min_col = beacon_results[best_index].min_col;
         s_vision_runtime_beacon_slots[slot_count].max_col = beacon_results[best_index].max_col;
+        s_vision_runtime_beacon_slots[slot_count].raw_min_row = beacon_results[best_index].raw_min_row;
+        s_vision_runtime_beacon_slots[slot_count].raw_max_row = beacon_results[best_index].raw_max_row;
+        s_vision_runtime_beacon_slots[slot_count].raw_min_col = beacon_results[best_index].raw_min_col;
+        s_vision_runtime_beacon_slots[slot_count].raw_max_col = beacon_results[best_index].raw_max_col;
         s_vision_runtime_beacon_slots[slot_count].area_cm2 = beacon_results[best_index].physical_area_cm2;
         s_vision_runtime_beacon_slots[slot_count].perimeter_cm = beacon_results[best_index].physical_perimeter_cm;
         s_vision_runtime_beacon_slots[slot_count].circularity = beacon_results[best_index].physical_circularity;
         s_vision_runtime_beacon_slots[slot_count].physical_pixel_count = beacon_results[best_index].physical_pixel_count;
         s_vision_runtime_beacon_slots[slot_count].physical_valid = beacon_results[best_index].physical_valid;
+        s_vision_runtime_beacon_slots[slot_count].raw_box_area_pixels =
+            beacon_results[best_index].raw_box_area_pixels;
+        s_vision_runtime_beacon_slots[slot_count].detection_confidence =
+            beacon_results[best_index].detection_confidence;
+        s_vision_runtime_beacon_slots[slot_count].confidence_box_size =
+            beacon_results[best_index].confidence_box_size;
+        s_vision_runtime_beacon_slots[slot_count].confidence_stability =
+            beacon_results[best_index].confidence_stability;
+        s_vision_runtime_beacon_slots[slot_count].confidence_area =
+            beacon_results[best_index].confidence_area;
+        s_vision_runtime_beacon_slots[slot_count].confidence_edge =
+            beacon_results[best_index].confidence_edge;
         slot_count++;
     }
 }
@@ -584,8 +616,26 @@ typedef struct
     int max_col;
 } VisionRuntimeCandidate_t;
 
+typedef struct
+{
+    uint8 vehicle_valid;
+    uint8 beacon_valid;
+    int raw_box_area_pixels;
+    uint8 detection_confidence;
+    float beacon_x_cm;
+    float beacon_y_cm;
+    float beacon_area_cm2;
+    float beacon_circularity;
+    float confidence_box_size;
+    float confidence_stability;
+    float confidence_area;
+    float confidence_edge;
+} VisionRuntimeCandidateAnnotation_t;
+
 static uint8 s_vision_coarse_binary[VISION_RUNTIME_IMAGE_BITSET_BYTES];
 static VisionRuntimeCandidate_t s_vision_candidates[VISION_RUNTIME_MAX_CANDIDATES];
+static VisionRuntimeCandidateAnnotation_t
+    s_vision_candidate_annotations[VISION_RUNTIME_MAX_CANDIDATES];
 static uint8 s_vision_candidate_count;
 typedef struct
 {
@@ -756,6 +806,8 @@ static uint8 VisionRuntime_FindCoarseCandidates(void)
 
     memset(s_vision_visited, 0, sizeof(s_vision_visited));
     memset(s_vision_candidates, 0, sizeof(s_vision_candidates));
+    memset(s_vision_candidate_annotations, 0,
+           sizeof(s_vision_candidate_annotations));
     for(row = 0; row < MT9V03X_H; ++row)
     {
         for(col = 0; col < MT9V03X_W; ++col)
@@ -1505,6 +1557,117 @@ static uint8 VisionRuntime_FineSampleBrightness(
         image, x, y, &source_x_q8, &source_y_q8, sample);
 }
 
+static float VisionRuntime_Clamp01(float value)
+{
+    if(value < 0.0f) return 0.0f;
+    if(value > 1.0f) return 1.0f;
+    return value;
+}
+
+static void VisionRuntime_ComputeConfidenceInputs(
+    const uint8 image[MT9V03X_H][MT9V03X_W],
+    const VisionRuntimeCandidate_t *candidate,
+    uint8 threshold,
+    VisionBlob_t *blob)
+{
+    int x;
+    int y;
+    int threshold_low = (threshold > 8U) ? (int)threshold - 8 : 1;
+    int threshold_high = (threshold < 247U) ? (int)threshold + 8 : 255;
+    uint32 low_area = 0U;
+    uint32 high_area = 0U;
+    uint32 low_x_sum = 0U;
+    uint32 low_y_sum = 0U;
+    uint32 high_x_sum = 0U;
+    uint32 high_y_sum = 0U;
+    float max_center_drift = 0.0f;
+    float max_area_change = 0.0f;
+    float delta;
+    float base_area;
+
+    if(blob == NULL) return;
+    blob->raw_box_area_pixels = 0;
+    blob->confidence_box_size = 0.0f;
+    blob->confidence_stability = 0.0f;
+    blob->confidence_area = 0.0f;
+    blob->confidence_edge = 0.0f;
+
+    if(candidate != NULL)
+    {
+        blob->raw_min_row = candidate->min_row;
+        blob->raw_max_row = candidate->max_row;
+        blob->raw_min_col = candidate->min_col;
+        blob->raw_max_col = candidate->max_col;
+        blob->raw_box_area_pixels =
+            (candidate->max_col - candidate->min_col + 1) *
+            (candidate->max_row - candidate->min_row + 1);
+        blob->confidence_box_size = VisionRuntime_Clamp01(
+            (sqrtf((float)blob->raw_box_area_pixels) -
+             sqrtf(VISION_RUNTIME_BEACON_BOX_AREA_MIN_PIXELS)) /
+            (sqrtf(VISION_RUNTIME_BEACON_BOX_AREA_MAX_PIXELS) -
+             sqrtf(VISION_RUNTIME_BEACON_BOX_AREA_MIN_PIXELS)));
+    }
+
+    for(y = blob->min_row; y <= blob->max_row; ++y)
+    {
+        for(x = blob->min_col; x <= blob->max_col; ++x)
+        {
+            uint8 sample = 0U;
+            if(!VisionRuntime_FineSampleBrightness(image, x, y, &sample)) continue;
+            if((int)sample >= threshold_low)
+            {
+                ++low_area;
+                low_x_sum += (uint32)x;
+                low_y_sum += (uint32)y;
+            }
+            if((int)sample >= threshold_high)
+            {
+                ++high_area;
+                high_x_sum += (uint32)x;
+                high_y_sum += (uint32)y;
+            }
+        }
+    }
+    base_area = (blob->area > 0) ? (float)blob->area : 1.0f;
+    max_area_change = fabsf((float)low_area - base_area) / base_area;
+    delta = fabsf((float)high_area - base_area) / base_area;
+    if(delta > max_area_change) max_area_change = delta;
+    if(low_area > 0U)
+    {
+        delta = sqrtf(
+            ((float)low_x_sum / (float)low_area - blob->centroid_col) *
+            ((float)low_x_sum / (float)low_area - blob->centroid_col) +
+            ((float)low_y_sum / (float)low_area - blob->centroid_row) *
+            ((float)low_y_sum / (float)low_area - blob->centroid_row));
+        if(delta > max_center_drift) max_center_drift = delta;
+    }
+    if(high_area > 0U)
+    {
+        delta = sqrtf(
+            ((float)high_x_sum / (float)high_area - blob->centroid_col) *
+            ((float)high_x_sum / (float)high_area - blob->centroid_col) +
+            ((float)high_y_sum / (float)high_area - blob->centroid_row) *
+            ((float)high_y_sum / (float)high_area - blob->centroid_row));
+        if(delta > max_center_drift) max_center_drift = delta;
+    }
+    blob->confidence_stability =
+        0.70f * expf(-max_center_drift / 1.5f) +
+        0.30f * expf(-max_area_change / 0.25f);
+    blob->confidence_stability = VisionRuntime_Clamp01(blob->confidence_stability);
+
+    {
+        int edge_distance = blob->raw_min_col;
+        int value;
+        value = blob->raw_min_row;
+        if(value < edge_distance) edge_distance = value;
+        value = (MT9V03X_W - 1) - blob->raw_max_col;
+        if(value < edge_distance) edge_distance = value;
+        value = (MT9V03X_H - 1) - blob->raw_max_row;
+        if(value < edge_distance) edge_distance = value;
+        blob->confidence_edge = VisionRuntime_Clamp01((float)edge_distance / 8.0f);
+    }
+}
+
 static void VisionRuntime_BuildPhysicalBlobMetricsFine(
     VisionBlob_t *blob, uint16 run_count)
 {
@@ -1721,7 +1884,8 @@ typedef enum
 
 static uint8 VisionRuntime_DispatchFineComponent(
     const uint8 image[MT9V03X_H][MT9V03X_W], uint16 run_count,
-    VisionRuntimeFineTarget_t target)
+    VisionRuntimeFineTarget_t target, const VisionRuntimeCandidate_t *candidate,
+    uint8 candidate_index, uint8 threshold)
 {
     VisionBlob_t blob;
     VisionContour_t contour;
@@ -1819,9 +1983,32 @@ static uint8 VisionRuntime_DispatchFineComponent(
         else
         {
             ++s_vision_runtime_diag.beacon_split_count;
+            VisionRuntime_ComputeConfidenceInputs(image, candidate, threshold, &blob);
             if(BeaconDetect_AppendBlob(&blob))
             {
                 ++s_vision_runtime_diag.beacon_blob_count;
+                if(candidate_index < VISION_RUNTIME_MAX_CANDIDATES)
+                {
+                    s_vision_candidate_annotations[candidate_index].beacon_valid = 1U;
+                    s_vision_candidate_annotations[candidate_index].raw_box_area_pixels =
+                        blob.raw_box_area_pixels;
+                    s_vision_candidate_annotations[candidate_index].detection_confidence =
+                        blob.detection_confidence;
+                    s_vision_candidate_annotations[candidate_index].beacon_x_cm = blob.world_x;
+                    s_vision_candidate_annotations[candidate_index].beacon_y_cm = blob.world_y;
+                    s_vision_candidate_annotations[candidate_index].beacon_area_cm2 =
+                        blob.physical_area_cm2;
+                    s_vision_candidate_annotations[candidate_index].beacon_circularity =
+                        blob.physical_circularity;
+                    s_vision_candidate_annotations[candidate_index].confidence_box_size =
+                        blob.confidence_box_size;
+                    s_vision_candidate_annotations[candidate_index].confidence_stability =
+                        blob.confidence_stability;
+                    s_vision_candidate_annotations[candidate_index].confidence_area =
+                        blob.confidence_area;
+                    s_vision_candidate_annotations[candidate_index].confidence_edge =
+                        blob.confidence_edge;
+                }
             }
         }
     }
@@ -1831,7 +2018,7 @@ static uint8 VisionRuntime_DispatchFineComponent(
 static uint8 VisionRuntime_ProcessFineROI(
     const uint8 image[MT9V03X_H][MT9V03X_W],
     const VisionRuntimeCandidate_t *candidate,
-    VisionRuntimeFineTarget_t target)
+    VisionRuntimeFineTarget_t target, uint8 candidate_index, uint8 threshold)
 {
     int min_col;
     int max_col;
@@ -1875,7 +2062,8 @@ static uint8 VisionRuntime_ProcessFineROI(
                     return 0U;
                 }
             }
-            if(VisionRuntime_DispatchFineComponent(image, run_count, target))
+            if(VisionRuntime_DispatchFineComponent(
+                   image, run_count, target, candidate, candidate_index, threshold))
             {
                 VisionRuntime_ClearFineComponent(run_count);
                 return 1U;
@@ -1883,7 +2071,7 @@ static uint8 VisionRuntime_ProcessFineROI(
             VisionRuntime_ClearFineComponent(run_count);
         }
     }
-    return 1U;
+    return 0U;
 }
 
 static void VisionRuntime_ProcessBlobs(
@@ -1901,7 +2089,12 @@ static void VisionRuntime_ProcessBlobs(
         {
             vehicle_confirmed = VisionRuntime_ProcessFineROI(
                 image, &s_vision_candidates[i],
-                VISION_RUNTIME_FINE_TARGET_VEHICLE);
+                VISION_RUNTIME_FINE_TARGET_VEHICLE, i,
+                s_vision_vehicle_threshold);
+            if(vehicle_confirmed)
+            {
+                s_vision_candidate_annotations[i].vehicle_valid = 1U;
+            }
         }
         if(vehicle_confirmed)
         {
@@ -1912,7 +2105,8 @@ static void VisionRuntime_ProcessBlobs(
         {
             (void)VisionRuntime_ProcessFineROI(
                 image, &s_vision_candidates[i],
-                VISION_RUNTIME_FINE_TARGET_BEACON);
+                VISION_RUNTIME_FINE_TARGET_BEACON, i,
+                s_vision_beacon_threshold);
         }
     }
 }
@@ -1970,6 +2164,8 @@ static void VisionRuntime_UpdateDiagFromCurrentFrame(int beacon_count,
             s_vision_runtime_diag.beacon_nearest_brightness = nearest->average_brightness;
             s_vision_runtime_diag.beacon_nearest_occupancy = nearest->occupancy_ratio;
             s_vision_runtime_diag.beacon_nearest_aspect = nearest->aspect_ratio;
+            s_vision_runtime_diag.beacon_nearest_confidence =
+                nearest->detection_confidence;
         }
     }
 }
@@ -2135,6 +2331,25 @@ uint8 VisionRuntime_GetCandidateBoxes(VisionRuntimeCandidateBox_t *boxes, uint8 
         boxes[i].fine_min_col = min_x;
         boxes[i].fine_max_col = max_x;
         boxes[i].area = s_vision_candidates[i].area;
+        boxes[i].raw_box_area_pixels =
+            s_vision_candidate_annotations[i].raw_box_area_pixels;
+        boxes[i].vehicle_valid = s_vision_candidate_annotations[i].vehicle_valid;
+        boxes[i].beacon_valid = s_vision_candidate_annotations[i].beacon_valid;
+        boxes[i].detection_confidence =
+            s_vision_candidate_annotations[i].detection_confidence;
+        boxes[i].beacon_x_cm = s_vision_candidate_annotations[i].beacon_x_cm;
+        boxes[i].beacon_y_cm = s_vision_candidate_annotations[i].beacon_y_cm;
+        boxes[i].beacon_area_cm2 = s_vision_candidate_annotations[i].beacon_area_cm2;
+        boxes[i].beacon_circularity =
+            s_vision_candidate_annotations[i].beacon_circularity;
+        boxes[i].confidence_box_size =
+            s_vision_candidate_annotations[i].confidence_box_size;
+        boxes[i].confidence_stability =
+            s_vision_candidate_annotations[i].confidence_stability;
+        boxes[i].confidence_area =
+            s_vision_candidate_annotations[i].confidence_area;
+        boxes[i].confidence_edge =
+            s_vision_candidate_annotations[i].confidence_edge;
     }
     return count;
 }

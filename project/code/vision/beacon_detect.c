@@ -5,17 +5,76 @@
 BeaconConfig_t g_beacon_config = {
     .binary_threshold = 10,
     .area_threshold   = 1,
-    .min_aspect       = 0.25f,
-    .max_aspect       = 1.5f,
-    .min_occupancy    = 0.30f,
-    .min_circularity  = 0.47f,
-    .min_physical_area_cm2 = 10.0f,
-    .max_physical_area_cm2 = 300.0f
+    .min_aspect       = 0.15f,
+    .max_aspect       = 3.0f,
+    .min_occupancy    = 0.10f,
+    .min_circularity  = 0.15f,
+    .min_physical_area_cm2 = BEACON_PHYSICAL_AREA_MIN_CM2,
+    .max_physical_area_cm2 = BEACON_PHYSICAL_AREA_MAX_CM2
 };
 
 static BeaconResult_t *s_beacon_frame_results = NULL;
 static int s_beacon_frame_max_results = 0;
 static int s_beacon_frame_count = 0;
+
+static float BeaconDetect_Clamp01(float value)
+{
+    if(value < 0.0f) return 0.0f;
+    if(value > 1.0f) return 1.0f;
+    return value;
+}
+
+static void BeaconDetect_UpdateConfidence(VisionBlob_t *blob)
+{
+    float score;
+    float area_score;
+    float box_size = 0.0f;
+    float stability = 0.0f;
+    float area = 0.0f;
+    float edge = 0.0f;
+
+    if(blob == NULL)
+    {
+        return;
+    }
+
+    box_size = BeaconDetect_Clamp01(blob->confidence_box_size);
+    stability = BeaconDetect_Clamp01(blob->confidence_stability);
+    edge = BeaconDetect_Clamp01(blob->confidence_edge);
+
+    area = blob->physical_area_cm2;
+    if(area <= BEACON_PHYSICAL_AREA_MIN_CM2 ||
+       area >= BEACON_PHYSICAL_AREA_MAX_CM2)
+    {
+        area_score = 0.0f;
+    }
+    else if(area <= BEACON_PHYSICAL_AREA_IDEAL_CM2)
+    {
+        area_score = (area - BEACON_PHYSICAL_AREA_MIN_CM2) /
+                     (BEACON_PHYSICAL_AREA_IDEAL_CM2 -
+                      BEACON_PHYSICAL_AREA_MIN_CM2);
+    }
+    else
+    {
+        area_score = (BEACON_PHYSICAL_AREA_MAX_CM2 - area) /
+                     (BEACON_PHYSICAL_AREA_MAX_CM2 -
+                      BEACON_PHYSICAL_AREA_IDEAL_CM2);
+    }
+
+    blob->confidence_box_size = box_size;
+    blob->confidence_stability = stability;
+    blob->confidence_area = BeaconDetect_Clamp01(area_score);
+    blob->confidence_edge = edge;
+    score = BEACON_CONFIDENCE_BOX_SIZE_WEIGHT * box_size +
+            BEACON_CONFIDENCE_STABILITY_WEIGHT * stability +
+            BEACON_CONFIDENCE_AREA_WEIGHT * blob->confidence_area +
+            BEACON_CONFIDENCE_EDGE_WEIGHT * edge;
+    score = BeaconDetect_Clamp01(score);
+    /* Keep a usable floor for distant lamps while preserving high-score headroom. */
+    score = 64.0f / 255.0f + score * (191.0f / 255.0f);
+    score = BeaconDetect_Clamp01(score);
+    blob->detection_confidence = (uint8)(score * 255.0f + 0.5f);
+}
 
 static void BeaconDetect_FillResultFromBlob(const VisionBlob_t *blob, BeaconResult_t *result)
 {
@@ -37,6 +96,10 @@ static void BeaconDetect_FillResultFromBlob(const VisionBlob_t *blob, BeaconResu
     result->max_row = blob->max_row;
     result->min_col = blob->min_col;
     result->max_col = blob->max_col;
+    result->raw_min_row = blob->raw_min_row;
+    result->raw_max_row = blob->raw_max_row;
+    result->raw_min_col = blob->raw_min_col;
+    result->raw_max_col = blob->raw_max_col;
     result->average_brightness = blob->average_brightness;
     result->aspect_ratio = blob->aspect_ratio;
     result->occupancy_ratio = blob->occupancy_ratio;
@@ -47,6 +110,12 @@ static void BeaconDetect_FillResultFromBlob(const VisionBlob_t *blob, BeaconResu
     result->physical_occupancy_ratio = blob->physical_occupancy_ratio;
     result->physical_pixel_count = blob->physical_pixel_count;
     result->physical_valid = blob->physical_valid;
+    result->raw_box_area_pixels = blob->raw_box_area_pixels;
+    result->detection_confidence = blob->detection_confidence;
+    result->confidence_box_size = blob->confidence_box_size;
+    result->confidence_stability = blob->confidence_stability;
+    result->confidence_area = blob->confidence_area;
+    result->confidence_edge = blob->confidence_edge;
     result->world_x = blob->world_x;
     result->world_y = blob->world_y;
     result->distance_cm = dist;
@@ -64,7 +133,7 @@ void BeaconDetect_BeginBlobFrame(BeaconResult_t *results, int max_results)
     s_beacon_frame_count = 0;
 }
 
-uint8 BeaconDetect_AppendBlob(const VisionBlob_t *blob)
+uint8 BeaconDetect_AppendBlob(VisionBlob_t *blob)
 {
     float aspect_ratio;
     float occupancy_ratio;
@@ -118,6 +187,7 @@ uint8 BeaconDetect_AppendBlob(const VisionBlob_t *blob)
         return 0U;
     }
 
+    BeaconDetect_UpdateConfidence(blob);
     if(s_beacon_frame_count >= s_beacon_frame_max_results)
     {
         return 0U;

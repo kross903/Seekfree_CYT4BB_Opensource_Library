@@ -893,12 +893,24 @@ class VisionToolApp:
             tab.columnconfigure(1, weight=1)
             tab.columnconfigure(2, weight=1)
             tab.rowconfigure(1, weight=1)
+            candidate_type = (
+                "小车" if candidate.get("vehicle_valid") else
+                ("信标" if candidate.get("beacon_valid") else "未通过")
+            )
             ttk.Label(
                 tab,
                 text=(
                     f"候选 {index}  框: ({min_col},{min_row})-({max_col},{max_row})  "
-                    f"面积: {candidate.get('area_cm2', 0):.2f} cm²  "
-                    f"圆度: {candidate.get('circularity', 0):.3f}"
+                    f"类型: {candidate_type}  "
+                    f"候选框面积: {int(candidate.get('raw_box_area_pixels', 0))} 像素  "
+                    f"实际面积: {candidate.get('area_cm2', 0):.2f} cm²  "
+                    f"圆度: {candidate.get('circularity', 0):.3f}  "
+                    f"位置: ({candidate.get('x_cm', 0):.1f}, {candidate.get('y_cm', 0):.1f}) cm  "
+                    f"detection_confidence: {int(candidate.get('detection_confidence', 0))}\n"
+                    f"候选框大小评分 B: {candidate.get('confidence_box_size', 0):.2f}  "
+                    f"面积评分 A: {candidate.get('confidence_area', 0):.2f}  "
+                    f"阈值稳定性评分 T: {candidate.get('confidence_stability', 0):.2f}  "
+                    f"边缘评分 E: {candidate.get('confidence_edge', 0):.2f}"
                 ),
             ).grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 6))
             left_label = ttk.Label(tab, text="原图候选区", anchor="center")
@@ -1224,32 +1236,47 @@ class VisionToolApp:
         for beacon in result.get("beacons", []):
             if not beacon.get("valid"):
                 continue
-            box = (beacon["min_col"], beacon["min_row"], beacon["max_col"], beacon["max_row"])
-            draw_original.rectangle(box, outline=(0, 255, 255), width=1)
-            draw_binary.rectangle(box, outline=(0, 255, 255), width=1)
-            cx = (beacon["min_col"] + beacon["max_col"]) // 2
-            cy = (beacon["min_row"] + beacon["max_row"]) // 2
-            draw_original.ellipse((cx - 2, cy - 2, cx + 2, cy + 2), outline=(255, 0, 0), width=1)
-            draw_binary.ellipse((cx - 2, cy - 2, cx + 2, cy + 2), outline=(255, 0, 0), width=1)
+            fine_box = (
+                int(beacon["min_col"]), int(beacon["min_row"]),
+                int(beacon["max_col"]), int(beacon["max_row"]),
+            )
+            raw_min_col = int(beacon.get("raw_min_col", beacon["min_col"] // 2))
+            raw_min_row = int(beacon.get("raw_min_row", beacon["min_row"] // 2))
+            raw_max_col = int(beacon.get("raw_max_col", beacon["max_col"] // 2))
+            raw_max_row = int(beacon.get("raw_max_row", beacon["max_row"] // 2))
+            raw_box = (
+                raw_min_col * 2, raw_min_row * 2,
+                raw_max_col * 2 + 1, raw_max_row * 2 + 1,
+            )
+            draw_original.rectangle(raw_box, outline=(0, 255, 255), width=1)
+            draw_binary.rectangle(fine_box, outline=(0, 255, 255), width=1)
+            raw_cx = (raw_box[0] + raw_box[2]) // 2
+            raw_cy = (raw_box[1] + raw_box[3]) // 2
+            fine_cx = (fine_box[0] + fine_box[2]) // 2
+            fine_cy = (fine_box[1] + fine_box[3]) // 2
+            draw_original.ellipse((raw_cx - 2, raw_cy - 2, raw_cx + 2, raw_cy + 2), outline=(255, 0, 0), width=1)
+            draw_binary.ellipse((fine_cx - 2, fine_cy - 2, fine_cx + 2, fine_cy + 2), outline=(255, 0, 0), width=1)
         chevron = result.get("chevron", {})
         if chevron.get("valid"):
-            def point(name: str) -> tuple[int, int]:
-                item = chevron.get(name, {})
-                return int(round(item.get("u", 0))), int(round(item.get("v", 0)))
+            def point(name: str, raw: bool = False) -> tuple[int, int]:
+                key = name.replace("_img", "_raw_img") if raw else name
+                item = chevron.get(key, chevron.get(name, {}))
+                scale = 2 if raw else 1
+                return int(round(item.get("u", 0) * scale)), int(round(item.get("v", 0) * scale))
 
-            def draw_chevron(draw: ImageDraw.ImageDraw) -> None:
-                draw.line([point("left_line_start_img"), point("left_line_end_img")], fill=(0, 255, 0), width=1)
-                draw.line([point("right_line_start_img"), point("right_line_end_img")], fill=(0, 255, 0), width=1)
-                apex = point("apex_img")
-                left_tip = point("left_tip_img")
-                right_tip = point("right_tip_img")
+            def draw_chevron(draw: ImageDraw.ImageDraw, raw: bool = False) -> None:
+                draw.line([point("left_line_start_img", raw), point("left_line_end_img", raw)], fill=(0, 255, 0), width=1)
+                draw.line([point("right_line_start_img", raw), point("right_line_end_img", raw)], fill=(0, 255, 0), width=1)
+                apex = point("apex_img", raw)
+                left_tip = point("left_tip_img", raw)
+                right_tip = point("right_tip_img", raw)
                 for px, py, color in ((apex[0], apex[1], (255, 0, 0)),
                                       (left_tip[0], left_tip[1], (0, 128, 255)),
                                       (right_tip[0], right_tip[1], (0, 128, 255))):
                     draw.ellipse((px - 2, py - 2, px + 2, py + 2), outline=color, width=1)
 
-            draw_chevron(draw_original)
-            draw_chevron(draw_binary)
+            draw_chevron(draw_original, raw=True)
+            draw_chevron(draw_binary, raw=False)
         self.current_source_image = original
         self.current_candidate_source = image.copy()
         self.current_candidate_binary = binary.copy()
@@ -1306,6 +1333,16 @@ class VisionToolApp:
             f"，夹角: {physical.get('arm_angle_deg', 0):.2f}°"
             f"\n底边/高: {physical.get('base_cm', 0):.2f}/{physical.get('triangle_height_cm', 0):.2f} cm"
         )
+        beacon_lines = []
+        for beacon_index, beacon in enumerate(result.get("beacons", []), start=1):
+            if not beacon.get("valid"):
+                continue
+            beacon_lines.append(
+                f"#{beacon_index} conf={int(beacon.get('detection_confidence', 0))} "
+                f"pos=({beacon.get('x_cm', 0.0):.1f},{beacon.get('y_cm', 0.0):.1f}) "
+                f"area={beacon.get('area_cm2', 0.0):.1f}cm²"
+            )
+        beacon_detail = "\n信标详情:\n" + "\n".join(beacon_lines) if beacon_lines else ""
         self.set_result_info(
             f"连通域: {result.get('blob_count', 0)}\n"
             f"信标: {result.get('beacon_count', 0)}\n"
@@ -1315,6 +1352,7 @@ class VisionToolApp:
             f"粗筛阈值: {result.get('coarse_threshold', '?')}\n"
             f"预览顺序: {binary_mode_text}\n"
             f"小车标志有效: {result.get('vehicle', {}).get('valid', 0)}\n"
+            f"{beacon_detail}"
             f"{chevron_info}\n"
             f"运行目录: {binary_path.parent}"
             f"{undistorted_info}"

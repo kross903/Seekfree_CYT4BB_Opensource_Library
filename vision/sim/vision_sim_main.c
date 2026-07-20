@@ -1,5 +1,6 @@
 #include "zf_device_mt9v03x.h"
 #include "vision/beacon_detect.h"
+#include "vision/camera_calibration.h"
 #include "vision/ipm_interface.h"
 #include "vision/vehicle_marker_localization.h"
 #include "vision/vision_runtime.h"
@@ -153,6 +154,33 @@ static void threshold_image(uint8 *image, size_t pixel_count, uint8 threshold)
     }
 }
 
+static void full_rectified_point_to_raw(const VehicleMarkerPoint2D_t *full,
+                                        float *raw_u, float *raw_v)
+{
+    uint16 source_x_q8 = 0U;
+    uint16 source_y_q8 = 0U;
+    int full_x;
+    int full_y;
+
+    if(full == NULL || raw_u == NULL || raw_v == NULL)
+    {
+        return;
+    }
+    full_x = (int)(full->u + 0.5f);
+    full_y = (int)(full->v + 0.5f);
+    if(CameraCalibration_FullRectifiedPixelToSourceQ8(
+           full_x, full_y, &source_x_q8, &source_y_q8))
+    {
+        *raw_u = (float)source_x_q8 / 256.0f;
+        *raw_v = (float)source_y_q8 / 256.0f;
+    }
+    else
+    {
+        *raw_u = full->u * 0.5f;
+        *raw_v = full->v * 0.5f;
+    }
+}
+
 static int write_result(const char *path, const char *binary_path,
                         float roll_deg, float pitch_deg, float height_cm,
                         uint8 vehicle_threshold, uint8 beacon_threshold,
@@ -165,6 +193,20 @@ static int write_result(const char *path, const char *binary_path,
     VisionRuntimeBeaconSlot_t slots[VISION_RUNTIME_BEACON_SLOT_COUNT] = {0};
     VisionRuntimeCandidateBox_t candidates[16U] = {0};
     VehicleMarkerChevronDebug_t chevron = {0};
+    float apex_raw_u = 0.0f;
+    float apex_raw_v = 0.0f;
+    float left_tip_raw_u = 0.0f;
+    float left_tip_raw_v = 0.0f;
+    float right_tip_raw_u = 0.0f;
+    float right_tip_raw_v = 0.0f;
+    float left_line_start_raw_u = 0.0f;
+    float left_line_start_raw_v = 0.0f;
+    float left_line_end_raw_u = 0.0f;
+    float left_line_end_raw_v = 0.0f;
+    float right_line_start_raw_u = 0.0f;
+    float right_line_start_raw_v = 0.0f;
+    float right_line_end_raw_u = 0.0f;
+    float right_line_end_raw_v = 0.0f;
     uint8 candidate_count;
     int i;
 
@@ -212,11 +254,12 @@ static int write_result(const char *path, const char *binary_path,
             diag->ir_reject_insert_count);
     fprintf(file,
             "  \"beacon_nearest_metrics\":{\"raw_area_pixels\":%.6f,\"area_cm2\":%.6f,"
-            "\"perimeter_cm\":%.6f,\"circularity\":%.6f},\n",
+            "\"perimeter_cm\":%.6f,\"circularity\":%.6f,\"detection_confidence\":%u},\n",
             diag->beacon_nearest_area,
             diag->beacon_nearest_area_cm2,
             diag->beacon_nearest_perimeter_cm,
-            diag->beacon_nearest_circularity);
+            diag->beacon_nearest_circularity,
+            (unsigned)diag->beacon_nearest_confidence);
     fprintf(file, "  \"binary_threshold\":%u,\n",
             (unsigned)beacon_threshold);
     fprintf(file, "  \"coarse_threshold\":%u,\n",
@@ -274,14 +317,26 @@ static int write_result(const char *path, const char *binary_path,
     {
         fprintf(file,
                 "    {\"valid\":%u,\"x_cm\":%.6f,\"y_cm\":%.6f,\"min_row\":%d,\"max_row\":%d,\"min_col\":%d,\"max_col\":%d,"
+                "\"raw_min_row\":%d,\"raw_max_row\":%d,\"raw_min_col\":%d,\"raw_max_col\":%d,"
                 "\"area_cm2\":%.6f,\"perimeter_cm\":%.6f,\"circularity\":%.6f,"
-                "\"physical_pixel_count\":%u,\"physical_valid\":%u}%s\n",
+                "\"physical_pixel_count\":%u,\"physical_valid\":%u,"
+                "\"raw_box_area_pixels\":%d,\"detection_confidence\":%u,\"confidence_box_size\":%.6f,"
+                "\"confidence_stability\":%.6f,\"confidence_area\":%.6f,"
+                "\"confidence_edge\":%.6f}%s\n",
                 (unsigned)slots[i].valid, slots[i].x_cm, slots[i].y_cm,
                 slots[i].min_row, slots[i].max_row,
                 slots[i].min_col, slots[i].max_col,
+                slots[i].raw_min_row, slots[i].raw_max_row,
+                slots[i].raw_min_col, slots[i].raw_max_col,
                 slots[i].area_cm2, slots[i].perimeter_cm, slots[i].circularity,
                 (unsigned)slots[i].physical_pixel_count,
                 (unsigned)slots[i].physical_valid,
+                slots[i].raw_box_area_pixels,
+                (unsigned)slots[i].detection_confidence,
+                slots[i].confidence_box_size,
+                slots[i].confidence_stability,
+                slots[i].confidence_area,
+                slots[i].confidence_edge,
                 (i + 1 < VISION_RUNTIME_BEACON_SLOT_COUNT) ? "," : "");
     }
     fprintf(file, "  ],\n  \"vehicle\":{\"valid\":%u,\"x_cm\":%.6f,\"y_cm\":%.6f,\"heading_deg\":%.6f},\n",
@@ -295,14 +350,42 @@ static int write_result(const char *path, const char *binary_path,
                 "    {\"area\":%d,\"raw_min_row\":%d,\"raw_max_row\":%d,"
                 "\"raw_min_col\":%d,\"raw_max_col\":%d,"
                 "\"fine_min_row\":%d,\"fine_max_row\":%d,"
-                "\"fine_min_col\":%d,\"fine_max_col\":%d}%s\n",
+                "\"fine_min_col\":%d,\"fine_max_col\":%d,"
+                "\"vehicle_valid\":%u,\"beacon_valid\":%u,"
+                "\"raw_box_area_pixels\":%d,\"detection_confidence\":%u,\"x_cm\":%.6f,\"y_cm\":%.6f,"
+                "\"area_cm2\":%.6f,\"circularity\":%.6f,"
+                "\"confidence_box_size\":%.6f,\"confidence_stability\":%.6f,"
+                "\"confidence_area\":%.6f,\"confidence_edge\":%.6f}%s\n",
                 candidates[i].area,
                 candidates[i].raw_min_row, candidates[i].raw_max_row,
                 candidates[i].raw_min_col, candidates[i].raw_max_col,
                 candidates[i].fine_min_row, candidates[i].fine_max_row,
                 candidates[i].fine_min_col, candidates[i].fine_max_col,
+                (unsigned)candidates[i].vehicle_valid,
+                (unsigned)candidates[i].beacon_valid,
+                candidates[i].raw_box_area_pixels,
+                (unsigned)candidates[i].detection_confidence,
+                candidates[i].beacon_x_cm,
+                candidates[i].beacon_y_cm,
+                candidates[i].beacon_area_cm2,
+                candidates[i].beacon_circularity,
+                candidates[i].confidence_box_size,
+                candidates[i].confidence_stability,
+                candidates[i].confidence_area,
+                candidates[i].confidence_edge,
                 (i + 1 < (int)candidate_count) ? "," : "");
     }
+    full_rectified_point_to_raw(&chevron.apex_img, &apex_raw_u, &apex_raw_v);
+    full_rectified_point_to_raw(&chevron.left_tip_img, &left_tip_raw_u, &left_tip_raw_v);
+    full_rectified_point_to_raw(&chevron.right_tip_img, &right_tip_raw_u, &right_tip_raw_v);
+    full_rectified_point_to_raw(&chevron.left_line_start_img,
+                                &left_line_start_raw_u, &left_line_start_raw_v);
+    full_rectified_point_to_raw(&chevron.left_line_end_img,
+                                &left_line_end_raw_u, &left_line_end_raw_v);
+    full_rectified_point_to_raw(&chevron.right_line_start_img,
+                                &right_line_start_raw_u, &right_line_start_raw_v);
+    full_rectified_point_to_raw(&chevron.right_line_end_img,
+                                &right_line_end_raw_u, &right_line_end_raw_v);
     fprintf(file, "  ],\n");
     fprintf(file, "  \"chevron\":{\"valid\":%u,\"heading_deg\":%.6f,",
             (unsigned)chevron.valid, chevron.heading_deg);
@@ -320,6 +403,20 @@ static int write_result(const char *path, const char *binary_path,
             chevron.right_line_start_img.u, chevron.right_line_start_img.v);
     fprintf(file, "\"right_line_end_img\":{\"u\":%.3f,\"v\":%.3f},",
             chevron.right_line_end_img.u, chevron.right_line_end_img.v);
+    fprintf(file, "\"apex_raw_img\":{\"u\":%.3f,\"v\":%.3f},",
+            apex_raw_u, apex_raw_v);
+    fprintf(file, "\"left_tip_raw_img\":{\"u\":%.3f,\"v\":%.3f},",
+            left_tip_raw_u, left_tip_raw_v);
+    fprintf(file, "\"right_tip_raw_img\":{\"u\":%.3f,\"v\":%.3f},",
+            right_tip_raw_u, right_tip_raw_v);
+    fprintf(file, "\"left_line_start_raw_img\":{\"u\":%.3f,\"v\":%.3f},",
+            left_line_start_raw_u, left_line_start_raw_v);
+    fprintf(file, "\"left_line_end_raw_img\":{\"u\":%.3f,\"v\":%.3f},",
+            left_line_end_raw_u, left_line_end_raw_v);
+    fprintf(file, "\"right_line_start_raw_img\":{\"u\":%.3f,\"v\":%.3f},",
+            right_line_start_raw_u, right_line_start_raw_v);
+    fprintf(file, "\"right_line_end_raw_img\":{\"u\":%.3f,\"v\":%.3f},",
+            right_line_end_raw_u, right_line_end_raw_v);
     fprintf(file,
             "\"physical\":{\"area_cm2\":%.6f,\"occupancy\":%.6f,\"circularity\":%.6f,"
             "\"left_arm_cm\":%.6f,\"right_arm_cm\":%.6f,\"arm_angle_deg\":%.6f,"
