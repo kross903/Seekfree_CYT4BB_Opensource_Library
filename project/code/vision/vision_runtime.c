@@ -2305,6 +2305,7 @@ void VisionRuntime_SetBeaconSlots(const VisionRuntimeBeaconSlot_t *slots, uint8 
 
 uint8 VisionRuntime_GetCandidateBoxes(VisionRuntimeCandidateBox_t *boxes, uint8 max_boxes)
 {
+#if CY_CORE_CM7_1
     uint8 count;
     uint8 i;
 
@@ -2352,4 +2353,9 @@ uint8 VisionRuntime_GetCandidateBoxes(VisionRuntimeCandidateBox_t *boxes, uint8 
             s_vision_candidate_annotations[i].confidence_edge;
     }
     return count;
+#else
+    (void)boxes;
+    (void)max_boxes;
+    return 0U;
+#endif
 }
