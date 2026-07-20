@@ -1514,7 +1514,7 @@ static uint8 vehicle_marker_chevron_world_to_image(const VehicleMarkerWorldPoint
         return 0U;
     }
 
-    if(!IPM_World2RectifiedImage(world->x, world->y, &img_x, &img_y))
+    if(!IPM_World2FullRectifiedImage(world->x, world->y, &img_x, &img_y))
     {
         return 0U;
     }
@@ -1523,18 +1523,18 @@ static uint8 vehicle_marker_chevron_world_to_image(const VehicleMarkerWorldPoint
     {
         img_x = 0;
     }
-    else if(img_x >= MT9V03X_W)
+    else if(img_x >= (int)VISION_RUNTIME_FINE_WIDTH)
     {
-        img_x = MT9V03X_W - 1;
+        img_x = VISION_RUNTIME_FINE_WIDTH - 1;
     }
 
     if(img_y < 0)
     {
         img_y = 0;
     }
-    else if(img_y >= MT9V03X_H)
+    else if(img_y >= (int)VISION_RUNTIME_FINE_HEIGHT)
     {
-        img_y = MT9V03X_H - 1;
+        img_y = VISION_RUNTIME_FINE_HEIGHT - 1;
     }
 
     img->u = (float)img_x;
@@ -2127,11 +2127,12 @@ static uint8 vehicle_marker_chevron_process_candidate(const VehicleMarkerChevron
         return 0U;
     }
 
-    if(!IPM_RectifiedImage2WorldF(apex_img.u, apex_img.v, &apex.x, &apex.y) ||
-       !IPM_RectifiedImage2WorldF(left_tip_img.u, left_tip_img.v,
-                                 &left_tip.x, &left_tip.y) ||
-       !IPM_RectifiedImage2WorldF(right_tip_img.u, right_tip_img.v,
-                                 &right_tip.x, &right_tip.y))
+    if(!IPM_FullRectifiedImage2WorldF(apex_img.u, apex_img.v,
+                                     &apex.x, &apex.y) ||
+       !IPM_FullRectifiedImage2WorldF(left_tip_img.u, left_tip_img.v,
+                                     &left_tip.x, &left_tip.y) ||
+       !IPM_FullRectifiedImage2WorldF(right_tip_img.u, right_tip_img.v,
+                                     &right_tip.x, &right_tip.y))
     {
         s_vehicle_marker_chevron_debug.reject_reason =
             VEHICLE_MARKER_CHEVRON_REJECT_WORLD_PROJECTION;
@@ -2293,7 +2294,7 @@ static uint8 vehicle_marker_chevron_process_candidate_legacy(VehicleMarkerPose_t
         float world_x = 0.0f;
         float world_y = 0.0f;
 
-        if(!IPM_RectifiedImage2WorldF(
+        if(!IPM_FullRectifiedImage2WorldF(
                (float)s_vehicle_marker_chevron_candidates[0].contour.point_x[i],
                (float)s_vehicle_marker_chevron_candidates[0].contour.point_y[i],
                &world_x,

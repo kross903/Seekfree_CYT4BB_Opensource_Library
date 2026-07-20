@@ -80,6 +80,12 @@ uint8 CameraCalibration_RectifiedPixelToSourceQ8(int dst_x,
                                                  uint16 *src_x_q8,
                                                  uint16 *src_y_q8);
 
+/* 获取完整376x240去畸变画布像素对应的原图Q8坐标。 */
+uint8 CameraCalibration_FullRectifiedPixelToSourceQ8(int full_x,
+                                                      int full_y,
+                                                      uint16 *src_x_q8,
+                                                      uint16 *src_y_q8);
+
 #ifdef __cplusplus
 }
 #endif

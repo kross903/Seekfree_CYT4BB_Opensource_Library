@@ -12,6 +12,8 @@
 uint8 mt9v03x_image[MT9V03X_H][MT9V03X_W];
 volatile uint8 mt9v03x_finish_flag = 0U;
 static uint8 s_runtime_undistorted_mask[MT9V03X_H][MT9V03X_W];
+static uint8 s_runtime_binary_fine[VISION_RUNTIME_FINE_HEIGHT][VISION_RUNTIME_FINE_WIDTH];
+static uint8 s_runtime_binary_coarse[MT9V03X_H][MT9V03X_W];
 
 #define BIRDVIEW_MAX_ALLOCATION_BYTES (256U * 1024U * 1024U)
 #define BIRDVIEW_HALF_RANGE_CM        (500.0f)
@@ -101,6 +103,40 @@ static int parse_int(const char *text, int fallback)
 static int write_pgm(const char *path, const uint8 *image)
 {
     return write_pgm_image(path, image, MT9V03X_W, MT9V03X_H);
+}
+
+static int write_fine_pgm(const char *path, const uint8 *image)
+{
+    return write_pgm_image(path, image, VISION_RUNTIME_FINE_WIDTH,
+                            VISION_RUNTIME_FINE_HEIGHT);
+}
+
+static void unpack_runtime_binary(const uint8 *packed)
+{
+    int y;
+    int x;
+
+    memset(s_runtime_binary_fine, 0, sizeof(s_runtime_binary_fine));
+    memset(s_runtime_binary_coarse, 0, sizeof(s_runtime_binary_coarse));
+    if(packed == NULL)
+    {
+        return;
+    }
+    for(y = 0; y < (int)VISION_RUNTIME_FINE_HEIGHT; y++)
+    {
+        for(x = 0; x < (int)VISION_RUNTIME_FINE_WIDTH; x++)
+        {
+            size_t byte_index = (size_t)y * (size_t)VISION_RUNTIME_FINE_STRIDE +
+                                (size_t)(x >> 3);
+            uint8 mask = (uint8)(0x80U >> (x & 7));
+            uint8 value = (packed[byte_index] & mask) ? 255U : 0U;
+            s_runtime_binary_fine[y][x] = value;
+            if(value != 0U)
+            {
+                s_runtime_binary_coarse[y >> 1][x >> 1] = 255U;
+            }
+        }
+    }
 }
 
 static void threshold_image(uint8 *image, size_t pixel_count, uint8 threshold)
@@ -359,12 +395,13 @@ int main(int argc, char **argv)
     mt9v03x_finish_flag = 1U;
     VisionRuntime_ProcessFrameWithPose(roll_deg, pitch_deg, height_cm);
     VisionRuntime_GetDiag(&diag);
-    binary_source = (const uint8 (*)[MT9V03X_W])VisionRuntime_GetBinaryDisplayImage();
+    unpack_runtime_binary(VisionRuntime_GetBinaryImage());
+    binary_source = (const uint8 (*)[MT9V03X_W])s_runtime_binary_coarse;
     IPM_GenerateUndistortedDebugMask(s_runtime_undistorted_mask);
 
     if(binary_path != NULL)
     {
-        write_pgm(binary_path, VisionRuntime_GetBinaryDisplayImage());
+        write_fine_pgm(binary_path, &s_runtime_binary_fine[0][0]);
     }
     if(undistorted_path != NULL ||
        (birdview_path != NULL && binary_mode == BINARY_MODE_UNDISTORT_BINARY))
@@ -452,8 +489,8 @@ int main(int argc, char **argv)
             {
                 if(binary_mode == BINARY_MODE_UNDISTORT_BINARY)
                 {
-                    write_pgm(undistorted_binary_path,
-                              VisionRuntime_GetBinaryDisplayImage());
+                    write_fine_pgm(undistorted_binary_path,
+                                   &s_runtime_binary_fine[0][0]);
                 }
                 else
                 {
@@ -556,7 +593,7 @@ int main(int argc, char **argv)
             else if(binary_mode == BINARY_MODE_UNDISTORT_BINARY)
             {
                 if(!IPM_GenerateBirdViewFromRuntimeBinary(
-                       &binary_source[0][0], birdview_binary,
+                       VisionRuntime_GetBinaryImage(), birdview_binary,
                        birdview_mask, &birdview_bounds))
                 {
                     fprintf(stderr, "undistorted binary birdview generation failed\n");

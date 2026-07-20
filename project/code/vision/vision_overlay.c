@@ -1,5 +1,14 @@
 #include "vision/vision_overlay.h"
 #include "vision/ipm_interface.h"
+#include "vision/vision_runtime.h"
+
+static uint8 VisionOverlay_GetBinaryPixel(const uint8 *binary_image,
+                                          int col, int row)
+{
+    uint8 mask = (uint8)(0x80U >> (col & 7));
+    return (uint8)((binary_image[row * VISION_RUNTIME_BINARY_STRIDE +
+                                (col >> 3)] & mask) != 0U);
+}
 
 static uint8 VisionOverlay_IsImagePointInBounds(int img_x, int img_y)
 {
@@ -86,6 +95,24 @@ void VisionOverlay_DrawImagePoint4x4(int img_x, int img_y, uint16 color, uint16 
     }
 }
 
+void VisionOverlay_DrawFineImagePoint4x4(int img_x, int img_y,
+                                         uint16 color, uint16 image_y_offset)
+{
+    VisionOverlay_DrawImagePoint4x4(img_x / 2, img_y / 2,
+                                    color, image_y_offset);
+}
+
+void VisionOverlay_DrawFineImageLine(int img_x0, int img_y0,
+                                     int img_x1, int img_y1,
+                                     uint16 color, uint16 image_y_offset)
+{
+    ips200_draw_line((uint16)(img_x0 / 2),
+                     (uint16)(img_y0 / 2 + (int)image_y_offset),
+                     (uint16)(img_x1 / 2),
+                     (uint16)(img_y1 / 2 + (int)image_y_offset),
+                     color);
+}
+
 void VisionOverlay_DrawBinaryContour(const uint8 *binary_image,
                                      int min_col, int max_col,
                                      int min_row, int max_row,
@@ -100,9 +127,11 @@ void VisionOverlay_DrawBinaryContour(const uint8 *binary_image,
     }
 
     if(min_col < 0) min_col = 0;
-    if(max_col >= MT9V03X_W) max_col = MT9V03X_W - 1;
+    if(max_col >= (int)VISION_RUNTIME_FINE_WIDTH)
+        max_col = VISION_RUNTIME_FINE_WIDTH - 1;
     if(min_row < 0) min_row = 0;
-    if(max_row >= MT9V03X_H) max_row = MT9V03X_H - 1;
+    if(max_row >= (int)VISION_RUNTIME_FINE_HEIGHT)
+        max_row = VISION_RUNTIME_FINE_HEIGHT - 1;
     if(min_col > max_col || min_row > max_row)
     {
         return;
@@ -116,7 +145,7 @@ void VisionOverlay_DrawBinaryContour(const uint8 *binary_image,
             int dc = 0;
             uint8 is_boundary = 0U;
 
-            if(binary_image[row * MT9V03X_W + col] == 0U)
+            if(!VisionOverlay_GetBinaryPixel(binary_image, col, row))
             {
                 continue;
             }
@@ -132,9 +161,12 @@ void VisionOverlay_DrawBinaryContour(const uint8 *binary_image,
                     {
                         continue;
                     }
-                    if(next_row < 0 || next_row >= MT9V03X_H ||
-                       next_col < 0 || next_col >= MT9V03X_W ||
-                       binary_image[next_row * MT9V03X_W + next_col] == 0U)
+                    if(next_row < 0 ||
+                       next_row >= (int)VISION_RUNTIME_FINE_HEIGHT ||
+                       next_col < 0 ||
+                       next_col >= (int)VISION_RUNTIME_FINE_WIDTH ||
+                       !VisionOverlay_GetBinaryPixel(binary_image,
+                                                     next_col, next_row))
                     {
                         is_boundary = 1U;
                         break;
@@ -144,8 +176,8 @@ void VisionOverlay_DrawBinaryContour(const uint8 *binary_image,
 
             if(is_boundary)
             {
-                ips200_draw_point((uint16)col,
-                                  (uint16)(row + (int)image_y_offset),
+                ips200_draw_point((uint16)(col / 2),
+                                  (uint16)(row / 2 + (int)image_y_offset),
                                   color);
             }
         }

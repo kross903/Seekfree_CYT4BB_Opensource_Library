@@ -101,6 +101,8 @@ uint8 IPM_Image2WorldF(float img_x, float img_y, float *world_x, float *world_y)
 /* 188x120运行时去畸变坐标与地面物理坐标互转。 */
 uint8 IPM_RectifiedImage2WorldF(float img_x, float img_y,
                                float *world_x, float *world_y);
+uint8 IPM_FullRectifiedImage2WorldF(float img_x, float img_y,
+                                    float *world_x, float *world_y);
 
 /**
  * @brief 地面物理坐标转换为图像坐标
@@ -113,6 +115,8 @@ uint8 IPM_RectifiedImage2WorldF(float img_x, float img_y,
 bool IPM_World2Image(float world_x, float world_y, int *img_x, int *img_y);
 bool IPM_World2RectifiedImage(float world_x, float world_y,
                               int *img_x, int *img_y);
+bool IPM_World2FullRectifiedImage(float world_x, float world_y,
+                                  int *img_x, int *img_y);
 
 /**
  * @brief 获取正下方点在图像中的位置
@@ -200,6 +204,13 @@ void IPM_GenerateUndistortedDebugImageNearest(const uint8 src_img[MT9V03X_H][MT9
                                               uint8 dst_img[MT9V03X_H][MT9V03X_W]);
 
 void IPM_GenerateUndistortedDebugMask(uint8 dst_mask[MT9V03X_H][MT9V03X_W]);
+
+/* 逐点采样完整376x240去畸变画布，供阈值前的全分辨率处理。 */
+uint8 IPM_SampleFullUndistortedGrayQ8(
+    const uint8 src_img[MT9V03X_H][MT9V03X_W],
+    int full_x, int full_y,
+    uint16 *source_x_q8, uint16 *source_y_q8,
+    uint8 *value);
 
 /* 使用标定配置设置原焦距尺度、居中的有限视场去畸变画布。 */
 uint8 IPM_SetUndistortCanvas(IPM_UndistortCanvas_t *canvas);

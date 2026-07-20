@@ -358,7 +358,11 @@ static void CrossCoreCamera_CameraCoreDrawVisionScreen(const VisionRuntimeDiag_t
     }
     else if(binary_display_image != NULL)
     {
-        ips200_show_gray_image(0U, image_y, (uint8 *)binary_display_image, MT9V03X_W, MT9V03X_H, image_w, image_h, 0U);
+        ips200_show_binary_image(0U, image_y, binary_display_image,
+                                 VISION_RUNTIME_FINE_WIDTH,
+                                 VISION_RUNTIME_FINE_HEIGHT,
+                                 image_w,
+                                 image_h);
     }
     else
     {
@@ -398,33 +402,35 @@ static void CrossCoreCamera_CameraCoreDrawVisionScreen(const VisionRuntimeDiag_t
         {
             if(chevron_debug.left_valid)
             {
-                ips200_draw_line((uint16)chevron_debug.left_line_start_img.u,
-                                 (uint16)(chevron_debug.left_line_start_img.v + image_y),
-                                 (uint16)chevron_debug.left_line_end_img.u,
-                                 (uint16)(chevron_debug.left_line_end_img.v + image_y),
-                                 RGB565_GREEN);
-                VisionOverlay_DrawImagePoint4x4((int)chevron_debug.left_tip_img.u,
-                                                (int)chevron_debug.left_tip_img.v,
-                                                RGB565_BLUE,
-                                                image_y);
+                VisionOverlay_DrawFineImageLine(
+                    (int)chevron_debug.left_line_start_img.u,
+                    (int)chevron_debug.left_line_start_img.v,
+                    (int)chevron_debug.left_line_end_img.u,
+                    (int)chevron_debug.left_line_end_img.v,
+                    RGB565_GREEN, image_y);
+                VisionOverlay_DrawFineImagePoint4x4(
+                    (int)chevron_debug.left_tip_img.u,
+                    (int)chevron_debug.left_tip_img.v,
+                    RGB565_BLUE, image_y);
             }
             if(chevron_debug.right_valid)
             {
-                ips200_draw_line((uint16)chevron_debug.right_line_start_img.u,
-                                 (uint16)(chevron_debug.right_line_start_img.v + image_y),
-                                 (uint16)chevron_debug.right_line_end_img.u,
-                                 (uint16)(chevron_debug.right_line_end_img.v + image_y),
-                                 RGB565_GREEN);
-                VisionOverlay_DrawImagePoint4x4((int)chevron_debug.right_tip_img.u,
-                                                (int)chevron_debug.right_tip_img.v,
-                                                RGB565_BLUE,
-                                                image_y);
+                VisionOverlay_DrawFineImageLine(
+                    (int)chevron_debug.right_line_start_img.u,
+                    (int)chevron_debug.right_line_start_img.v,
+                    (int)chevron_debug.right_line_end_img.u,
+                    (int)chevron_debug.right_line_end_img.v,
+                    RGB565_GREEN, image_y);
+                VisionOverlay_DrawFineImagePoint4x4(
+                    (int)chevron_debug.right_tip_img.u,
+                    (int)chevron_debug.right_tip_img.v,
+                    RGB565_BLUE, image_y);
             }
 
-            VisionOverlay_DrawImagePoint4x4((int)chevron_debug.apex_img.u,
-                                            (int)chevron_debug.apex_img.v,
-                                            RGB565_RED,
-                                            image_y);
+            VisionOverlay_DrawFineImagePoint4x4(
+                (int)chevron_debug.apex_img.u,
+                (int)chevron_debug.apex_img.v,
+                RGB565_RED, image_y);
         }
     }
 

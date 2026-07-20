@@ -19,6 +19,25 @@
 #define VISION_RUNTIME_LOCAL_BIRDVIEW_MAX_WIDTH (128U)
 #define VISION_RUNTIME_LOCAL_BIRDVIEW_MAX_HEIGHT (128U)
 
+/* Candidate refinement pipeline selection. */
+#define VISION_RUNTIME_PIPELINE_UNDISTORT_THEN_IPM (0U)
+#define VISION_RUNTIME_PIPELINE_IPM_THEN_BINARY   (1U)
+#ifndef VISION_RUNTIME_PIPELINE_MODE
+#define VISION_RUNTIME_PIPELINE_MODE VISION_RUNTIME_PIPELINE_UNDISTORT_THEN_IPM
+#endif
+#if VISION_RUNTIME_PIPELINE_MODE != VISION_RUNTIME_PIPELINE_UNDISTORT_THEN_IPM && \
+    VISION_RUNTIME_PIPELINE_MODE != VISION_RUNTIME_PIPELINE_IPM_THEN_BINARY
+#error "Unsupported VISION_RUNTIME_PIPELINE_MODE"
+#endif
+
+#define VISION_RUNTIME_FINE_WIDTH   (MT9V03X_W * 2U)
+#define VISION_RUNTIME_FINE_HEIGHT  (MT9V03X_H * 2U)
+#define VISION_RUNTIME_FINE_STRIDE  ((VISION_RUNTIME_FINE_WIDTH + 7U) / 8U)
+#define VISION_RUNTIME_FINE_BYTES   (VISION_RUNTIME_FINE_STRIDE * VISION_RUNTIME_FINE_HEIGHT)
+#define VISION_RUNTIME_BINARY_STRIDE VISION_RUNTIME_FINE_STRIDE
+#define VISION_RUNTIME_BINARY_BYTES  VISION_RUNTIME_FINE_BYTES
+#define VISION_RUNTIME_RLE_MAX_RUNS  (4096U)
+
 typedef struct
 {
     float centroid_row;
@@ -112,8 +131,10 @@ void VisionRuntime_GetDiag(VisionRuntimeDiag_t *diag);
 void VisionRuntime_SetDiag(const VisionRuntimeDiag_t *diag);
 void VisionRuntime_GetBeaconSlots(VisionRuntimeBeaconSlot_t *slots, uint8 max_slots);
 void VisionRuntime_SetBeaconSlots(const VisionRuntimeBeaconSlot_t *slots, uint8 max_slots);
+/* Returns the row-aligned MSB-first 1-bit 376x240 binary bitmap. */
 const uint8 *VisionRuntime_GetBinaryImage(void);
 const uint8 *VisionRuntime_GetBinaryDisplayImage(void);
 const uint8 *VisionRuntime_GetUndistortedImage(void);
+uint32 VisionRuntime_GetFineRleOverflowCount(void);
 
 #endif /* VISION_RUNTIME_H_ */

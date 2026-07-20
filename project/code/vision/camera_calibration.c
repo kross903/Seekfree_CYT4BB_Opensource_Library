@@ -585,3 +585,27 @@ uint8 CameraCalibration_RectifiedPixelToSourceQ8(int dst_x,
     return 1U;
 #endif
 }
+
+uint8 CameraCalibration_FullRectifiedPixelToSourceQ8(int full_x,
+                                                      int full_y,
+                                                      uint16 *src_x_q8,
+                                                      uint16 *src_y_q8)
+{
+    if(src_x_q8 == NULL || src_y_q8 == NULL ||
+       full_x < 0 || full_x >= CAMERA_CALIBRATION_UNDISTORT_WIDTH ||
+       full_y < 0 || full_y >= CAMERA_CALIBRATION_UNDISTORT_HEIGHT)
+    {
+        return 0U;
+    }
+
+#if CAMERA_UNDISTORT_RECT_MAP_HAS_DATA
+    *src_x_q8 = camera_undistort_full_src_x_q8[full_y][full_x];
+    *src_y_q8 = camera_undistort_full_src_y_q8[full_y][full_x];
+    return (uint8)(*src_x_q8 != CAMERA_UNDISTORT_RECT_MAP_INVALID &&
+                   *src_y_q8 != CAMERA_UNDISTORT_RECT_MAP_INVALID);
+#else
+    *src_x_q8 = CAMERA_UNDISTORT_RECT_MAP_INVALID;
+    *src_y_q8 = CAMERA_UNDISTORT_RECT_MAP_INVALID;
+    return 0U;
+#endif
+}

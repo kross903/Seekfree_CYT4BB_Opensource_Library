@@ -54,11 +54,17 @@ def pixel_to_ray(x: float, y: float, cfg: dict) -> tuple[float, float, float, bo
     return my * s, mx * s, math.cos(theta), True
 
 
-def c_array_2d(name: str, values: list[list[int]], c_type: str) -> str:
+def c_array_2d(
+    name: str,
+    values: list[list[int]],
+    c_type: str,
+    row_dim: str = "MT9V03X_H",
+    col_dim: str = "MT9V03X_W",
+) -> str:
     rows = []
     for row in values:
         rows.append("    {" + ", ".join(str(v) for v in row) + "}")
-    return f"const {c_type} {name}[MT9V03X_H][MT9V03X_W] = {{\n" + ",\n".join(rows) + "\n};\n"
+    return f"const {c_type} {name}[{row_dim}][{col_dim}] = {{\n" + ",\n".join(rows) + "\n};\n"
 
 
 def write_generated(path: Path, text: str) -> None:
@@ -216,6 +222,45 @@ def generate_headers(calibration_path: Path | str, output_dir: Path | str, q: in
 """
     rect += c_array_2d("camera_undistort_rect_src_x_q8", mx, "uint16")
     rect += c_array_2d("camera_undistort_rect_src_y_q8", my, "uint16")
+
+    # Full-resolution map used for thresholding before the 2x2 binary merge.
+    full_k = np.array(
+        [
+            [cfg["fx"], 0, (undistort_w - 1) * 0.5],
+            [0, cfg["fy"], (undistort_h - 1) * 0.5],
+            [0, 0, 1],
+        ],
+        dtype=np.float64,
+    )
+    full_map_x, full_map_y = cv2.fisheye.initUndistortRectifyMap(
+        k, d, np.eye(3), full_k, (undistort_w, undistort_h), cv2.CV_32FC1
+    )
+    full_mx, full_my = [], []
+    for y in range(undistort_h):
+        full_mxr, full_myr = [], []
+        for x in range(undistort_w):
+            sx = float(full_map_x[y, x])
+            sy = float(full_map_y[y, x])
+            ok = 0.0 <= sx < (w - 1) and 0.0 <= sy < (h - 1)
+            full_mxr.append(int(round(sx * map_scale)) if ok else map_invalid)
+            full_myr.append(int(round(sy * map_scale)) if ok else map_invalid)
+        full_mx.append(full_mxr)
+        full_my.append(full_myr)
+
+    rect += c_array_2d(
+        "camera_undistort_full_src_x_q8",
+        full_mx,
+        "uint16",
+        "CAMERA_CALIBRATION_UNDISTORT_HEIGHT",
+        "CAMERA_CALIBRATION_UNDISTORT_WIDTH",
+    )
+    rect += c_array_2d(
+        "camera_undistort_full_src_y_q8",
+        full_my,
+        "uint16",
+        "CAMERA_CALIBRATION_UNDISTORT_HEIGHT",
+        "CAMERA_CALIBRATION_UNDISTORT_WIDTH",
+    )
     rect += "\n#endif /* CAMERA_UNDISTORT_RECT_MAP_H_ */\n"
     rect_path = output_dir / "camera_undistort_rect_map.h"
     write_generated(rect_path, rect)

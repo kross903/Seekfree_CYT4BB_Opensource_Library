@@ -29,14 +29,18 @@ BUILD_ROOT = APP_ROOT / "build"
 RUN_ROOT = APP_ROOT / "runs"
 WIDTH = 188
 HEIGHT = 120
+FINE_WIDTH = 376
+FINE_HEIGHT = 240
+FINE_STRIDE = (FINE_WIDTH + 7) // 8
 
 
 class Simulator:
     """Builds the selected firmware vision sources with the PC hardware shim."""
 
-    def __init__(self, source_dir: Path, threshold: int = 150) -> None:
+    def __init__(self, source_dir: Path, threshold: int = 150, pipeline_mode: int = 0) -> None:
         self.source_dir = source_dir
         self.threshold = threshold
+        self.pipeline_mode = pipeline_mode
 
     def find_compiler(self) -> str | None:
         configured = os.environ.get("VISION_CC") or os.environ.get("CC")
@@ -89,7 +93,8 @@ class Simulator:
         manifest = self.manifest_path()
         if not executable.exists() or not manifest.exists():
             return True
-        if manifest.read_text(encoding="utf-8").strip() != str(self.source_dir.resolve()):
+        expected_manifest = f"{self.source_dir.resolve()}|pipeline={self.pipeline_mode}"
+        if manifest.read_text(encoding="utf-8").strip() != expected_manifest:
             return True
         executable_time = executable.stat().st_mtime
         return any(path.exists() and path.stat().st_mtime > executable_time for path in self.build_inputs())
@@ -112,6 +117,7 @@ class Simulator:
             "-Wno-unused-parameter",
             "-DCY_CORE_CM7_1=1",
             "-DCY_CORE_CM7_0=0",
+            f"-DVISION_RUNTIME_PIPELINE_MODE={self.pipeline_mode}",
             "-I",
             str(SIM_ROOT / "include"),
             "-I",
@@ -140,7 +146,11 @@ class Simulator:
         log = "$ " + " ".join(process_command) + f"\n[returncode={result.returncode}]\n" + (result.stdout or "") + (result.stderr or "")
         if result.returncode != 0:
             return False, log
-        self.manifest_path().write_text(str(self.source_dir.resolve()), encoding="utf-8", newline="\n")
+        self.manifest_path().write_text(
+            f"{self.source_dir.resolve()}|pipeline={self.pipeline_mode}",
+            encoding="utf-8",
+            newline="\n",
+        )
         return True, log + "\nBuild succeeded: " + str(self.output_path())
 
     def run(
@@ -157,6 +167,7 @@ class Simulator:
         threshold_outer: int = 170,
         binary_mode: str = "gray",
     ) -> tuple[bool, str, Path | None, Path | None, Path | None, Path | None, Path | None, Path | None, Path | None]:
+        self.pipeline_mode = 1 if binary_mode == "post_transform" else 0
         executable = self.output_path()
         if self.needs_rebuild():
             ok, log = self.build()
@@ -255,6 +266,8 @@ class VisionToolApp:
         self.processed_window: tk.Toplevel | None = None
         self.processed_label: ttk.Label | None = None
         self.processed_photo: ImageTk.PhotoImage | None = None
+        self.candidate_window: tk.Toplevel | None = None
+        self.candidate_photos: list[ImageTk.PhotoImage] = []
         self.current_frame: Path | None = None
         self.current_result: dict | None = None
         self.ui_queue: queue.Queue[tuple[str, object]] = queue.Queue()
@@ -721,6 +734,95 @@ class VisionToolApp:
         self.processed_label = None
         self.processed_photo = None
 
+    def close_candidate_window(self) -> None:
+        if self.candidate_window is not None and self.candidate_window.winfo_exists():
+            self.candidate_window.destroy()
+        self.candidate_window = None
+        self.candidate_photos = []
+
+    def open_candidate_window(
+        self,
+        image: Image.Image,
+        binary: Image.Image,
+        result: dict,
+    ) -> None:
+        self.close_candidate_window()
+        window = tk.Toplevel(self.root)
+        self.candidate_window = window
+        window.title("候选区域")
+        window.geometry("980x680")
+        window.minsize(640, 420)
+        notebook = ttk.Notebook(window)
+        notebook.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
+        candidates = [
+            item for item in result.get("beacons", [])
+            if item.get("valid") and item.get("max_col", -1) >= item.get("min_col", 0)
+        ]
+        if not candidates:
+            ttk.Label(window, text="当前帧没有有效候选区域").pack(pady=8)
+            window.protocol("WM_DELETE_WINDOW", self.close_candidate_window)
+            return
+
+        source = image.convert("RGB")
+        fine_binary = binary.convert("RGB")
+        for index, candidate in enumerate(candidates, start=1):
+            min_col = max(0, int(candidate.get("min_col", 0)))
+            max_col = min(FINE_WIDTH - 1, int(candidate.get("max_col", 0)))
+            min_row = max(0, int(candidate.get("min_row", 0)))
+            max_row = min(FINE_HEIGHT - 1, int(candidate.get("max_row", 0)))
+            if min_col > max_col or min_row > max_row:
+                continue
+            # 固件坐标是 376x240；原图裁剪需映射回 188x120。
+            left = max(0, min_col // 2)
+            top = max(0, min_row // 2)
+            right = min(WIDTH, (max_col + 2) // 2)
+            bottom = min(HEIGHT, (max_row + 2) // 2)
+            original_crop = source.crop((left, top, max(right, left + 1), max(bottom, top + 1)))
+            binary_crop = fine_binary.crop((min_col, min_row, max_col + 1, max_row + 1))
+            tab = ttk.Frame(notebook, padding=8)
+            tab.columnconfigure(0, weight=1)
+            tab.columnconfigure(1, weight=1)
+            tab.rowconfigure(1, weight=1)
+            ttk.Label(
+                tab,
+                text=(
+                    f"候选 {index}  框: ({min_col},{min_row})-({max_col},{max_row})  "
+                    f"面积: {candidate.get('area_cm2', 0):.2f} cm²  "
+                    f"圆度: {candidate.get('circularity', 0):.3f}"
+                ),
+            ).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 6))
+            left_label = ttk.Label(tab, text="原图候选区", anchor="center")
+            right_label = ttk.Label(tab, text="376×240 二值候选区", anchor="center")
+            left_label.grid(row=1, column=0, sticky="nsew", padx=(0, 4))
+            right_label.grid(row=1, column=1, sticky="nsew", padx=(4, 0))
+            tab.bind(
+                "<Configure>",
+                lambda _event, l=left_label, r=right_label,
+                       oi=original_crop, bi=binary_crop: self._refresh_candidate_tab(
+                           l, r, oi, bi
+                       ),
+            )
+            notebook.add(tab, text=f"候选 {index}")
+        window.protocol("WM_DELETE_WINDOW", self.close_candidate_window)
+
+    def _refresh_candidate_tab(
+        self,
+        left_label: ttk.Label,
+        right_label: ttk.Label,
+        original: Image.Image,
+        binary: Image.Image,
+    ) -> None:
+        width = max(160, (left_label.winfo_width() or 420))
+        height = max(120, (left_label.winfo_height() or 300))
+        left_photo = ImageTk.PhotoImage(self.fit_image(original, width, height))
+        right_photo = ImageTk.PhotoImage(self.fit_image(binary, width, height))
+        left_label.configure(image=left_photo, text="")
+        right_label.configure(image=right_photo, text="")
+        # Keep only the current pair per label; repeated resize events must not
+        # retain every historical PhotoImage.
+        left_label._vision_photo = left_photo
+        right_label._vision_photo = right_photo
+
     def refresh_processed_preview(self) -> None:
         if self.processed_label is None or self.processed_window is None or not self.processed_window.winfo_exists():
             return
@@ -945,8 +1047,10 @@ class VisionToolApp:
         undistorted_mask: Image.Image | None = None,
         birdview_mask: Image.Image | None = None,
     ) -> None:
-        original = image.convert("RGB")
-        binary = Image.open(binary_path).convert("RGB") if binary_path.exists() else image.convert("RGB")
+        original = image.convert("RGB").resize((FINE_WIDTH, FINE_HEIGHT), Image.Resampling.NEAREST)
+        binary = Image.open(binary_path).convert("RGB") if binary_path.exists() else original.copy()
+        if binary.size != (FINE_WIDTH, FINE_HEIGHT):
+            binary = binary.resize((FINE_WIDTH, FINE_HEIGHT), Image.Resampling.NEAREST)
         draw_original = ImageDraw.Draw(original)
         draw_binary = ImageDraw.Draw(binary)
         for beacon in result.get("beacons", []):
@@ -1048,6 +1152,7 @@ class VisionToolApp:
         )
         if self.undistort_var.get() or self.birdview_var.get():
             self.open_processed_window()
+        self.open_candidate_window(image, binary, result)
 
     def editor_modified(self, _event: object = None) -> None:
         if self.editor.edit_modified():
@@ -1082,6 +1187,7 @@ class VisionToolApp:
 
 def self_test() -> int:
     assert WIDTH == 188 and HEIGHT == 120
+    assert FINE_WIDTH == 376 and FINE_HEIGHT == 240 and FINE_STRIDE == 47
     assert (SIM_ROOT / "vision_sim_main.c").exists()
     assert Simulator(DEFAULT_SOURCE).source_files()
     print("vision tool self-test passed")

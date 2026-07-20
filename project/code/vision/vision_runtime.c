@@ -4,7 +4,8 @@
 
 static VisionRuntimeDiag_t s_vision_runtime_diag;
 static VisionRuntimeBeaconSlot_t s_vision_runtime_beacon_slots[VISION_RUNTIME_BEACON_SLOT_COUNT];
-static uint8 s_vision_binary[MT9V03X_H * MT9V03X_W];
+static uint8 s_vision_binary[VISION_RUNTIME_BINARY_BYTES];
+static uint32 s_vision_rle_overflow_count;
 static uint8 s_vision_binary_thresholds[VISION_BINARY_ZONE_COUNT] = {
     (uint8)VISION_BINARY_THRESHOLD_INNER,
     (uint8)VISION_BINARY_THRESHOLD_MIDDLE,
@@ -44,27 +45,59 @@ void VisionRuntime_GetBinaryThresholds(uint8 thresholds[VISION_BINARY_ZONE_COUNT
 
 #define VISION_RUNTIME_IMAGE_PIXEL_COUNT \
     (MT9V03X_H * MT9V03X_W)
+#define VISION_RUNTIME_IMAGE_STRIDE \
+    ((MT9V03X_W + 7U) / 8U)
 #define VISION_RUNTIME_IMAGE_BITSET_BYTES \
-    ((VISION_RUNTIME_IMAGE_PIXEL_COUNT + 7U) / 8U)
+    (VISION_RUNTIME_IMAGE_STRIDE * MT9V03X_H)
 #define VISION_RUNTIME_LOCAL_BIRDVIEW_PIXEL_COUNT \
     (VISION_RUNTIME_LOCAL_BIRDVIEW_MAX_WIDTH * VISION_RUNTIME_LOCAL_BIRDVIEW_MAX_HEIGHT)
 #define VISION_RUNTIME_LOCAL_BIRDVIEW_BITSET_BYTES \
     ((VISION_RUNTIME_LOCAL_BIRDVIEW_PIXEL_COUNT + 7U) / 8U)
-#define VISION_RUNTIME_BIT_GET(buffer, index) \
+#define VISION_RUNTIME_LOCAL_BIT_GET(buffer, index) \
     (((buffer)[(index) >> 3] >> ((index) & 7)) & 1U)
-#define VISION_RUNTIME_BIT_SET(buffer, index) \
+#define VISION_RUNTIME_LOCAL_BIT_SET(buffer, index) \
     ((buffer)[(index) >> 3] |= (uint8)(1U << ((index) & 7)))
-#define VISION_RUNTIME_BIT_CLEAR(buffer, index) \
+#define VISION_RUNTIME_LOCAL_BIT_CLEAR(buffer, index) \
     ((buffer)[(index) >> 3] &= (uint8)~(uint8)(1U << ((index) & 7)))
 
+#define VISION_RUNTIME_IMAGE_BYTE(index) \
+    (((index) / MT9V03X_W) * VISION_RUNTIME_IMAGE_STRIDE + \
+     (((index) % MT9V03X_W) >> 3))
+#define VISION_RUNTIME_IMAGE_MASK(index) \
+    ((uint8)(0x80U >> ((index) % MT9V03X_W & 7)))
+#define VISION_RUNTIME_IMAGE_BIT_GET(buffer, index) \
+    (((buffer)[VISION_RUNTIME_IMAGE_BYTE(index)] & \
+      VISION_RUNTIME_IMAGE_MASK(index)) != 0U)
+#define VISION_RUNTIME_IMAGE_BIT_SET(buffer, index) \
+    ((buffer)[VISION_RUNTIME_IMAGE_BYTE(index)] |= \
+     VISION_RUNTIME_IMAGE_MASK(index))
+#define VISION_RUNTIME_IMAGE_BIT_CLEAR(buffer, index) \
+    ((buffer)[VISION_RUNTIME_IMAGE_BYTE(index)] &= \
+     (uint8)~VISION_RUNTIME_IMAGE_MASK(index))
+
+#define VISION_RUNTIME_FINE_BYTE(x, y) \
+    ((y) * VISION_RUNTIME_FINE_STRIDE + ((x) >> 3))
+#define VISION_RUNTIME_FINE_MASK(x) \
+    ((uint8)(0x80U >> ((x) & 7)))
+#define VISION_RUNTIME_FINE_BIT_GET(buffer, x, y) \
+    (((buffer)[VISION_RUNTIME_FINE_BYTE((x), (y))] & \
+      VISION_RUNTIME_FINE_MASK(x)) != 0U)
+#define VISION_RUNTIME_FINE_BIT_SET(buffer, x, y) \
+    ((buffer)[VISION_RUNTIME_FINE_BYTE((x), (y))] |= \
+     VISION_RUNTIME_FINE_MASK(x))
+#define VISION_RUNTIME_FINE_BIT_CLEAR(buffer, x, y) \
+    ((buffer)[VISION_RUNTIME_FINE_BYTE((x), (y))] &= \
+     (uint8)~VISION_RUNTIME_FINE_MASK(x))
+
 static uint8 s_vision_visited[VISION_RUNTIME_IMAGE_BITSET_BYTES];
-static uint16 s_vision_queue[MT9V03X_H * MT9V03X_W];
-static uint8 s_vision_component_mask[VISION_RUNTIME_IMAGE_BITSET_BYTES];
+static uint8 s_vision_fine_visited[VISION_RUNTIME_FINE_BYTES];
+static uint8 s_vision_fine_component_mask[VISION_RUNTIME_FINE_BYTES];
 static uint8 s_vision_local_birdview_mask[VISION_RUNTIME_LOCAL_BIRDVIEW_BITSET_BYTES];
 static uint8 s_vision_undistorted[MT9V03X_H][MT9V03X_W];
 
 static float VisionRuntime_NormalizedAspect(int width, int height);
 
+#if 0
 static void VisionRuntime_ClearComponentMask(int pixel_count)
 {
     int i;
@@ -80,7 +113,7 @@ static void VisionRuntime_ClearComponentMask(int pixel_count)
 
     for(i = 0; i < pixel_count; ++i)
     {
-        VISION_RUNTIME_BIT_CLEAR(s_vision_component_mask, s_vision_queue[i]);
+        VISION_RUNTIME_IMAGE_BIT_CLEAR(s_vision_component_mask, s_vision_queue[i]);
     }
 }
 
@@ -173,10 +206,10 @@ static void VisionRuntime_BuildPhysicalBlobMetrics(VisionBlob_t *blob, int pixel
                 int src_y = 0;
 
                 if(IPM_World2RectifiedImage(world_x, world_y, &src_x, &src_y) &&
-                   VISION_RUNTIME_BIT_GET(s_vision_component_mask,
+                   VISION_RUNTIME_IMAGE_BIT_GET(s_vision_component_mask,
                                           src_y * MT9V03X_W + src_x) != 0U)
                 {
-                    VISION_RUNTIME_BIT_SET(
+                    VISION_RUNTIME_LOCAL_BIT_SET(
                         s_vision_local_birdview_mask,
                         local_y * VISION_RUNTIME_LOCAL_BIRDVIEW_MAX_WIDTH + local_x);
                 }
@@ -249,7 +282,7 @@ static void VisionRuntime_BuildPhysicalBlobMetrics(VisionBlob_t *blob, int pixel
             {
                 for(local_x = min_local_x; local_x <= max_local_x; ++local_x)
                 {
-                    VISION_RUNTIME_BIT_SET(
+                    VISION_RUNTIME_LOCAL_BIT_SET(
                         s_vision_local_birdview_mask,
                         local_y * VISION_RUNTIME_LOCAL_BIRDVIEW_MAX_WIDTH + local_x);
                 }
@@ -270,20 +303,20 @@ static void VisionRuntime_BuildPhysicalBlobMetrics(VisionBlob_t *blob, int pixel
                 int index = row * VISION_RUNTIME_LOCAL_BIRDVIEW_MAX_WIDTH + col;
                 int neighbor;
 
-                if(VISION_RUNTIME_BIT_GET(s_vision_local_birdview_mask, index) == 0U)
+                if(VISION_RUNTIME_LOCAL_BIT_GET(s_vision_local_birdview_mask, index) == 0U)
                 {
                     continue;
                 }
                 occupied++;
 
                 neighbor = (row > 0) ? index - (int)VISION_RUNTIME_LOCAL_BIRDVIEW_MAX_WIDTH : -1;
-                if(neighbor < 0 || VISION_RUNTIME_BIT_GET(s_vision_local_birdview_mask, neighbor) == 0U) exposed_edges++;
+                if(neighbor < 0 || VISION_RUNTIME_LOCAL_BIT_GET(s_vision_local_birdview_mask, neighbor) == 0U) exposed_edges++;
                 neighbor = (row + 1 < local_height) ? index + (int)VISION_RUNTIME_LOCAL_BIRDVIEW_MAX_WIDTH : -1;
-                if(neighbor < 0 || VISION_RUNTIME_BIT_GET(s_vision_local_birdview_mask, neighbor) == 0U) exposed_edges++;
+                if(neighbor < 0 || VISION_RUNTIME_LOCAL_BIT_GET(s_vision_local_birdview_mask, neighbor) == 0U) exposed_edges++;
                 neighbor = (col > 0) ? index - 1 : -1;
-                if(neighbor < 0 || VISION_RUNTIME_BIT_GET(s_vision_local_birdview_mask, neighbor) == 0U) exposed_edges++;
+                if(neighbor < 0 || VISION_RUNTIME_LOCAL_BIT_GET(s_vision_local_birdview_mask, neighbor) == 0U) exposed_edges++;
                 neighbor = (col + 1 < local_width) ? index + 1 : -1;
-                if(neighbor < 0 || VISION_RUNTIME_BIT_GET(s_vision_local_birdview_mask, neighbor) == 0U) exposed_edges++;
+                if(neighbor < 0 || VISION_RUNTIME_LOCAL_BIT_GET(s_vision_local_birdview_mask, neighbor) == 0U) exposed_edges++;
             }
         }
 
@@ -399,6 +432,8 @@ static void VisionRuntime_UpdateBeaconSlotsFromCurrentFrame(int beacon_count,
     }
 }
 
+#endif
+
 static float VisionRuntime_NormalizedAspect(int width, int height)
 {
     float w = (float)width;
@@ -416,70 +451,627 @@ static float VisionRuntime_NormalizedAspect(int width, int height)
     return (w > h) ? (w / h) : (h / w);
 }
 
-static void VisionRuntime_Binarize(const uint8 image[MT9V03X_H][MT9V03X_W])
+static uint8 VisionRuntime_GetZoneThreshold(uint16 source_x_q8,
+                                            uint16 source_y_q8,
+                                            sint32 center_x_q8,
+                                            sint32 center_y_q8,
+                                            uint32 inner_radius_sq,
+                                            uint32 middle_radius_sq)
+{
+    sint32 dx = (sint32)source_x_q8 - center_x_q8;
+    sint32 dy = (sint32)source_y_q8 - center_y_q8;
+    uint32 radius_sq = (uint32)(dx * dx) + (uint32)(dy * dy);
+
+    if(radius_sq <= inner_radius_sq)
+    {
+        return s_vision_binary_thresholds[VISION_BINARY_ZONE_INNER];
+    }
+    if(radius_sq <= middle_radius_sq)
+    {
+        return s_vision_binary_thresholds[VISION_BINARY_ZONE_MIDDLE];
+    }
+    return s_vision_binary_thresholds[VISION_BINARY_ZONE_OUTER];
+}
+
+#define VISION_RUNTIME_MAX_CANDIDATES (16U)
+#define VISION_RUNTIME_CANDIDATE_MIN_AREA (2)
+#define VISION_RUNTIME_CANDIDATE_MARGIN (2)
+
+typedef struct
+{
+    int area;
+    int min_row;
+    int max_row;
+    int min_col;
+    int max_col;
+} VisionRuntimeCandidate_t;
+
+static uint8 s_vision_coarse_binary[VISION_RUNTIME_IMAGE_BITSET_BYTES];
+static VisionRuntimeCandidate_t s_vision_candidates[VISION_RUNTIME_MAX_CANDIDATES];
+static uint8 s_vision_candidate_count;
+typedef struct
+{
+    uint16 row;
+    uint16 start_col;
+    uint16 end_col;
+} VisionRuntimeFineRun_t;
+
+static VisionRuntimeFineRun_t
+    s_vision_fine_runs[VISION_RUNTIME_RLE_MAX_RUNS];
+
+static void VisionRuntime_BinarizeCoarse(const uint8 image[MT9V03X_H][MT9V03X_W])
+{
+    int row;
+    int col;
+
+    memset(s_vision_coarse_binary, 0, sizeof(s_vision_coarse_binary));
+    for(row = 0; row < MT9V03X_H; ++row)
+    {
+        for(col = 0; col < MT9V03X_W; ++col)
+        {
+            int index = row * MT9V03X_W + col;
+            if(image[row][col] >=
+               s_vision_binary_thresholds[VISION_BINARY_ZONE_MIDDLE])
+            {
+                VISION_RUNTIME_IMAGE_BIT_SET(s_vision_coarse_binary, index);
+            }
+        }
+    }
+}
+
+static uint8 VisionRuntime_CoarseIsForeground(int x, int y)
+{
+    if(x < 0 || x >= MT9V03X_W || y < 0 || y >= MT9V03X_H) return 0U;
+    return (uint8)VISION_RUNTIME_IMAGE_BIT_GET(
+        s_vision_coarse_binary, y * MT9V03X_W + x);
+}
+
+static uint8 VisionRuntime_CoarseAppendRun(int row, int seed_col,
+                                           int min_col, int max_col,
+                                           uint16 *run_count)
+{
+    int start_col = seed_col;
+    int end_col = seed_col;
+    int x;
+
+    if(run_count == NULL || *run_count >= VISION_RUNTIME_RLE_MAX_RUNS)
+    {
+        ++s_vision_rle_overflow_count;
+        return 0U;
+    }
+    while(start_col > min_col &&
+          VisionRuntime_CoarseIsForeground(start_col - 1, row) &&
+          !VISION_RUNTIME_IMAGE_BIT_GET(s_vision_visited,
+                                        row * MT9V03X_W + start_col - 1))
+    {
+        --start_col;
+    }
+    while(end_col < max_col &&
+          VisionRuntime_CoarseIsForeground(end_col + 1, row) &&
+          !VISION_RUNTIME_IMAGE_BIT_GET(s_vision_visited,
+                                        row * MT9V03X_W + end_col + 1))
+    {
+        ++end_col;
+    }
+    for(x = start_col; x <= end_col; ++x)
+    {
+        VISION_RUNTIME_IMAGE_BIT_SET(s_vision_visited,
+                                     row * MT9V03X_W + x);
+    }
+    s_vision_fine_runs[*run_count].row = (uint16)row;
+    s_vision_fine_runs[*run_count].start_col = (uint16)start_col;
+    s_vision_fine_runs[*run_count].end_col = (uint16)end_col;
+    ++(*run_count);
+    return 1U;
+}
+
+static uint8 VisionRuntime_CoarseAppendNeighborRuns(
+    const VisionRuntimeFineRun_t *run, int neighbor_row,
+    int min_col, int max_col, uint16 *run_count)
+{
+    int scan_col;
+    int begin_col;
+    int end_col;
+
+    if(run == NULL || run_count == NULL ||
+       neighbor_row < 0 || neighbor_row >= MT9V03X_H)
+    {
+        return 1U;
+    }
+    begin_col = (int)run->start_col - 1;
+    end_col = (int)run->end_col + 1;
+    if(begin_col < min_col) begin_col = min_col;
+    if(end_col > max_col) end_col = max_col;
+    scan_col = begin_col;
+    while(scan_col <= end_col)
+    {
+        int index = neighbor_row * MT9V03X_W + scan_col;
+        if(VisionRuntime_CoarseIsForeground(scan_col, neighbor_row) &&
+           !VISION_RUNTIME_IMAGE_BIT_GET(s_vision_visited, index))
+        {
+            if(!VisionRuntime_CoarseAppendRun(neighbor_row, scan_col,
+                                               min_col, max_col, run_count))
+            {
+                return 0U;
+            }
+            scan_col = (int)s_vision_fine_runs[*run_count - 1U].end_col + 1;
+        }
+        else
+        {
+            ++scan_col;
+        }
+    }
+    return 1U;
+}
+
+static uint8 VisionRuntime_FindCoarseCandidates(void)
+{
+    int row;
+    int col;
+    uint8 candidate_count = 0U;
+
+    memset(s_vision_visited, 0, sizeof(s_vision_visited));
+    memset(s_vision_candidates, 0, sizeof(s_vision_candidates));
+    for(row = 0; row < MT9V03X_H; ++row)
+    {
+        for(col = 0; col < MT9V03X_W; ++col)
+        {
+            int start_index = row * MT9V03X_W + col;
+            uint16 run_count = 0U;
+            int front = 0;
+            int area = 0;
+            int min_row = row;
+            int max_row = row;
+            int min_col = col;
+            int max_col = col;
+            uint8 complete = 1U;
+
+            if(!VISION_RUNTIME_IMAGE_BIT_GET(s_vision_coarse_binary, start_index) ||
+               VISION_RUNTIME_IMAGE_BIT_GET(s_vision_visited, start_index))
+            {
+                continue;
+            }
+            if(!VisionRuntime_CoarseAppendRun(row, col, 0, MT9V03X_W - 1,
+                                              &run_count))
+            {
+                continue;
+            }
+            while(front < (int)run_count)
+            {
+                VisionRuntimeFineRun_t run = s_vision_fine_runs[front++];
+                int run_length = (int)run.end_col - (int)run.start_col + 1;
+                area += run_length;
+                {
+                    int current_row = (int)run.row;
+                if(current_row < min_row) min_row = current_row;
+                if(current_row > max_row) max_row = current_row;
+                if((int)run.start_col < min_col) min_col = run.start_col;
+                if((int)run.end_col > max_col) max_col = run.end_col;
+                }
+                if(!VisionRuntime_CoarseAppendNeighborRuns(
+                       &run, (int)run.row - 1, 0, MT9V03X_W - 1, &run_count) ||
+                   !VisionRuntime_CoarseAppendNeighborRuns(
+                       &run, (int)run.row + 1, 0, MT9V03X_W - 1, &run_count))
+                {
+                    complete = 0U;
+                    break;
+                }
+            }
+            if(complete && area >= VISION_RUNTIME_CANDIDATE_MIN_AREA)
+            {
+                int slot = (int)candidate_count;
+
+                if(candidate_count >= VISION_RUNTIME_MAX_CANDIDATES)
+                {
+                    uint8 i;
+                    slot = 0;
+                    for(i = 1U; i < candidate_count; ++i)
+                    {
+                        if(s_vision_candidates[i].area <
+                           s_vision_candidates[slot].area) slot = (int)i;
+                    }
+                    if(area <= s_vision_candidates[slot].area) continue;
+                }
+                else
+                {
+                    ++candidate_count;
+                }
+                s_vision_candidates[slot].area = area;
+                s_vision_candidates[slot].min_row = min_row;
+                s_vision_candidates[slot].max_row = max_row;
+                s_vision_candidates[slot].min_col = min_col;
+                s_vision_candidates[slot].max_col = max_col;
+            }
+        }
+    }
+    s_vision_candidate_count = candidate_count;
+    return candidate_count;
+}
+
+#if 0
+static void VisionRuntime_RefineCandidateUndistorted(
+    const uint8 image[MT9V03X_H][MT9V03X_W],
+    const VisionRuntimeCandidate_t *candidate)
 {
     const float inner_ratio_sq = 0.40f * 0.40f;
     const float middle_ratio_sq = 0.72f * 0.72f;
     const sint32 center_x_q8 = (sint32)(CAMERA_CALIBRATION_CX * 256.0f + 0.5f);
     const sint32 center_y_q8 = (sint32)(CAMERA_CALIBRATION_CY * 256.0f + 0.5f);
     const sint32 far_x_q8 = (center_x_q8 >
-        (((sint32)MT9V03X_W - 1) * 256 - center_x_q8)) ?
-        center_x_q8 : (((sint32)MT9V03X_W - 1) * 256 - center_x_q8);
+        (((sint32)MT9V03X_W - 1) * 256 - center_x_q8)) ? center_x_q8 :
+        (((sint32)MT9V03X_W - 1) * 256 - center_x_q8);
     const sint32 far_y_q8 = (center_y_q8 >
-        (((sint32)MT9V03X_H - 1) * 256 - center_y_q8)) ?
-        center_y_q8 : (((sint32)MT9V03X_H - 1) * 256 - center_y_q8);
-    const uint32 max_radius_sq =
-        (uint32)(far_x_q8 * far_x_q8) + (uint32)(far_y_q8 * far_y_q8);
+        (((sint32)MT9V03X_H - 1) * 256 - center_y_q8)) ? center_y_q8 :
+        (((sint32)MT9V03X_H - 1) * 256 - center_y_q8);
+    const uint32 max_radius_sq = (uint32)(far_x_q8 * far_x_q8) +
+                                 (uint32)(far_y_q8 * far_y_q8);
     const uint32 inner_radius_sq = (uint32)((float)max_radius_sq * inner_ratio_sq);
     const uint32 middle_radius_sq = (uint32)((float)max_radius_sq * middle_ratio_sq);
+    int min_row;
+    int max_row;
+    int min_col;
+    int max_col;
     int row;
     int col;
 
-    IPM_GenerateUndistortedDebugImage(image, s_vision_undistorted);
-    for(row = 0; row < MT9V03X_H; row++)
+    if(candidate == NULL) return;
+    min_row = candidate->min_row - VISION_RUNTIME_CANDIDATE_MARGIN;
+    max_row = candidate->max_row + VISION_RUNTIME_CANDIDATE_MARGIN;
+    min_col = candidate->min_col - VISION_RUNTIME_CANDIDATE_MARGIN;
+    max_col = candidate->max_col + VISION_RUNTIME_CANDIDATE_MARGIN;
+    if(min_row < 0) min_row = 0;
+    if(min_col < 0) min_col = 0;
+    if(max_row >= MT9V03X_H) max_row = MT9V03X_H - 1;
+    if(max_col >= MT9V03X_W) max_col = MT9V03X_W - 1;
+    for(row = min_row; row <= max_row; ++row)
     {
-        for(col = 0; col < MT9V03X_W; col++)
+        for(col = min_col; col <= max_col; ++col)
         {
-            uint16 source_x_q8 = 0U;
-            uint16 source_y_q8 = 0U;
-            uint8 threshold;
+            uint8 foreground_count = 0U;
+            int sub_row;
+            int sub_col;
             int index = row * MT9V03X_W + col;
-
-            if(!CameraCalibration_RectifiedPixelToSourceQ8(col, row,
-                                                           &source_x_q8,
-                                                           &source_y_q8))
+            for(sub_row = 0; sub_row < 2; ++sub_row)
             {
-                s_vision_binary[index] = 0U;
-                continue;
-            }
+                for(sub_col = 0; sub_col < 2; ++sub_col)
+                {
+                    uint16 source_x_q8 = 0U;
+                    uint16 source_y_q8 = 0U;
+                    uint8 sample = 0U;
+                    uint8 threshold;
 
-            {
-                sint32 dx = (sint32)source_x_q8 - center_x_q8;
-                sint32 dy = (sint32)source_y_q8 - center_y_q8;
-                uint32 radius_sq = (uint32)(dx * dx) + (uint32)(dy * dy);
-
-                if(radius_sq <= inner_radius_sq)
-                {
-                    threshold = s_vision_binary_thresholds[VISION_BINARY_ZONE_INNER];
-                }
-                else if(radius_sq <= middle_radius_sq)
-                {
-                    threshold = s_vision_binary_thresholds[VISION_BINARY_ZONE_MIDDLE];
-                }
-                else
-                {
-                    threshold = s_vision_binary_thresholds[VISION_BINARY_ZONE_OUTER];
+                    if(!IPM_SampleFullUndistortedGrayQ8(
+                           image, col * 2 + sub_col, row * 2 + sub_row,
+                           &source_x_q8, &source_y_q8, &sample)) continue;
+                    threshold = VisionRuntime_GetZoneThreshold(
+                        source_x_q8, source_y_q8, center_x_q8, center_y_q8,
+                        inner_radius_sq, middle_radius_sq);
+                    if(sample >= threshold) ++foreground_count;
                 }
             }
-            s_vision_binary[index] =
-                (s_vision_undistorted[row][col] >= threshold) ? 255U : 0U;
+            if(foreground_count >= 2U)
+            {
+                VISION_RUNTIME_IMAGE_BIT_SET(s_vision_binary, index);
+            }
         }
     }
 }
 
+#endif
+
+static uint8 VisionRuntime_GetSourceThreshold(int source_x, int source_y)
+{
+    const sint32 center_x_q8 = (sint32)(CAMERA_CALIBRATION_CX * 256.0f + 0.5f);
+    const sint32 center_y_q8 = (sint32)(CAMERA_CALIBRATION_CY * 256.0f + 0.5f);
+    const sint32 far_x_q8 = (center_x_q8 >
+        (((sint32)MT9V03X_W - 1) * 256 - center_x_q8)) ? center_x_q8 :
+        (((sint32)MT9V03X_W - 1) * 256 - center_x_q8);
+    const sint32 far_y_q8 = (center_y_q8 >
+        (((sint32)MT9V03X_H - 1) * 256 - center_y_q8)) ? center_y_q8 :
+        (((sint32)MT9V03X_H - 1) * 256 - center_y_q8);
+    const uint32 max_radius_sq = (uint32)(far_x_q8 * far_x_q8) +
+                                 (uint32)(far_y_q8 * far_y_q8);
+
+    if(source_x < 0) source_x = 0;
+    if(source_y < 0) source_y = 0;
+    if(source_x >= MT9V03X_W) source_x = MT9V03X_W - 1;
+    if(source_y >= MT9V03X_H) source_y = MT9V03X_H - 1;
+    return VisionRuntime_GetZoneThreshold((uint16)(source_x * 256),
+                                          (uint16)(source_y * 256),
+                                          center_x_q8, center_y_q8,
+                                          (uint32)((float)max_radius_sq * 0.16f),
+                                          (uint32)((float)max_radius_sq * 0.5184f));
+}
+
+#if 0
+static void VisionRuntime_RefineCandidateIPM(
+    const uint8 image[MT9V03X_H][MT9V03X_W],
+    const VisionRuntimeCandidate_t *candidate)
+{
+    const float scale = VISION_RUNTIME_LOCAL_BIRDVIEW_SCALE_CM_PER_PIXEL;
+    float min_world_x = 0.0f;
+    float max_world_x = 0.0f;
+    float min_world_y = 0.0f;
+    float max_world_y = 0.0f;
+    int local_width;
+    int local_height;
+    int valid = 0;
+    int corner;
+    int corner_x[4];
+    int corner_y[4];
+
+    if(candidate == NULL || scale <= 0.0f) return;
+    corner_x[0] = candidate->min_col;
+    corner_x[1] = candidate->max_col;
+    corner_x[2] = candidate->min_col;
+    corner_x[3] = candidate->max_col;
+    corner_y[0] = candidate->min_row;
+    corner_y[1] = candidate->min_row;
+    corner_y[2] = candidate->max_row;
+    corner_y[3] = candidate->max_row;
+    for(corner = 0; corner < 4; ++corner)
+    {
+        float world_x;
+        float world_y;
+
+        if(!IPM_RectifiedImage2WorldF((float)corner_x[corner],
+                                      (float)corner_y[corner],
+                                      &world_x, &world_y)) continue;
+        if(!valid)
+        {
+            min_world_x = max_world_x = world_x;
+            min_world_y = max_world_y = world_y;
+            valid = 1;
+        }
+        else
+        {
+            if(world_x < min_world_x) min_world_x = world_x;
+            if(world_x > max_world_x) max_world_x = world_x;
+            if(world_y < min_world_y) min_world_y = world_y;
+            if(world_y > max_world_y) max_world_y = world_y;
+        }
+    }
+    if(!valid) return;
+    min_world_x -= scale;
+    max_world_x += scale;
+    min_world_y -= scale;
+    max_world_y += scale;
+    local_width = (int)ceilf((max_world_y - min_world_y) / scale) + 1;
+    local_height = (int)ceilf((max_world_x - min_world_x) / scale) + 1;
+    if(local_width < 1 || local_height < 1 ||
+       local_width > (int)VISION_RUNTIME_LOCAL_BIRDVIEW_MAX_WIDTH ||
+       local_height > (int)VISION_RUNTIME_LOCAL_BIRDVIEW_MAX_HEIGHT) return;
+
+    memset(s_vision_local_birdview_mask, 0,
+           sizeof(s_vision_local_birdview_mask));
+    {
+        int local_row;
+        int local_col;
+
+        for(local_row = 0; local_row < local_height; ++local_row)
+        {
+            for(local_col = 0; local_col < local_width; ++local_col)
+            {
+                float world_x = min_world_x + ((float)local_row + 0.5f) * scale;
+                float world_y = max_world_y - ((float)local_col + 0.5f) * scale;
+                int source_x;
+                int source_y;
+                int rect_x;
+                int rect_y;
+                int local_index = local_row *
+                    VISION_RUNTIME_LOCAL_BIRDVIEW_MAX_WIDTH + local_col;
+
+                if(!IPM_World2Image(world_x, world_y, &source_x, &source_y) ||
+                   !IPM_World2RectifiedImage(world_x, world_y, &rect_x, &rect_y) ||
+                   source_x < 0 || source_x >= MT9V03X_W ||
+                   source_y < 0 || source_y >= MT9V03X_H) continue;
+                if(image[source_y][source_x] >=
+                   VisionRuntime_GetSourceThreshold(source_x, source_y))
+                {
+                    VISION_RUNTIME_LOCAL_BIT_SET(s_vision_local_birdview_mask,
+                                                 local_index);
+                    VISION_RUNTIME_IMAGE_BIT_SET(s_vision_binary,
+                        rect_y * MT9V03X_W + rect_x);
+                }
+            }
+        }
+    }
+}
+
+#endif
+
+static void VisionRuntime_FillFineCandidateUndistorted(
+    const uint8 image[MT9V03X_H][MT9V03X_W],
+    const VisionRuntimeCandidate_t *candidate);
+static uint8 VisionRuntime_BuildFineCandidateIPMBinary(
+    const uint8 image[MT9V03X_H][MT9V03X_W],
+    const VisionRuntimeCandidate_t *candidate);
+
+static void VisionRuntime_Binarize(const uint8 image[MT9V03X_H][MT9V03X_W])
+{
+    uint8 i;
+
+    VisionRuntime_BinarizeCoarse(image);
+    VisionRuntime_FindCoarseCandidates();
+    memset(s_vision_binary, 0, sizeof(s_vision_binary));
+    memset(s_vision_fine_visited, 0, sizeof(s_vision_fine_visited));
+    memset(s_vision_fine_component_mask, 0,
+           sizeof(s_vision_fine_component_mask));
+    IPM_GenerateUndistortedDebugImage(image, s_vision_undistorted);
+    for(i = 0U; i < s_vision_candidate_count; ++i)
+    {
+#if VISION_RUNTIME_PIPELINE_MODE == VISION_RUNTIME_PIPELINE_IPM_THEN_BINARY
+        (void)VisionRuntime_BuildFineCandidateIPMBinary(
+            image, &s_vision_candidates[i]);
+#else
+        VisionRuntime_FillFineCandidateUndistorted(
+            image, &s_vision_candidates[i]);
+#endif
+    }
+}
+
+static void VisionRuntime_FillFineCandidateUndistorted(
+    const uint8 image[MT9V03X_H][MT9V03X_W],
+    const VisionRuntimeCandidate_t *candidate)
+{
+    const float inner_ratio_sq = 0.40f * 0.40f;
+    const float middle_ratio_sq = 0.72f * 0.72f;
+    const sint32 center_x_q8 = (sint32)(CAMERA_CALIBRATION_CX * 256.0f + 0.5f);
+    const sint32 center_y_q8 = (sint32)(CAMERA_CALIBRATION_CY * 256.0f + 0.5f);
+    const sint32 far_x_q8 = (center_x_q8 >
+        (((sint32)MT9V03X_W - 1) * 256 - center_x_q8)) ? center_x_q8 :
+        (((sint32)MT9V03X_W - 1) * 256 - center_x_q8);
+    const sint32 far_y_q8 = (center_y_q8 >
+        (((sint32)MT9V03X_H - 1) * 256 - center_y_q8)) ? center_y_q8 :
+        (((sint32)MT9V03X_H - 1) * 256 - center_y_q8);
+    const uint32 max_radius_sq = (uint32)(far_x_q8 * far_x_q8) +
+                                 (uint32)(far_y_q8 * far_y_q8);
+    const uint32 inner_radius_sq = (uint32)((float)max_radius_sq * inner_ratio_sq);
+    const uint32 middle_radius_sq = (uint32)((float)max_radius_sq * middle_ratio_sq);
+    int min_x;
+    int max_x;
+    int min_y;
+    int max_y;
+    int x;
+    int y;
+
+    if(candidate == NULL) return;
+    min_x = (candidate->min_col - VISION_RUNTIME_CANDIDATE_MARGIN) * 2;
+    max_x = (candidate->max_col + VISION_RUNTIME_CANDIDATE_MARGIN + 1) * 2 - 1;
+    min_y = (candidate->min_row - VISION_RUNTIME_CANDIDATE_MARGIN) * 2;
+    max_y = (candidate->max_row + VISION_RUNTIME_CANDIDATE_MARGIN + 1) * 2 - 1;
+    if(min_x < 0) min_x = 0;
+    if(min_y < 0) min_y = 0;
+    if(max_x >= (int)VISION_RUNTIME_FINE_WIDTH)
+        max_x = VISION_RUNTIME_FINE_WIDTH - 1;
+    if(max_y >= (int)VISION_RUNTIME_FINE_HEIGHT)
+        max_y = VISION_RUNTIME_FINE_HEIGHT - 1;
+
+    for(y = min_y; y <= max_y; ++y)
+    {
+        for(x = min_x; x <= max_x; ++x)
+        {
+            uint16 source_x_q8 = 0U;
+            uint16 source_y_q8 = 0U;
+            uint8 sample = 0U;
+            uint8 threshold;
+
+            if(!IPM_SampleFullUndistortedGrayQ8(
+                   image, x, y, &source_x_q8, &source_y_q8, &sample))
+            {
+                continue;
+            }
+            threshold = VisionRuntime_GetZoneThreshold(
+                source_x_q8, source_y_q8, center_x_q8, center_y_q8,
+                inner_radius_sq, middle_radius_sq);
+            if(sample >= threshold)
+            {
+                VISION_RUNTIME_FINE_BIT_SET(s_vision_binary, x, y);
+            }
+        }
+    }
+}
+
+static uint8 VisionRuntime_BuildFineCandidateIPMBinary(
+    const uint8 image[MT9V03X_H][MT9V03X_W],
+    const VisionRuntimeCandidate_t *candidate)
+{
+    const float scale = VISION_RUNTIME_LOCAL_BIRDVIEW_SCALE_CM_PER_PIXEL;
+    float min_world_x = 0.0f;
+    float max_world_x = 0.0f;
+    float min_world_y = 0.0f;
+    float max_world_y = 0.0f;
+    int corner_x[4];
+    int corner_y[4];
+    int local_width;
+    int local_height;
+    int valid = 0;
+    int corner;
+
+    if(candidate == NULL || scale <= 0.0f) return 0U;
+    corner_x[0] = candidate->min_col;
+    corner_x[1] = candidate->max_col;
+    corner_x[2] = candidate->min_col;
+    corner_x[3] = candidate->max_col;
+    corner_y[0] = candidate->min_row;
+    corner_y[1] = candidate->min_row;
+    corner_y[2] = candidate->max_row;
+    corner_y[3] = candidate->max_row;
+    for(corner = 0; corner < 4; ++corner)
+    {
+        float world_x;
+        float world_y;
+
+        if(!IPM_RectifiedImage2WorldF((float)corner_x[corner],
+                                      (float)corner_y[corner],
+                                      &world_x, &world_y)) continue;
+        if(!valid)
+        {
+            min_world_x = max_world_x = world_x;
+            min_world_y = max_world_y = world_y;
+            valid = 1;
+        }
+        else
+        {
+            if(world_x < min_world_x) min_world_x = world_x;
+            if(world_x > max_world_x) max_world_x = world_x;
+            if(world_y < min_world_y) min_world_y = world_y;
+            if(world_y > max_world_y) max_world_y = world_y;
+        }
+    }
+    if(!valid) return 0U;
+    min_world_x -= scale;
+    max_world_x += scale;
+    min_world_y -= scale;
+    max_world_y += scale;
+    local_width = (int)ceilf((max_world_y - min_world_y) / scale) + 1;
+    local_height = (int)ceilf((max_world_x - min_world_x) / scale) + 1;
+    if(local_width < 1 || local_height < 1 ||
+       local_width > (int)VISION_RUNTIME_LOCAL_BIRDVIEW_MAX_WIDTH ||
+       local_height > (int)VISION_RUNTIME_LOCAL_BIRDVIEW_MAX_HEIGHT)
+    {
+        return 0U;
+    }
+
+    memset(s_vision_local_birdview_mask, 0,
+           sizeof(s_vision_local_birdview_mask));
+    for(corner = 0; corner < local_height; ++corner)
+    {
+        int local_col;
+        for(local_col = 0; local_col < local_width; ++local_col)
+        {
+            float world_x = min_world_x + ((float)corner + 0.5f) * scale;
+            float world_y = max_world_y - ((float)local_col + 0.5f) * scale;
+            int source_x;
+            int source_y;
+            int full_x;
+            int full_y;
+            int local_index = corner * VISION_RUNTIME_LOCAL_BIRDVIEW_MAX_WIDTH +
+                              local_col;
+
+            if(!IPM_World2Image(world_x, world_y, &source_x, &source_y) ||
+               !IPM_World2FullRectifiedImage(world_x, world_y,
+                                             &full_x, &full_y) ||
+               source_x < 0 || source_x >= MT9V03X_W ||
+               source_y < 0 || source_y >= MT9V03X_H)
+            {
+                continue;
+            }
+            if(image[source_y][source_x] >=
+               VisionRuntime_GetSourceThreshold(source_x, source_y))
+            {
+                VISION_RUNTIME_LOCAL_BIT_SET(s_vision_local_birdview_mask,
+                                             local_index);
+                VISION_RUNTIME_FINE_BIT_SET(s_vision_binary, full_x, full_y);
+            }
+        }
+    }
+    return 1U;
+}
+
 static int VisionRuntime_GetScaledLargeAreaThreshold(void)
 {
-    return VISION_RUNTIME_BEACON_SPLIT_AREA_THRESHOLD;
+    return VISION_RUNTIME_BEACON_SPLIT_AREA_THRESHOLD * 4;
 }
 
 static uint8 VisionRuntime_IsBoundaryPixel(int row, int col)
@@ -509,7 +1101,7 @@ static uint8 VisionRuntime_IsBoundaryPixel(int row, int col)
             }
 
             next_index = next_row * MT9V03X_W + next_col;
-            if(s_vision_binary[next_index] == 0U)
+            if(!VISION_RUNTIME_IMAGE_BIT_GET(s_vision_binary, next_index))
             {
                 return 1U;
             }
@@ -564,7 +1156,8 @@ static void VisionRuntime_DispatchBlob(const VisionBlob_t *blob,
 #endif
 }
 
-static void VisionRuntime_ProcessBlobs(const uint8 image[MT9V03X_H][MT9V03X_W])
+#if 0
+static void VisionRuntime_ProcessBlobsLegacy(const uint8 image[MT9V03X_H][MT9V03X_W])
 {
     int row = 0;
     int col = 0;
@@ -572,6 +1165,7 @@ static void VisionRuntime_ProcessBlobs(const uint8 image[MT9V03X_H][MT9V03X_W])
 
     memset(s_vision_visited, 0, sizeof(s_vision_visited));
     VisionRuntime_Binarize(image);
+    memset(s_vision_visited, 0, sizeof(s_vision_visited));
 
     for(row = 0; row < MT9V03X_H; row++)
     {
@@ -589,15 +1183,15 @@ static void VisionRuntime_ProcessBlobs(const uint8 image[MT9V03X_H][MT9V03X_W])
             int min_col = col;
             int max_col = col;
 
-            if(s_vision_binary[start_index] == 0U ||
-               VISION_RUNTIME_BIT_GET(s_vision_visited, start_index))
+            if(!VISION_RUNTIME_IMAGE_BIT_GET(s_vision_binary, start_index) ||
+               VISION_RUNTIME_IMAGE_BIT_GET(s_vision_visited, start_index))
             {
                 continue;
             }
 
             s_vision_queue[rear++] = (uint16)start_index;
-            VISION_RUNTIME_BIT_SET(s_vision_visited, start_index);
-            VISION_RUNTIME_BIT_SET(s_vision_component_mask, start_index);
+            VISION_RUNTIME_IMAGE_BIT_SET(s_vision_visited, start_index);
+            VISION_RUNTIME_IMAGE_BIT_SET(s_vision_component_mask, start_index);
 
             while(front < rear)
             {
@@ -640,11 +1234,11 @@ static void VisionRuntime_ProcessBlobs(const uint8 image[MT9V03X_H][MT9V03X_W])
                         }
 
                         next_index = next_row * MT9V03X_W + next_col;
-                        if(s_vision_binary[next_index] != 0U &&
-                           !VISION_RUNTIME_BIT_GET(s_vision_visited, next_index))
+                        if(VISION_RUNTIME_IMAGE_BIT_GET(s_vision_binary, next_index) &&
+                           !VISION_RUNTIME_IMAGE_BIT_GET(s_vision_visited, next_index))
                         {
-                            VISION_RUNTIME_BIT_SET(s_vision_visited, next_index);
-                            VISION_RUNTIME_BIT_SET(s_vision_component_mask, next_index);
+                            VISION_RUNTIME_IMAGE_BIT_SET(s_vision_visited, next_index);
+                            VISION_RUNTIME_IMAGE_BIT_SET(s_vision_component_mask, next_index);
                             if(rear < (MT9V03X_H * MT9V03X_W))
                             {
                                 s_vision_queue[rear++] = (uint16)next_index;
@@ -724,6 +1318,497 @@ static void VisionRuntime_ProcessBlobs(const uint8 image[MT9V03X_H][MT9V03X_W])
                 VisionRuntime_ClearComponentMask(rear);
             }
         }
+    }
+}
+
+#endif
+
+static uint8 VisionRuntime_FineIsForeground(int x, int y)
+{
+    return (uint8)(x >= 0 && x < (int)VISION_RUNTIME_FINE_WIDTH &&
+                   y >= 0 && y < (int)VISION_RUNTIME_FINE_HEIGHT &&
+                   VISION_RUNTIME_FINE_BIT_GET(s_vision_binary, x, y));
+}
+
+static uint8 VisionRuntime_FineIsBoundary(int x, int y)
+{
+    int dr;
+    int dc;
+
+    for(dr = -1; dr <= 1; ++dr)
+    {
+        for(dc = -1; dc <= 1; ++dc)
+        {
+            if(dr == 0 && dc == 0) continue;
+            if(!VisionRuntime_FineIsForeground(x + dc, y + dr)) return 1U;
+        }
+    }
+    return 0U;
+}
+
+static uint8 VisionRuntime_FineAppendRun(int row, int seed_col,
+                                         int min_col, int max_col,
+                                         uint16 *run_count)
+{
+    int start_col = seed_col;
+    int end_col = seed_col;
+    int x;
+
+    if(run_count == NULL || *run_count >= VISION_RUNTIME_RLE_MAX_RUNS)
+    {
+        ++s_vision_rle_overflow_count;
+        return 0U;
+    }
+    while(start_col > min_col &&
+          VisionRuntime_FineIsForeground(start_col - 1, row) &&
+          !VISION_RUNTIME_FINE_BIT_GET(s_vision_fine_visited,
+                                       start_col - 1, row))
+    {
+        --start_col;
+    }
+    while(end_col < max_col &&
+          VisionRuntime_FineIsForeground(end_col + 1, row) &&
+          !VISION_RUNTIME_FINE_BIT_GET(s_vision_fine_visited,
+                                       end_col + 1, row))
+    {
+        ++end_col;
+    }
+    for(x = start_col; x <= end_col; ++x)
+    {
+        VISION_RUNTIME_FINE_BIT_SET(s_vision_fine_visited, x, row);
+        VISION_RUNTIME_FINE_BIT_SET(s_vision_fine_component_mask, x, row);
+    }
+    s_vision_fine_runs[*run_count].row = (uint16)row;
+    s_vision_fine_runs[*run_count].start_col = (uint16)start_col;
+    s_vision_fine_runs[*run_count].end_col = (uint16)end_col;
+    ++(*run_count);
+    return 1U;
+}
+
+static uint8 VisionRuntime_FineAppendNeighborRuns(
+    const VisionRuntimeFineRun_t *run, int neighbor_row,
+    int min_col, int max_col, uint16 *run_count)
+{
+    int scan_col;
+    int begin_col;
+    int end_col;
+
+    if(run == NULL || run_count == NULL ||
+       neighbor_row < 0 || neighbor_row >= (int)VISION_RUNTIME_FINE_HEIGHT)
+    {
+        return 1U;
+    }
+    begin_col = (int)run->start_col - 1;
+    end_col = (int)run->end_col + 1;
+    if(begin_col < min_col) begin_col = min_col;
+    if(end_col > max_col) end_col = max_col;
+    scan_col = begin_col;
+    while(scan_col <= end_col)
+    {
+        if(VisionRuntime_FineIsForeground(scan_col, neighbor_row) &&
+           !VISION_RUNTIME_FINE_BIT_GET(s_vision_fine_visited,
+                                        scan_col, neighbor_row))
+        {
+            if(!VisionRuntime_FineAppendRun(neighbor_row, scan_col,
+                                            min_col, max_col, run_count))
+            {
+                return 0U;
+            }
+            scan_col = (int)s_vision_fine_runs[*run_count - 1U].end_col + 1;
+        }
+        else
+        {
+            ++scan_col;
+        }
+    }
+    return 1U;
+}
+
+static uint8 VisionRuntime_FineSampleBrightness(
+    const uint8 image[MT9V03X_H][MT9V03X_W], int x, int y, uint8 *sample)
+{
+    uint16 source_x_q8;
+    uint16 source_y_q8;
+
+    if(sample == NULL || x < 0 || x >= (int)VISION_RUNTIME_FINE_WIDTH ||
+       y < 0 || y >= (int)VISION_RUNTIME_FINE_HEIGHT)
+    {
+        return 0U;
+    }
+    return IPM_SampleFullUndistortedGrayQ8(
+        image, x, y, &source_x_q8, &source_y_q8, sample);
+}
+
+static void VisionRuntime_BuildPhysicalBlobMetricsFine(
+    VisionBlob_t *blob, uint16 run_count)
+{
+    const float scale = VISION_RUNTIME_LOCAL_BIRDVIEW_SCALE_CM_PER_PIXEL;
+    float min_x = 0.0f;
+    float max_x = 0.0f;
+    float min_y = 0.0f;
+    float max_y = 0.0f;
+    int valid_points = 0;
+    int local_width;
+    int local_height;
+    uint32 occupied = 0U;
+    uint32 exposed_edges = 0U;
+    uint16 run_index;
+
+    if(blob == NULL || run_count == 0U || scale <= 0.0f) return;
+    for(run_index = 0U; run_index < run_count; ++run_index)
+    {
+        int x;
+        int y = (int)s_vision_fine_runs[run_index].row;
+        for(x = (int)s_vision_fine_runs[run_index].start_col;
+            x <= (int)s_vision_fine_runs[run_index].end_col; ++x)
+        {
+            float world_x;
+            float world_y;
+            if(!IPM_FullRectifiedImage2WorldF((float)x, (float)y,
+                                              &world_x, &world_y)) continue;
+            if(valid_points == 0)
+            {
+                min_x = max_x = world_x;
+                min_y = max_y = world_y;
+            }
+            else
+            {
+                if(world_x < min_x) min_x = world_x;
+                if(world_x > max_x) max_x = world_x;
+                if(world_y < min_y) min_y = world_y;
+                if(world_y > max_y) max_y = world_y;
+            }
+            ++valid_points;
+        }
+    }
+    if(valid_points == 0) return;
+
+    min_x -= scale;
+    max_x += scale;
+    min_y -= scale;
+    max_y += scale;
+    local_width = (int)ceilf((max_y - min_y) / scale) + 1;
+    local_height = (int)ceilf((max_x - min_x) / scale) + 1;
+    if(local_width < 1) local_width = 1;
+    if(local_height < 1) local_height = 1;
+    if(local_width > (int)VISION_RUNTIME_LOCAL_BIRDVIEW_MAX_WIDTH ||
+       local_height > (int)VISION_RUNTIME_LOCAL_BIRDVIEW_MAX_HEIGHT)
+    {
+        return;
+    }
+
+    memset(s_vision_local_birdview_mask, 0,
+           sizeof(s_vision_local_birdview_mask));
+    {
+        int local_row;
+        int local_col;
+        for(local_row = 0; local_row < local_height; ++local_row)
+        {
+            for(local_col = 0; local_col < local_width; ++local_col)
+            {
+                float world_x = min_x + ((float)local_row + 0.5f) * scale;
+                float world_y = max_y - ((float)local_col + 0.5f) * scale;
+                int source_x;
+                int source_y;
+                int index = local_row * VISION_RUNTIME_LOCAL_BIRDVIEW_MAX_WIDTH +
+                            local_col;
+
+                if(IPM_World2FullRectifiedImage(world_x, world_y,
+                                                &source_x, &source_y) &&
+                   VISION_RUNTIME_FINE_BIT_GET(
+                       s_vision_fine_component_mask, source_x, source_y))
+                {
+                    VISION_RUNTIME_LOCAL_BIT_SET(s_vision_local_birdview_mask,
+                                                 index);
+                }
+            }
+        }
+    }
+
+    /* Fill the projected footprint of each full-resolution foreground pixel. */
+    for(run_index = 0U; run_index < run_count; ++run_index)
+    {
+        int x;
+        int y = (int)s_vision_fine_runs[run_index].row;
+        for(x = (int)s_vision_fine_runs[run_index].start_col;
+            x <= (int)s_vision_fine_runs[run_index].end_col; ++x)
+        {
+            const float corner_x[4] = {
+                (float)x - 0.5f, (float)x + 0.5f,
+                (float)x - 0.5f, (float)x + 0.5f};
+            const float corner_y[4] = {
+                (float)y - 0.5f, (float)y - 0.5f,
+                (float)y + 0.5f, (float)y + 0.5f};
+            float footprint_min_x = 0.0f;
+            float footprint_max_x = 0.0f;
+            float footprint_min_y = 0.0f;
+            float footprint_max_y = 0.0f;
+            int footprint_valid = 0;
+            int corner;
+
+            for(corner = 0; corner < 4; ++corner)
+            {
+                float world_x;
+                float world_y;
+                if(!IPM_FullRectifiedImage2WorldF(
+                       corner_x[corner], corner_y[corner],
+                       &world_x, &world_y)) continue;
+                if(footprint_valid == 0)
+                {
+                    footprint_min_x = footprint_max_x = world_x;
+                    footprint_min_y = footprint_max_y = world_y;
+                }
+                else
+                {
+                    if(world_x < footprint_min_x) footprint_min_x = world_x;
+                    if(world_x > footprint_max_x) footprint_max_x = world_x;
+                    if(world_y < footprint_min_y) footprint_min_y = world_y;
+                    if(world_y > footprint_max_y) footprint_max_y = world_y;
+                }
+                ++footprint_valid;
+            }
+            if(footprint_valid == 0) continue;
+            {
+                int min_local_row = (int)floorf((footprint_min_x - min_x) / scale);
+                int max_local_row = (int)floorf((footprint_max_x - min_x) / scale);
+                int min_local_col = (int)floorf((max_y - footprint_max_y) / scale);
+                int max_local_col = (int)floorf((max_y - footprint_min_y) / scale);
+                int local_row;
+                int local_col;
+
+                if(min_local_row < 0) min_local_row = 0;
+                if(min_local_col < 0) min_local_col = 0;
+                if(max_local_row >= local_height) max_local_row = local_height - 1;
+                if(max_local_col >= local_width) max_local_col = local_width - 1;
+                for(local_row = min_local_row; local_row <= max_local_row; ++local_row)
+                {
+                    for(local_col = min_local_col; local_col <= max_local_col; ++local_col)
+                    {
+                        VISION_RUNTIME_LOCAL_BIT_SET(
+                            s_vision_local_birdview_mask,
+                            local_row * VISION_RUNTIME_LOCAL_BIRDVIEW_MAX_WIDTH +
+                            local_col);
+                    }
+                }
+            }
+        }
+    }
+
+    {
+        int row;
+        int col;
+        for(row = 0; row < local_height; ++row)
+        {
+            for(col = 0; col < local_width; ++col)
+            {
+                int index = row * VISION_RUNTIME_LOCAL_BIRDVIEW_MAX_WIDTH + col;
+                int neighbor;
+                if(!VISION_RUNTIME_LOCAL_BIT_GET(s_vision_local_birdview_mask,
+                                                 index)) continue;
+                ++occupied;
+                neighbor = (row > 0) ? index - VISION_RUNTIME_LOCAL_BIRDVIEW_MAX_WIDTH : -1;
+                if(neighbor < 0 || !VISION_RUNTIME_LOCAL_BIT_GET(s_vision_local_birdview_mask, neighbor)) ++exposed_edges;
+                neighbor = (row + 1 < local_height) ? index + VISION_RUNTIME_LOCAL_BIRDVIEW_MAX_WIDTH : -1;
+                if(neighbor < 0 || !VISION_RUNTIME_LOCAL_BIT_GET(s_vision_local_birdview_mask, neighbor)) ++exposed_edges;
+                neighbor = (col > 0) ? index - 1 : -1;
+                if(neighbor < 0 || !VISION_RUNTIME_LOCAL_BIT_GET(s_vision_local_birdview_mask, neighbor)) ++exposed_edges;
+                neighbor = (col + 1 < local_width) ? index + 1 : -1;
+                if(neighbor < 0 || !VISION_RUNTIME_LOCAL_BIT_GET(s_vision_local_birdview_mask, neighbor)) ++exposed_edges;
+            }
+        }
+    }
+    if(occupied == 0U || exposed_edges == 0U) return;
+    blob->physical_pixel_count = (occupied > 65535U) ? 65535U : (uint16)occupied;
+    blob->physical_area_cm2 = (float)occupied * scale * scale;
+    blob->physical_perimeter_cm = (float)exposed_edges * scale;
+    blob->physical_circularity =
+        (4.0f * 3.14159265f * blob->physical_area_cm2) /
+        ((float)exposed_edges * scale * (float)exposed_edges * scale);
+    if(blob->physical_circularity > 1.0f) blob->physical_circularity = 1.0f;
+    blob->physical_aspect_ratio = VisionRuntime_NormalizedAspect(local_width,
+                                                                  local_height);
+    blob->physical_occupancy_ratio =
+        (float)occupied / (float)(local_width * local_height);
+    blob->physical_valid = 1U;
+}
+
+static void VisionRuntime_ClearFineComponent(uint16 run_count)
+{
+    uint16 run_index;
+    for(run_index = 0U; run_index < run_count; ++run_index)
+    {
+        int x;
+        int y = (int)s_vision_fine_runs[run_index].row;
+        for(x = (int)s_vision_fine_runs[run_index].start_col;
+            x <= (int)s_vision_fine_runs[run_index].end_col; ++x)
+        {
+            VISION_RUNTIME_FINE_BIT_CLEAR(s_vision_fine_component_mask, x, y);
+        }
+    }
+}
+
+static void VisionRuntime_DispatchFineComponent(
+    const uint8 image[MT9V03X_H][MT9V03X_W], uint16 run_count,
+    int large_area_threshold)
+{
+    VisionBlob_t blob;
+    VisionContour_t contour;
+    uint32 area = 0U;
+    uint32 row_sum = 0U;
+    uint32 col_sum = 0U;
+    uint32 brightness_sum = 0U;
+    uint32 boundary_count = 0U;
+    uint32 boundary_seen = 0U;
+    uint16 run_index;
+    int min_row = VISION_RUNTIME_FINE_HEIGHT;
+    int max_row = -1;
+    int min_col = VISION_RUNTIME_FINE_WIDTH;
+    int max_col = -1;
+    int boundary_step;
+    int width;
+    int height;
+
+    memset(&blob, 0, sizeof(blob));
+    memset(&contour, 0, sizeof(contour));
+    for(run_index = 0U; run_index < run_count; ++run_index)
+    {
+        int x;
+        int y = (int)s_vision_fine_runs[run_index].row;
+        for(x = (int)s_vision_fine_runs[run_index].start_col;
+            x <= (int)s_vision_fine_runs[run_index].end_col; ++x)
+        {
+            uint8 sample = 0U;
+            ++area;
+            row_sum += (uint32)y;
+            col_sum += (uint32)x;
+            if(VisionRuntime_FineSampleBrightness(image, x, y, &sample))
+                brightness_sum += sample;
+            if(y < min_row) min_row = y;
+            if(y > max_row) max_row = y;
+            if(x < min_col) min_col = x;
+            if(x > max_col) max_col = x;
+            if(VisionRuntime_FineIsBoundary(x, y)) ++boundary_count;
+        }
+    }
+    if(area == 0U || boundary_count == 0U) return;
+    width = max_col - min_col + 1;
+    height = max_row - min_row + 1;
+    blob.centroid_row = (float)row_sum / (float)area;
+    blob.centroid_col = (float)col_sum / (float)area;
+    blob.area = (area > 2147483647U) ? 2147483647 : (int)area;
+    blob.min_row = min_row;
+    blob.max_row = max_row;
+    blob.min_col = min_col;
+    blob.max_col = max_col;
+    blob.average_brightness = (float)brightness_sum / (float)area;
+    blob.aspect_ratio = VisionRuntime_NormalizedAspect(width, height);
+    blob.occupancy_ratio = (float)area / (float)(width * height);
+    blob.circularity = (4.0f * 3.14159265f * (float)area) /
+                       ((float)boundary_count * (float)boundary_count);
+    if(blob.circularity > 1.0f) blob.circularity = 1.0f;
+
+    boundary_step = (boundary_count > VISION_RUNTIME_CONTOUR_MAX_POINTS) ?
+                    (int)((boundary_count + VISION_RUNTIME_CONTOUR_MAX_POINTS - 1U) /
+                          VISION_RUNTIME_CONTOUR_MAX_POINTS) : 1;
+    for(run_index = 0U; run_index < run_count; ++run_index)
+    {
+        int x;
+        int y = (int)s_vision_fine_runs[run_index].row;
+        for(x = (int)s_vision_fine_runs[run_index].start_col;
+            x <= (int)s_vision_fine_runs[run_index].end_col; ++x)
+        {
+            if(!VisionRuntime_FineIsBoundary(x, y)) continue;
+            if((boundary_seen % (uint32)boundary_step) == 0U &&
+               contour.point_count < VISION_RUNTIME_CONTOUR_MAX_POINTS)
+            {
+                contour.point_x[contour.point_count] = (uint16)x;
+                contour.point_y[contour.point_count] = (uint16)y;
+                ++contour.point_count;
+            }
+            ++boundary_seen;
+        }
+    }
+    VisionRuntime_BuildPhysicalBlobMetricsFine(&blob, run_count);
+    blob.world_valid = IPM_FullRectifiedImage2WorldF(
+        blob.centroid_col, blob.centroid_row, &blob.world_x, &blob.world_y);
+    ++s_vision_runtime_diag.blob_count;
+    VisionRuntime_InsertBlobAreaRank(blob.area);
+    if(blob.world_valid)
+    {
+        VisionRuntime_DispatchBlob(&blob, &contour, large_area_threshold);
+    }
+}
+
+static uint8 VisionRuntime_ProcessFineROI(
+    const uint8 image[MT9V03X_H][MT9V03X_W],
+    const VisionRuntimeCandidate_t *candidate, int large_area_threshold)
+{
+    int min_col;
+    int max_col;
+    int min_row;
+    int max_row;
+    int row;
+    int col;
+
+    if(candidate == NULL) return 0U;
+    min_col = (candidate->min_col - VISION_RUNTIME_CANDIDATE_MARGIN) * 2;
+    max_col = (candidate->max_col + VISION_RUNTIME_CANDIDATE_MARGIN + 1) * 2 - 1;
+    min_row = (candidate->min_row - VISION_RUNTIME_CANDIDATE_MARGIN) * 2;
+    max_row = (candidate->max_row + VISION_RUNTIME_CANDIDATE_MARGIN + 1) * 2 - 1;
+    if(min_col < 0) min_col = 0;
+    if(min_row < 0) min_row = 0;
+    if(max_col >= (int)VISION_RUNTIME_FINE_WIDTH) max_col = VISION_RUNTIME_FINE_WIDTH - 1;
+    if(max_row >= (int)VISION_RUNTIME_FINE_HEIGHT) max_row = VISION_RUNTIME_FINE_HEIGHT - 1;
+
+    for(row = min_row; row <= max_row; ++row)
+    {
+        for(col = min_col; col <= max_col; ++col)
+        {
+            uint16 run_count = 0U;
+            int front = 0;
+
+            if(!VisionRuntime_FineIsForeground(col, row) ||
+               VISION_RUNTIME_FINE_BIT_GET(s_vision_fine_visited, col, row))
+            {
+                continue;
+            }
+            if(!VisionRuntime_FineAppendRun(row, col, min_col, max_col,
+                                            &run_count))
+            {
+                VisionRuntime_ClearFineComponent(run_count);
+                return 0U;
+            }
+            while(front < (int)run_count)
+            {
+                VisionRuntimeFineRun_t run = s_vision_fine_runs[front++];
+                if(!VisionRuntime_FineAppendNeighborRuns(
+                       &run, (int)run.row - 1, min_col, max_col, &run_count) ||
+                   !VisionRuntime_FineAppendNeighborRuns(
+                       &run, (int)run.row + 1, min_col, max_col, &run_count))
+                {
+                    VisionRuntime_ClearFineComponent(run_count);
+                    return 0U;
+                }
+            }
+            VisionRuntime_DispatchFineComponent(image, run_count,
+                                                large_area_threshold);
+            VisionRuntime_ClearFineComponent(run_count);
+        }
+    }
+    return 1U;
+}
+
+static void VisionRuntime_ProcessBlobs(
+    const uint8 image[MT9V03X_H][MT9V03X_W])
+{
+    uint8 i;
+    int large_area_threshold = VisionRuntime_GetScaledLargeAreaThreshold();
+
+    VisionRuntime_Binarize(image);
+    for(i = 0U; i < s_vision_candidate_count; ++i)
+    {
+        (void)VisionRuntime_ProcessFineROI(
+            image, &s_vision_candidates[i], large_area_threshold);
     }
 }
 
@@ -813,6 +1898,7 @@ static void VisionRuntime_ProcessFrameInternal(float roll_deg,
     s_vision_runtime_diag.beacon_split_count = 0;
     s_vision_runtime_diag.ir_blob_count = 0;
     s_vision_runtime_diag.beacon_blob_count = 0;
+    s_vision_rle_overflow_count = 0U;
     memset(s_vision_runtime_diag.blob_area_rank, 0, sizeof(s_vision_runtime_diag.blob_area_rank));
 #if VEHICLE_MARKER_MODE == VEHICLE_MARKER_MODE_CHEVRON
     VehicleMarkerLocalization_BeginBlobFrame();
@@ -869,6 +1955,11 @@ const uint8 *VisionRuntime_GetUndistortedImage(void)
 #else
     return NULL;
 #endif
+}
+
+uint32 VisionRuntime_GetFineRleOverflowCount(void)
+{
+    return s_vision_rle_overflow_count;
 }
 
 void VisionRuntime_GetDiag(VisionRuntimeDiag_t *diag)
