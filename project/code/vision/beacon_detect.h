@@ -33,6 +33,8 @@
 #define BEACON_CONFIDENCE_STABILITY_WEIGHT (0.40f)
 #define BEACON_CONFIDENCE_AREA_WEIGHT      (0.20f)
 #define BEACON_CONFIDENCE_EDGE_WEIGHT      (0.10f)
+#define BEACON_BOX_SIZE_MIN_EDGE           (0.05f)
+#define BEACON_BOX_SIZE_MIN_CENTER         (0.50f)
 
 /* ====================== 数据结构 ====================== */
 
@@ -66,6 +68,7 @@ typedef struct {
     float angle_deg;                       /* 方位角(度), 正前方为0 */
     uint8 detection_confidence;            /* 0..255 */
     float confidence_box_size;
+    float confidence_box_size_min;
     float confidence_stability;
     float confidence_area;
     float confidence_edge;

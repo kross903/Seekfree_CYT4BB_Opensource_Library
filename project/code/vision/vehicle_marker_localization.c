@@ -317,12 +317,17 @@ typedef struct
     VisionContour_t contour;
     float score;
     uint8 valid;
+    uint8 geometry_checked;
+    uint8 geometry_valid;
 } VehicleMarkerChevronCandidate_t;
 
 #pragma location = 0x20000000
 __no_init static VehicleMarkerChevronCandidate_t
     s_vehicle_marker_chevron_candidates[VEHICLE_MARKER_CHEVRON_MAX_FRAME_CANDIDATES];
 static uint8 s_vehicle_marker_chevron_candidate_count = 0U;
+static uint8 s_vehicle_marker_chevron_last_candidate_index = 0U;
+static uint8 s_vehicle_marker_chevron_last_candidate_stored = 0U;
+static uint8 s_vehicle_marker_chevron_cached_pose_valid = 0U;
 static VehicleMarkerWorldPoint_t s_vehicle_marker_chevron_world_pts[VISION_RUNTIME_CONTOUR_MAX_POINTS];
 static VehicleMarkerWorldPoint_t s_vehicle_marker_chevron_left_pts[VEHICLE_MARKER_CHEVRON_GROUP_MAX_POINTS];
 static VehicleMarkerWorldPoint_t s_vehicle_marker_chevron_right_pts[VEHICLE_MARKER_CHEVRON_GROUP_MAX_POINTS];
@@ -368,6 +373,9 @@ static void vehicle_marker_chevron_reset_debug(void)
 {
     memset(s_vehicle_marker_chevron_candidates, 0, sizeof(s_vehicle_marker_chevron_candidates));
     s_vehicle_marker_chevron_candidate_count = 0U;
+    s_vehicle_marker_chevron_last_candidate_index = 0U;
+    s_vehicle_marker_chevron_last_candidate_stored = 0U;
+    s_vehicle_marker_chevron_cached_pose_valid = 0U;
     memset(&s_vehicle_marker_chevron_debug, 0, sizeof(s_vehicle_marker_chevron_debug));
     s_vehicle_marker_chevron_reject_area_low_count = 0U;
     s_vehicle_marker_chevron_reject_area_high_count = 0U;
@@ -906,6 +914,7 @@ uint8 VehicleMarkerLocalization_AppendBlob(const VisionBlob_t *blob, const Visio
     float score = 0.0f;
     uint8 candidate_index = 0U;
 
+    s_vehicle_marker_chevron_last_candidate_stored = 0U;
     if(blob == NULL || contour == NULL || contour->point_count < VEHICLE_MARKER_CHEVRON_MIN_CONTOUR_POINTS)
     {
         s_vehicle_marker_chevron_reject_size_count++;
@@ -953,6 +962,10 @@ uint8 VehicleMarkerLocalization_AppendBlob(const VisionBlob_t *blob, const Visio
     s_vehicle_marker_chevron_candidates[candidate_index].contour = *contour;
     s_vehicle_marker_chevron_candidates[candidate_index].score = score;
     s_vehicle_marker_chevron_candidates[candidate_index].valid = 1U;
+    s_vehicle_marker_chevron_candidates[candidate_index].geometry_checked = 0U;
+    s_vehicle_marker_chevron_candidates[candidate_index].geometry_valid = 0U;
+    s_vehicle_marker_chevron_last_candidate_index = candidate_index;
+    s_vehicle_marker_chevron_last_candidate_stored = 1U;
     s_vehicle_marker_chevron_accept_count++;
     return 1U;
 }
@@ -1678,6 +1691,7 @@ uint8 VehicleMarkerLocalization_AppendAndValidateBlob(
     const VisionBlob_t *blob, const VisionContour_t *contour)
 {
     VehicleMarkerChevronCandidate_t candidate;
+    uint8 valid;
 
     if(!VehicleMarkerLocalization_AppendBlob(blob, contour))
     {
@@ -1687,7 +1701,20 @@ uint8 VehicleMarkerLocalization_AppendAndValidateBlob(
     candidate.blob = *blob;
     candidate.contour = *contour;
     candidate.valid = 1U;
-    return vehicle_marker_chevron_process_candidate(&candidate, NULL, 0U);
+    valid = vehicle_marker_chevron_process_candidate(&candidate, NULL, 1U);
+    if(s_vehicle_marker_chevron_last_candidate_stored)
+    {
+        VehicleMarkerChevronCandidate_t *stored =
+            &s_vehicle_marker_chevron_candidates[
+                s_vehicle_marker_chevron_last_candidate_index];
+        stored->geometry_checked = 1U;
+        stored->geometry_valid = valid;
+    }
+    if(valid)
+    {
+        s_vehicle_marker_chevron_cached_pose_valid = 1U;
+    }
+    return valid;
 }
 
 uint8 VehicleMarkerLocalization_EndBlobFrame(VehicleMarkerPose_t *out_pose)
@@ -1698,6 +1725,17 @@ uint8 VehicleMarkerLocalization_EndBlobFrame(VehicleMarkerPose_t *out_pose)
     s_vehicle_marker_debug_raw_detect_valid = 0U;
     s_vehicle_marker_debug_process_count++;
     s_vehicle_marker_chevron_debug.candidate_count = s_vehicle_marker_chevron_candidate_count;
+
+    if(s_vehicle_marker_chevron_cached_pose_valid)
+    {
+        s_vehicle_marker_debug_raw_detect_valid = 1U;
+        s_vehicle_marker_debug_process_success_count++;
+        s_vehicle_marker_chevron_debug.geometry_reject_count =
+            (s_vehicle_marker_chevron_geometry_reject_count > 255U) ?
+            255U : (uint8)s_vehicle_marker_chevron_geometry_reject_count;
+        vehicle_marker_copy_pose(out_pose);
+        return 1U;
+    }
 
     if(s_vehicle_marker_chevron_candidate_count == 0U)
     {
@@ -1721,7 +1759,8 @@ uint8 VehicleMarkerLocalization_EndBlobFrame(VehicleMarkerPose_t *out_pose)
 
         for(i = 0U; i < s_vehicle_marker_chevron_candidate_count; ++i)
         {
-            if(tried[i] || !s_vehicle_marker_chevron_candidates[i].valid)
+            if(tried[i] || !s_vehicle_marker_chevron_candidates[i].valid ||
+               s_vehicle_marker_chevron_candidates[i].geometry_checked)
             {
                 continue;
             }

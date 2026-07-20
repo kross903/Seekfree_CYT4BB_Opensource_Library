@@ -116,7 +116,9 @@ static uint8 s_vision_visited[VISION_RUNTIME_IMAGE_BITSET_BYTES];
 static uint8 s_vision_fine_visited[VISION_RUNTIME_FINE_BYTES];
 static uint8 s_vision_fine_component_mask[VISION_RUNTIME_FINE_BYTES];
 static uint8 s_vision_local_birdview_mask[VISION_RUNTIME_LOCAL_BIRDVIEW_BITSET_BYTES];
+#if CY_CORE_CM7_1 && VISION_RUNTIME_DEBUG_UNDISTORT_IMAGE_ENABLE
 static uint8 s_vision_undistorted[MT9V03X_H][MT9V03X_W];
+#endif
 
 static float VisionRuntime_NormalizedAspect(int width, int height);
 
@@ -461,6 +463,8 @@ static void VisionRuntime_UpdateBeaconSlotsFromCurrentFrame(int beacon_count,
             beacon_results[best_index].detection_confidence;
         s_vision_runtime_beacon_slots[slot_count].confidence_box_size =
             beacon_results[best_index].confidence_box_size;
+        s_vision_runtime_beacon_slots[slot_count].confidence_box_size_min =
+            beacon_results[best_index].confidence_box_size_min;
         s_vision_runtime_beacon_slots[slot_count].confidence_stability =
             beacon_results[best_index].confidence_stability;
         s_vision_runtime_beacon_slots[slot_count].confidence_area =
@@ -578,6 +582,8 @@ static void VisionRuntime_UpdateBeaconSlotsFromCurrentFrame(
             beacon_results[best_index].detection_confidence;
         s_vision_runtime_beacon_slots[slot_count].confidence_box_size =
             beacon_results[best_index].confidence_box_size;
+        s_vision_runtime_beacon_slots[slot_count].confidence_box_size_min =
+            beacon_results[best_index].confidence_box_size_min;
         s_vision_runtime_beacon_slots[slot_count].confidence_stability =
             beacon_results[best_index].confidence_stability;
         s_vision_runtime_beacon_slots[slot_count].confidence_area =
@@ -630,6 +636,7 @@ typedef struct
     float beacon_area_cm2;
     float beacon_circularity;
     float confidence_box_size;
+    float confidence_box_size_min;
     float confidence_stability;
     float confidence_area;
     float confidence_edge;
@@ -650,6 +657,7 @@ static VisionRuntimeCandidate_t s_vision_candidates[VISION_RUNTIME_MAX_CANDIDATE
 static VisionRuntimeCandidateAnnotation_t
     s_vision_candidate_annotations[VISION_RUNTIME_MAX_CANDIDATES];
 static uint32 s_vision_candidate_beacon_area[VISION_RUNTIME_MAX_CANDIDATES];
+static uint32 s_vision_candidate_vehicle_area[VISION_RUNTIME_MAX_CANDIDATES];
 static uint32 s_vision_candidate_beacon_brightness_sum[VISION_RUNTIME_MAX_CANDIDATES];
 static VisionRuntimeThresholdStats_t
     s_vision_candidate_threshold_stats[VISION_RUNTIME_MAX_CANDIDATES];
@@ -1090,7 +1098,9 @@ static void VisionRuntime_Binarize(const uint8 image[MT9V03X_H][MT9V03X_W])
     memset(s_vision_vehicle_binary, 0, sizeof(s_vision_vehicle_binary));
     memset(s_vision_fine_component_mask, 0,
            sizeof(s_vision_fine_component_mask));
+#if VISION_RUNTIME_DEBUG_UNDISTORT_IMAGE_ENABLE
     IPM_GenerateUndistortedDebugImage(image, s_vision_undistorted);
+#endif
 }
 
 static void VisionRuntime_ClearFineCandidateBuffer(
@@ -1124,6 +1134,7 @@ static uint8 VisionRuntime_BuildFineCandidateBinaries(
     VisionRuntime_ClearFineCandidateBuffer(s_vision_binary, candidate);
     if(candidate_index < VISION_RUNTIME_MAX_CANDIDATES)
     {
+        s_vision_candidate_vehicle_area[candidate_index] = 0U;
         s_vision_candidate_beacon_area[candidate_index] = 0U;
         s_vision_candidate_beacon_brightness_sum[candidate_index] = 0U;
         memset(&s_vision_candidate_threshold_stats[candidate_index], 0,
@@ -1169,6 +1180,10 @@ static void VisionRuntime_FillFineCandidateUndistortedDual(
             if(sample >= s_vision_vehicle_threshold)
             {
                 VISION_RUNTIME_FINE_BIT_SET(s_vision_vehicle_binary, x, y);
+                if(candidate_index < VISION_RUNTIME_MAX_CANDIDATES)
+                {
+                    ++s_vision_candidate_vehicle_area[candidate_index];
+                }
             }
             if(sample >= s_vision_beacon_threshold)
             {
@@ -1298,6 +1313,10 @@ static uint8 VisionRuntime_BuildFineCandidateIPMDualBinary(
                 {
                     VISION_RUNTIME_FINE_BIT_SET(s_vision_vehicle_binary,
                                                 full_x, full_y);
+                    if(candidate_index < VISION_RUNTIME_MAX_CANDIDATES)
+                    {
+                        ++s_vision_candidate_vehicle_area[candidate_index];
+                    }
                 }
                 if(sample >= s_vision_beacon_threshold)
                 {
@@ -1767,7 +1786,7 @@ static void VisionRuntime_ComputeConfidenceInputs(
 }
 
 static void VisionRuntime_BuildPhysicalBlobMetricsFine(
-    VisionBlob_t *blob, uint16 run_count)
+    VisionBlob_t *blob, const VisionContour_t *contour, uint16 run_count)
 {
     const float scale = VISION_RUNTIME_LOCAL_BIRDVIEW_SCALE_CM_PER_PIXEL;
     float min_x = 0.0f;
@@ -1781,32 +1800,29 @@ static void VisionRuntime_BuildPhysicalBlobMetricsFine(
     uint32 exposed_edges = 0U;
     uint16 run_index;
 
-    if(blob == NULL || run_count == 0U || scale <= 0.0f) return;
-    for(run_index = 0U; run_index < run_count; ++run_index)
+    if(blob == NULL || contour == NULL || contour->point_count == 0U ||
+       run_count == 0U || scale <= 0.0f) return;
+    for(run_index = 0U; run_index < contour->point_count; ++run_index)
     {
-        int x;
-        int y = (int)s_vision_fine_runs[run_index].row;
-        for(x = (int)s_vision_fine_runs[run_index].start_col;
-            x <= (int)s_vision_fine_runs[run_index].end_col; ++x)
+        float world_x;
+        float world_y;
+        if(!IPM_FullRectifiedImage2WorldF(
+               (float)contour->point_x[run_index],
+               (float)contour->point_y[run_index],
+               &world_x, &world_y)) continue;
+        if(valid_points == 0)
         {
-            float world_x;
-            float world_y;
-            if(!IPM_FullRectifiedImage2WorldF((float)x, (float)y,
-                                              &world_x, &world_y)) continue;
-            if(valid_points == 0)
-            {
-                min_x = max_x = world_x;
-                min_y = max_y = world_y;
-            }
-            else
-            {
-                if(world_x < min_x) min_x = world_x;
-                if(world_x > max_x) max_x = world_x;
-                if(world_y < min_y) min_y = world_y;
-                if(world_y > max_y) max_y = world_y;
-            }
-            ++valid_points;
+            min_x = max_x = world_x;
+            min_y = max_y = world_y;
         }
+        else
+        {
+            if(world_x < min_x) min_x = world_x;
+            if(world_x > max_x) max_x = world_x;
+            if(world_y < min_y) min_y = world_y;
+            if(world_y > max_y) max_y = world_y;
+        }
+        ++valid_points;
     }
     if(valid_points == 0) return;
 
@@ -1826,33 +1842,7 @@ static void VisionRuntime_BuildPhysicalBlobMetricsFine(
 
     memset(s_vision_local_birdview_mask, 0,
            sizeof(s_vision_local_birdview_mask));
-    {
-        int local_row;
-        int local_col;
-        for(local_row = 0; local_row < local_height; ++local_row)
-        {
-            for(local_col = 0; local_col < local_width; ++local_col)
-            {
-                float world_x = min_x + ((float)local_row + 0.5f) * scale;
-                float world_y = max_y - ((float)local_col + 0.5f) * scale;
-                int source_x;
-                int source_y;
-                int index = local_row * VISION_RUNTIME_LOCAL_BIRDVIEW_MAX_WIDTH +
-                            local_col;
-
-                if(IPM_World2FullRectifiedImage(world_x, world_y,
-                                                &source_x, &source_y) &&
-                   VISION_RUNTIME_FINE_BIT_GET(
-                       s_vision_fine_component_mask, source_x, source_y))
-                {
-                    VISION_RUNTIME_LOCAL_BIT_SET(s_vision_local_birdview_mask,
-                                                 index);
-                }
-            }
-        }
-    }
-
-    /* Fill the projected footprint of each full-resolution foreground pixel. */
+    /* Forward-project each foreground footprint; do not repeat an inverse-grid pass. */
     for(run_index = 0U; run_index < run_count; ++run_index)
     {
         int x;
@@ -2020,7 +2010,8 @@ static uint8 VisionRuntime_DispatchFineComponent(
             if(VisionRuntime_FineIsBoundary(x, y)) ++boundary_count;
         }
     }
-    if(area == 0U || boundary_count == 0U) return 0U;
+    if(area < VISION_RUNTIME_FINE_MIN_FOREGROUND_PIXELS ||
+       boundary_count == 0U) return 0U;
     width = max_col - min_col + 1;
     height = max_row - min_row + 1;
     blob.centroid_row = (float)row_sum / (float)area;
@@ -2065,7 +2056,7 @@ static uint8 VisionRuntime_DispatchFineComponent(
             ++boundary_seen;
         }
     }
-    VisionRuntime_BuildPhysicalBlobMetricsFine(&blob, run_count);
+    VisionRuntime_BuildPhysicalBlobMetricsFine(&blob, &contour, run_count);
     blob.world_valid = IPM_FullRectifiedImage2WorldF(
         blob.centroid_col, blob.centroid_row, &blob.world_x, &blob.world_y);
     ++s_vision_runtime_diag.blob_count;
@@ -2083,33 +2074,40 @@ static uint8 VisionRuntime_DispatchFineComponent(
         }
         else
         {
+            uint8 beacon_accepted;
+
             ++s_vision_runtime_diag.beacon_split_count;
             VisionRuntime_ComputeConfidenceInputs(candidate, candidate_index, &blob);
-            if(BeaconDetect_AppendBlob(&blob))
+            beacon_accepted = BeaconDetect_AppendBlob(&blob);
+            if(candidate_index < VISION_RUNTIME_MAX_CANDIDATES &&
+               (beacon_accepted ||
+                !s_vision_candidate_annotations[candidate_index].beacon_valid))
+            {
+                s_vision_candidate_annotations[candidate_index].beacon_valid = beacon_accepted;
+                s_vision_candidate_annotations[candidate_index].raw_box_area_pixels =
+                    blob.raw_box_area_pixels;
+                s_vision_candidate_annotations[candidate_index].detection_confidence =
+                    blob.detection_confidence;
+                s_vision_candidate_annotations[candidate_index].beacon_x_cm = blob.world_x;
+                s_vision_candidate_annotations[candidate_index].beacon_y_cm = blob.world_y;
+                s_vision_candidate_annotations[candidate_index].beacon_area_cm2 =
+                    blob.physical_area_cm2;
+                s_vision_candidate_annotations[candidate_index].beacon_circularity =
+                    blob.physical_circularity;
+                s_vision_candidate_annotations[candidate_index].confidence_box_size =
+                    blob.confidence_box_size;
+                s_vision_candidate_annotations[candidate_index].confidence_box_size_min =
+                    blob.confidence_box_size_min;
+                s_vision_candidate_annotations[candidate_index].confidence_stability =
+                    blob.confidence_stability;
+                s_vision_candidate_annotations[candidate_index].confidence_area =
+                    blob.confidence_area;
+                s_vision_candidate_annotations[candidate_index].confidence_edge =
+                    blob.confidence_edge;
+            }
+            if(beacon_accepted)
             {
                 ++s_vision_runtime_diag.beacon_blob_count;
-                if(candidate_index < VISION_RUNTIME_MAX_CANDIDATES)
-                {
-                    s_vision_candidate_annotations[candidate_index].beacon_valid = 1U;
-                    s_vision_candidate_annotations[candidate_index].raw_box_area_pixels =
-                        blob.raw_box_area_pixels;
-                    s_vision_candidate_annotations[candidate_index].detection_confidence =
-                        blob.detection_confidence;
-                    s_vision_candidate_annotations[candidate_index].beacon_x_cm = blob.world_x;
-                    s_vision_candidate_annotations[candidate_index].beacon_y_cm = blob.world_y;
-                    s_vision_candidate_annotations[candidate_index].beacon_area_cm2 =
-                        blob.physical_area_cm2;
-                    s_vision_candidate_annotations[candidate_index].beacon_circularity =
-                        blob.physical_circularity;
-                    s_vision_candidate_annotations[candidate_index].confidence_box_size =
-                        blob.confidence_box_size;
-                    s_vision_candidate_annotations[candidate_index].confidence_stability =
-                        blob.confidence_stability;
-                    s_vision_candidate_annotations[candidate_index].confidence_area =
-                        blob.confidence_area;
-                    s_vision_candidate_annotations[candidate_index].confidence_edge =
-                        blob.confidence_edge;
-                }
             }
         }
     }
@@ -2197,7 +2195,9 @@ static void VisionRuntime_ProcessBlobs(
         if(VisionRuntime_BuildFineCandidateBinaries(
                image, &s_vision_candidates[i], i))
         {
-            if(!skip_vehicle)
+            if(!skip_vehicle &&
+               s_vision_candidate_vehicle_area[i] >=
+                   VISION_RUNTIME_FINE_MIN_FOREGROUND_PIXELS)
             {
                 vehicle_confirmed = VisionRuntime_ProcessFineROI(
                     &s_vision_candidates[i],
@@ -2208,7 +2208,9 @@ static void VisionRuntime_ProcessBlobs(
                     s_vision_candidate_annotations[i].vehicle_valid = 1U;
                 }
             }
-            if(!vehicle_confirmed)
+            if(!vehicle_confirmed &&
+               s_vision_candidate_beacon_area[i] >=
+                   VISION_RUNTIME_FINE_MIN_FOREGROUND_PIXELS)
             {
                 (void)VisionRuntime_ProcessFineROI(
                     &s_vision_candidates[i],
@@ -2353,7 +2355,7 @@ const uint8 *VisionRuntime_GetBinaryDisplayImage(void)
 
 const uint8 *VisionRuntime_GetUndistortedImage(void)
 {
-#if CY_CORE_CM7_1
+#if CY_CORE_CM7_1 && VISION_RUNTIME_DEBUG_UNDISTORT_IMAGE_ENABLE
     return &s_vision_undistorted[0][0];
 #else
     return NULL;
@@ -2457,6 +2459,8 @@ uint8 VisionRuntime_GetCandidateBoxes(VisionRuntimeCandidateBox_t *boxes, uint8 
             s_vision_candidate_annotations[i].beacon_circularity;
         boxes[i].confidence_box_size =
             s_vision_candidate_annotations[i].confidence_box_size;
+        boxes[i].confidence_box_size_min =
+            s_vision_candidate_annotations[i].confidence_box_size_min;
         boxes[i].confidence_stability =
             s_vision_candidate_annotations[i].confidence_stability;
         boxes[i].confidence_area =

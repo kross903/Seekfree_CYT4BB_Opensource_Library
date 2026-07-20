@@ -914,6 +914,7 @@ class VisionToolApp:
                     f"位置: ({candidate.get('x_cm', 0):.1f}, {candidate.get('y_cm', 0):.1f}) cm  "
                     f"detection_confidence: {int(candidate.get('detection_confidence', 0))}\n"
                     f"候选框大小评分 B: {candidate.get('confidence_box_size', 0):.2f}  "
+                    f"当前位置B门槛: {candidate.get('confidence_box_size_min', 0):.2f}  "
                     f"面积评分 A: {candidate.get('confidence_area', 0):.2f}  "
                     f"阈值稳定性评分 T: {candidate.get('confidence_stability', 0):.2f}  "
                     f"边缘评分 E: {candidate.get('confidence_edge', 0):.2f}"

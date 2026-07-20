@@ -22,9 +22,13 @@
 #define VISION_RUNTIME_LOCAL_BIRDVIEW_SCALE_CM_PER_PIXEL (0.5f)
 #define VISION_RUNTIME_LOCAL_BIRDVIEW_MAX_WIDTH (128U)
 #define VISION_RUNTIME_LOCAL_BIRDVIEW_MAX_HEIGHT (128U)
-#define VISION_RUNTIME_BEACON_BOX_AREA_MIN_PIXELS (12.0f)
+#define VISION_RUNTIME_BEACON_BOX_AREA_MIN_PIXELS (8.0f)
 #define VISION_RUNTIME_BEACON_BOX_AREA_MAX_PIXELS (100.0f)
 #define VISION_RUNTIME_VEHICLE_MIN_RAW_BOX_AREA   (150U)
+#define VISION_RUNTIME_FINE_MIN_FOREGROUND_PIXELS (8U)
+#ifndef VISION_RUNTIME_DEBUG_UNDISTORT_IMAGE_ENABLE
+#define VISION_RUNTIME_DEBUG_UNDISTORT_IMAGE_ENABLE (0U)
+#endif
 
 /* Candidate refinement pipeline selection. */
 #define VISION_RUNTIME_PIPELINE_UNDISTORT_THEN_IPM (0U)
@@ -71,6 +75,7 @@ typedef struct
     int raw_max_col;
     int raw_box_area_pixels;
     float confidence_box_size;
+    float confidence_box_size_min;
     float confidence_stability;
     float confidence_area;
     float confidence_edge;
@@ -145,6 +150,7 @@ typedef struct
     int raw_box_area_pixels;
     uint8 detection_confidence;
     float confidence_box_size;
+    float confidence_box_size_min;
     float confidence_stability;
     float confidence_area;
     float confidence_edge;
@@ -171,6 +177,7 @@ typedef struct
     float beacon_area_cm2;
     float beacon_circularity;
     float confidence_box_size;
+    float confidence_box_size_min;
     float confidence_stability;
     float confidence_area;
     float confidence_edge;

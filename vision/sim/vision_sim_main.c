@@ -323,6 +323,7 @@ static int write_result(const char *path, const char *binary_path,
                 "\"area_cm2\":%.6f,\"perimeter_cm\":%.6f,\"circularity\":%.6f,"
                 "\"physical_pixel_count\":%u,\"physical_valid\":%u,"
                 "\"raw_box_area_pixels\":%d,\"detection_confidence\":%u,\"confidence_box_size\":%.6f,"
+                "\"confidence_box_size_min\":%.6f,"
                 "\"confidence_stability\":%.6f,\"confidence_area\":%.6f,"
                 "\"confidence_edge\":%.6f}%s\n",
                 (unsigned)slots[i].valid, slots[i].x_cm, slots[i].y_cm,
@@ -336,6 +337,7 @@ static int write_result(const char *path, const char *binary_path,
                 slots[i].raw_box_area_pixels,
                 (unsigned)slots[i].detection_confidence,
                 slots[i].confidence_box_size,
+                slots[i].confidence_box_size_min,
                 slots[i].confidence_stability,
                 slots[i].confidence_area,
                 slots[i].confidence_edge,
@@ -356,7 +358,8 @@ static int write_result(const char *path, const char *binary_path,
                 "\"vehicle_valid\":%u,\"vehicle_skipped_small_box\":%u,\"beacon_valid\":%u,"
                 "\"raw_box_area_pixels\":%d,\"detection_confidence\":%u,\"x_cm\":%.6f,\"y_cm\":%.6f,"
                 "\"area_cm2\":%.6f,\"circularity\":%.6f,"
-                "\"confidence_box_size\":%.6f,\"confidence_stability\":%.6f,"
+                "\"confidence_box_size\":%.6f,\"confidence_box_size_min\":%.6f,"
+                "\"confidence_stability\":%.6f,"
                 "\"confidence_area\":%.6f,\"confidence_edge\":%.6f}%s\n",
                 candidates[i].area,
                 candidates[i].raw_min_row, candidates[i].raw_max_row,
@@ -373,6 +376,7 @@ static int write_result(const char *path, const char *binary_path,
                 candidates[i].beacon_area_cm2,
                 candidates[i].beacon_circularity,
                 candidates[i].confidence_box_size,
+                candidates[i].confidence_box_size_min,
                 candidates[i].confidence_stability,
                 candidates[i].confidence_area,
                 candidates[i].confidence_edge,

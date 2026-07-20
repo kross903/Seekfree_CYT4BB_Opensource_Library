@@ -1,5 +1,6 @@
 #include "beacon_detect.h"
 #include "common/project_headfile.h"
+#include "vision/camera_calibration.h"
 #include <math.h>
 
 BeaconConfig_t g_beacon_config = {
@@ -24,6 +25,40 @@ static float BeaconDetect_Clamp01(float value)
     return value;
 }
 
+static float BeaconDetect_GetBoxSizeMinimum(const VisionBlob_t *blob)
+{
+    float center_u;
+    float center_v;
+    float radius_x;
+    float radius_y;
+    float dx;
+    float dy;
+    float radius_sq;
+    float strictness;
+
+    if(blob == NULL)
+    {
+        return BEACON_BOX_SIZE_MIN_EDGE;
+    }
+    center_u = 0.5f * (float)(blob->raw_min_col + blob->raw_max_col);
+    center_v = 0.5f * (float)(blob->raw_min_row + blob->raw_max_row);
+    radius_x = (CAMERA_CALIBRATION_CX >
+                ((float)BEACON_IMG_COLS - 1.0f - CAMERA_CALIBRATION_CX)) ?
+               CAMERA_CALIBRATION_CX :
+               ((float)BEACON_IMG_COLS - 1.0f - CAMERA_CALIBRATION_CX);
+    radius_y = (CAMERA_CALIBRATION_CY >
+                ((float)BEACON_IMG_ROWS - 1.0f - CAMERA_CALIBRATION_CY)) ?
+               CAMERA_CALIBRATION_CY :
+               ((float)BEACON_IMG_ROWS - 1.0f - CAMERA_CALIBRATION_CY);
+    dx = (center_u - CAMERA_CALIBRATION_CX) / radius_x;
+    dy = (center_v - CAMERA_CALIBRATION_CY) / radius_y;
+    radius_sq = BeaconDetect_Clamp01(dx * dx + dy * dy);
+    strictness = 1.0f - radius_sq;
+    strictness *= strictness;
+    return BEACON_BOX_SIZE_MIN_EDGE +
+           (BEACON_BOX_SIZE_MIN_CENTER - BEACON_BOX_SIZE_MIN_EDGE) * strictness;
+}
+
 static void BeaconDetect_UpdateConfidence(VisionBlob_t *blob)
 {
     float score;
@@ -41,6 +76,7 @@ static void BeaconDetect_UpdateConfidence(VisionBlob_t *blob)
     box_size = BeaconDetect_Clamp01(blob->confidence_box_size);
     stability = BeaconDetect_Clamp01(blob->confidence_stability);
     edge = BeaconDetect_Clamp01(blob->confidence_edge);
+    blob->confidence_box_size_min = BeaconDetect_GetBoxSizeMinimum(blob);
 
     area = blob->physical_area_cm2;
     if(area <= BEACON_PHYSICAL_AREA_MIN_CM2 ||
@@ -113,6 +149,7 @@ static void BeaconDetect_FillResultFromBlob(const VisionBlob_t *blob, BeaconResu
     result->raw_box_area_pixels = blob->raw_box_area_pixels;
     result->detection_confidence = blob->detection_confidence;
     result->confidence_box_size = blob->confidence_box_size;
+    result->confidence_box_size_min = blob->confidence_box_size_min;
     result->confidence_stability = blob->confidence_stability;
     result->confidence_area = blob->confidence_area;
     result->confidence_edge = blob->confidence_edge;
@@ -188,6 +225,10 @@ uint8 BeaconDetect_AppendBlob(VisionBlob_t *blob)
     }
 
     BeaconDetect_UpdateConfidence(blob);
+    if(blob->confidence_box_size <= blob->confidence_box_size_min)
+    {
+        return 0U;
+    }
     if(s_beacon_frame_count >= s_beacon_frame_max_results)
     {
         return 0U;
