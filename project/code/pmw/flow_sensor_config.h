@@ -26,8 +26,8 @@
 /* Current UP-FLOW-302 mounting on this airframe:
  * module X maps to body/backend Y, module Y maps to body/backend X.
  * X_SIGN / Y_SIGN are applied after the axis swap, so they mean body/backend axes. */
-#define FLOW_SENSOR_UPFLOW302_X_SIGN          (1.0f)
-#define FLOW_SENSOR_UPFLOW302_Y_SIGN          (1.0f)
+#define FLOW_SENSOR_UPFLOW302_X_SIGN          (-1.0f)
+#define FLOW_SENSOR_UPFLOW302_Y_SIGN          (-1.0f)
 #define FLOW_SENSOR_UPFLOW302_SWAP_XY         (1)
 #define FLOW_SENSOR_UPFLOW302_VALID_VALUE     (245U)
 #define FLOW_SENSOR_UPFLOW302_COMP_X_FROM_GYRO_X_SIGN (0.0f)

@@ -49,11 +49,11 @@
  */
 #define PMW_FLOW_RANGE_LPF_ALPHA            (0.40f)
 #define PMW_FLOW_GRAVITY_CMS2               (980.665f)
-#define PMW_FLOW_VEL_LPF_CUTOFF_HZ          (12.0f)
+#define PMW_FLOW_VEL_LPF_CUTOFF_HZ          (15.0f)
 #define PMW_FLOW_VEL_DEADBAND_CMS           (5.0f)
 #define PMW_FLOW_TILT_GATE_DEG              (25.0f)
 #define PMW_FLOW_VEL_ABS_LIMIT_CMS          (300.0f)
-#define PMW_FLOW_VEL_SLEW_LIMIT_CMS2        PMW_FLOW_GRAVITY_CMS2
+#define PMW_FLOW_VEL_SLEW_LIMIT_CMS2        (1500.0f)
 #define PMW_FLOW_VEL_SLEW_MIN_STEP_CMS      (12.0f)
 #define PMW_FLOW_VEL_OUTPUT_SLEW_LIMIT_CMS2 PMW_FLOW_GRAVITY_CMS2
 /* Dynamic confidence fusion is enabled; FU! reports the active confidence and alpha. */
