@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import os
 import queue
+import re
 import shlex
 import shutil
 import subprocess
@@ -34,6 +35,8 @@ FINE_HEIGHT = 240
 FINE_STRIDE = (FINE_WIDTH + 7) // 8
 COARSE_THRESHOLD = 40
 COARSE_MIN_AREA = 10
+MAP_CREATE_CONFIDENCE = 210
+MAP_CREATE_SIGMA_CM = 15
 
 
 class Simulator:
@@ -283,6 +286,7 @@ class VisionToolApp:
         ] = queue.Queue()
         self.capture_stop_event = threading.Event()
         self.capture_running = False
+        self.batch_running = False
         self.capture_out_var = tk.StringVar(value=str(APP_ROOT / "capture"))
         self.capture_port_var = tk.StringVar()
         self.capture_baud_var = tk.StringVar(value="115200")
@@ -405,6 +409,12 @@ class VisionToolApp:
         ttk.Button(action_bar, text="打开连通域候选区", command=self.open_current_candidate_window).grid(
             row=2, column=0, columnspan=2, sticky="ew", pady=(6, 0)
         )
+        self.batch_button = ttk.Button(
+            action_bar,
+            text="批量验证分类目录",
+            command=self.start_classified_batch,
+        )
+        self.batch_button.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(6, 0))
 
         capture_tab.columnconfigure(0, weight=1)
         capture_tab.rowconfigure(2, weight=1)
@@ -841,6 +851,39 @@ class VisionToolApp:
         candidates.sort(key=lambda item: item["raw_area_pixels"], reverse=True)
         return candidates[:16]
 
+    @staticmethod
+    def candidate_type_text(candidate: dict) -> str:
+        if candidate.get("vehicle_valid"):
+            return "小车"
+        if candidate.get("beacon_valid"):
+            return "信标"
+
+        area_cm2 = float(candidate.get("area_cm2", 0.0))
+        circularity = float(candidate.get("circularity", 0.0))
+        box_score = float(candidate.get("confidence_box_size", 0.0))
+        box_minimum = float(candidate.get("confidence_box_size_min", 0.0))
+        confidence = int(candidate.get("detection_confidence", 0))
+        reasons: list[str] = []
+
+        if area_cm2 <= 0.0:
+            return "未通过（未生成有效精连通域/IPM数据）"
+        if area_cm2 < 500.0:
+            reasons.append(f"物理面积{area_cm2:.1f}<500cm²")
+        elif area_cm2 > 1000.0:
+            reasons.append(f"物理面积{area_cm2:.1f}>1000cm²")
+        if circularity < 0.15:
+            reasons.append(f"圆度{circularity:.2f}<0.15")
+        if box_score <= box_minimum:
+            reasons.append(f"B评分{box_score:.2f}≤门槛{box_minimum:.2f}")
+        if 0 < confidence < 96:
+            reasons.append(f"置信度{confidence}<96")
+        if not reasons:
+            if candidate.get("vehicle_skipped_small_box"):
+                reasons.append("箭头框过小且信标形状条件未通过")
+            else:
+                reasons.append("箭头几何及信标形状条件未通过")
+        return f"未通过（{'；'.join(reasons)}）"
+
     def open_candidate_window(
         self,
         image: Image.Image,
@@ -893,10 +936,7 @@ class VisionToolApp:
             tab.columnconfigure(1, weight=1)
             tab.columnconfigure(2, weight=1)
             tab.rowconfigure(1, weight=1)
-            candidate_type = (
-                "小车" if candidate.get("vehicle_valid") else
-                ("信标" if candidate.get("beacon_valid") else "未通过")
-            )
+            candidate_type = self.candidate_type_text(candidate)
             vehicle_route = (
                 "跳过箭头，直接识别信标"
                 if candidate.get("vehicle_skipped_small_box")
@@ -1132,6 +1172,140 @@ class VisionToolApp:
             daemon=True,
         ).start()
 
+    @staticmethod
+    def classification_beacon_upper(frame_path: Path, root: Path, expected_arrow: bool) -> int:
+        try:
+            category = frame_path.relative_to(root).parts[0]
+        except (ValueError, IndexError):
+            return 0
+        counts = [int(value) for value in re.findall(r"\d+", category)]
+        if not counts:
+            return 0
+        return max(0, max(counts) - (1 if expected_arrow else 0))
+
+    def start_classified_batch(self) -> None:
+        if self.batch_running:
+            return
+        root = Path(self.frames_var.get())
+        if (root / "分类").is_dir():
+            root = root / "分类"
+        raw_files = sorted(root.rglob("*.raw")) if root.is_dir() else []
+        if not raw_files:
+            messagebox.showerror("无法批量验证", "输入帧目录及其子目录中没有 RAW 图像。")
+            return
+        try:
+            fallback_pose = (
+                float(self.roll_var.get()),
+                float(self.pitch_var.get()),
+                float(self.height_var.get()),
+            )
+            thresholds = (
+                int(self.vehicle_threshold_var.get()),
+                int(self.beacon_threshold_var.get()),
+                int(self.coarse_threshold_var.get()),
+            )
+            if any(value < 1 or value > 255 for value in thresholds):
+                raise ValueError
+        except ValueError:
+            messagebox.showerror("参数错误", "姿态、高度必须是数字，阈值必须为 1 到 255。")
+            return
+
+        self.batch_running = True
+        self.batch_button.config(state=tk.DISABLED)
+        self.status_var.set(f"批量验证中 0/{len(raw_files)}")
+        threading.Thread(
+            target=self.classified_batch_worker,
+            args=(Path(self.source_var.get()), root, raw_files, fallback_pose,
+                  thresholds, self.binary_mode_var.get()),
+            daemon=True,
+        ).start()
+
+    def classified_batch_worker(
+        self,
+        source: Path,
+        root: Path,
+        raw_files: list[Path],
+        fallback_pose: tuple[float, float, float],
+        thresholds: tuple[int, int, int],
+        binary_mode: str,
+    ) -> None:
+        run_dir = RUN_ROOT / time.strftime("classified_%Y%m%d_%H%M%S")
+        rows: list[dict] = []
+        try:
+            simulator = Simulator(source)
+            for index, raw_path in enumerate(raw_files, start=1):
+                roll, pitch, height = fallback_pose
+                metadata_path = raw_path.with_suffix(".json")
+                if metadata_path.exists():
+                    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+                    telemetry = metadata.get("telemetry", {})
+                    roll = float(telemetry.get("roll_deg", roll))
+                    pitch = float(telemetry.get("pitch_deg", pitch))
+                    height = float(telemetry.get("tof_height_cm", height))
+
+                frame_dir = run_dir / f"{index:03d}"
+                result = simulator.run(
+                    raw_path,
+                    frame_dir,
+                    roll,
+                    pitch,
+                    height,
+                    False,
+                    False,
+                    thresholds[0],
+                    thresholds[1],
+                    thresholds[2],
+                    binary_mode,
+                )
+                ok, log, result_path = result[0], result[1], result[2]
+                if not ok or result_path is None:
+                    raise RuntimeError(f"{raw_path.name} 仿真失败\n{log}")
+                payload = json.loads(result_path.read_text(encoding="utf-8"))
+                expected_arrow = "有箭头" in raw_path.parts
+                valid_beacons = [item for item in payload.get("beacons", []) if item.get("valid")]
+                map_ready = sum(
+                    1 for item in valid_beacons
+                    if int(item.get("detection_confidence", 0)) >= MAP_CREATE_CONFIDENCE
+                    and int(item.get("position_sigma_cm", 255)) <= MAP_CREATE_SIGMA_CM
+                )
+                rows.append({
+                    "frame": str(raw_path.relative_to(root)),
+                    "expected_arrow": expected_arrow,
+                    "arrow_valid": bool(payload.get("vehicle", {}).get("valid")),
+                    "beacon_count": len(valid_beacons),
+                    "map_ready_count": map_ready,
+                    "beacon_upper": self.classification_beacon_upper(raw_path, root, expected_arrow),
+                })
+                self.ui_queue.put(("batch_progress", (index, len(raw_files))))
+
+            run_dir.mkdir(parents=True, exist_ok=True)
+            summary_path = run_dir / "classification_summary.json"
+            summary_path.write_text(
+                json.dumps(rows, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            expected_arrow_rows = [item for item in rows if item["expected_arrow"]]
+            no_arrow_rows = [item for item in rows if not item["expected_arrow"]]
+            arrow_hits = sum(1 for item in expected_arrow_rows if item["arrow_valid"])
+            false_arrows = sum(1 for item in no_arrow_rows if item["arrow_valid"])
+            beacon_count = sum(item["beacon_count"] for item in rows)
+            map_ready_count = sum(item["map_ready_count"] for item in rows)
+            beacon_upper = sum(item["beacon_upper"] for item in rows)
+            map_rate = 100.0 * map_ready_count / max(1, beacon_upper)
+            text = (
+                f"分类批量验证完成\n"
+                f"箭头识别: {arrow_hits}/{len(expected_arrow_rows)}\n"
+                f"无箭头误检: {false_arrows}/{len(no_arrow_rows)}\n"
+                f"识别信标: {beacon_count}\n"
+                f"单帧制图质量合格: {map_ready_count}/{beacon_upper} ({map_rate:.1f}%)\n"
+                f"门槛: confidence≥{MAP_CREATE_CONFIDENCE}, σ≤{MAP_CREATE_SIGMA_CM}cm\n"
+                f"注: 连续5帧条件需在实车时验证\n"
+                f"结果: {summary_path}"
+            )
+            self.ui_queue.put(("batch_done", (text, str(run_dir))))
+        except Exception as exc:
+            self.ui_queue.put(("batch_error", str(exc)))
+
     def run_worker(
         self,
         frame_path: Path,
@@ -1208,6 +1382,22 @@ class VisionToolApp:
                 ok, log = payload
                 self.log(log)
                 self.status_var.set("构建成功" if ok else "构建失败")
+            elif event == "batch_progress":
+                current, total = payload
+                self.status_var.set(f"批量验证中 {current}/{total}")
+            elif event == "batch_done":
+                text, run_dir = payload
+                self.batch_running = False
+                self.batch_button.config(state=tk.NORMAL)
+                self.status_var.set("批量验证完成")
+                self.set_result_info(text)
+                self.log(f"classified batch result: {run_dir}")
+            elif event == "batch_error":
+                self.batch_running = False
+                self.batch_button.config(state=tk.NORMAL)
+                self.status_var.set("批量验证失败")
+                self.log("classified batch error: " + str(payload))
+                messagebox.showerror("批量验证失败", str(payload))
             elif event == "run":
                 ok, log, result, run_dir, image, undistorted_image, birdview_image, undistorted_mask, birdview_mask = payload
                 self.log(log)
@@ -1422,6 +1612,33 @@ def self_test() -> int:
     assert FINE_WIDTH == 376 and FINE_HEIGHT == 240 and FINE_STRIDE == 47
     assert (SIM_ROOT / "vision_sim_main.c").exists()
     assert Simulator(DEFAULT_SOURCE).source_files()
+    assert VisionToolApp.candidate_type_text({"vehicle_valid": 1}) == "小车"
+    assert VisionToolApp.candidate_type_text({"beacon_valid": 1}) == "信标"
+    assert "未生成有效精连通域" in VisionToolApp.candidate_type_text({})
+    assert "物理面积499.0<500cm²" in VisionToolApp.candidate_type_text({"area_cm2": 499.0})
+    assert "圆度0.10<0.15" in VisionToolApp.candidate_type_text({"area_cm2": 700.0, "circularity": 0.1})
+    assert "B评分0.20≤门槛0.30" in VisionToolApp.candidate_type_text({
+        "area_cm2": 700.0,
+        "circularity": 0.5,
+        "confidence_box_size": 0.2,
+        "confidence_box_size_min": 0.3,
+    })
+    category_root = Path("分类")
+    assert VisionToolApp.classification_beacon_upper(
+        category_root / "4、5连通域" / "有箭头" / "frame.raw",
+        category_root,
+        True,
+    ) == 4
+    assert VisionToolApp.classification_beacon_upper(
+        category_root / "5、6连通域" / "frame.raw",
+        category_root,
+        False,
+    ) == 6
+    assert VisionToolApp.classification_beacon_upper(
+        category_root / "0信标" / "有箭头" / "frame.raw",
+        category_root,
+        True,
+    ) == 0
     print("vision tool self-test passed")
     return 0
 
