@@ -169,6 +169,25 @@ uint8 Flight_Safety_Check_Esc(void)
     return 0U;
 }
 
+uint8 Flight_Safety_Check_Battery(void)
+{
+    BatteryStatus status;
+
+    if(!armed)
+    {
+        return 0U;
+    }
+
+    BatteryMonitor_GetStatus(&status);
+    if(status.local_valid && status.pack_type != BATTERY_PACK_UNKNOWN)
+    {
+        return 0U;
+    }
+
+    Flight_Runtime_Emergency_Stop(EMERGENCY_STOP_REASON_BATTERY_INVALID);
+    return 1U;
+}
+
 void Flight_Safety_ResetYawSpinMonitor(void)
 {
     s_yaw_spin_ticks = 0U;
@@ -230,7 +249,10 @@ uint8 Flight_Safety_Check_Attitude(void)
 
 uint8 Flight_Safety_Can_Arm(FlightArmRejectReason *reason)
 {
+    BatteryStatus battery_status;
     FlightArmRejectReason reject_reason = FLIGHT_ARM_REJECT_NONE;
+
+    BatteryMonitor_GetStatus(&battery_status);
 
     if(s_rearm_inhibit_ticks > 0U)
     {
@@ -257,6 +279,10 @@ uint8 Flight_Safety_Can_Arm(FlightArmRejectReason *reason)
             (current_pitch > SAFE_MAX_ANGLE_PITCH) || (current_pitch < -SAFE_MAX_ANGLE_PITCH))
     {
         reject_reason = FLIGHT_ARM_REJECT_ATTITUDE;
+    }
+    else if(!battery_status.local_valid || battery_status.pack_type == BATTERY_PACK_UNKNOWN)
+    {
+        reject_reason = FLIGHT_ARM_REJECT_BATTERY_INVALID;
     }
     else if(!MotorHardware_IsInitialized())
     {
@@ -308,6 +334,7 @@ static const char *flight_safety_estop_reason_text(uint8 reason)
         case EMERGENCY_STOP_REASON_TAKEOFF_TOF:     return "ESTOP TAKEOFF TOF";
         case EMERGENCY_STOP_REASON_YAW_SPIN:        return "ESTOP YAW SPIN";
         case EMERGENCY_STOP_REASON_ESC_FAULT:       return "ESTOP ESC FAULT";
+        case EMERGENCY_STOP_REASON_BATTERY_INVALID: return "ESTOP BAT INVALID";
         case EMERGENCY_STOP_REASON_NONE:
         default:                                    return "ESTOP UNKNOWN";
     }
@@ -359,6 +386,16 @@ uint8 Flight_Runtime_Clear_Emergency_Stop_Latch(void)
        small_driver_esc_has_active_fault())
     {
         return 0U;
+    }
+    if(emergency_stop_reason == EMERGENCY_STOP_REASON_BATTERY_INVALID)
+    {
+        BatteryStatus battery_status;
+
+        BatteryMonitor_GetStatus(&battery_status);
+        if(!battery_status.local_valid || battery_status.pack_type == BATTERY_PACK_UNKNOWN)
+        {
+            return 0U;
+        }
     }
 
     emergency_stop_triggered = 0U;

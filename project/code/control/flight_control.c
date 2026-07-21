@@ -541,6 +541,7 @@ static const char *takeoff_arm_reject_text(FlightArmRejectReason reason)
         case FLIGHT_ARM_REJECT_IMU_CALIBRATING: return "IMU CALIBRATING";
         case FLIGHT_ARM_REJECT_INVALID_SENSOR:  return "INVALID SENSOR";
         case FLIGHT_ARM_REJECT_ATTITUDE:        return "ATTITUDE LIMIT";
+        case FLIGHT_ARM_REJECT_BATTERY_INVALID: return "BAT INVALID";
         case FLIGHT_ARM_REJECT_MOTOR_NOT_READY:
         {
             const char *esc_fault = Flight_Safety_GetEscFaultText();

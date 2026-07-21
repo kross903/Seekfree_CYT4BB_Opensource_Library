@@ -966,6 +966,12 @@ void PIT_Control_Task_250us(void)
         return;
     }
 
+    if(Flight_Safety_Check_Battery())
+    {
+        control_task_finish_cycle(rate_due);
+        return;
+    }
+
     if(control_task_handle_motor_test(rate_due))
     {
         control_task_finish_cycle(rate_due);

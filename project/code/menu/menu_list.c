@@ -830,7 +830,7 @@ static void sensor_status_draw_imu_power(void)
     {
         battery_color = RGB565_RED;
     }
-    else if(battery_status.local_filtered_voltage_v < BATTERY_LOW_RECOVER_THRESHOLD)
+    else if(battery_status.local_filtered_voltage_v < battery_status.low_recover_voltage_v)
     {
         battery_color = RGB565_YELLOW;
     }

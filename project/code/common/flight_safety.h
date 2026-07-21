@@ -16,6 +16,7 @@
 #define EMERGENCY_STOP_REASON_TAKEOFF_TOF     6
 #define EMERGENCY_STOP_REASON_YAW_SPIN        7
 #define EMERGENCY_STOP_REASON_ESC_FAULT       8
+#define EMERGENCY_STOP_REASON_BATTERY_INVALID 9
 
 #define FLIGHT_ESTOP_REARM_INHIBIT_MS          2000U
 
@@ -27,6 +28,7 @@ typedef enum
     FLIGHT_ARM_REJECT_INVALID_SENSOR,
     FLIGHT_ARM_REJECT_ATTITUDE,
     FLIGHT_ARM_REJECT_MOTOR_NOT_READY,
+    FLIGHT_ARM_REJECT_BATTERY_INVALID,
     FLIGHT_ARM_REJECT_REARM_INHIBIT
 } FlightArmRejectReason;
 
@@ -36,6 +38,7 @@ extern int low_voltage_protect_flag;
 
 uint8 Flight_Safety_Check_Attitude(void);
 uint8 Flight_Safety_Check_Esc(void);
+uint8 Flight_Safety_Check_Battery(void);
 uint8 Flight_Safety_Can_Arm(FlightArmRejectReason *reason);
 void Flight_Safety_Update_Battery_Warning(void);
 void Flight_Safety_Tick_5ms(void);

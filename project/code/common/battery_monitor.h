@@ -7,15 +7,23 @@
 #define BATTERY_ADC_TO_VOLTAGE_SCALE       (36.3f / 4096.0f)
 #define BATTERY_ADC_CHANNEL                ADC0_CH21_P07_5
 
-#define BATTERY_SERIES_CELLS               4.0f
-#define BATTERY_NOMINAL_VOLTAGE            14.8f
 #define BATTERY_COMP_REFERENCE_V           15.2f
-#define BATTERY_COMP_GAIN_MIN              0.90f
+#define BATTERY_COMP_GAIN_MIN              0.55f
 #define BATTERY_COMP_GAIN_MAX              1.15f
 #define BATTERY_LOW_CELL_WARN_V            3.70f
 #define BATTERY_LOW_CELL_RECOVER_V         3.80f
-#define BATTERY_LOW_WARN_THRESHOLD         (BATTERY_SERIES_CELLS * BATTERY_LOW_CELL_WARN_V)
-#define BATTERY_LOW_RECOVER_THRESHOLD      (BATTERY_SERIES_CELLS * BATTERY_LOW_CELL_RECOVER_V)
+
+#define BATTERY_4S_DETECT_MIN_V             12.0f
+#define BATTERY_4S_DETECT_MAX_V             17.2f
+#define BATTERY_6S_DETECT_MIN_V             18.0f
+#define BATTERY_6S_DETECT_MAX_V             25.8f
+
+typedef enum
+{
+    BATTERY_PACK_UNKNOWN = 0,
+    BATTERY_PACK_4S = 4,
+    BATTERY_PACK_6S = 6
+} BatteryPackType;
 
 typedef struct
 {
@@ -24,7 +32,10 @@ typedef struct
     float local_filtered_voltage_v;
     float remote_voltage_v;
     float compensation_gain;
+    float low_warn_voltage_v;
+    float low_recover_voltage_v;
     uint16 remote_age_ms;
+    BatteryPackType pack_type;
     uint8 local_valid;
     uint8 remote_valid;
     uint8 low_warning;

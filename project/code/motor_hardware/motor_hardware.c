@@ -64,12 +64,12 @@ static uint16 throttle_to_dshot(uint16 throttle)
 }
 #endif
 
-static uint16 apply_motor_hw_compensation(uint8 motor_idx, uint16 throttle, uint8 bypass_compensation)
+static uint16 apply_motor_hw_compensation(uint8 motor_idx, uint16 throttle, uint8 bypass_motor_trim)
 {
     float scale;
     float scaled;
 
-    if(bypass_compensation)
+    if(bypass_motor_trim)
     {
         return throttle;
     }
@@ -99,14 +99,12 @@ static uint16 apply_motor_hw_compensation(uint8 motor_idx, uint16 throttle, uint
     return (uint16)scaled;
 }
 
-static uint16 apply_voltage_compensation(uint8 motor_idx, uint16 throttle, uint8 bypass_compensation)
+static uint16 apply_voltage_compensation(uint8 motor_idx, uint16 throttle, float gain)
 {
-    float gain = bypass_compensation ? 1.0f : BatteryMonitor_GetCompensationGain();
     float compensated = (float)throttle * gain;
 
     s_voltage_comp_diag.raw_output[motor_idx] = (float)throttle;
     s_voltage_comp_diag.compensation_gain = gain;
-    s_voltage_comp_diag.bypassed = bypass_compensation ? 1U : 0U;
 
     if(!isfinite(compensated) || !isfinite(gain))
     {
@@ -127,6 +125,17 @@ static uint16 apply_voltage_compensation(uint8 motor_idx, uint16 throttle, uint8
     }
 
     return (uint16)compensated;
+}
+
+static uint16 apply_final_hard_limit(uint8 motor_idx, uint16 throttle, float hard_limit)
+{
+    if((float)throttle > hard_limit)
+    {
+        throttle = (uint16)hard_limit;
+        s_voltage_comp_diag.saturation_mask |= (uint8)(1U << motor_idx);
+    }
+    s_voltage_comp_diag.compensated_output[motor_idx] = (float)throttle;
+    return throttle;
 }
 
 void MotorHardware_InitOnce(void)
@@ -152,13 +161,24 @@ void MotorHardware_InitOnce(void)
 void MotorHardware_WriteOutput(const volatile uint16 motor_throttle[4],
                                uint8 armed,
                                uint8 output_enabled,
-                               uint8 bypass_compensation)
+                               uint8 bypass_motor_trim)
 {
+    BatteryStatus battery_status;
     uint16 output[4];
+    float hard_limit = 0.0f;
+    float limit_voltage_v;
     uint8 i;
 
     s_voltage_comp_diag.saturation_mask = 0U;
     s_voltage_comp_diag.invalid_output = 0U;
+    s_voltage_comp_diag.bypassed = bypass_motor_trim ? 1U : 0U;
+    s_voltage_comp_diag.hard_output_limit = 0.0f;
+    s_voltage_comp_diag.battery_pack = (uint8)BATTERY_PACK_UNKNOWN;
+    for(i = 0U; i < 4U; i++)
+    {
+        s_voltage_comp_diag.raw_output[i] = (float)motor_throttle[i];
+        s_voltage_comp_diag.compensated_output[i] = 0.0f;
+    }
 
     if(!armed && !output_enabled)
     {
@@ -176,10 +196,55 @@ void MotorHardware_WriteOutput(const volatile uint16 motor_throttle[4],
         return;
     }
 
+    BatteryMonitor_GetStatus(&battery_status);
+    s_voltage_comp_diag.compensation_gain = battery_status.compensation_gain;
+    s_voltage_comp_diag.battery_pack = (uint8)battery_status.pack_type;
+    if(!battery_status.local_valid ||
+       battery_status.pack_type == BATTERY_PACK_UNKNOWN ||
+       !isfinite(battery_status.local_filtered_voltage_v) ||
+       battery_status.local_filtered_voltage_v <= 0.0f)
+    {
+        s_voltage_comp_diag.invalid_output = 1U;
+#if MOTOR_OUTPUT_PROTOCOL == 0
+        pwm_set_duty(MOTOR_PWM_CH1, MOTOR_PWM_DUTY_MIN);
+        pwm_set_duty(MOTOR_PWM_CH2, MOTOR_PWM_DUTY_MIN);
+        pwm_set_duty(MOTOR_PWM_CH3, MOTOR_PWM_DUTY_MIN);
+        pwm_set_duty(MOTOR_PWM_CH4, MOTOR_PWM_DUTY_MIN);
+#elif MOTOR_OUTPUT_PROTOCOL == 1
+        dshot_set_all_throttle(0U, 0U, 0U, 0U);
+#else
+        small_driver_set_duty(0, 0, 0, 0);
+        small_driver_service_tx(MOTOR_UART_NORMAL_SERVICE_US);
+#endif
+        return;
+    }
+
+    limit_voltage_v = battery_status.local_raw_voltage_v;
+    if(battery_status.local_filtered_voltage_v > limit_voltage_v)
+    {
+        limit_voltage_v = battery_status.local_filtered_voltage_v;
+    }
+    hard_limit = (float)MOTOR_OUTPUT_SCALE_MAX *
+                 BATTERY_COMP_REFERENCE_V /
+                 limit_voltage_v;
+    if(hard_limit > (float)MOTOR_OUTPUT_SCALE_MAX)
+    {
+        hard_limit = (float)MOTOR_OUTPUT_SCALE_MAX;
+    }
+    else if(hard_limit < 0.0f || !isfinite(hard_limit))
+    {
+        hard_limit = 0.0f;
+        s_voltage_comp_diag.invalid_output = 1U;
+    }
+    s_voltage_comp_diag.hard_output_limit = hard_limit;
+
     for(i = 0U; i < 4U; i++)
     {
-        output[i] = apply_voltage_compensation(i, motor_throttle[i], bypass_compensation);
-        output[i] = apply_motor_hw_compensation(i, output[i], bypass_compensation);
+        output[i] = apply_voltage_compensation(i,
+                                               motor_throttle[i],
+                                               battery_status.compensation_gain);
+        output[i] = apply_motor_hw_compensation(i, output[i], bypass_motor_trim);
+        output[i] = apply_final_hard_limit(i, output[i], hard_limit);
     }
 
 #if MOTOR_OUTPUT_PROTOCOL == 0
