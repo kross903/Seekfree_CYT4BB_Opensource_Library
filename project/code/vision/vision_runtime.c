@@ -1,5 +1,6 @@
 #include "vision/vision_runtime.h"
 #include "vision/camera_calibration.h"
+#include "vision/coarse_distance_zone_map.h"
 #include <string.h>
 #include <math.h>
 
@@ -13,7 +14,14 @@ static uint8 s_vision_vehicle_threshold =
     (uint8)VISION_BINARY_THRESHOLD_VEHICLE;
 static uint8 s_vision_beacon_threshold =
     (uint8)VISION_BINARY_THRESHOLD_BEACON;
-static uint8 s_vision_coarse_threshold = (uint8)VISION_RUNTIME_COARSE_THRESHOLD;
+static uint8 s_vision_coarse_zone_thresholds[VISION_RUNTIME_COARSE_ZONE_COUNT] =
+{
+    (uint8)VISION_RUNTIME_COARSE_THRESHOLD_CENTER,
+    (uint8)VISION_RUNTIME_COARSE_THRESHOLD_NEAR,
+    (uint8)VISION_RUNTIME_COARSE_THRESHOLD_MIDDLE,
+    (uint8)VISION_RUNTIME_COARSE_THRESHOLD_FAR,
+    (uint8)VISION_RUNTIME_COARSE_THRESHOLD_EDGE
+};
 
 void VisionRuntime_SetBinaryThreshold(uint8 threshold)
 {
@@ -23,12 +31,66 @@ void VisionRuntime_SetBinaryThreshold(uint8 threshold)
 
 void VisionRuntime_SetCoarseThreshold(uint8 threshold)
 {
-    s_vision_coarse_threshold = (threshold == 0U) ? 1U : threshold;
+    uint8 value = (threshold == 0U) ? 1U : threshold;
+    VisionRuntime_SetCoarseThresholdRange(value, value);
 }
 
 uint8 VisionRuntime_GetCoarseThreshold(void)
 {
-    return s_vision_coarse_threshold;
+    return s_vision_coarse_zone_thresholds[0];
+}
+
+void VisionRuntime_SetCoarseThresholdRange(uint8 center_threshold, uint8 edge_threshold)
+{
+    uint8 center = (center_threshold == 0U) ? 1U : center_threshold;
+    uint8 edge = (edge_threshold == 0U) ? 1U : edge_threshold;
+
+    s_vision_coarse_zone_thresholds[0] = center;
+    s_vision_coarse_zone_thresholds[1] =
+        (uint8)(((uint16)center * 3U + (uint16)edge + 2U) / 4U);
+    s_vision_coarse_zone_thresholds[2] =
+        (uint8)(((uint16)center + (uint16)edge + 1U) / 2U);
+    s_vision_coarse_zone_thresholds[3] =
+        (uint8)(((uint16)center + (uint16)edge * 3U + 2U) / 4U);
+    s_vision_coarse_zone_thresholds[4] = edge;
+}
+
+void VisionRuntime_GetCoarseThresholdRange(uint8 *center_threshold, uint8 *edge_threshold)
+{
+    if(center_threshold != NULL)
+    {
+        *center_threshold = s_vision_coarse_zone_thresholds[0];
+    }
+    if(edge_threshold != NULL)
+    {
+        *edge_threshold = s_vision_coarse_zone_thresholds[4];
+    }
+}
+
+void VisionRuntime_SetCoarseZoneThresholds(
+    const uint8 thresholds[VISION_RUNTIME_COARSE_ZONE_COUNT])
+{
+    uint8 zone;
+
+    if(thresholds == NULL)
+    {
+        return;
+    }
+    for(zone = 0U; zone < VISION_RUNTIME_COARSE_ZONE_COUNT; ++zone)
+    {
+        s_vision_coarse_zone_thresholds[zone] =
+            (thresholds[zone] == 0U) ? 1U : thresholds[zone];
+    }
+}
+
+void VisionRuntime_GetCoarseZoneThresholds(
+    uint8 thresholds[VISION_RUNTIME_COARSE_ZONE_COUNT])
+{
+    if(thresholds != NULL)
+    {
+        memcpy(thresholds, s_vision_coarse_zone_thresholds,
+               sizeof(s_vision_coarse_zone_thresholds));
+    }
 }
 
 void VisionRuntime_SetBinaryThresholds(uint8 inner, uint8 middle, uint8 outer)
@@ -735,7 +797,9 @@ static void VisionRuntime_BinarizeCoarse(const uint8 image[MT9V03X_H][MT9V03X_W]
         for(col = 0; col < MT9V03X_W; ++col)
         {
             int index = row * MT9V03X_W + col;
-            if(image[row][col] >= s_vision_coarse_threshold)
+            uint8 zone = g_vision_coarse_distance_zone[index];
+            uint8 threshold = s_vision_coarse_zone_thresholds[zone];
+            if(image[row][col] >= threshold)
             {
                 VISION_RUNTIME_IMAGE_BIT_SET(s_vision_coarse_binary, index);
             }

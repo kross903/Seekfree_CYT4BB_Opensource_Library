@@ -33,7 +33,11 @@ HEIGHT = 120
 FINE_WIDTH = 376
 FINE_HEIGHT = 240
 FINE_STRIDE = (FINE_WIDTH + 7) // 8
-COARSE_THRESHOLD = 40
+COARSE_CENTER_X = 95.4078135
+COARSE_CENTER_Y = 59.9547985
+COARSE_ZONE_NAMES = ("center", "near", "middle", "far", "edge")
+COARSE_THRESHOLDS = (50, 45, 40, 35, 30)
+COARSE_THRESHOLD = COARSE_THRESHOLDS[2]
 COARSE_MIN_AREA = 10
 MAP_CREATE_CONFIDENCE = 210
 MAP_CREATE_SIGMA_CM = 15
@@ -171,6 +175,7 @@ class Simulator:
         beacon_threshold: int = 10,
         coarse_threshold: int = COARSE_THRESHOLD,
         binary_mode: str = "gray",
+        coarse_thresholds: tuple[int, int, int, int, int] | None = None,
     ) -> tuple[bool, str, Path | None, Path | None, Path | None, Path | None, Path | None, Path | None, Path | None]:
         self.pipeline_mode = 1 if binary_mode == "post_transform" else 0
         executable = self.output_path()
@@ -195,6 +200,7 @@ class Simulator:
             "post_transform": "birdview_post_binary.pgm",
         }.get(binary_mode, "birdview_binary.pgm")
         birdview_binary_path = output_dir / birdview_binary_name
+        zone_thresholds = coarse_thresholds or (coarse_threshold,) * len(COARSE_ZONE_NAMES)
         command = [
             str(executable),
             "--input", str(raw_path),
@@ -206,7 +212,11 @@ class Simulator:
             "--threshold", str(beacon_threshold),
             "--vehicle-threshold", str(vehicle_threshold),
             "--beacon-threshold", str(beacon_threshold),
-            "--coarse-threshold", str(coarse_threshold),
+            "--coarse-center-threshold", str(zone_thresholds[0]),
+            "--coarse-near-threshold", str(zone_thresholds[1]),
+            "--coarse-middle-threshold", str(zone_thresholds[2]),
+            "--coarse-far-threshold", str(zone_thresholds[3]),
+            "--coarse-edge-threshold", str(zone_thresholds[4]),
             "--binary-mode", binary_mode,
         ]
         if undistort:
@@ -252,7 +262,9 @@ class VisionToolApp:
         self.height_var = tk.StringVar(value="100")
         self.vehicle_threshold_var = tk.StringVar(value="110")
         self.beacon_threshold_var = tk.StringVar(value="10")
-        self.coarse_threshold_var = tk.StringVar(value=str(COARSE_THRESHOLD))
+        self.coarse_threshold_vars = [
+            tk.StringVar(value=str(value)) for value in COARSE_THRESHOLDS
+        ]
         self.undistort_var = tk.BooleanVar(value=False)
         self.birdview_var = tk.BooleanVar(value=False)
         self.binary_mode_var = tk.StringVar(value="undistort_binary_ipm")
@@ -282,7 +294,8 @@ class VisionToolApp:
         self.current_result: dict | None = None
         self.ui_queue: queue.Queue[tuple[str, object]] = queue.Queue()
         self.simulation_queue: queue.Queue[
-            tuple[Path, float, float, float, bool, bool, int, int, int, str]
+            tuple[Path, float, float, float, bool, bool, int, int,
+                  tuple[int, int, int, int, int], str]
         ] = queue.Queue()
         self.capture_stop_event = threading.Event()
         self.capture_running = False
@@ -518,10 +531,15 @@ class VisionToolApp:
         ttk.Entry(processing, textvariable=self.beacon_threshold_var, width=8).grid(
             row=9, column=1, sticky="ew", padx=(8, 0), pady=(4, 0)
         )
-        ttk.Label(processing, text="粗筛固定阈值").grid(row=10, column=0, sticky="w", pady=(4, 0))
-        ttk.Entry(processing, textvariable=self.coarse_threshold_var, width=8).grid(
-            row=10, column=1, sticky="ew", padx=(8, 0), pady=(4, 0)
-        )
+        for offset, (label, variable) in enumerate(zip(
+            ("粗筛中心圈", "粗筛近圈", "粗筛中圈", "粗筛远圈", "粗筛边缘圈"),
+            self.coarse_threshold_vars,
+        )):
+            row = 10 + offset
+            ttk.Label(processing, text=label).grid(row=row, column=0, sticky="w", pady=(4, 0))
+            ttk.Entry(processing, textvariable=variable, width=8).grid(
+                row=row, column=1, sticky="ew", padx=(8, 0), pady=(4, 0)
+            )
         ttk.Label(processing_tab, textvariable=self.status_var, foreground="#1b6e3a").grid(
             row=2, column=0, sticky="w", pady=(8, 4)
         )
@@ -632,8 +650,8 @@ class VisionToolApp:
                 int(self.vehicle_threshold_var.get()),
                 int(self.beacon_threshold_var.get()),
             )
-            coarse_threshold = int(self.coarse_threshold_var.get())
-            if any(value < 1 or value > 255 for value in (*thresholds, coarse_threshold)):
+            coarse_thresholds = tuple(int(variable.get()) for variable in self.coarse_threshold_vars)
+            if any(value < 1 or value > 255 for value in (*thresholds, *coarse_thresholds)):
                 raise ValueError
         except ValueError:
             self.ui_queue.put(("run", (False, "simulation parameters are invalid", None, APP_ROOT, None, None, None, None, None)))
@@ -646,7 +664,7 @@ class VisionToolApp:
             bool(self.undistort_var.get()),
             bool(self.birdview_var.get()),
             *thresholds,
-            coarse_threshold,
+            coarse_thresholds,
             self.binary_mode_var.get(),
         ))
 
@@ -654,11 +672,11 @@ class VisionToolApp:
         while True:
             (frame_path, roll, pitch, height, undistort, birdview,
              vehicle_threshold, beacon_threshold,
-             coarse_threshold, binary_mode) = self.simulation_queue.get()
+             coarse_thresholds, binary_mode) = self.simulation_queue.get()
             try:
                 self.run_worker(frame_path, roll, pitch, height, undistort, birdview,
                                 vehicle_threshold, beacon_threshold,
-                                coarse_threshold, binary_mode)
+                                coarse_thresholds, binary_mode)
             except Exception as exc:
                 self.ui_queue.put(("run", (False, str(exc), None, APP_ROOT, None, None, None, None, None)))
 
@@ -778,7 +796,7 @@ class VisionToolApp:
             return
         candidates = self.find_coarse_candidates(
             self.current_candidate_source,
-            int(self.current_result.get("coarse_threshold", COARSE_THRESHOLD)),
+            self.result_coarse_thresholds(self.current_result),
         )
         runtime_candidates = self.current_result.get("coarse_candidates")
         if isinstance(runtime_candidates, list) and runtime_candidates:
@@ -792,17 +810,42 @@ class VisionToolApp:
         )
 
     @staticmethod
-    def find_coarse_candidates(image: Image.Image, threshold: int) -> list[dict]:
+    def result_coarse_thresholds(result: dict) -> tuple[int, int, int, int, int]:
+        values = result.get("coarse_thresholds")
+        if isinstance(values, dict):
+            return tuple(int(values.get(name, COARSE_THRESHOLDS[index]))
+                         for index, name in enumerate(COARSE_ZONE_NAMES))
+        threshold = int(result.get("coarse_threshold", COARSE_THRESHOLD))
+        return (threshold,) * len(COARSE_ZONE_NAMES)
+
+    @staticmethod
+    def find_coarse_candidates(
+        image: Image.Image,
+        thresholds: tuple[int, int, int, int, int] = COARSE_THRESHOLDS,
+    ) -> list[dict]:
         gray = image.convert("L")
         width, height = gray.size
         pixels = gray.load()
         visited = bytearray(width * height)
+        pixel_thresholds = bytearray(width * height)
         candidates: list[dict] = []
-        threshold = max(1, min(255, threshold))
+        thresholds = tuple(max(1, min(255, value)) for value in thresholds)
+        radius_x = max(COARSE_CENTER_X, WIDTH - 1 - COARSE_CENTER_X)
+        radius_y = max(COARSE_CENTER_Y, HEIGHT - 1 - COARSE_CENTER_Y)
+        for y in range(height):
+            for x in range(width):
+                dx = (x - COARSE_CENTER_X) / radius_x
+                dy = (y - COARSE_CENTER_Y) / radius_y
+                radius_sq = dx * dx + dy * dy
+                zone = (0 if radius_sq < 0.04 else
+                        (1 if radius_sq < 0.16 else
+                         (2 if radius_sq < 0.36 else
+                          (3 if radius_sq < 0.64 else 4))))
+                pixel_thresholds[y * width + x] = thresholds[zone]
         for y in range(height):
             for x in range(width):
                 index = y * width + x
-                if visited[index] or pixels[x, y] < threshold:
+                if visited[index] or pixels[x, y] < pixel_thresholds[index]:
                     continue
                 queue = [(x, y)]
                 visited[index] = 1
@@ -824,7 +867,8 @@ class VisionToolApp:
                             if not (0 <= nx < width and 0 <= ny < height):
                                 continue
                             neighbor = ny * width + nx
-                            if visited[neighbor] or pixels[nx, ny] < threshold:
+                            if (visited[neighbor] or
+                                    pixels[nx, ny] < pixel_thresholds[neighbor]):
                                 continue
                             visited[neighbor] = 1
                             queue.append((nx, ny))
@@ -1155,8 +1199,8 @@ class VisionToolApp:
                 int(self.vehicle_threshold_var.get()),
                 int(self.beacon_threshold_var.get()),
             )
-            coarse_threshold = int(self.coarse_threshold_var.get())
-            if any(value < 1 or value > 255 for value in (*thresholds, coarse_threshold)):
+            coarse_thresholds = tuple(int(variable.get()) for variable in self.coarse_threshold_vars)
+            if any(value < 1 or value > 255 for value in (*thresholds, *coarse_thresholds)):
                 raise ValueError
         except ValueError:
             messagebox.showerror("参数错误", "Roll、Pitch、高度必须是数字，阈值必须为 1 到 255。")
@@ -1168,20 +1212,25 @@ class VisionToolApp:
         threading.Thread(
             target=self.run_worker,
             args=(self.current_frame, roll, pitch, height, undistort, birdview,
-                  *thresholds, coarse_threshold, binary_mode),
+                  *thresholds, coarse_thresholds, binary_mode),
             daemon=True,
         ).start()
 
     @staticmethod
     def classification_beacon_upper(frame_path: Path, root: Path, expected_arrow: bool) -> int:
         try:
-            category = frame_path.relative_to(root).parts[0]
-        except (ValueError, IndexError):
+            categories = frame_path.relative_to(root).parts[:-1]
+        except ValueError:
             return 0
-        counts = [int(value) for value in re.findall(r"\d+", category)]
-        if not counts:
-            return 0
-        return max(0, max(counts) - (1 if expected_arrow else 0))
+        for category in categories:
+            counts = [int(value) for value in re.findall(r"\d+", category)]
+            if not counts:
+                continue
+            if "信标" in category:
+                return max(counts)
+            if "连通域" in category:
+                return max(0, max(counts) - (1 if expected_arrow else 0))
+        return 0
 
     def start_classified_batch(self) -> None:
         if self.batch_running:
@@ -1199,12 +1248,13 @@ class VisionToolApp:
                 float(self.pitch_var.get()),
                 float(self.height_var.get()),
             )
-            thresholds = (
+            recognition_thresholds = (
                 int(self.vehicle_threshold_var.get()),
                 int(self.beacon_threshold_var.get()),
-                int(self.coarse_threshold_var.get()),
             )
-            if any(value < 1 or value > 255 for value in thresholds):
+            coarse_thresholds = tuple(int(variable.get()) for variable in self.coarse_threshold_vars)
+            if any(value < 1 or value > 255
+                   for value in (*recognition_thresholds, *coarse_thresholds)):
                 raise ValueError
         except ValueError:
             messagebox.showerror("参数错误", "姿态、高度必须是数字，阈值必须为 1 到 255。")
@@ -1216,7 +1266,8 @@ class VisionToolApp:
         threading.Thread(
             target=self.classified_batch_worker,
             args=(Path(self.source_var.get()), root, raw_files, fallback_pose,
-                  thresholds, self.binary_mode_var.get()),
+                  recognition_thresholds, coarse_thresholds,
+                  self.binary_mode_var.get()),
             daemon=True,
         ).start()
 
@@ -1226,7 +1277,8 @@ class VisionToolApp:
         root: Path,
         raw_files: list[Path],
         fallback_pose: tuple[float, float, float],
-        thresholds: tuple[int, int, int],
+        recognition_thresholds: tuple[int, int],
+        coarse_thresholds: tuple[int, int, int, int, int],
         binary_mode: str,
     ) -> None:
         run_dir = RUN_ROOT / time.strftime("classified_%Y%m%d_%H%M%S")
@@ -1252,10 +1304,11 @@ class VisionToolApp:
                     height,
                     False,
                     False,
-                    thresholds[0],
-                    thresholds[1],
-                    thresholds[2],
+                    recognition_thresholds[0],
+                    recognition_thresholds[1],
+                    coarse_thresholds[2],
                     binary_mode,
+                    coarse_thresholds,
                 )
                 ok, log, result_path = result[0], result[1], result[2]
                 if not ok or result_path is None:
@@ -1316,7 +1369,7 @@ class VisionToolApp:
         birdview: bool,
         vehicle_threshold: int,
         beacon_threshold: int,
-        coarse_threshold: int,
+        coarse_thresholds: tuple[int, int, int, int, int],
         binary_mode: str,
     ) -> None:
         source = Path(self.source_var.get())
@@ -1330,7 +1383,7 @@ class VisionToolApp:
             ok, log, result_path, undistorted_path, birdview_path, undistorted_mask_path, birdview_mask_path, undistorted_binary_path, birdview_binary_path = simulator.run(
                 raw_path, run_dir, roll, pitch, height, undistort, True,
                 vehicle_threshold, beacon_threshold,
-                coarse_threshold, binary_mode
+                coarse_thresholds[2], binary_mode, coarse_thresholds
             )
             payload = json.loads(result_path.read_text(encoding="utf-8")) if result_path else None
             binary_enabled = binary_mode != "gray"
@@ -1542,13 +1595,14 @@ class VisionToolApp:
                 f"area={beacon.get('area_cm2', 0.0):.1f}cm²"
             )
         beacon_detail = "\n信标详情:\n" + "\n".join(beacon_lines) if beacon_lines else ""
+        coarse_text = "/".join(str(value) for value in self.result_coarse_thresholds(result))
         self.set_result_info(
             f"连通域: {result.get('blob_count', 0)}\n"
             f"信标: {result.get('beacon_count', 0)}\n"
             f"箭头/信标精筛阈值: "
             f"{result.get('recognition_thresholds', {}).get('vehicle', '?')}/"
             f"{result.get('recognition_thresholds', {}).get('beacon', '?')}\n"
-            f"粗筛阈值: {result.get('coarse_threshold', '?')}\n"
+            f"粗筛五圈阈值（中心→边缘）: {coarse_text}\n"
             f"箭头分流面积阈值: {result.get('vehicle_min_raw_box_area', '?')} 像素\n"
             f"预览顺序: {binary_mode_text}\n"
             f"小车标志有效: {result.get('vehicle', {}).get('valid', 0)}\n"
@@ -1563,7 +1617,7 @@ class VisionToolApp:
             self.open_processed_window()
         candidates = self.find_coarse_candidates(
             image,
-            int(result.get("coarse_threshold", COARSE_THRESHOLD)),
+            self.result_coarse_thresholds(result),
         )
         runtime_candidates = result.get("coarse_candidates")
         if isinstance(runtime_candidates, list) and runtime_candidates:
@@ -1639,6 +1693,11 @@ def self_test() -> int:
         category_root,
         True,
     ) == 0
+    assert VisionToolApp.classification_beacon_upper(
+        category_root / "粗集" / "3、4信标" / "有箭头" / "frame.raw",
+        category_root,
+        True,
+    ) == 4
     print("vision tool self-test passed")
     return 0
 

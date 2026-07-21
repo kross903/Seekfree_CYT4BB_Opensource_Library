@@ -10,7 +10,14 @@
 #define VISION_BINARY_THRESHOLD_MIDDLE VISION_BINARY_THRESHOLD_BEACON
 #define VISION_BINARY_THRESHOLD_OUTER  VISION_BINARY_THRESHOLD_BEACON
 #define VISION_BINARY_THRESHOLD        VISION_BINARY_THRESHOLD_BEACON
-#define VISION_RUNTIME_COARSE_THRESHOLD (40U)
+#define VISION_RUNTIME_COARSE_ZONE_COUNT       (5U)
+#define VISION_RUNTIME_COARSE_THRESHOLD_CENTER (50U)
+#define VISION_RUNTIME_COARSE_THRESHOLD_NEAR   (45U)
+#define VISION_RUNTIME_COARSE_THRESHOLD_MIDDLE (40U)
+#define VISION_RUNTIME_COARSE_THRESHOLD_FAR    (35U)
+#define VISION_RUNTIME_COARSE_THRESHOLD_EDGE   (30U)
+/* Legacy single-threshold name keeps existing callers source compatible. */
+#define VISION_RUNTIME_COARSE_THRESHOLD VISION_RUNTIME_COARSE_THRESHOLD_CENTER
 #define VISION_BINARY_ZONE_INNER       (0U)
 #define VISION_BINARY_ZONE_MIDDLE      (1U)
 #define VISION_BINARY_ZONE_OUTER       (2U)
@@ -195,6 +202,12 @@ void VisionRuntime_SetRecognitionThresholds(uint8 vehicle, uint8 beacon);
 void VisionRuntime_GetRecognitionThresholds(uint8 *vehicle, uint8 *beacon);
 void VisionRuntime_SetCoarseThreshold(uint8 threshold);
 uint8 VisionRuntime_GetCoarseThreshold(void);
+void VisionRuntime_SetCoarseThresholdRange(uint8 center_threshold, uint8 edge_threshold);
+void VisionRuntime_GetCoarseThresholdRange(uint8 *center_threshold, uint8 *edge_threshold);
+void VisionRuntime_SetCoarseZoneThresholds(
+    const uint8 thresholds[VISION_RUNTIME_COARSE_ZONE_COUNT]);
+void VisionRuntime_GetCoarseZoneThresholds(
+    uint8 thresholds[VISION_RUNTIME_COARSE_ZONE_COUNT]);
 void VisionRuntime_GetDiag(VisionRuntimeDiag_t *diag);
 void VisionRuntime_SetDiag(const VisionRuntimeDiag_t *diag);
 void VisionRuntime_GetBeaconSlots(VisionRuntimeBeaconSlot_t *slots, uint8 max_slots);

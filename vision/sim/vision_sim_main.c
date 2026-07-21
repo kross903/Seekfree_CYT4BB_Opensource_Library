@@ -193,6 +193,7 @@ static int write_result(const char *path, const char *binary_path,
     VisionRuntimeBeaconSlot_t slots[VISION_RUNTIME_BEACON_SLOT_COUNT] = {0};
     VisionRuntimeCandidateBox_t candidates[16U] = {0};
     VehicleMarkerChevronDebug_t chevron = {0};
+    uint8 coarse_thresholds[VISION_RUNTIME_COARSE_ZONE_COUNT] = {0};
     float apex_raw_u = 0.0f;
     float apex_raw_v = 0.0f;
     float left_tip_raw_u = 0.0f;
@@ -218,6 +219,7 @@ static int write_result(const char *path, const char *binary_path,
     candidate_count = VisionRuntime_GetCandidateBoxes(
         candidates, 16U);
     VehicleMarkerLocalization_GetChevronDebug(&chevron);
+    VisionRuntime_GetCoarseZoneThresholds(coarse_thresholds);
     file = fopen(path, "w");
     if(file == NULL)
     {
@@ -264,6 +266,14 @@ static int write_result(const char *path, const char *binary_path,
             (unsigned)beacon_threshold);
     fprintf(file, "  \"coarse_threshold\":%u,\n",
             (unsigned)VisionRuntime_GetCoarseThreshold());
+    fprintf(file,
+            "  \"coarse_thresholds\":{"
+            "\"center\":%u,\"near\":%u,\"middle\":%u,\"far\":%u,\"edge\":%u},\n",
+            (unsigned)coarse_thresholds[0],
+            (unsigned)coarse_thresholds[1],
+            (unsigned)coarse_thresholds[2],
+            (unsigned)coarse_thresholds[3],
+            (unsigned)coarse_thresholds[4]);
     fprintf(file, "  \"vehicle_min_raw_box_area\":%u,\n",
             (unsigned)VISION_RUNTIME_VEHICLE_MIN_RAW_BOX_AREA);
     fprintf(file,
@@ -475,8 +485,27 @@ int main(int argc, char **argv)
         get_option(argc, argv, "--beacon-threshold"),
         parse_int(get_option(argc, argv, "--threshold-middle"),
                   threshold_value));
-    int coarse_threshold_value = parse_int(get_option(argc, argv, "--coarse-threshold"),
-                                           (int)VISION_RUNTIME_COARSE_THRESHOLD);
+    int legacy_coarse_threshold = parse_int(
+        get_option(argc, argv, "--coarse-threshold"), -1);
+    int coarse_threshold_values[VISION_RUNTIME_COARSE_ZONE_COUNT] =
+    {
+        parse_int(get_option(argc, argv, "--coarse-center-threshold"),
+                  (legacy_coarse_threshold > 0) ? legacy_coarse_threshold :
+                  (int)VISION_RUNTIME_COARSE_THRESHOLD_CENTER),
+        parse_int(get_option(argc, argv, "--coarse-near-threshold"),
+                  (legacy_coarse_threshold > 0) ? legacy_coarse_threshold :
+                  (int)VISION_RUNTIME_COARSE_THRESHOLD_NEAR),
+        parse_int(get_option(argc, argv, "--coarse-middle-threshold"),
+                  (legacy_coarse_threshold > 0) ? legacy_coarse_threshold :
+                  (int)VISION_RUNTIME_COARSE_THRESHOLD_MIDDLE),
+        parse_int(get_option(argc, argv, "--coarse-far-threshold"),
+                  (legacy_coarse_threshold > 0) ? legacy_coarse_threshold :
+                  (int)VISION_RUNTIME_COARSE_THRESHOLD_FAR),
+        parse_int(get_option(argc, argv, "--coarse-edge-threshold"),
+                  (legacy_coarse_threshold > 0) ? legacy_coarse_threshold :
+                  (int)VISION_RUNTIME_COARSE_THRESHOLD_EDGE)
+    };
+    uint8 coarse_thresholds[VISION_RUNTIME_COARSE_ZONE_COUNT];
     uint8 threshold;
     uint8 vehicle_threshold;
     uint8 beacon_threshold;
@@ -498,7 +527,7 @@ int main(int argc, char **argv)
 
     if(input_path == NULL || output_path == NULL || !read_raw(input_path))
     {
-        fprintf(stderr, "usage: vision_sim --input frame.raw --output result.json [--binary binary.pgm] [--vehicle-threshold 110] [--beacon-threshold 10] [--coarse-threshold 40] [--binary-mode gray|pre_transform|undistort_binary_ipm|post_transform] [--undistorted undistorted.pgm] [--undistorted-mask mask.pgm] [--undistorted-binary binary.pgm] [--birdview birdview.pgm] [--birdview-mask mask.pgm] [--birdview-binary binary.pgm]\n");
+        fprintf(stderr, "usage: vision_sim --input frame.raw --output result.json [--binary binary.pgm] [--vehicle-threshold 110] [--beacon-threshold 10] [--coarse-center-threshold 50] [--coarse-near-threshold 45] [--coarse-middle-threshold 40] [--coarse-far-threshold 35] [--coarse-edge-threshold 30] [--binary-mode gray|pre_transform|undistort_binary_ipm|post_transform]\n");
         return 2;
     }
 
@@ -508,8 +537,15 @@ int main(int argc, char **argv)
     if(vehicle_threshold_value > 255) vehicle_threshold_value = 255;
     if(beacon_threshold_value < 1) beacon_threshold_value = 1;
     if(beacon_threshold_value > 255) beacon_threshold_value = 255;
-    if(coarse_threshold_value < 1) coarse_threshold_value = 1;
-    if(coarse_threshold_value > 255) coarse_threshold_value = 255;
+    {
+        int zone;
+        for(zone = 0; zone < (int)VISION_RUNTIME_COARSE_ZONE_COUNT; ++zone)
+        {
+            if(coarse_threshold_values[zone] < 1) coarse_threshold_values[zone] = 1;
+            if(coarse_threshold_values[zone] > 255) coarse_threshold_values[zone] = 255;
+            coarse_thresholds[zone] = (uint8)coarse_threshold_values[zone];
+        }
+    }
     vehicle_threshold = (uint8)vehicle_threshold_value;
     beacon_threshold = (uint8)beacon_threshold_value;
     threshold = beacon_threshold;
@@ -535,7 +571,7 @@ int main(int argc, char **argv)
     BeaconDetect_Init();
     VisionRuntime_SetRecognitionThresholds(vehicle_threshold,
                                            beacon_threshold);
-    VisionRuntime_SetCoarseThreshold((uint8)coarse_threshold_value);
+    VisionRuntime_SetCoarseZoneThresholds(coarse_thresholds);
     mt9v03x_finish_flag = 1U;
     VisionRuntime_ProcessFrameWithPose(roll_deg, pitch_deg, height_cm);
     VisionRuntime_GetDiag(&diag);
