@@ -26,15 +26,21 @@
 #define BEACON_IMG_ROWS         MT9V03X_H   /* 120 */
 #define BEACON_IMG_COLS         MT9V03X_W   /* 188 */
 #define BEACON_DETECTION_CONFIDENCE_MIN (96U)
-#define BEACON_PHYSICAL_AREA_MIN_CM2      (500.0f)
-#define BEACON_PHYSICAL_AREA_IDEAL_CM2    (700.0f)
-#define BEACON_PHYSICAL_AREA_MAX_CM2      (1000.0f)
-#define BEACON_CONFIDENCE_BOX_SIZE_WEIGHT (0.45f)
-#define BEACON_CONFIDENCE_STABILITY_WEIGHT (0.40f)
-#define BEACON_CONFIDENCE_AREA_WEIGHT      (0.20f)
-#define BEACON_CONFIDENCE_EDGE_WEIGHT      (0.10f)
-#define BEACON_BOX_SIZE_MIN_EDGE           (0.05f)
-#define BEACON_BOX_SIZE_MIN_CENTER         (0.50f)
+/* 信标局部鸟瞰物理面积门槛与理想面积，单位 cm²。 */
+#define BEACON_PHYSICAL_AREA_MIN_CM2      (480.0f)  /* 最小可接受面积 */
+#define BEACON_PHYSICAL_AREA_IDEAL_CM2    (700.0f)  /* 面积评分 A=1 的理想面积 */
+#define BEACON_PHYSICAL_AREA_MAX_CM2      (1500.0f) /* 最大可接受面积 */
+#define BEACON_UNDISTORTED_AREA_MIN_PX    (80.0f)
+#define BEACON_UNDISTORTED_AREA_IDEAL_PX  (180.0f)
+#define BEACON_UNDISTORTED_AREA_MAX_PX    (500.0f)
+/* 检测置信度组成：B=候选框大小，T=多阈值稳定性，A=面积，E=边缘完整性。 */
+#define BEACON_CONFIDENCE_BOX_SIZE_WEIGHT (0.45f) /* B 权重 */
+#define BEACON_CONFIDENCE_STABILITY_WEIGHT (0.60f) /* T 权重 */
+#define BEACON_CONFIDENCE_AREA_WEIGHT      (0.20f) /* A 权重 */
+#define BEACON_CONFIDENCE_EDGE_WEIGHT      (0.10f) /* E 权重 */
+/* B 的位置动态门槛：中心严格，边缘宽松，中间使用二次曲线过渡。 */
+#define BEACON_BOX_SIZE_MIN_EDGE           (0.05f) /* 图像边缘最低 B 门槛 */
+#define BEACON_BOX_SIZE_MIN_CENTER         (0.50f) /* 图像中心最低 B 门槛 */
 #define BEACON_POSITION_SIGMA_MIN_CM        (5U)
 #define BEACON_POSITION_SIGMA_MAX_CM        (15U)
 

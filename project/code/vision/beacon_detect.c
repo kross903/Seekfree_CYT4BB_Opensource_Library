@@ -80,6 +80,7 @@ static void BeaconDetect_UpdateConfidence(VisionBlob_t *blob)
     edge = BeaconDetect_Clamp01(blob->confidence_edge);
     blob->confidence_box_size_min = BeaconDetect_GetBoxSizeMinimum(blob);
 
+#if VISION_RUNTIME_PHYSICAL_GRID_ENABLE
     area = blob->physical_area_cm2;
     if(area <= BEACON_PHYSICAL_AREA_MIN_CM2 ||
        area >= BEACON_PHYSICAL_AREA_MAX_CM2)
@@ -98,6 +99,26 @@ static void BeaconDetect_UpdateConfidence(VisionBlob_t *blob)
                      (BEACON_PHYSICAL_AREA_MAX_CM2 -
                       BEACON_PHYSICAL_AREA_IDEAL_CM2);
     }
+#else
+    area = (float)blob->area;
+    if(area <= BEACON_UNDISTORTED_AREA_MIN_PX ||
+       area >= BEACON_UNDISTORTED_AREA_MAX_PX)
+    {
+        area_score = 0.0f;
+    }
+    else if(area <= BEACON_UNDISTORTED_AREA_IDEAL_PX)
+    {
+        area_score = (area - BEACON_UNDISTORTED_AREA_MIN_PX) /
+                     (BEACON_UNDISTORTED_AREA_IDEAL_PX -
+                      BEACON_UNDISTORTED_AREA_MIN_PX);
+    }
+    else
+    {
+        area_score = (BEACON_UNDISTORTED_AREA_MAX_PX - area) /
+                     (BEACON_UNDISTORTED_AREA_MAX_PX -
+                      BEACON_UNDISTORTED_AREA_IDEAL_PX);
+    }
+#endif
 
     blob->confidence_box_size = box_size;
     blob->confidence_stability = stability;
@@ -215,10 +236,8 @@ uint8 BeaconDetect_AppendBlob(VisionBlob_t *blob)
     aspect_ratio = blob->aspect_ratio;
     occupancy_ratio = blob->occupancy_ratio;
     circularity = blob->circularity;
-    if(!blob->physical_valid)
-    {
-        return 0U;
-    }
+#if VISION_RUNTIME_PHYSICAL_GRID_ENABLE
+    if(!blob->physical_valid) return 0U;
     if(blob->physical_area_cm2 < g_beacon_config.min_physical_area_cm2 ||
        blob->physical_area_cm2 > g_beacon_config.max_physical_area_cm2)
     {
@@ -227,6 +246,13 @@ uint8 BeaconDetect_AppendBlob(VisionBlob_t *blob)
     aspect_ratio = blob->physical_aspect_ratio;
     occupancy_ratio = blob->physical_occupancy_ratio;
     circularity = blob->physical_circularity;
+#else
+    if((float)blob->area < BEACON_UNDISTORTED_AREA_MIN_PX ||
+       (float)blob->area > BEACON_UNDISTORTED_AREA_MAX_PX)
+    {
+        return 0U;
+    }
+#endif
 
     if(aspect_ratio < g_beacon_config.min_aspect ||
        aspect_ratio > g_beacon_config.max_aspect)
