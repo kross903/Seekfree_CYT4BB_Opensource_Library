@@ -154,31 +154,117 @@ static void threshold_image(uint8 *image, size_t pixel_count, uint8 threshold)
     }
 }
 
-static void full_rectified_point_to_raw(const VehicleMarkerPoint2D_t *full,
-                                        float *raw_u, float *raw_v)
+typedef struct
+{
+    float min_u;
+    float min_v;
+    float max_u;
+    float max_v;
+    float center_u;
+    float center_v;
+    uint8 valid;
+} RawOverlayBox_t;
+
+static uint8 full_rectified_xy_to_raw(float full_u, float full_v,
+                                      float *raw_u, float *raw_v)
 {
     uint16 source_x_q8 = 0U;
     uint16 source_y_q8 = 0U;
-    int full_x;
-    int full_y;
+    int full_x = (int)(full_u + 0.5f);
+    int full_y = (int)(full_v + 0.5f);
 
-    if(full == NULL || raw_u == NULL || raw_v == NULL)
+    if(raw_u == NULL || raw_v == NULL)
     {
-        return;
+        return 0U;
     }
-    full_x = (int)(full->u + 0.5f);
-    full_y = (int)(full->v + 0.5f);
     if(CameraCalibration_FullRectifiedPixelToSourceQ8(
            full_x, full_y, &source_x_q8, &source_y_q8))
     {
         *raw_u = (float)source_x_q8 / 256.0f;
         *raw_v = (float)source_y_q8 / 256.0f;
+        return 1U;
     }
-    else
+    return 0U;
+}
+
+static void full_rectified_point_to_raw(const VehicleMarkerPoint2D_t *full,
+                                        float *raw_u, float *raw_v)
+{
+    if(full == NULL || raw_u == NULL || raw_v == NULL)
+    {
+        return;
+    }
+    if(!full_rectified_xy_to_raw(full->u, full->v, raw_u, raw_v))
     {
         *raw_u = full->u * 0.5f;
         *raw_v = full->v * 0.5f;
     }
+}
+
+static void full_rectified_box_to_raw(const VisionRuntimeBeaconSlot_t *slot,
+                                      RawOverlayBox_t *box)
+{
+    int center_x;
+    int center_y;
+    int sample;
+    int point;
+    int valid_count = 0;
+
+    if(box == NULL) return;
+    memset(box, 0, sizeof(*box));
+    if(slot == NULL || !slot->valid) return;
+
+    for(sample = 0; sample <= 8; ++sample)
+    {
+        float t = (float)sample / 8.0f;
+        float x = (float)slot->min_col +
+                  ((float)slot->max_col - (float)slot->min_col) * t;
+        float y = (float)slot->min_row +
+                  ((float)slot->max_row - (float)slot->min_row) * t;
+        const float full_u[4] = {
+            x, x, (float)slot->min_col, (float)slot->max_col};
+        const float full_v[4] = {
+            (float)slot->min_row, (float)slot->max_row, y, y};
+
+        for(point = 0; point < 4; ++point)
+        {
+            float raw_u;
+            float raw_v;
+            if(!full_rectified_xy_to_raw(full_u[point], full_v[point],
+                                         &raw_u, &raw_v))
+            {
+                continue;
+            }
+            if(valid_count == 0)
+            {
+                box->min_u = box->max_u = raw_u;
+                box->min_v = box->max_v = raw_v;
+            }
+            else
+            {
+                if(raw_u < box->min_u) box->min_u = raw_u;
+                if(raw_u > box->max_u) box->max_u = raw_u;
+                if(raw_v < box->min_v) box->min_v = raw_v;
+                if(raw_v > box->max_v) box->max_v = raw_v;
+            }
+            ++valid_count;
+        }
+    }
+    if(valid_count == 0) return;
+    if(IPM_World2Image(slot->x_cm, slot->y_cm, &center_x, &center_y))
+    {
+        box->center_u = (float)center_x;
+        box->center_v = (float)center_y;
+    }
+    else if(!full_rectified_xy_to_raw(
+                0.5f * (float)(slot->min_col + slot->max_col),
+                0.5f * (float)(slot->min_row + slot->max_row),
+                &box->center_u, &box->center_v))
+    {
+        box->center_u = 0.5f * (box->min_u + box->max_u);
+        box->center_v = 0.5f * (box->min_v + box->max_v);
+    }
+    box->valid = 1U;
 }
 
 static int write_result(const char *path, const char *binary_path,
@@ -286,6 +372,8 @@ static int write_result(const char *path, const char *binary_path,
             (unsigned)vehicle_threshold, (unsigned)beacon_threshold);
     fprintf(file,
             "  \"recognition_pipeline\":\"vehicle_first_dual_threshold_short_circuit\",\n");
+    fprintf(file, "  \"physical_grid_enabled\":%u,\n",
+            (unsigned)VISION_RUNTIME_PHYSICAL_GRID_ENABLE);
     fprintf(file, "  \"binary_mode\":\"%s\",\n",
             (binary_mode == BINARY_MODE_PRE_TRANSFORM) ? "pre_transform" :
             ((binary_mode == BINARY_MODE_UNDISTORT_BINARY) ? "undistort_binary_ipm" :
@@ -327,9 +415,14 @@ static int write_result(const char *path, const char *binary_path,
     fprintf(file, "\",\n  \"beacons\":[\n");
     for(i = 0; i < VISION_RUNTIME_BEACON_SLOT_COUNT; i++)
     {
+        RawOverlayBox_t overlay_box;
+        full_rectified_box_to_raw(&slots[i], &overlay_box);
         fprintf(file,
                 "    {\"valid\":%u,\"x_cm\":%.6f,\"y_cm\":%.6f,\"min_row\":%d,\"max_row\":%d,\"min_col\":%d,\"max_col\":%d,"
                 "\"raw_min_row\":%d,\"raw_max_row\":%d,\"raw_min_col\":%d,\"raw_max_col\":%d,"
+                "\"overlay_raw_valid\":%u,\"overlay_raw_min_row\":%.3f,\"overlay_raw_max_row\":%.3f,"
+                "\"overlay_raw_min_col\":%.3f,\"overlay_raw_max_col\":%.3f,"
+                "\"overlay_raw_centroid_row\":%.3f,\"overlay_raw_centroid_col\":%.3f,"
                 "\"area_cm2\":%.6f,\"perimeter_cm\":%.6f,\"circularity\":%.6f,"
                 "\"physical_pixel_count\":%u,\"physical_valid\":%u,"
                 "\"raw_box_area_pixels\":%d,\"detection_confidence\":%u,\"position_sigma_cm\":%u,"
@@ -342,6 +435,10 @@ static int write_result(const char *path, const char *binary_path,
                 slots[i].min_col, slots[i].max_col,
                 slots[i].raw_min_row, slots[i].raw_max_row,
                 slots[i].raw_min_col, slots[i].raw_max_col,
+                (unsigned)overlay_box.valid,
+                overlay_box.min_v, overlay_box.max_v,
+                overlay_box.min_u, overlay_box.max_u,
+                overlay_box.center_v, overlay_box.center_u,
                 slots[i].area_cm2, slots[i].perimeter_cm, slots[i].circularity,
                 (unsigned)slots[i].physical_pixel_count,
                 (unsigned)slots[i].physical_valid,
@@ -368,7 +465,8 @@ static int write_result(const char *path, const char *binary_path,
                 "\"fine_min_row\":%d,\"fine_max_row\":%d,"
                 "\"fine_min_col\":%d,\"fine_max_col\":%d,"
                 "\"vehicle_valid\":%u,\"vehicle_skipped_small_box\":%u,\"beacon_valid\":%u,"
-                "\"raw_box_area_pixels\":%d,\"detection_confidence\":%u,\"position_sigma_cm\":%u,"
+                "\"raw_box_area_pixels\":%d,\"beacon_area_pixels\":%d,"
+                "\"detection_confidence\":%u,\"position_sigma_cm\":%u,"
                 "\"x_cm\":%.6f,\"y_cm\":%.6f,"
                 "\"area_cm2\":%.6f,\"circularity\":%.6f,"
                 "\"confidence_box_size\":%.6f,\"confidence_box_size_min\":%.6f,"
@@ -383,6 +481,7 @@ static int write_result(const char *path, const char *binary_path,
                 (unsigned)candidates[i].vehicle_skipped_small_box,
                 (unsigned)candidates[i].beacon_valid,
                 candidates[i].raw_box_area_pixels,
+                candidates[i].beacon_area_pixels,
                 (unsigned)candidates[i].detection_confidence,
                 (unsigned)candidates[i].position_sigma_cm,
                 candidates[i].beacon_x_cm,

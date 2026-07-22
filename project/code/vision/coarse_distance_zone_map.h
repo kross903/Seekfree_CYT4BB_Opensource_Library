@@ -1,7 +1,7 @@
 #ifndef VISION_COARSE_DISTANCE_ZONE_MAP_H_
 #define VISION_COARSE_DISTANCE_ZONE_MAP_H_
 
-/* Offline 188x120 radial zone map: 0=center/near, 4=edge/far. */
+/* 离线生成的 188x120 径向分区表：0=中心近处，4=图像边缘远处。 */
 static const uint8 g_vision_coarse_distance_zone[MT9V03X_H * MT9V03X_W] =
 {
     4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
@@ -712,4 +712,3 @@ static const uint8 g_vision_coarse_distance_zone[MT9V03X_H * MT9V03X_W] =
 };
 
 #endif
-

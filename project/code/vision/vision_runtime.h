@@ -3,19 +3,21 @@
 
 #include "zf_common_headfile.h"
 
-#define VISION_BINARY_THRESHOLD_VEHICLE (110U)
-#define VISION_BINARY_THRESHOLD_BEACON  (10U)
+/* 候选区完整分辨率精筛阈值：箭头较亮，信标允许保留较暗像素。 */
+#define VISION_BINARY_THRESHOLD_VEHICLE (150U) /* 箭头精筛二值化阈值 */
+#define VISION_BINARY_THRESHOLD_BEACON  (10U)  /* 信标精筛二值化阈值 */
 /* Legacy names keep the shared-memory interface source compatible. */
 #define VISION_BINARY_THRESHOLD_INNER  VISION_BINARY_THRESHOLD_VEHICLE
 #define VISION_BINARY_THRESHOLD_MIDDLE VISION_BINARY_THRESHOLD_BEACON
 #define VISION_BINARY_THRESHOLD_OUTER  VISION_BINARY_THRESHOLD_BEACON
 #define VISION_BINARY_THRESHOLD        VISION_BINARY_THRESHOLD_BEACON
-#define VISION_RUNTIME_COARSE_ZONE_COUNT       (5U)
-#define VISION_RUNTIME_COARSE_THRESHOLD_CENTER (50U)
-#define VISION_RUNTIME_COARSE_THRESHOLD_NEAR   (45U)
-#define VISION_RUNTIME_COARSE_THRESHOLD_MIDDLE (40U)
-#define VISION_RUNTIME_COARSE_THRESHOLD_FAR    (35U)
-#define VISION_RUNTIME_COARSE_THRESHOLD_EDGE   (30U)
+#define VISION_RUNTIME_COARSE_ZONE_COUNT       (5U)  /* 中心到边缘共五个同心分区 */
+/* 粗筛阈值从中心向边缘递减：近处要求高，远处弱信标使用较低阈值。 */
+#define VISION_RUNTIME_COARSE_THRESHOLD_CENTER (150U) /* 光轴中心圈 */
+#define VISION_RUNTIME_COARSE_THRESHOLD_NEAR   (150U) /* 近圈 */
+#define VISION_RUNTIME_COARSE_THRESHOLD_MIDDLE (150U) /* 中圈 */
+#define VISION_RUNTIME_COARSE_THRESHOLD_FAR    (80U) /* 远圈 */
+#define VISION_RUNTIME_COARSE_THRESHOLD_EDGE   (10U) /* 图像边缘圈 */
 /* Legacy single-threshold name keeps existing callers source compatible. */
 #define VISION_RUNTIME_COARSE_THRESHOLD VISION_RUNTIME_COARSE_THRESHOLD_CENTER
 #define VISION_BINARY_ZONE_INNER       (0U)
@@ -33,6 +35,13 @@
 #define VISION_RUNTIME_BEACON_BOX_AREA_MAX_PIXELS (100.0f)
 #define VISION_RUNTIME_VEHICLE_MIN_RAW_BOX_AREA   (150U)
 #define VISION_RUNTIME_FINE_MIN_FOREGROUND_PIXELS (8U)
+#ifndef VISION_RUNTIME_PHYSICAL_GRID_ENABLE
+#define VISION_RUNTIME_PHYSICAL_GRID_ENABLE (0U)
+#endif
+#if VISION_RUNTIME_PHYSICAL_GRID_ENABLE != 0U && \
+    VISION_RUNTIME_PHYSICAL_GRID_ENABLE != 1U
+#error "VISION_RUNTIME_PHYSICAL_GRID_ENABLE must be 0 or 1"
+#endif
 #ifndef VISION_RUNTIME_DEBUG_UNDISTORT_IMAGE_ENABLE
 #define VISION_RUNTIME_DEBUG_UNDISTORT_IMAGE_ENABLE (0U)
 #endif
@@ -177,6 +186,7 @@ typedef struct
     int fine_max_col;
     int area;
     int raw_box_area_pixels;
+    int beacon_area_pixels;
     uint8 vehicle_valid;
     uint8 vehicle_skipped_small_box;
     uint8 beacon_valid;
