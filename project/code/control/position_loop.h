@@ -20,6 +20,8 @@ typedef struct
     uint8 active;
     uint8 ir_track_valid;
     uint8 velocity_ready;
+    uint8 velocity_x_ready;
+    uint8 velocity_y_ready;
 } PositionLoopDiag_t;
 
 extern PID_Controller pos_pid_x;
@@ -27,7 +29,8 @@ extern PID_Controller pos_pid_y;
 
 void Position_Loop_Set_Enabled(uint8 enabled);
 uint8 Position_Loop_Is_Enabled(void);
-void Position_Loop_Update_Velocity_Target(uint8 velocity_ready,
+void Position_Loop_Update_Velocity_Target(uint8 velocity_x_ready,
+                                          uint8 velocity_y_ready,
                                           float measured_vx_cms,
                                           float measured_vy_cms,
                                           float *target_vx_cms,

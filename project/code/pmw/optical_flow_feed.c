@@ -103,6 +103,7 @@ void OpticalFlowFeed_Task(void)
                           current_pitch,
                           flow_height_cm,
                           tof_source,
+                          flow_sample_valid,
                           flow_sample_dt_s,
                           X_V_F,
                           Y_V_F);

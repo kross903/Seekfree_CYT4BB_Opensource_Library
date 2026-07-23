@@ -828,7 +828,8 @@ static void control_task_update_position_target(uint8 takeoff_active)
     }
 
     PMW_Flow_GetState(&flow_snap);
-    Position_Loop_Update_Velocity_Target(flow_snap.fused_velocity_valid,
+    Position_Loop_Update_Velocity_Target(flow_snap.fused_velocity_x_valid,
+                                         flow_snap.fused_velocity_y_valid,
                                          flow_snap.velocity_x_fused_cms,
                                          flow_snap.velocity_y_fused_cms,
                                          &position_target_vx_cms,
@@ -857,7 +858,8 @@ static void control_task_update_velocity_target(uint8 takeoff_active)
 
     Flight_Takeoff_Get_Captured_Angles(&captured_roll, &captured_pitch);
     PMW_Flow_GetState(&flow_snap);
-    Velocity_Loop_Update_Attitude_Target(flow_snap.fused_velocity_valid,
+    Velocity_Loop_Update_Attitude_Target(flow_snap.fused_velocity_x_valid,
+                                         flow_snap.fused_velocity_y_valid,
                                          flow_snap.velocity_x_fused_cms,
                                          flow_snap.velocity_y_fused_cms,
                                          captured_roll,

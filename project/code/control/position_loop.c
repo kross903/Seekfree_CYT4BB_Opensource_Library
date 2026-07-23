@@ -21,6 +21,8 @@ static volatile uint8 g_position_loop_enabled        = 0U;
 static volatile uint8 g_position_loop_active         = 0U;
 static volatile uint8 g_position_loop_ir_track_valid = 0U;
 static volatile uint8 g_position_loop_velocity_ready = 0U;
+static volatile uint8 g_position_loop_velocity_x_ready = 0U;
+static volatile uint8 g_position_loop_velocity_y_ready = 0U;
 static volatile float g_position_loop_fb_x_cm        = 0.0f;
 static volatile float g_position_loop_fb_y_cm        = 0.0f;
 static volatile float g_position_loop_error_x_cm     = 0.0f;
@@ -213,6 +215,8 @@ void Position_Loop_Set_Enabled(uint8 enabled)
         g_position_loop_enabled = 0U;
         g_position_loop_ir_track_valid = 0U;
         g_position_loop_velocity_ready = 0U;
+        g_position_loop_velocity_x_ready = 0U;
+        g_position_loop_velocity_y_ready = 0U;
         g_position_loop_fb_x_cm = 0.0f;
         g_position_loop_fb_y_cm = 0.0f;
         position_loop_reset_runtime();
@@ -224,7 +228,8 @@ uint8 Position_Loop_Is_Enabled(void)
     return g_position_loop_enabled;
 }
 
-void Position_Loop_Update_Velocity_Target(uint8 velocity_ready,
+void Position_Loop_Update_Velocity_Target(uint8 velocity_x_ready,
+                                          uint8 velocity_y_ready,
                                           float measured_vx_cms,
                                           float measured_vy_cms,
                                           float *target_vx_cms,
@@ -239,10 +244,12 @@ void Position_Loop_Update_Velocity_Target(uint8 velocity_ready,
     float pos_error_x_cm;
     float pos_error_y_cm;
 
-    if(!g_position_loop_enabled || !velocity_ready)
+    if(!g_position_loop_enabled)
     {
         g_position_loop_ir_track_valid = 0U;
-        g_position_loop_velocity_ready = velocity_ready;
+        g_position_loop_velocity_ready = 0U;
+        g_position_loop_velocity_x_ready = 0U;
+        g_position_loop_velocity_y_ready = 0U;
         g_position_loop_fb_x_cm = 0.0f;
         g_position_loop_fb_y_cm = 0.0f;
         g_position_loop_error_x_cm = 0.0f;
@@ -265,17 +272,23 @@ void Position_Loop_Update_Velocity_Target(uint8 velocity_ready,
     }
     else
     {
-        position_input_valid = position_loop_update_predict_hold(measured_vx_cms,
-                                                                 measured_vy_cms,
-                                                                 &position_input_x_cm,
-                                                                 &position_input_y_cm);
+        if(velocity_x_ready || velocity_y_ready)
+        {
+            position_input_valid = position_loop_update_predict_hold(
+                                       velocity_x_ready ? measured_vx_cms : 0.0f,
+                                       velocity_y_ready ? measured_vy_cms : 0.0f,
+                                       &position_input_x_cm,
+                                       &position_input_y_cm);
+        }
     }
 
     pos_error_x_cm = position_loop_apply_deadzone(position_input_x_cm);
     pos_error_y_cm = position_loop_apply_deadzone(position_input_y_cm);
 
     g_position_loop_ir_track_valid = position_input_valid;
-    g_position_loop_velocity_ready = velocity_ready;
+    g_position_loop_velocity_ready = (uint8)(velocity_x_ready && velocity_y_ready);
+    g_position_loop_velocity_x_ready = velocity_x_ready;
+    g_position_loop_velocity_y_ready = velocity_y_ready;
     g_position_loop_fb_x_cm = position_input_x_cm;
     g_position_loop_fb_y_cm = position_input_y_cm;
     g_position_loop_error_x_cm = pos_error_x_cm;
@@ -288,34 +301,50 @@ void Position_Loop_Update_Velocity_Target(uint8 velocity_ready,
         return;
     }
 
-    if(pos_error_x_cm == 0.0f)
+    if(!velocity_x_ready || pos_error_x_cm == 0.0f)
     {
         PID_Reset(&pos_pid_x);
     }
-    if(pos_error_y_cm == 0.0f)
+    if(!velocity_y_ready || pos_error_y_cm == 0.0f)
     {
         PID_Reset(&pos_pid_y);
     }
 
-    g_position_loop_vx_cmd_cms = position_loop_limit_velocity_command(
-                                      POSITION_LOOP_VX_SIGN *
-                                      PID_Calculate(&pos_pid_x,
-                                                    pos_error_x_cm,
-                                                    POSITION_LOOP_TARGET_X_CM,
-                                                    POSITION_LOOP_DT_S),
-                                      g_position_loop_vx_cmd_cms);
-    g_position_loop_vy_cmd_cms = position_loop_limit_velocity_command(
-                                      POSITION_LOOP_VY_SIGN *
-                                      PID_Calculate(&pos_pid_y,
-                                                    pos_error_y_cm,
-                                                    POSITION_LOOP_TARGET_Y_CM,
-                                                    POSITION_LOOP_DT_S),
-                                      g_position_loop_vy_cmd_cms);
+    if(velocity_x_ready)
+    {
+        g_position_loop_vx_cmd_cms = position_loop_limit_velocity_command(
+                                          POSITION_LOOP_VX_SIGN *
+                                          PID_Calculate(&pos_pid_x,
+                                                        pos_error_x_cm,
+                                                        POSITION_LOOP_TARGET_X_CM,
+                                                        POSITION_LOOP_DT_S),
+                                          g_position_loop_vx_cmd_cms);
+        g_position_loop_x_i_out = pos_pid_x.Ki * pos_pid_x.integral;
+    }
+    else
+    {
+        g_position_loop_vx_cmd_cms = 0.0f;
+        g_position_loop_x_i_out = 0.0f;
+    }
+    if(velocity_y_ready)
+    {
+        g_position_loop_vy_cmd_cms = position_loop_limit_velocity_command(
+                                          POSITION_LOOP_VY_SIGN *
+                                          PID_Calculate(&pos_pid_y,
+                                                        pos_error_y_cm,
+                                                        POSITION_LOOP_TARGET_Y_CM,
+                                                        POSITION_LOOP_DT_S),
+                                          g_position_loop_vy_cmd_cms);
+        g_position_loop_y_i_out = pos_pid_y.Ki * pos_pid_y.integral;
+    }
+    else
+    {
+        g_position_loop_vy_cmd_cms = 0.0f;
+        g_position_loop_y_i_out = 0.0f;
+    }
 
     position_loop_set_output(g_position_loop_vx_cmd_cms, g_position_loop_vy_cmd_cms, target_vx_cms, target_vy_cms);
-    g_position_loop_x_i_out = pos_pid_x.Ki * pos_pid_x.integral;
-    g_position_loop_y_i_out = pos_pid_y.Ki * pos_pid_y.integral;
-    g_position_loop_active = 1U;
+    g_position_loop_active = (uint8)(velocity_x_ready || velocity_y_ready);
 }
 
 void Position_Loop_Get_Diag(PositionLoopDiag_t *diag)
@@ -339,4 +368,6 @@ void Position_Loop_Get_Diag(PositionLoopDiag_t *diag)
     diag->active = g_position_loop_active;
     diag->ir_track_valid = g_position_loop_ir_track_valid;
     diag->velocity_ready = g_position_loop_velocity_ready;
+    diag->velocity_x_ready = g_position_loop_velocity_x_ready;
+    diag->velocity_y_ready = g_position_loop_velocity_y_ready;
 }

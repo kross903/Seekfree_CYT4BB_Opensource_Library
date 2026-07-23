@@ -48,7 +48,8 @@ void Velocity_Loop_Get_Rate_Feedforward_Parameters(uint8 axis,
                                                    float *limit_dps);
 void Velocity_Loop_Get_Rate_Feedforward_Diag(VelocityLoopRateFeedforwardDiag_t *diag);
 uint8 Velocity_Loop_Get_Axis_Diag(uint8 axis, VelocityLoopAxisDiag_t *diag);
-void Velocity_Loop_Update_Attitude_Target(uint8 velocity_ready,
+void Velocity_Loop_Update_Attitude_Target(uint8 velocity_x_ready,
+                                          uint8 velocity_y_ready,
                                           float measured_vx_cms,
                                           float measured_vy_cms,
                                           float captured_roll,

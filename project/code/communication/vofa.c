@@ -34,7 +34,7 @@ static void send_sixteen_date(float date_1, float date_2, float date_3, float da
                               float date_9, float date_10, float date_11, float date_12,
                               float date_13, float date_14, float date_15, float date_16);
 
-/* 保留的回传模式：F1/F2/F3/F4/F5/F6/F7/F8/F9/FA/FC/FD/FE/FG/FI/FO/FU/FV/FW/FY/FZ。 */
+/* 保留的回传模式：F1/F2/F3/F4/F5/F6/F7/F8/F9/FA/FC/FD/FE/FG/FI/FK/FO/FU/FV/FW/FY/FZ。 */
 static int send_back_flag = 0;
 static uint8 send_back_command = 'R';
 
@@ -1270,6 +1270,8 @@ void USART_PID_Adjust(void)
                 case 'g': send_back_flag = 16; break;
                 case 'I':
                 case 'i': send_back_flag = 18; break;
+                case 'K':
+                case 'k': send_back_flag = 23; break;
                 case 'O':
                 case 'o': send_back_flag = 22; break;
                 case 'U':
@@ -1740,6 +1742,30 @@ void send_date_back(void)
                               flow_state.velocity_y_output_slew_cms,
                               flow_state.velocity_x_cms,
                               flow_state.velocity_y_cms);
+            break;
+        }
+
+        case 23:
+        {
+            PMWFlowState_t flow_state = {0};
+
+            PMW_Flow_GetState(&flow_state);
+            send_sixteen_date(flow_state.velocity_x_raw_cms,
+                              flow_state.flow_prediction_x_cms,
+                              flow_state.flow_innovation_x_cms,
+                              flow_state.flow_gate_x_cms,
+                              flow_state.kalman_k_x,
+                              (float)flow_state.flow_reject_reason_x,
+                              (float)flow_state.flow_x_state,
+                              flow_state.flow_prediction_age_x_ms,
+                              flow_state.velocity_y_raw_cms,
+                              flow_state.flow_prediction_y_cms,
+                              flow_state.flow_innovation_y_cms,
+                              flow_state.flow_gate_y_cms,
+                              flow_state.kalman_k_y,
+                              (float)flow_state.flow_reject_reason_y,
+                              (float)flow_state.flow_y_state,
+                              flow_state.flow_prediction_age_y_ms);
             break;
         }
 

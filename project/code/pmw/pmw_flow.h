@@ -8,12 +8,43 @@
 #define PMW_FLOW_TOF_SOURCE_LIVE       (1U)
 #define PMW_FLOW_TOF_SOURCE_HOLD       (2U)
 
+#define PMW_FLOW_AXIS_X                (0U)
+#define PMW_FLOW_AXIS_Y                (1U)
+
+#define PMW_FLOW_REJECT_NONE           (0U)
+#define PMW_FLOW_REJECT_FLOW_INVALID   (1U << 0)
+#define PMW_FLOW_REJECT_TOF_NOT_LIVE   (1U << 1)
+#define PMW_FLOW_REJECT_TILT           (1U << 2)
+#define PMW_FLOW_REJECT_RAW_LIMIT      (1U << 3)
+#define PMW_FLOW_REJECT_INNOVATION     (1U << 4)
+#define PMW_FLOW_REJECT_RAW_JUMP       (1U << 5)
+#define PMW_FLOW_REJECT_REACQUIRING    (1U << 6)
+#define PMW_FLOW_REJECT_UNINITIALIZED  (1U << 7)
+
+typedef enum
+{
+    PMW_FLOW_AXIS_INVALID = 0,
+    PMW_FLOW_AXIS_LIVE,
+    PMW_FLOW_AXIS_REACQUIRING
+} PMWFlowAxisState_t;
+
 typedef struct
 {
     uint8 valid;
     uint8 flow_used;
     uint8 acc_used;
+    /* Legacy aggregate: true only when both X and Y fused feedback are valid. */
     uint8 fused_velocity_valid;
+    uint8 flow_x_used;
+    uint8 flow_y_used;
+    uint8 fused_velocity_x_valid;
+    uint8 fused_velocity_y_valid;
+    uint8 flow_x_accepted;
+    uint8 flow_y_accepted;
+    uint8 flow_reject_reason_x;
+    uint8 flow_reject_reason_y;
+    uint8 flow_x_state;
+    uint8 flow_y_state;
     int16 flow_delta_x_count;
     int16 flow_delta_y_count;
     float dt_s;
@@ -50,6 +81,20 @@ typedef struct
     float kalman_p_y;
     float kalman_r_x;
     float kalman_r_y;
+    float flow_prediction_x_cms;
+    float flow_prediction_y_cms;
+    float flow_innovation_x_cms;
+    float flow_innovation_y_cms;
+    float flow_gate_x_cms;
+    float flow_gate_y_cms;
+    float flow_raw_jump_x_cms;
+    float flow_raw_jump_y_cms;
+    float flow_prediction_age_x_ms;
+    float flow_prediction_age_y_ms;
+    uint8 flow_reacquire_count_x;
+    uint8 flow_reacquire_count_y;
+    uint32 flow_reject_count_x;
+    uint32 flow_reject_count_y;
     float flow_residual_norm_cms;
     float velocity_x_world_cms;
     float velocity_y_world_cms;
@@ -74,6 +119,7 @@ void PMW_Flow_UpdateSample(int16 flow_delta_x,
                            float pitch_deg,
                            float tof_height_cm,
                            uint8 tof_source,
+                           uint8 flow_sample_valid,
                            float dt_s,
                            float imu_velocity_x_cms,
                            float imu_velocity_y_cms);

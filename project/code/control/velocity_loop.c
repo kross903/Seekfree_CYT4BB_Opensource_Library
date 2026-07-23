@@ -33,7 +33,8 @@ static volatile float g_velocity_loop_pitch_ff_limit_dps = VEL_LOOP_RATE_FF_LIMI
 static volatile float g_velocity_loop_roll_ff_limit_dps = VEL_LOOP_RATE_FF_LIMIT_DEFAULT;
 static float g_velocity_loop_prev_pitch_corr_deg = 0.0f;
 static float g_velocity_loop_prev_roll_corr_deg = 0.0f;
-static uint8 g_velocity_loop_rate_ff_initialized = 0U;
+static uint8 g_velocity_loop_roll_ff_initialized = 0U;
+static uint8 g_velocity_loop_pitch_ff_initialized = 0U;
 static VelocityLoopRateFeedforwardDiag_t g_velocity_loop_rate_ff_diag = {0};
 static volatile VelocityLoopAxisDiag_t g_velocity_loop_axis_diag[2];
 
@@ -54,7 +55,8 @@ static void velocity_loop_reset_rate_feedforward(void)
 {
     g_velocity_loop_prev_pitch_corr_deg = 0.0f;
     g_velocity_loop_prev_roll_corr_deg = 0.0f;
-    g_velocity_loop_rate_ff_initialized = 0U;
+    g_velocity_loop_roll_ff_initialized = 0U;
+    g_velocity_loop_pitch_ff_initialized = 0U;
     g_velocity_loop_rate_ff_diag.roll_target_rate_raw_dps = 0.0f;
     g_velocity_loop_rate_ff_diag.pitch_target_rate_raw_dps = 0.0f;
     g_velocity_loop_rate_ff_diag.roll_target_rate_filt_dps = 0.0f;
@@ -64,47 +66,72 @@ static void velocity_loop_reset_rate_feedforward(void)
     Angle_Loop_Set_Rate_Feedforward(0.0f, 0.0f);
 }
 
-static void velocity_loop_update_rate_feedforward(float roll_corr_deg,
+static void velocity_loop_update_rate_feedforward(uint8 roll_valid,
+                                                  uint8 pitch_valid,
+                                                  float roll_corr_deg,
                                                   float pitch_corr_deg)
 {
-    float roll_rate_ff;
-    float pitch_rate_ff;
+    float roll_rate_ff = 0.0f;
+    float pitch_rate_ff = 0.0f;
 
-    if(!g_velocity_loop_rate_ff_initialized)
+    if(!roll_valid)
     {
         g_velocity_loop_prev_roll_corr_deg = roll_corr_deg;
-        g_velocity_loop_prev_pitch_corr_deg = pitch_corr_deg;
-        g_velocity_loop_rate_ff_initialized = 1U;
-        Angle_Loop_Set_Rate_Feedforward(0.0f, 0.0f);
-        return;
+        g_velocity_loop_roll_ff_initialized = 0U;
+        g_velocity_loop_rate_ff_diag.roll_target_rate_raw_dps = 0.0f;
+        g_velocity_loop_rate_ff_diag.roll_target_rate_filt_dps = 0.0f;
+        g_velocity_loop_rate_ff_diag.roll_rate_ff_dps = 0.0f;
+    }
+    else if(!g_velocity_loop_roll_ff_initialized)
+    {
+        g_velocity_loop_prev_roll_corr_deg = roll_corr_deg;
+        g_velocity_loop_roll_ff_initialized = 1U;
+    }
+    else
+    {
+        g_velocity_loop_rate_ff_diag.roll_target_rate_raw_dps =
+            (roll_corr_deg - g_velocity_loop_prev_roll_corr_deg) / VELOCITY_LOOP_DT_S;
+        g_velocity_loop_prev_roll_corr_deg = roll_corr_deg;
+        g_velocity_loop_rate_ff_diag.roll_target_rate_filt_dps +=
+            VEL_LOOP_RATE_FF_LPF_ALPHA *
+            (g_velocity_loop_rate_ff_diag.roll_target_rate_raw_dps -
+             g_velocity_loop_rate_ff_diag.roll_target_rate_filt_dps);
+        roll_rate_ff = velocity_loop_limit_float(
+                           g_velocity_loop_rate_ff_diag.roll_target_rate_filt_dps *
+                           g_velocity_loop_roll_ff_gain,
+                           -g_velocity_loop_roll_ff_limit_dps,
+                           g_velocity_loop_roll_ff_limit_dps);
     }
 
-    g_velocity_loop_rate_ff_diag.roll_target_rate_raw_dps =
-        (roll_corr_deg - g_velocity_loop_prev_roll_corr_deg) / VELOCITY_LOOP_DT_S;
-    g_velocity_loop_rate_ff_diag.pitch_target_rate_raw_dps =
-        (pitch_corr_deg - g_velocity_loop_prev_pitch_corr_deg) / VELOCITY_LOOP_DT_S;
-    g_velocity_loop_prev_roll_corr_deg = roll_corr_deg;
-    g_velocity_loop_prev_pitch_corr_deg = pitch_corr_deg;
+    if(!pitch_valid)
+    {
+        g_velocity_loop_prev_pitch_corr_deg = pitch_corr_deg;
+        g_velocity_loop_pitch_ff_initialized = 0U;
+        g_velocity_loop_rate_ff_diag.pitch_target_rate_raw_dps = 0.0f;
+        g_velocity_loop_rate_ff_diag.pitch_target_rate_filt_dps = 0.0f;
+        g_velocity_loop_rate_ff_diag.pitch_rate_ff_dps = 0.0f;
+    }
+    else if(!g_velocity_loop_pitch_ff_initialized)
+    {
+        g_velocity_loop_prev_pitch_corr_deg = pitch_corr_deg;
+        g_velocity_loop_pitch_ff_initialized = 1U;
+    }
+    else
+    {
+        g_velocity_loop_rate_ff_diag.pitch_target_rate_raw_dps =
+            (pitch_corr_deg - g_velocity_loop_prev_pitch_corr_deg) / VELOCITY_LOOP_DT_S;
+        g_velocity_loop_prev_pitch_corr_deg = pitch_corr_deg;
+        g_velocity_loop_rate_ff_diag.pitch_target_rate_filt_dps +=
+            VEL_LOOP_RATE_FF_LPF_ALPHA *
+            (g_velocity_loop_rate_ff_diag.pitch_target_rate_raw_dps -
+             g_velocity_loop_rate_ff_diag.pitch_target_rate_filt_dps);
+        pitch_rate_ff = velocity_loop_limit_float(
+                            g_velocity_loop_rate_ff_diag.pitch_target_rate_filt_dps *
+                            g_velocity_loop_pitch_ff_gain,
+                            -g_velocity_loop_pitch_ff_limit_dps,
+                            g_velocity_loop_pitch_ff_limit_dps);
+    }
 
-    g_velocity_loop_rate_ff_diag.roll_target_rate_filt_dps +=
-        VEL_LOOP_RATE_FF_LPF_ALPHA *
-        (g_velocity_loop_rate_ff_diag.roll_target_rate_raw_dps -
-         g_velocity_loop_rate_ff_diag.roll_target_rate_filt_dps);
-    g_velocity_loop_rate_ff_diag.pitch_target_rate_filt_dps +=
-        VEL_LOOP_RATE_FF_LPF_ALPHA *
-        (g_velocity_loop_rate_ff_diag.pitch_target_rate_raw_dps -
-         g_velocity_loop_rate_ff_diag.pitch_target_rate_filt_dps);
-
-    roll_rate_ff = g_velocity_loop_rate_ff_diag.roll_target_rate_filt_dps *
-                   g_velocity_loop_roll_ff_gain;
-    pitch_rate_ff = g_velocity_loop_rate_ff_diag.pitch_target_rate_filt_dps *
-                    g_velocity_loop_pitch_ff_gain;
-    roll_rate_ff = velocity_loop_limit_float(roll_rate_ff,
-                                             -g_velocity_loop_roll_ff_limit_dps,
-                                             g_velocity_loop_roll_ff_limit_dps);
-    pitch_rate_ff = velocity_loop_limit_float(pitch_rate_ff,
-                                              -g_velocity_loop_pitch_ff_limit_dps,
-                                              g_velocity_loop_pitch_ff_limit_dps);
     g_velocity_loop_rate_ff_diag.roll_rate_ff_dps = roll_rate_ff;
     g_velocity_loop_rate_ff_diag.pitch_rate_ff_dps = pitch_rate_ff;
     Angle_Loop_Set_Rate_Feedforward(roll_rate_ff, pitch_rate_ff);
@@ -286,7 +313,8 @@ uint8 Velocity_Loop_Get_Axis_Diag(uint8 axis, VelocityLoopAxisDiag_t *diag)
     return 1U;
 }
 
-void Velocity_Loop_Update_Attitude_Target(uint8 velocity_ready,
+void Velocity_Loop_Update_Attitude_Target(uint8 velocity_x_ready,
+                                          uint8 velocity_y_ready,
                                           float measured_vx_cms,
                                           float measured_vy_cms,
                                           float captured_roll,
@@ -294,6 +322,12 @@ void Velocity_Loop_Update_Attitude_Target(uint8 velocity_ready,
                                           float *target_roll,
                                           float *target_pitch)
 {
+    float ax_cmd_cms2 = 0.0f;
+    float ay_cmd_cms2 = 0.0f;
+    float pitch_corr = 0.0f;
+    float roll_corr = 0.0f;
+    VelocityLoopAxisDiag_t empty_axis_diag = {0};
+
     if((target_roll == NULL) || (target_pitch == NULL))
     {
         return;
@@ -312,70 +346,66 @@ void Velocity_Loop_Update_Attitude_Target(uint8 velocity_ready,
         return;
     }
 
-    if(velocity_ready)
+    *target_roll = captured_roll;
+    *target_pitch = captured_pitch;
+
+    if(velocity_x_ready)
     {
-        float ax_cmd_cms2;
-        float ay_cmd_cms2;
-        float pitch_corr;
-        float roll_corr;
-        float fb_vx_cms;
-        float fb_vy_cms;
-
-        fb_vx_cms = measured_vx_cms;
-        fb_vy_cms = measured_vy_cms;
-
         ax_cmd_cms2 = PID_Calculate(&vel_pid_x,
                                     g_velocity_loop_target_vx_cms,
-                                    fb_vx_cms,
+                                    measured_vx_cms,
                                     VELOCITY_LOOP_DT_S);
-        ay_cmd_cms2 = PID_Calculate(&vel_pid_y,
-                                    g_velocity_loop_target_vy_cms,
-                                    fb_vy_cms,
-                                    VELOCITY_LOOP_DT_S);
-
-        pitch_corr = ax_cmd_cms2;
-        roll_corr  = ay_cmd_cms2;
-
-        pitch_corr *= VEL_LOOP_PITCH_SIGN;
-        roll_corr  *= VEL_LOOP_ROLL_SIGN;
-
+        pitch_corr = ax_cmd_cms2 * VEL_LOOP_PITCH_SIGN;
         velocity_loop_update_axis_diag(VELOCITY_LOOP_AXIS_X,
                                        &vel_pid_x,
                                        g_velocity_loop_target_vx_cms,
-                                       fb_vx_cms,
+                                       measured_vx_cms,
                                        ax_cmd_cms2,
                                        VEL_LOOP_PITCH_SIGN);
-        velocity_loop_update_axis_diag(VELOCITY_LOOP_AXIS_Y,
-                                       &vel_pid_y,
-                                       g_velocity_loop_target_vy_cms,
-                                       fb_vy_cms,
-                                       ay_cmd_cms2,
-                                       VEL_LOOP_ROLL_SIGN);
-
-        velocity_loop_update_rate_feedforward(roll_corr, pitch_corr);
-
-        *target_pitch = captured_pitch + pitch_corr;
-        *target_roll  = captured_roll  + roll_corr;
-
-        g_velocity_loop_x_i_out        = vel_pid_x.Ki * vel_pid_x.integral;
-        g_velocity_loop_y_i_out        = vel_pid_y.Ki * vel_pid_y.integral;
-        g_velocity_loop_pitch_corr_deg = pitch_corr;
-        g_velocity_loop_roll_corr_deg  = roll_corr;
-        g_velocity_loop_fb_vx_cms      = fb_vx_cms;
-        g_velocity_loop_fb_vy_cms      = fb_vy_cms;
-        g_velocity_loop_active = 1U;
+        g_velocity_loop_x_i_out = vel_pid_x.Ki * vel_pid_x.integral;
+        g_velocity_loop_fb_vx_cms = measured_vx_cms;
     }
     else
     {
-        *target_roll = captured_roll;
-        *target_pitch = captured_pitch;
         PID_Reset(&vel_pid_x);
-        PID_Reset(&vel_pid_y);
-        velocity_loop_reset_diag();
-        velocity_loop_reset_feedback_diag();
-        g_velocity_loop_active = 0U;
-        velocity_loop_reset_rate_feedforward();
+        g_velocity_loop_axis_diag[VELOCITY_LOOP_AXIS_X] = empty_axis_diag;
+        g_velocity_loop_x_i_out = 0.0f;
+        g_velocity_loop_fb_vx_cms = 0.0f;
     }
+
+    if(velocity_y_ready)
+    {
+        ay_cmd_cms2 = PID_Calculate(&vel_pid_y,
+                                    g_velocity_loop_target_vy_cms,
+                                    measured_vy_cms,
+                                    VELOCITY_LOOP_DT_S);
+        roll_corr = ay_cmd_cms2 * VEL_LOOP_ROLL_SIGN;
+        velocity_loop_update_axis_diag(VELOCITY_LOOP_AXIS_Y,
+                                       &vel_pid_y,
+                                       g_velocity_loop_target_vy_cms,
+                                       measured_vy_cms,
+                                       ay_cmd_cms2,
+                                       VEL_LOOP_ROLL_SIGN);
+        g_velocity_loop_y_i_out = vel_pid_y.Ki * vel_pid_y.integral;
+        g_velocity_loop_fb_vy_cms = measured_vy_cms;
+    }
+    else
+    {
+        PID_Reset(&vel_pid_y);
+        g_velocity_loop_axis_diag[VELOCITY_LOOP_AXIS_Y] = empty_axis_diag;
+        g_velocity_loop_y_i_out = 0.0f;
+        g_velocity_loop_fb_vy_cms = 0.0f;
+    }
+
+    velocity_loop_update_rate_feedforward(velocity_y_ready,
+                                          velocity_x_ready,
+                                          roll_corr,
+                                          pitch_corr);
+    *target_pitch = captured_pitch + pitch_corr;
+    *target_roll = captured_roll + roll_corr;
+    g_velocity_loop_pitch_corr_deg = pitch_corr;
+    g_velocity_loop_roll_corr_deg = roll_corr;
+    g_velocity_loop_active = (uint8)(velocity_x_ready || velocity_y_ready);
 }
 
 void Velocity_Loop_Get_Diag(float *pitch_corr_deg,
