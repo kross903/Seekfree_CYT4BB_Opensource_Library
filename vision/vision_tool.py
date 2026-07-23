@@ -86,6 +86,7 @@ class Simulator:
         names = [
             "vision_runtime.c",
             "beacon_detect.c",
+            "beacon_adaptive_threshold.c",
             "vehicle_marker_localization.c",
             "ipm_interface.c",
             "drone_ipm_embedded.c",
@@ -960,25 +961,43 @@ class VisionToolApp:
 
         area_cm2 = float(candidate.get("area_cm2", 0.0))
         pixel_area = int(candidate.get("beacon_area_pixels", 0))
+        normalized_area = float(candidate.get("adaptive_normalized_area_px", 0.0))
+        adaptive_min_area = float(candidate.get("adaptive_min_area_px", 0.0))
+        adaptive_max_area = float(candidate.get("adaptive_max_area_px", 0.0))
         circularity = float(candidate.get("circularity", 0.0))
+        adaptive_min_circularity = float(candidate.get("adaptive_min_circularity", 0.0))
+        if normalized_area <= 0.0:
+            normalized_area = float(pixel_area)
+        if adaptive_min_area <= 0.0:
+            adaptive_min_area = 80.0
+        if adaptive_max_area <= 0.0:
+            adaptive_max_area = 500.0
+        if adaptive_min_circularity <= 0.0:
+            adaptive_min_circularity = 0.15
         box_score = float(candidate.get("confidence_box_size", 0.0))
         box_minimum = float(candidate.get("confidence_box_size_min", 0.0))
         confidence = int(candidate.get("detection_confidence", 0))
         reasons: list[str] = []
 
         if pixel_area > 0:
-            if pixel_area < 80:
-                reasons.append(f"去畸变面积{pixel_area}<80px")
-            elif pixel_area > 500:
-                reasons.append(f"去畸变面积{pixel_area}>500px")
+            if normalized_area < adaptive_min_area:
+                reasons.append(
+                    f"归一化面积{normalized_area:.1f}<{adaptive_min_area:.1f}px"
+                )
+            elif normalized_area > adaptive_max_area:
+                reasons.append(
+                    f"归一化面积{normalized_area:.1f}>{adaptive_max_area:.1f}px"
+                )
         elif area_cm2 <= 0.0:
             return "未通过（未生成有效精连通域/IPM数据）"
         elif area_cm2 < 480.0:
             reasons.append(f"物理面积{area_cm2:.1f}<480cm²")
         elif area_cm2 > 1500.0:
             reasons.append(f"物理面积{area_cm2:.1f}>1500cm²")
-        if circularity < 0.15:
-            reasons.append(f"圆度{circularity:.2f}<0.15")
+        if circularity < adaptive_min_circularity:
+            reasons.append(
+                f"圆度{circularity:.2f}<{adaptive_min_circularity:.2f}"
+            )
         if box_score <= box_minimum:
             reasons.append(f"B评分{box_score:.2f}≤门槛{box_minimum:.2f}")
         if 0 < confidence < 96:
@@ -1049,7 +1068,8 @@ class VisionToolApp:
             else:
                 area_text = (
                     f"去畸变面积: "
-                    f"{int(candidate.get('beacon_area_pixels', 0))} px"
+                    f"{int(candidate.get('beacon_area_pixels', 0))} px，"
+                    f"归一化: {candidate.get('adaptive_normalized_area_px', 0):.1f} px"
                 )
             vehicle_route = (
                 "跳过箭头，直接识别信标"
@@ -1072,7 +1092,9 @@ class VisionToolApp:
                     f"当前位置B门槛: {candidate.get('confidence_box_size_min', 0):.2f}  "
                     f"面积评分 A: {candidate.get('confidence_area', 0):.2f}  "
                     f"阈值稳定性评分 T: {candidate.get('confidence_stability', 0):.2f}  "
-                    f"边缘评分 E: {candidate.get('confidence_edge', 0):.2f}"
+                    f"边缘评分 E: {candidate.get('confidence_edge', 0):.2f}  "
+                    f"姿态放宽量: {candidate.get('adaptive_relaxation', 0):.2f}  "
+                    f"动态圆度门槛: {candidate.get('adaptive_min_circularity', 0.15):.3f}"
                 ),
             ).grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 6))
             left_label = ttk.Label(tab, text="原图候选区", anchor="center")
@@ -1287,20 +1309,29 @@ class VisionToolApp:
         ).start()
 
     @staticmethod
-    def classification_beacon_upper(frame_path: Path, root: Path, expected_arrow: bool) -> int:
+    def classification_set_type(frame_path: Path, root: Path) -> str:
         try:
             categories = frame_path.relative_to(root).parts[:-1]
         except ValueError:
-            return 0
+            return ""
         for category in categories:
-            counts = [int(value) for value in re.findall(r"\d+", category)]
-            if not counts:
-                continue
-            if "信标" in category:
-                return max(counts)
-            if "连通域" in category:
-                return max(0, max(counts) - (1 if expected_arrow else 0))
-        return 0
+            if category in {"准集", "粗集"}:
+                return category
+        return ""
+
+    @staticmethod
+    def classification_expected_beacon_count(frame_path: Path, root: Path) -> int | None:
+        if VisionToolApp.classification_set_type(frame_path, root) != "准集":
+            return None
+        try:
+            categories = frame_path.relative_to(root).parts[:-1]
+        except ValueError:
+            return None
+        for category in categories:
+            match = re.fullmatch(r"(\d+)信标", category)
+            if match:
+                return int(match.group(1))
+        return None
 
     def start_classified_batch(self) -> None:
         if self.batch_running:
@@ -1385,7 +1416,20 @@ class VisionToolApp:
                     raise RuntimeError(f"{raw_path.name} 仿真失败\n{log}")
                 payload = json.loads(result_path.read_text(encoding="utf-8"))
                 expected_arrow = "有箭头" in raw_path.parts
+                set_type = self.classification_set_type(raw_path, root)
+                expected_beacon_count = self.classification_expected_beacon_count(
+                    raw_path, root,
+                )
+                if set_type not in {"准集", "粗集"}:
+                    raise RuntimeError(
+                        f"{raw_path} 不在准集或粗集目录中"
+                    )
+                if set_type == "准集" and expected_beacon_count is None:
+                    raise RuntimeError(
+                        f"{raw_path} 的准集目录必须使用“数字+信标”命名"
+                    )
                 valid_beacons = [item for item in payload.get("beacons", []) if item.get("valid")]
+                beacon_count = len(valid_beacons)
                 map_ready = sum(
                     1 for item in valid_beacons
                     if int(item.get("detection_confidence", 0)) >= MAP_CREATE_CONFIDENCE
@@ -1393,11 +1437,16 @@ class VisionToolApp:
                 )
                 rows.append({
                     "frame": str(raw_path.relative_to(root)),
+                    "set_type": set_type,
                     "expected_arrow": expected_arrow,
                     "arrow_valid": bool(payload.get("vehicle", {}).get("valid")),
-                    "beacon_count": len(valid_beacons),
+                    "beacon_count": beacon_count,
                     "map_ready_count": map_ready,
-                    "beacon_upper": self.classification_beacon_upper(raw_path, root, expected_arrow),
+                    "expected_beacon_count": expected_beacon_count,
+                    "beacon_count_correct": (
+                        beacon_count == expected_beacon_count
+                        if expected_beacon_count is not None else None
+                    ),
                 })
                 self.ui_queue.put(("batch_progress", (index, len(raw_files))))
 
@@ -1411,16 +1460,35 @@ class VisionToolApp:
             no_arrow_rows = [item for item in rows if not item["expected_arrow"]]
             arrow_hits = sum(1 for item in expected_arrow_rows if item["arrow_valid"])
             false_arrows = sum(1 for item in no_arrow_rows if item["arrow_valid"])
-            beacon_count = sum(item["beacon_count"] for item in rows)
-            map_ready_count = sum(item["map_ready_count"] for item in rows)
-            beacon_upper = sum(item["beacon_upper"] for item in rows)
-            map_rate = 100.0 * map_ready_count / max(1, beacon_upper)
+            precise_rows = [
+                item for item in rows
+                if item["set_type"] == "准集"
+                and item["expected_beacon_count"] is not None
+            ]
+            coarse_rows = [item for item in rows if item["set_type"] == "粗集"]
+            precise_correct = sum(
+                1 for item in precise_rows if item["beacon_count_correct"]
+            )
+            precise_detected = sum(item["beacon_count"] for item in precise_rows)
+            precise_expected = sum(item["expected_beacon_count"] for item in precise_rows)
+            precise_map_ready = sum(item["map_ready_count"] for item in precise_rows)
+            precise_map_rate = (
+                100.0 * precise_map_ready / max(1, precise_expected)
+            )
+            coarse_detected = sum(item["beacon_count"] for item in coarse_rows)
+            coarse_map_ready = sum(item["map_ready_count"] for item in coarse_rows)
             text = (
                 f"分类批量验证完成\n"
                 f"箭头识别: {arrow_hits}/{len(expected_arrow_rows)}\n"
                 f"无箭头误检: {false_arrows}/{len(no_arrow_rows)}\n"
-                f"识别信标: {beacon_count}\n"
-                f"单帧制图质量合格: {map_ready_count}/{beacon_upper} ({map_rate:.1f}%)\n"
+                f"准集样本: {len(precise_rows)}\n"
+                f"准集信标数量正确: {precise_correct}/{len(precise_rows)}\n"
+                f"准集识别/应有信标: {precise_detected}/{precise_expected}\n"
+                f"准集制图质量合格: {precise_map_ready}/{precise_expected} "
+                f"({precise_map_rate:.1f}%)\n"
+                f"粗集样本: {len(coarse_rows)}\n"
+                f"粗集识别信标: {coarse_detected}\n"
+                f"粗集制图质量合格: {coarse_map_ready}\n"
                 f"门槛: confidence≥{MAP_CREATE_CONFIDENCE}, σ≤{MAP_CREATE_SIGMA_CM}cm\n"
                 f"注: 连续5帧条件需在实车时验证\n"
                 f"结果: {summary_path}"
@@ -1695,6 +1763,8 @@ class VisionToolApp:
             f"箭头分流面积阈值: {result.get('vehicle_min_raw_box_area', '?')} 像素\n"
             f"预览顺序: {binary_mode_text}\n"
             f"小车标志有效: {result.get('vehicle', {}).get('valid', 0)}\n"
+            f"箭头目标平面高度: "
+            f"{result.get('vehicle', {}).get('target_plane_height_cm', 0):.1f} cm\n"
             f"{beacon_detail}"
             f"{chevron_info}\n"
             f"运行目录: {binary_path.parent}"
@@ -1789,26 +1859,26 @@ def self_test() -> int:
         "confidence_box_size_min": 0.3,
     })
     category_root = Path("分类")
-    assert VisionToolApp.classification_beacon_upper(
-        category_root / "4、5连通域" / "有箭头" / "frame.raw",
+    assert VisionToolApp.classification_set_type(
+        category_root / "准集" / "1信标" / "有箭头" / "frame.raw",
         category_root,
-        True,
-    ) == 4
-    assert VisionToolApp.classification_beacon_upper(
-        category_root / "5、6连通域" / "frame.raw",
+    ) == "准集"
+    assert VisionToolApp.classification_set_type(
+        category_root / "粗集" / "3、4信标" / "frame.raw",
         category_root,
-        False,
-    ) == 6
-    assert VisionToolApp.classification_beacon_upper(
-        category_root / "0信标" / "有箭头" / "frame.raw",
+    ) == "粗集"
+    assert VisionToolApp.classification_expected_beacon_count(
+        category_root / "准集" / "0信标" / "有箭头" / "frame.raw",
         category_root,
-        True,
     ) == 0
-    assert VisionToolApp.classification_beacon_upper(
+    assert VisionToolApp.classification_expected_beacon_count(
+        category_root / "准集" / "5信标" / "frame.raw",
+        category_root,
+    ) == 5
+    assert VisionToolApp.classification_expected_beacon_count(
         category_root / "粗集" / "3、4信标" / "有箭头" / "frame.raw",
         category_root,
-        True,
-    ) == 4
+    ) is None
     print("vision tool self-test passed")
     return 0
 

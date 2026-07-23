@@ -30,4 +30,14 @@ python vision_tool.py
 python vision_tool.py --self-test
 ```
 
+## 信标姿态自适应拟合
+
+使用 `capture/分类` 下带姿态和 ToF 高度元数据的样本重新拟合轻量补偿系数：
+
+```powershell
+python fit_beacon_adaptive_thresholds.py
+```
+
+拟合报告写入 `runs/beacon_adaptive_fit/fit_report.json`。固件仅按候选中心、Roll、Pitch 和高度调整面积及形状门限，不生成信标逆透视图。
+
 仿真适配层位于 `sim/`，不改写固件工程中的硬件头文件。当前工具不会自动覆盖固件文件，源码保存操作只写入你在 UI 中选择的源码目录。

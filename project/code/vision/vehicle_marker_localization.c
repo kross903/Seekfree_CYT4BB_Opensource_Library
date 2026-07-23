@@ -551,7 +551,9 @@ static uint8 vehicle_marker_chevron_world_to_image(const VehicleMarkerWorldPoint
         return 0U;
     }
 
-    if(!IPM_World2FullRectifiedImage(world->x, world->y, &img_x, &img_y))
+    if(!IPM_Plane2FullRectifiedImage(world->x, world->y,
+                                     VEHICLE_MARKER_CHEVRON_PLANE_HEIGHT_CM,
+                                     &img_x, &img_y))
     {
         return 0U;
     }
@@ -1339,12 +1341,17 @@ static uint8 vehicle_marker_chevron_process_candidate(
     s_vehicle_marker_chevron_debug.left_tip_img = left_tip_img;
     s_vehicle_marker_chevron_debug.right_tip_img = right_tip_img;
 
-    if(!IPM_FullRectifiedImage2WorldF(apex_img.u, apex_img.v,
-                                     &apex.x, &apex.y) ||
-       !IPM_FullRectifiedImage2WorldF(left_tip_img.u, left_tip_img.v,
-                                     &left_tip.x, &left_tip.y) ||
-       !IPM_FullRectifiedImage2WorldF(right_tip_img.u, right_tip_img.v,
-                                     &right_tip.x, &right_tip.y))
+    if(!IPM_FullRectifiedImage2PlaneF(
+           apex_img.u, apex_img.v, VEHICLE_MARKER_CHEVRON_PLANE_HEIGHT_CM,
+           &apex.x, &apex.y) ||
+       !IPM_FullRectifiedImage2PlaneF(
+           left_tip_img.u, left_tip_img.v,
+           VEHICLE_MARKER_CHEVRON_PLANE_HEIGHT_CM,
+           &left_tip.x, &left_tip.y) ||
+       !IPM_FullRectifiedImage2PlaneF(
+           right_tip_img.u, right_tip_img.v,
+           VEHICLE_MARKER_CHEVRON_PLANE_HEIGHT_CM,
+           &right_tip.x, &right_tip.y))
     {
         s_vehicle_marker_chevron_debug.reject_reason =
             VEHICLE_MARKER_CHEVRON_REJECT_WORLD_PROJECTION;
@@ -1511,9 +1518,10 @@ static uint8 vehicle_marker_chevron_process_candidate_legacy(VehicleMarkerPose_t
         float world_x = 0.0f;
         float world_y = 0.0f;
 
-        if(!IPM_FullRectifiedImage2WorldF(
+        if(!IPM_FullRectifiedImage2PlaneF(
                (float)s_vehicle_marker_chevron_candidates[0].contour.point_x[i],
                (float)s_vehicle_marker_chevron_candidates[0].contour.point_y[i],
+               VEHICLE_MARKER_CHEVRON_PLANE_HEIGHT_CM,
                &world_x,
                &world_y))
         {

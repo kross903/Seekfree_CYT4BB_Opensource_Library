@@ -452,10 +452,11 @@ static int write_result(const char *path, const char *binary_path,
                 slots[i].confidence_edge,
                 (i + 1 < VISION_RUNTIME_BEACON_SLOT_COUNT) ? "," : "");
     }
-    fprintf(file, "  ],\n  \"vehicle\":{\"valid\":%u,\"x_cm\":%.6f,\"y_cm\":%.6f,\"heading_deg\":%.6f},\n",
+    fprintf(file, "  ],\n  \"vehicle\":{\"valid\":%u,\"x_cm\":%.6f,\"y_cm\":%.6f,\"heading_deg\":%.6f,\"target_plane_height_cm\":%.6f},\n",
             (unsigned)g_vehicle_marker_pose.valid,
             g_vehicle_marker_pose.x, g_vehicle_marker_pose.y,
-            g_vehicle_marker_pose.heading_deg);
+            g_vehicle_marker_pose.heading_deg,
+            VEHICLE_MARKER_CHEVRON_PLANE_HEIGHT_CM);
     fprintf(file, "  \"coarse_candidates\":[\n");
     for(i = 0; i < (int)candidate_count; ++i)
     {
@@ -471,7 +472,11 @@ static int write_result(const char *path, const char *binary_path,
                 "\"area_cm2\":%.6f,\"circularity\":%.6f,"
                 "\"confidence_box_size\":%.6f,\"confidence_box_size_min\":%.6f,"
                 "\"confidence_stability\":%.6f,"
-                "\"confidence_area\":%.6f,\"confidence_edge\":%.6f}%s\n",
+                "\"confidence_area\":%.6f,\"confidence_edge\":%.6f,"
+                "\"adaptive_normalized_area_px\":%.6f,"
+                "\"adaptive_relaxation\":%.6f,"
+                "\"adaptive_min_area_px\":%.6f,\"adaptive_max_area_px\":%.6f,"
+                "\"adaptive_min_circularity\":%.6f}%s\n",
                 candidates[i].area,
                 candidates[i].raw_min_row, candidates[i].raw_max_row,
                 candidates[i].raw_min_col, candidates[i].raw_max_col,
@@ -493,6 +498,11 @@ static int write_result(const char *path, const char *binary_path,
                 candidates[i].confidence_stability,
                 candidates[i].confidence_area,
                 candidates[i].confidence_edge,
+                candidates[i].adaptive_normalized_area_px,
+                candidates[i].adaptive_relaxation,
+                candidates[i].adaptive_min_area_px,
+                candidates[i].adaptive_max_area_px,
+                candidates[i].adaptive_min_circularity,
                 (i + 1 < (int)candidate_count) ? "," : "");
     }
     full_rectified_point_to_raw(&chevron.apex_img, &apex_raw_u, &apex_raw_v);

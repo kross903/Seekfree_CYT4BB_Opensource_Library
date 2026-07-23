@@ -95,6 +95,11 @@ typedef struct
     float confidence_stability;
     float confidence_area;
     float confidence_edge;
+    float adaptive_normalized_area_px;
+    float adaptive_relaxation;
+    float adaptive_min_area_px;
+    float adaptive_max_area_px;
+    float adaptive_min_circularity;
     uint8 detection_confidence;
     uint8 position_sigma_cm;
     float world_x;
@@ -201,6 +206,11 @@ typedef struct
     float confidence_stability;
     float confidence_area;
     float confidence_edge;
+    float adaptive_normalized_area_px;
+    float adaptive_relaxation;
+    float adaptive_min_area_px;
+    float adaptive_max_area_px;
+    float adaptive_min_circularity;
 } VisionRuntimeCandidateBox_t;
 
 void VisionRuntime_ProcessFrame(float height_cm);

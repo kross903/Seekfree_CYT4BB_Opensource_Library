@@ -103,6 +103,10 @@ uint8 IPM_RectifiedImage2WorldF(float img_x, float img_y,
                                float *world_x, float *world_y);
 uint8 IPM_FullRectifiedImage2WorldF(float img_x, float img_y,
                                     float *world_x, float *world_y);
+/* 将完整分辨率去畸变坐标投影到离地 plane_height_cm 的水平目标平面。 */
+uint8 IPM_FullRectifiedImage2PlaneF(float img_x, float img_y,
+                                    float plane_height_cm,
+                                    float *world_x, float *world_y);
 
 /**
  * @brief 地面物理坐标转换为图像坐标
@@ -116,6 +120,10 @@ bool IPM_World2Image(float world_x, float world_y, int *img_x, int *img_y);
 bool IPM_World2RectifiedImage(float world_x, float world_y,
                               int *img_x, int *img_y);
 bool IPM_World2FullRectifiedImage(float world_x, float world_y,
+                                  int *img_x, int *img_y);
+/* IPM_FullRectifiedImage2PlaneF() 的反向投影。 */
+bool IPM_Plane2FullRectifiedImage(float world_x, float world_y,
+                                  float plane_height_cm,
                                   int *img_x, int *img_y);
 
 /**

@@ -1124,6 +1124,12 @@
             <name>$PROJ_DIR$\..\..\code\vision\beacon_detect.c</name>
         </file>
         <file>
+            <name>$PROJ_DIR$\..\..\code\vision\beacon_adaptive_threshold.c</name>
+        </file>
+        <file>
+            <name>$PROJ_DIR$\..\..\code\vision\beacon_adaptive_threshold.h</name>
+        </file>
+        <file>
             <name>$PROJ_DIR$\..\..\code\vision\camera_calibration.c</name>
         </file>
         <file>

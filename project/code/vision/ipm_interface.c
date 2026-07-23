@@ -157,6 +157,52 @@ uint8 IPM_FullRectifiedImage2WorldF(float img_x, float img_y,
                                      world_x, world_y);
 }
 
+static uint8 IPM_GetHorizontalPlaneScale(float plane_height_cm,
+                                         float *scale,
+                                         float *camera_world_x,
+                                         float *camera_world_y)
+{
+    float camera_to_ground_cm =
+        -(g_ipm.Z0 + CAMERA_OFFSET_Z_CM);
+
+    if(scale == NULL || camera_world_x == NULL || camera_world_y == NULL ||
+       plane_height_cm < 0.0f ||
+       camera_to_ground_cm <= plane_height_cm + 1e-3f)
+    {
+        return 0U;
+    }
+
+    *scale = (camera_to_ground_cm - plane_height_cm) /
+             camera_to_ground_cm;
+    *camera_world_x = -(g_ipm.X0 + CAMERA_OFFSET_X_CM);
+    *camera_world_y = -(g_ipm.Y0 + CAMERA_OFFSET_Y_CM);
+    return 1U;
+}
+
+uint8 IPM_FullRectifiedImage2PlaneF(float img_x, float img_y,
+                                    float plane_height_cm,
+                                    float *world_x, float *world_y)
+{
+    float ground_x = 0.0f;
+    float ground_y = 0.0f;
+    float camera_world_x = 0.0f;
+    float camera_world_y = 0.0f;
+    float scale = 0.0f;
+
+    if(world_x == NULL || world_y == NULL ||
+       !IPM_GetHorizontalPlaneScale(plane_height_cm, &scale,
+                                    &camera_world_x, &camera_world_y) ||
+       !IPM_FullRectifiedImage2WorldF(img_x, img_y,
+                                     &ground_x, &ground_y))
+    {
+        return 0U;
+    }
+
+    *world_x = camera_world_x + scale * (ground_x - camera_world_x);
+    *world_y = camera_world_y + scale * (ground_y - camera_world_y);
+    return 1U;
+}
+
 /**
  * @brief ?????????????
  */
@@ -211,6 +257,27 @@ bool IPM_World2FullRectifiedImage(float world_x, float world_y,
     *img_y = (int)floorf((rectified_y * 2.0f) + 0.5f);
     return *img_x >= 0 && *img_x < (MT9V03X_W * 2) &&
            *img_y >= 0 && *img_y < (MT9V03X_H * 2);
+}
+
+bool IPM_Plane2FullRectifiedImage(float world_x, float world_y,
+                                  float plane_height_cm,
+                                  int *img_x, int *img_y)
+{
+    float camera_world_x = 0.0f;
+    float camera_world_y = 0.0f;
+    float ground_x = 0.0f;
+    float ground_y = 0.0f;
+    float scale = 0.0f;
+
+    if(!IPM_GetHorizontalPlaneScale(plane_height_cm, &scale,
+                                    &camera_world_x, &camera_world_y))
+    {
+        return false;
+    }
+
+    ground_x = camera_world_x + (world_x - camera_world_x) / scale;
+    ground_y = camera_world_y + (world_y - camera_world_y) / scale;
+    return IPM_World2FullRectifiedImage(ground_x, ground_y, img_x, img_y);
 }
 
 /**

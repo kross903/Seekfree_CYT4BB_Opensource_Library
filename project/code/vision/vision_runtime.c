@@ -710,6 +710,11 @@ typedef struct
     float confidence_stability;
     float confidence_area;
     float confidence_edge;
+    float adaptive_normalized_area_px;
+    float adaptive_relaxation;
+    float adaptive_min_area_px;
+    float adaptive_max_area_px;
+    float adaptive_min_circularity;
 } VisionRuntimeCandidateAnnotation_t;
 
 typedef struct
@@ -2092,19 +2097,6 @@ static uint8 VisionRuntime_DispatchFineComponent(
     }
     if(area < VISION_RUNTIME_FINE_MIN_FOREGROUND_PIXELS ||
        boundary_count == 0U) return 0U;
-#if !VISION_RUNTIME_PHYSICAL_GRID_ENABLE
-    if(target == VISION_RUNTIME_FINE_TARGET_BEACON &&
-       ((float)area < BEACON_UNDISTORTED_AREA_MIN_PX ||
-        (float)area > BEACON_UNDISTORTED_AREA_MAX_PX))
-    {
-        if(candidate_index < VISION_RUNTIME_MAX_CANDIDATES)
-        {
-            s_vision_candidate_annotations[candidate_index].beacon_area_pixels =
-                (area > 2147483647U) ? 2147483647 : (int)area;
-        }
-        return 0U;
-    }
-#endif
     width = max_col - min_col + 1;
     height = max_row - min_row + 1;
     blob.centroid_row = (float)row_sum / (float)area;
@@ -2212,6 +2204,16 @@ static uint8 VisionRuntime_DispatchFineComponent(
                     blob.confidence_area;
                 s_vision_candidate_annotations[candidate_index].confidence_edge =
                     blob.confidence_edge;
+                s_vision_candidate_annotations[candidate_index].adaptive_normalized_area_px =
+                    blob.adaptive_normalized_area_px;
+                s_vision_candidate_annotations[candidate_index].adaptive_relaxation =
+                    blob.adaptive_relaxation;
+                s_vision_candidate_annotations[candidate_index].adaptive_min_area_px =
+                    blob.adaptive_min_area_px;
+                s_vision_candidate_annotations[candidate_index].adaptive_max_area_px =
+                    blob.adaptive_max_area_px;
+                s_vision_candidate_annotations[candidate_index].adaptive_min_circularity =
+                    blob.adaptive_min_circularity;
             }
             if(beacon_accepted)
             {
@@ -2579,6 +2581,16 @@ uint8 VisionRuntime_GetCandidateBoxes(VisionRuntimeCandidateBox_t *boxes, uint8 
             s_vision_candidate_annotations[i].confidence_area;
         boxes[i].confidence_edge =
             s_vision_candidate_annotations[i].confidence_edge;
+        boxes[i].adaptive_normalized_area_px =
+            s_vision_candidate_annotations[i].adaptive_normalized_area_px;
+        boxes[i].adaptive_relaxation =
+            s_vision_candidate_annotations[i].adaptive_relaxation;
+        boxes[i].adaptive_min_area_px =
+            s_vision_candidate_annotations[i].adaptive_min_area_px;
+        boxes[i].adaptive_max_area_px =
+            s_vision_candidate_annotations[i].adaptive_max_area_px;
+        boxes[i].adaptive_min_circularity =
+            s_vision_candidate_annotations[i].adaptive_min_circularity;
     }
     return count;
 #else
