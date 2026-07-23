@@ -29,6 +29,12 @@ typedef struct
     float flow_comp_y_rad;
     float velocity_x_raw_cms;
     float velocity_y_raw_cms;
+    float velocity_x_slew_cms;
+    float velocity_y_slew_cms;
+    float velocity_x_lpf_cms;
+    float velocity_y_lpf_cms;
+    float velocity_x_output_slew_cms;
+    float velocity_y_output_slew_cms;
     float velocity_x_cms;
     float velocity_y_cms;
     /* ICM-predicted + optical-flow-corrected velocity used by the speed loop. */

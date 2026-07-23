@@ -34,7 +34,7 @@ static void send_sixteen_date(float date_1, float date_2, float date_3, float da
                               float date_9, float date_10, float date_11, float date_12,
                               float date_13, float date_14, float date_15, float date_16);
 
-/* 保留的回传模式：F1/F2/F3/F4/F5/F6/F7/F8/F9/FA/FC/FD/FE/FI/FU/FY/FZ。 */
+/* 保留的回传模式：F1/F2/F3/F4/F5/F6/F7/F8/F9/FA/FC/FD/FE/FG/FI/FO/FU/FV/FW/FY/FZ。 */
 static int send_back_flag = 0;
 static uint8 send_back_command = 'R';
 
@@ -285,17 +285,20 @@ static uint8 set_height_vel_pid_value(uint8 item, float value)
 /*
  * VOFA 调参: 光流速度闭环 PID。
  *
- * axis = 0 → vel_pid_x (前向速度 vx_cms 反馈, 输出 ax_cmd_cms2)
- * axis = 1 → vel_pid_y (左向速度 vy_cms 反馈, 输出 ay_cmd_cms2)
+ * axis = 0 → vel_pid_x (前向速度 vx_cms 反馈, 输出 Pitch 修正角)
+ * axis = 1 → vel_pid_y (左向速度 vy_cms 反馈, 输出 Roll 修正角)
  *
  * item:
- *   '1' Kp, '2' Ki, '3' Kd, '4' output_limit (cm/s^2), '5' integral_limit
+ *   '1' Kp, '2' Ki, '3' Kd, '4' output_limit (deg), '5' integral_limit,
+ *   '6' 目标角变化率前馈增益, '7' 前馈角速度限幅 (deg/s)
  *
  * 上层在 USART_PID_Adjust 已经按命令字符 'V'/'W' 区分轴，避免与角度环 R/P/Y 混淆。
  */
 static uint8 set_vel_pid_value(uint8 axis, uint8 item, float value)
 {
     PID_Controller *pid = NULL;
+    float ff_gain = 0.0f;
+    float ff_limit_dps = 0.0f;
 
     if(axis == 0U)
     {
@@ -317,6 +320,12 @@ static uint8 set_vel_pid_value(uint8 axis, uint8 item, float value)
         case '3': pid->Kd = value; break;
         case '4': pid->output_limit = value; break;
         case '5': pid->integral_limit = value; break;
+        case '6':
+            Velocity_Loop_Get_Rate_Feedforward_Parameters(axis, &ff_gain, &ff_limit_dps);
+            return Velocity_Loop_Set_Rate_Feedforward_Parameters(axis, value, ff_limit_dps);
+        case '7':
+            Velocity_Loop_Get_Rate_Feedforward_Parameters(axis, &ff_gain, &ff_limit_dps);
+            return Velocity_Loop_Set_Rate_Feedforward_Parameters(axis, ff_gain, value);
         default:  return 0U;
     }
 
@@ -458,24 +467,40 @@ static void send_pid_data_back(uint8 command)
             break;
 
         case 'V':
+        {
+            float ff_gain = 0.0f;
+            float ff_limit_dps = 0.0f;
+
             value_1 = vel_pid_x.Kp;
             value_2 = vel_pid_x.Ki;
             value_3 = vel_pid_x.Kd;
+            Velocity_Loop_Get_Rate_Feedforward_Parameters(VELOCITY_LOOP_AXIS_X,
+                                                          &ff_gain,
+                                                          &ff_limit_dps);
             send_four_date(value_1, value_2, value_3,
                            vel_pid_x.output_limit,
                            vel_pid_x.integral_limit,
-                           0, 0, 0);
+                           ff_gain, ff_limit_dps, 0);
             return;
+        }
 
         case 'W':
+        {
+            float ff_gain = 0.0f;
+            float ff_limit_dps = 0.0f;
+
             value_1 = vel_pid_y.Kp;
             value_2 = vel_pid_y.Ki;
             value_3 = vel_pid_y.Kd;
+            Velocity_Loop_Get_Rate_Feedforward_Parameters(VELOCITY_LOOP_AXIS_Y,
+                                                          &ff_gain,
+                                                          &ff_limit_dps);
             send_four_date(value_1, value_2, value_3,
                            vel_pid_y.output_limit,
                            vel_pid_y.integral_limit,
-                           0, 0, 0);
+                           ff_gain, ff_limit_dps, 0);
             return;
+        }
 
         case 'I':
             value_1 = pos_pid_x.Kp;
@@ -722,6 +747,61 @@ static void send_rate_loop_tuning_data(uint8 axis)
                       (float)motor_throttle[1],
                       (float)motor_throttle[2],
                       (float)motor_throttle[3]);
+}
+
+static void send_velocity_loop_tuning_data(uint8 axis)
+{
+    VelocityLoopAxisDiag_t diag = {0};
+    AngleLoopRateFeedforwardDiag_t ff_diag = {0};
+    float target_angle_deg = 0.0f;
+    float actual_angle_deg = 0.0f;
+    float target_rate_dps = 0.0f;
+    float actual_rate_dps = 0.0f;
+    float rate_ff_dps = 0.0f;
+
+    if(!Velocity_Loop_Get_Axis_Diag(axis, &diag))
+    {
+        return;
+    }
+    Angle_Loop_Get_Rate_Feedforward_Diag(&ff_diag);
+
+    if(axis == VELOCITY_LOOP_AXIS_X)
+    {
+        target_angle_deg = target_angle_pitch;
+        actual_angle_deg = current_pitch;
+        target_rate_dps = target_pitch_rate;
+        actual_rate_dps = current_gyro_pitch;
+        rate_ff_dps = ff_diag.pitch_rate_ff_dps;
+    }
+    else if(axis == VELOCITY_LOOP_AXIS_Y)
+    {
+        target_angle_deg = target_angle_roll;
+        actual_angle_deg = current_roll;
+        target_rate_dps = target_roll_rate;
+        actual_rate_dps = current_gyro_roll;
+        rate_ff_dps = ff_diag.roll_rate_ff_dps;
+    }
+    else
+    {
+        return;
+    }
+
+    send_sixteen_date(diag.target_velocity_cms,
+                      diag.actual_velocity_cms,
+                      diag.error_velocity_cms,
+                      diag.p_output_deg,
+                      diag.i_output_deg,
+                      diag.d_output_deg,
+                      diag.raw_output_deg,
+                      diag.output_deg,
+                      (float)diag.saturated,
+                      target_angle_deg,
+                      actual_angle_deg,
+                      target_rate_dps,
+                      actual_rate_dps,
+                      rate_ff_dps,
+                      (float)diag.active,
+                      base_throttle);
 }
 
 static void send_height_loop_tuning_data(void)
@@ -1186,10 +1266,18 @@ void USART_PID_Adjust(void)
                     fe_last_cycle = 0U;
                     fe_timing_initialized = 0U;
                     break;
+                case 'G':
+                case 'g': send_back_flag = 16; break;
                 case 'I':
                 case 'i': send_back_flag = 18; break;
+                case 'O':
+                case 'o': send_back_flag = 22; break;
                 case 'U':
                 case 'u': send_back_flag = 29; break;
+                case 'V':
+                case 'v': send_back_flag = 20; break;
+                case 'W':
+                case 'w': send_back_flag = 21; break;
                 case 'Y':
                 case 'y': send_back_flag = 33; break;
                 case 'Z':
@@ -1465,6 +1553,32 @@ void send_date_back(void)
             break;
         }
 
+        case 16:
+        {
+            VelocityLoopRateFeedforwardDiag_t velocity_ff_diag = {0};
+            AngleLoopRateFeedforwardDiag_t angle_ff_diag = {0};
+
+            Velocity_Loop_Get_Rate_Feedforward_Diag(&velocity_ff_diag);
+            Angle_Loop_Get_Rate_Feedforward_Diag(&angle_ff_diag);
+            send_sixteen_date(target_angle_roll,
+                              current_roll,
+                              velocity_ff_diag.roll_target_rate_raw_dps,
+                              velocity_ff_diag.roll_target_rate_filt_dps,
+                              angle_ff_diag.roll_pid_rate_dps,
+                              angle_ff_diag.roll_rate_ff_dps,
+                              angle_ff_diag.roll_rate_final_dps,
+                              current_gyro_roll,
+                              target_angle_pitch,
+                              current_pitch,
+                              velocity_ff_diag.pitch_target_rate_raw_dps,
+                              velocity_ff_diag.pitch_target_rate_filt_dps,
+                              angle_ff_diag.pitch_pid_rate_dps,
+                              angle_ff_diag.pitch_rate_ff_dps,
+                              angle_ff_diag.pitch_rate_final_dps,
+                              current_gyro_pitch);
+            break;
+        }
+
         case 35:
         {
             ICM_Health_t imu_health = {0};
@@ -1594,6 +1708,38 @@ void send_date_back(void)
                               (float)height_diag.tof1_invalid_count,
                               (float)height_diag.tof2_invalid_count,
                               (float)height_diag.tof2_bus_error_count);
+            break;
+        }
+
+        case 20:
+            send_velocity_loop_tuning_data(VELOCITY_LOOP_AXIS_X);
+            break;
+
+        case 21:
+            send_velocity_loop_tuning_data(VELOCITY_LOOP_AXIS_Y);
+            break;
+
+        case 22:
+        {
+            PMWFlowState_t flow_state = {0};
+
+            PMW_Flow_GetState(&flow_state);
+            send_sixteen_date(flow_state.flow_x_rad,
+                              flow_state.flow_comp_x_rad - flow_state.flow_x_rad,
+                              flow_state.flow_comp_x_rad,
+                              flow_state.flow_y_rad,
+                              flow_state.flow_comp_y_rad - flow_state.flow_y_rad,
+                              flow_state.flow_comp_y_rad,
+                              flow_state.velocity_x_raw_cms,
+                              flow_state.velocity_y_raw_cms,
+                              flow_state.velocity_x_slew_cms,
+                              flow_state.velocity_y_slew_cms,
+                              flow_state.velocity_x_lpf_cms,
+                              flow_state.velocity_y_lpf_cms,
+                              flow_state.velocity_x_output_slew_cms,
+                              flow_state.velocity_y_output_slew_cms,
+                              flow_state.velocity_x_cms,
+                              flow_state.velocity_y_cms);
             break;
         }
 

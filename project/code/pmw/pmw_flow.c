@@ -519,11 +519,17 @@ static void pmw_flow_apply_invalid_velocity_hold(PMWFlowState_t *state)
 
     if(publish_hold_velocity)
     {
+        state->velocity_x_slew_cms = g_pmw_flow_vel_x_filt_cms;
+        state->velocity_y_slew_cms = g_pmw_flow_vel_y_filt_cms;
+        state->velocity_x_lpf_cms = g_pmw_flow_vel_x_filt_cms;
+        state->velocity_y_lpf_cms = g_pmw_flow_vel_y_filt_cms;
         state->velocity_x_cms = g_pmw_flow_vel_x_filt_cms;
         state->velocity_y_cms = g_pmw_flow_vel_y_filt_cms;
         pmw_flow_apply_output_velocity_slew(&state->velocity_x_cms,
                                             &state->velocity_y_cms,
                                             state->dt_s);
+        state->velocity_x_output_slew_cms = state->velocity_x_cms;
+        state->velocity_y_output_slew_cms = state->velocity_y_cms;
         state->velocity_x_cms = pmw_flow_apply_velocity_deadband(state->velocity_x_cms);
         state->velocity_y_cms = pmw_flow_apply_velocity_deadband(state->velocity_y_cms);
         state->valid = 1U;
@@ -1251,21 +1257,30 @@ void PMW_Flow_UpdateSample(int16 flow_delta_x,
             vx_raw = pmw_flow_limit_velocity_slew(vx_raw, g_pmw_flow_vel_x_filt_cms, dt_s);
             vy_raw = pmw_flow_limit_velocity_slew(vy_raw, g_pmw_flow_vel_y_filt_cms, dt_s);
 
+            new_state.velocity_x_slew_cms = vx_raw;
+            new_state.velocity_y_slew_cms = vy_raw;
+
             velocity_lpf_alpha = pmw_flow_calc_lpf_alpha(PMW_FLOW_VEL_LPF_CUTOFF_HZ, dt_s);
             g_pmw_flow_vel_x_filt_cms += velocity_lpf_alpha * (vx_raw - g_pmw_flow_vel_x_filt_cms);
             g_pmw_flow_vel_y_filt_cms += velocity_lpf_alpha * (vy_raw - g_pmw_flow_vel_y_filt_cms);
         }
         else
         {
+            new_state.velocity_x_slew_cms = vx_raw;
+            new_state.velocity_y_slew_cms = vy_raw;
             g_pmw_flow_vel_x_filt_cms = vx_raw;
             g_pmw_flow_vel_y_filt_cms = vy_raw;
             g_pmw_flow_vel_filt_init = 1U;
         }
 
         g_pmw_flow_invalid_sample_count = 0U;
+        new_state.velocity_x_lpf_cms = g_pmw_flow_vel_x_filt_cms;
+        new_state.velocity_y_lpf_cms = g_pmw_flow_vel_y_filt_cms;
         vx_raw = g_pmw_flow_vel_x_filt_cms;
         vy_raw = g_pmw_flow_vel_y_filt_cms;
         pmw_flow_apply_output_velocity_slew(&vx_raw, &vy_raw, dt_s);
+        new_state.velocity_x_output_slew_cms = vx_raw;
+        new_state.velocity_y_output_slew_cms = vy_raw;
         new_state.velocity_x_cms = pmw_flow_apply_velocity_deadband(vx_raw);
         new_state.velocity_y_cms = pmw_flow_apply_velocity_deadband(vy_raw);
         new_state.valid = 1U;
