@@ -724,6 +724,60 @@ static void send_rate_loop_tuning_data(uint8 axis)
                       (float)motor_throttle[3]);
 }
 
+static void send_height_loop_tuning_data(void)
+{
+    HeightManagerDiag_t height_diag = {0};
+    float target_height_cm = 0.0f;
+    float actual_height_cm = 0.0f;
+    float height_error_cm = 0.0f;
+    float height_p_output = 0.0f;
+    float height_i_output = 0.0f;
+    float height_d_output = 0.0f;
+    float height_total_output = 0.0f;
+    float speed_target_cms = 0.0f;
+    float actual_speed_cms = 0.0f;
+    float speed_error_cms = 0.0f;
+    float speed_p_output = 0.0f;
+    float speed_i_output = 0.0f;
+    float speed_d_output = 0.0f;
+    float speed_total_output = 0.0f;
+    float speed_final_output = 0.0f;
+
+    HeightManager_Get_Diag(&height_diag);
+    target_height_cm = HeightManager_Get_Active_Target();
+    actual_height_cm = g_height_result.height_cm;
+    height_error_cm = target_height_cm - actual_height_cm;
+    height_p_output = HeightPID.Kp * height_error_cm;
+    height_i_output = HeightPID.Ki * HeightPID.integral;
+    height_d_output = HeightPID.Kd * HeightPID.derivative;
+    height_total_output = height_p_output + height_i_output + height_d_output;
+    speed_target_cms = height_diag.target_velocity_cms;
+    actual_speed_cms = height_diag.velocity_feedback_view_cms;
+    speed_error_cms = speed_target_cms - actual_speed_cms;
+    speed_p_output = HeightVelPID.Kp * speed_error_cms;
+    speed_i_output = HeightVelPID.Ki * HeightVelPID.integral;
+    speed_d_output = HeightVelPID.Kd * HeightVelPID.derivative;
+    speed_total_output = speed_p_output + speed_i_output + speed_d_output;
+    speed_final_output = HeightSpeedPID_output;
+
+    send_sixteen_date(target_height_cm,
+                      actual_height_cm,
+                      height_p_output,
+                      height_i_output,
+                      height_d_output,
+                      height_total_output,
+                      speed_target_cms,
+                      actual_speed_cms,
+                      speed_p_output,
+                      speed_i_output,
+                      speed_d_output,
+                      speed_total_output,
+                      height_error_cm,
+                      speed_error_cms,
+                      speed_final_output,
+                      (float)height_diag.cascade_enabled);
+}
+
 void Init_uart(void)
 {
     fifo_init(&uart_data_fifo, FIFO_DATA_8BIT, uart_get_data, VOFA_PACKET_MAX_LEN);
@@ -1115,6 +1169,8 @@ void USART_PID_Adjust(void)
                 case '1': send_back_flag = 19; break;
                 case 'A':
                 case 'a': send_back_flag = 10; break;
+                case 'B':
+                case 'b': send_back_flag = 12; break;
                 case 'C':
                 case 'c':
                     send_back_flag = 35;
@@ -1365,6 +1421,10 @@ void send_date_back(void)
                            Y_V_F);
             break;
         }
+
+        case 12:
+            send_height_loop_tuning_data();
+            break;
 
         case 14:
         {

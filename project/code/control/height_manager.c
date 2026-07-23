@@ -15,7 +15,7 @@ extern volatile uint8 armed;
 #define TOF_MEDIAN_WINDOW                 3U
 
 #define HEIGHT_CASCADE_ENABLE             1U
-#define HEIGHT_TARGET_DEFAULT_CM          110.0f
+#define HEIGHT_TARGET_DEFAULT_CM          140.0f
 #define HEIGHT_TARGET_START_CM            50.0f
 #define HEIGHT_TARGET_ERROR_LIMIT_CM      40.0f
 #define HEIGHT_TARGET_RAMP_DURATION_S     3.0f
@@ -30,6 +30,7 @@ extern volatile uint8 armed;
 #define HEIGHT_ACC_ATTITUDE_GATE_DEG      25.0f
 #define HEIGHT_ACC_NORM_GATE_MG           400.0f
 #define HEIGHT_VEL_FUSION_ACC_ALPHA       0.20f
+#define HEIGHT_VEL_FB_LPF_ALPHA           0.5f
 
 #define TOF_VALID_MIN_M                   0.02f
 #define TOF_VALID_MAX_M                   2.0f
@@ -99,6 +100,8 @@ static uint8 s_tof_median_index = 0U;
 
 static float s_acc_velocity_cms = 0.0f;
 static float s_acc_velocity_filt_cms = 0.0f;
+static float s_height_velocity_feedback_cms = 0.0f;
+static uint8 s_height_velocity_feedback_initialized = 0U;
 
 static uint8 s_height_takeoff_target_active = 0U;
 static float s_height_takeoff_target_cm = HEIGHT_TARGET_START_CM;
@@ -264,6 +267,7 @@ static void height_clear_control_diag(void)
     s_height_diag.velocity_error_cms = 0.0f;
     s_height_diag.height_pid_output_cms = 0.0f;
     s_height_diag.velocity_pid_output = 0.0f;
+    s_height_diag.velocity_feedback_cms = 0.0f;
     s_height_diag.cascade_enabled = HEIGHT_CASCADE_ENABLE;
 }
 
@@ -271,8 +275,12 @@ static void height_reset_velocity_estimator(void)
 {
     s_acc_velocity_cms = 0.0f;
     s_acc_velocity_filt_cms = 0.0f;
+    s_height_velocity_feedback_cms = 0.0f;
+    s_height_velocity_feedback_initialized = 0U;
     s_height_diag.acc_velocity_cms = 0.0f;
     s_height_diag.fused_velocity_cms = tof_vel_mps_filt * 100.0f;
+    s_height_diag.velocity_feedback_cms = tof_vel_mps_filt * 100.0f;
+    s_height_diag.velocity_feedback_view_cms = tof_vel_mps_filt * 100.0f;
 }
 
 static void publish_height_result(float height_cm, float velocity_cms)
@@ -712,6 +720,19 @@ static void publish_estimator_result(void)
     s_height_diag.tof_height_filt_cm = tof_height_true_filt * 100.0f;
     s_height_diag.tof_velocity_cms = tof_velocity_cms;
     s_height_diag.fused_velocity_cms = fused_velocity_cms;
+    if(!s_height_velocity_feedback_initialized)
+    {
+        s_height_velocity_feedback_cms = fused_velocity_cms;
+        s_height_velocity_feedback_initialized = 1U;
+    }
+    else
+    {
+        s_height_velocity_feedback_cms += HEIGHT_VEL_FB_LPF_ALPHA *
+                                          (fused_velocity_cms -
+                                           s_height_velocity_feedback_cms);
+    }
+    s_height_diag.velocity_feedback_cms = s_height_velocity_feedback_cms;
+    s_height_diag.velocity_feedback_view_cms = s_height_velocity_feedback_cms;
 
     publish_height_result(tof_height_true_filt * 100.0f, fused_velocity_cms);
 }
@@ -933,7 +954,9 @@ void HeightManager_Task_10ms(void)
             float height_pid_vz_cms;
             float target_vz_cms;
             float raw_velocity_output;
+            float velocity_feedback_cms;
 
+            velocity_feedback_cms = s_height_velocity_feedback_cms;
             height_pid_vz_cms = PID_Calculate(&HeightPID,
                                               actual_cm + error_cm,
                                               actual_cm,
@@ -944,28 +967,33 @@ void HeightManager_Task_10ms(void)
 
             raw_velocity_output = PID_Calculate(&HeightVelPID,
                                                 target_vz_cms,
-                                                g_height_result.velocity_cms,
+                                                velocity_feedback_cms,
                                                 TOF_DT);
             HeightSpeedPID_output = raw_velocity_output *
                                     (s_soft_takeoff_active ? s_soft_takeoff_output_blend : 1.0f);
 
             s_height_diag.height_pid_output_cms = height_pid_vz_cms;
             s_height_diag.target_velocity_cms = target_vz_cms;
-            s_height_diag.velocity_error_cms = target_vz_cms - g_height_result.velocity_cms;
+            s_height_diag.velocity_error_cms = target_vz_cms - velocity_feedback_cms;
             s_height_diag.velocity_pid_output = HeightSpeedPID_output;
             s_height_diag.cascade_enabled = 1U;
         }
 #else
-        HeightSpeedPID_output = PID_Calculate(&HeightPID,
-                                              actual_cm + error_cm,
-                                              actual_cm,
-                                              TOF_DT) *
-                                (s_soft_takeoff_active ? s_soft_takeoff_output_blend : 1.0f);
-        s_height_diag.height_pid_output_cms = HeightSpeedPID_output;
-        s_height_diag.target_velocity_cms = 0.0f;
-        s_height_diag.velocity_error_cms = 0.0f;
-        s_height_diag.velocity_pid_output = HeightSpeedPID_output;
-        s_height_diag.cascade_enabled = 0U;
+        {
+            float velocity_feedback_cms = s_height_velocity_feedback_cms;
+
+            HeightSpeedPID_output = PID_Calculate(&HeightPID,
+                                                  actual_cm + error_cm,
+                                                  actual_cm,
+                                                  TOF_DT) *
+                                    (s_soft_takeoff_active ? s_soft_takeoff_output_blend : 1.0f);
+            s_height_diag.height_pid_output_cms = HeightSpeedPID_output;
+            s_height_diag.target_velocity_cms = 0.0f;
+            s_height_diag.velocity_error_cms = 0.0f;
+            s_height_diag.velocity_pid_output = HeightSpeedPID_output;
+            s_height_diag.cascade_enabled = 0U;
+            s_height_diag.velocity_feedback_cms = velocity_feedback_cms;
+        }
 #endif
     }
 }

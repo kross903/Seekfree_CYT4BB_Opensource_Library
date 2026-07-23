@@ -66,6 +66,8 @@ typedef struct
     float acc_z_cms2;
     float acc_velocity_cms;
     float fused_velocity_cms;
+    float velocity_feedback_cms;
+    float velocity_feedback_view_cms;
     float target_velocity_cms;
     float velocity_error_cms;
     float height_pid_output_cms;
