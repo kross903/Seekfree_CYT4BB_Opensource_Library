@@ -626,7 +626,7 @@ int main(int argc, char **argv)
 
     if(input_path == NULL || output_path == NULL || !read_raw(input_path))
     {
-        fprintf(stderr, "usage: vision_sim --input frame.raw --output result.json [--binary binary.pgm] [--vehicle-threshold 110] [--beacon-threshold 10] [--coarse-center-threshold 50] [--coarse-near-threshold 45] [--coarse-middle-threshold 40] [--coarse-far-threshold 35] [--coarse-edge-threshold 30] [--binary-mode gray|pre_transform|undistort_binary_ipm|post_transform]\n");
+        fprintf(stderr, "usage: vision_sim --input frame.raw --output result.json [--binary binary.pgm] [--vehicle-threshold 150] [--beacon-threshold 10] [--coarse-center-threshold 150] [--coarse-near-threshold 60] [--coarse-middle-threshold 50] [--coarse-far-threshold 50] [--coarse-edge-threshold 50] [--binary-mode gray|pre_transform|undistort_binary_ipm|post_transform]\n");
         return 2;
     }
 

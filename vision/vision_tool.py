@@ -20,6 +20,7 @@ import tkinter as tk
 from PIL import Image, ImageDraw, ImageTk
 
 from capture_serial import capture_frames, list_serial_ports
+from generate_coarse_circle_map import DEFAULT_FRACTIONS, build_zones, load_calibration
 
 
 APP_ROOT = Path(__file__).resolve().parent
@@ -28,16 +29,19 @@ DEFAULT_FRAMES = Path(r"D:\code\project\Seekfree_CYT4BB_Opensource_Library\visio
 SIM_ROOT = APP_ROOT / "sim"
 BUILD_ROOT = APP_ROOT / "build"
 RUN_ROOT = APP_ROOT / "runs"
-WIDTH = 188
-HEIGHT = 120
+WIDTH, HEIGHT, COARSE_CENTER_X, COARSE_CENTER_Y = load_calibration(
+    DEFAULT_SOURCE / "camera_calibration_params.h"
+)
 FINE_WIDTH = 376
 FINE_HEIGHT = 240
 FINE_STRIDE = (FINE_WIDTH + 7) // 8
-COARSE_CENTER_X = 95.4078135
-COARSE_CENTER_Y = 59.9547985
+COARSE_ZONE_VALUES, COARSE_ZONE_CUTOFFS, COARSE_ZONE_COUNTS = build_zones(
+    WIDTH, HEIGHT, COARSE_CENTER_X, COARSE_CENTER_Y, DEFAULT_FRACTIONS
+)
+COARSE_ZONE_MAP = bytes(COARSE_ZONE_VALUES)
 # 与固件五圈粗筛宏一致，顺序为中心、近圈、中圈、远圈、边缘圈。
 COARSE_ZONE_NAMES = ("center", "near", "middle", "far", "edge")
-COARSE_THRESHOLDS = (150, 150, 150, 60, 50)
+COARSE_THRESHOLDS = (150, 60, 50, 50, 50)
 COARSE_THRESHOLD = COARSE_THRESHOLDS[2]
 COARSE_MIN_AREA = 10
 MAP_CREATE_CONFIDENCE = 210
@@ -878,17 +882,10 @@ class VisionToolApp:
         source = gray.tobytes()
         output = bytearray(width * height)
         thresholds = tuple(max(1, min(255, value)) for value in thresholds)
-        radius = max(COARSE_CENTER_Y, HEIGHT - 1 - COARSE_CENTER_Y)
         for y in range(height):
             for x in range(width):
                 index = y * width + x
-                dx = (x - COARSE_CENTER_X) / radius
-                dy = (y - COARSE_CENTER_Y) / radius
-                radius_sq = dx * dx + dy * dy
-                zone = (0 if radius_sq < 0.04 else
-                        (1 if radius_sq < 0.16 else
-                         (2 if radius_sq < 0.36 else
-                          (3 if radius_sq < 0.64 else 4))))
+                zone = COARSE_ZONE_MAP[index]
                 output[index] = 255 if source[index] >= thresholds[zone] else 0
         return Image.frombytes("L", (width, height), bytes(output))
 
@@ -1764,10 +1761,10 @@ def self_test() -> int:
     assert Simulator(DEFAULT_SOURCE).source_files()
     macro_sample = "\n".join(
         f"#define {macro} ({value}U) /* test */"
-        for macro, value in zip(RUNTIME_THRESHOLD_MACROS, (150, 10, 100, 80, 70, 35, 10))
+        for macro, value in zip(RUNTIME_THRESHOLD_MACROS, (150, 10, 150, 60, 50, 50, 50))
     )
     assert VisionToolApp.parse_runtime_thresholds(macro_sample) == (
-        150, 10, 100, 80, 70, 35, 10,
+        150, 10, 150, 60, 50, 50, 50,
     )
     coarse_test = VisionToolApp.build_coarse_binary_image(
         Image.new("L", (WIDTH, HEIGHT), 50),
@@ -1775,10 +1772,11 @@ def self_test() -> int:
     )
     assert coarse_test.getpixel((round(COARSE_CENTER_X), round(COARSE_CENTER_Y))) == 0
     assert coarse_test.getpixel((0, 0)) == 255
-    assert coarse_test.getpixel((round(COARSE_CENTER_X) + 42,
-                                 round(COARSE_CENTER_Y))) == 255
+    assert tuple(COARSE_ZONE_COUNTS) == (4512, 4512, 2256, 4512, 6768)
+    assert coarse_test.getpixel((round(COARSE_CENTER_X) + 55,
+                                 round(COARSE_CENTER_Y))) == 0
     assert coarse_test.getpixel((round(COARSE_CENTER_X),
-                                 round(COARSE_CENTER_Y) + 42)) == 255
+                                 round(COARSE_CENTER_Y) - 55)) == 0
     assert VisionToolApp.candidate_type_text({"vehicle_valid": 1}) == "小车"
     assert VisionToolApp.candidate_type_text({"beacon_valid": 1}) == "信标"
     assert "未生成有效精连通域" in VisionToolApp.candidate_type_text({})

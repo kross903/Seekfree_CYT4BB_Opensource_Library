@@ -14,9 +14,9 @@
 #define VISION_RUNTIME_COARSE_ZONE_COUNT       (5U)  /* 中心到边缘共五个同心分区 */
 /* 粗筛阈值从中心向边缘递减：近处要求高，远处弱信标使用较低阈值。 */
 #define VISION_RUNTIME_COARSE_THRESHOLD_CENTER (150U) /* 光轴中心圈 */
-#define VISION_RUNTIME_COARSE_THRESHOLD_NEAR   (150U) /* 近圈 */
-#define VISION_RUNTIME_COARSE_THRESHOLD_MIDDLE (150U) /* 中圈 */
-#define VISION_RUNTIME_COARSE_THRESHOLD_FAR    (60U) /* 远圈 */
+#define VISION_RUNTIME_COARSE_THRESHOLD_NEAR   (60U) /* 近圈 */
+#define VISION_RUNTIME_COARSE_THRESHOLD_MIDDLE (50U) /* 中圈 */
+#define VISION_RUNTIME_COARSE_THRESHOLD_FAR    (50U) /* 远圈 */
 #define VISION_RUNTIME_COARSE_THRESHOLD_EDGE   (50U) /* 图像边缘圈 */
 /* Legacy single-threshold name keeps existing callers source compatible. */
 #define VISION_RUNTIME_COARSE_THRESHOLD VISION_RUNTIME_COARSE_THRESHOLD_CENTER

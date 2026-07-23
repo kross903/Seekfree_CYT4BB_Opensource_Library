@@ -41,11 +41,11 @@ static float BeaconDetect_GetBoxSizeMinimum(const VisionBlob_t *blob)
     }
     center_u = 0.5f * (float)(blob->raw_min_col + blob->raw_max_col);
     center_v = 0.5f * (float)(blob->raw_min_row + blob->raw_max_row);
-    /* Match the concentric coarse zones using the shorter image radius. */
-    radius = (CAMERA_CALIBRATION_CY >
-              ((float)BEACON_IMG_ROWS - 1.0f - CAMERA_CALIBRATION_CY)) ?
-             CAMERA_CALIBRATION_CY :
-             ((float)BEACON_IMG_ROWS - 1.0f - CAMERA_CALIBRATION_CY);
+    /* Preserve circular distance through the longer horizontal field. */
+    radius = (CAMERA_CALIBRATION_CX >
+              ((float)BEACON_IMG_COLS - 1.0f - CAMERA_CALIBRATION_CX)) ?
+             CAMERA_CALIBRATION_CX :
+             ((float)BEACON_IMG_COLS - 1.0f - CAMERA_CALIBRATION_CX);
     dx = (center_u - CAMERA_CALIBRATION_CX) / radius;
     dy = (center_v - CAMERA_CALIBRATION_CY) / radius;
     radius_sq = BeaconDetect_Clamp01(dx * dx + dy * dy);
