@@ -11,6 +11,8 @@
 #define POSITION_LOOP_DEADZONE_CM      (3.0f)
 #define POSITION_LOOP_PREDICT_RELEASE_EPS_CM (1.0f)
 #define POSITION_LOOP_DT_S             0.020f
+#define POSITION_LOOP_TARGET_VEL_LIMIT_CMS  (70.0f)
+#define POSITION_LOOP_TARGET_VEL_SLEW_CMS2  (400.0f)
 
 PID_Controller pos_pid_x;
 PID_Controller pos_pid_y;
@@ -91,6 +93,33 @@ static float position_loop_apply_deadzone(float error_cm)
     }
 
     return error_cm;
+}
+
+static float position_loop_limit_velocity_command(float command_cms, float previous_cms)
+{
+    float max_step_cms = POSITION_LOOP_TARGET_VEL_SLEW_CMS2 * POSITION_LOOP_DT_S;
+    float delta_cms;
+
+    if(command_cms > POSITION_LOOP_TARGET_VEL_LIMIT_CMS)
+    {
+        command_cms = POSITION_LOOP_TARGET_VEL_LIMIT_CMS;
+    }
+    else if(command_cms < -POSITION_LOOP_TARGET_VEL_LIMIT_CMS)
+    {
+        command_cms = -POSITION_LOOP_TARGET_VEL_LIMIT_CMS;
+    }
+
+    delta_cms = command_cms - previous_cms;
+    if(delta_cms > max_step_cms)
+    {
+        command_cms = previous_cms + max_step_cms;
+    }
+    else if(delta_cms < -max_step_cms)
+    {
+        command_cms = previous_cms - max_step_cms;
+    }
+
+    return command_cms;
 }
 
 static uint8 position_loop_get_raw_ir_track_valid(void)
@@ -268,16 +297,20 @@ void Position_Loop_Update_Velocity_Target(uint8 velocity_ready,
         PID_Reset(&pos_pid_y);
     }
 
-    g_position_loop_vx_cmd_cms = POSITION_LOOP_VX_SIGN *
-                                 PID_Calculate(&pos_pid_x,
-                                               pos_error_x_cm,
-                                               POSITION_LOOP_TARGET_X_CM,
-                                               POSITION_LOOP_DT_S);
-    g_position_loop_vy_cmd_cms = POSITION_LOOP_VY_SIGN *
-                                 PID_Calculate(&pos_pid_y,
-                                               pos_error_y_cm,
-                                               POSITION_LOOP_TARGET_Y_CM,
-                                               POSITION_LOOP_DT_S);
+    g_position_loop_vx_cmd_cms = position_loop_limit_velocity_command(
+                                      POSITION_LOOP_VX_SIGN *
+                                      PID_Calculate(&pos_pid_x,
+                                                    pos_error_x_cm,
+                                                    POSITION_LOOP_TARGET_X_CM,
+                                                    POSITION_LOOP_DT_S),
+                                      g_position_loop_vx_cmd_cms);
+    g_position_loop_vy_cmd_cms = position_loop_limit_velocity_command(
+                                      POSITION_LOOP_VY_SIGN *
+                                      PID_Calculate(&pos_pid_y,
+                                                    pos_error_y_cm,
+                                                    POSITION_LOOP_TARGET_Y_CM,
+                                                    POSITION_LOOP_DT_S),
+                                      g_position_loop_vy_cmd_cms);
 
     position_loop_set_output(g_position_loop_vx_cmd_cms, g_position_loop_vy_cmd_cms, target_vx_cms, target_vy_cms);
     g_position_loop_x_i_out = pos_pid_x.Ki * pos_pid_x.integral;
