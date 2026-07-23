@@ -37,7 +37,7 @@ COARSE_CENTER_X = 95.4078135
 COARSE_CENTER_Y = 59.9547985
 # 与固件五圈粗筛宏一致，顺序为中心、近圈、中圈、远圈、边缘圈。
 COARSE_ZONE_NAMES = ("center", "near", "middle", "far", "edge")
-COARSE_THRESHOLDS = (50, 45, 40, 35, 30)
+COARSE_THRESHOLDS = (150, 150, 150, 60, 50)
 COARSE_THRESHOLD = COARSE_THRESHOLDS[2]
 COARSE_MIN_AREA = 10
 MAP_CREATE_CONFIDENCE = 210
@@ -314,7 +314,6 @@ class VisionToolApp:
         self.capture_port_var = tk.StringVar()
         self.capture_baud_var = tk.StringVar(value="115200")
         self.capture_count_var = tk.StringVar(value="10")
-        self.capture_prefix_var = tk.StringVar(value="frame")
         self.capture_timeout_var = tk.StringVar(value="1.0")
         self.capture_status_var = tk.StringVar(value="未开始")
         self.editor_path: Path | None = None
@@ -467,8 +466,6 @@ class VisionToolApp:
         ttk.Button(capture, text="选择", command=self.choose_capture_output).grid(row=2, column=3, pady=3)
         ttk.Label(capture, text="超时(s)").grid(row=3, column=0, sticky="w", pady=3)
         ttk.Entry(capture, textvariable=self.capture_timeout_var, width=10).grid(row=3, column=1, sticky="w", padx=5, pady=3)
-        ttk.Label(capture, text="前缀").grid(row=3, column=2, sticky="e", pady=3)
-        ttk.Entry(capture, textvariable=self.capture_prefix_var, width=10).grid(row=3, column=3, sticky="w", padx=5, pady=3)
         self.capture_start_button = ttk.Button(capture, text="开始抓图", command=self.start_capture)
         self.capture_start_button.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(5, 0), padx=(0, 3))
         self.capture_stop_button = ttk.Button(capture, text="停止", command=self.stop_capture, state=tk.DISABLED)
@@ -626,7 +623,7 @@ class VisionToolApp:
         self.capture_status_var.set("抓图中")
         threading.Thread(
             target=self.capture_worker,
-            args=(self.capture_port_var.get(), baud, count, output, self.capture_prefix_var.get(), timeout),
+            args=(self.capture_port_var.get(), baud, count, output, timeout),
             daemon=True,
         ).start()
 
@@ -635,18 +632,19 @@ class VisionToolApp:
             self.capture_stop_event.set()
             self.capture_status_var.set("正在停止")
 
-    def capture_worker(self, port: str, baud: int, count: int, output: Path, prefix: str, timeout: float) -> None:
+    def capture_worker(self, port: str, baud: int, count: int, output: Path, timeout: float) -> None:
         try:
             frames = capture_frames(
                 port_name=port,
                 baud=baud,
                 count=count,
                 out_dir=output,
-                prefix=prefix,
+                prefix="",
                 timeout=timeout,
                 on_frame=lambda frame: self.ui_queue.put(("capture_frame", frame)),
                 on_log=lambda message: self.ui_queue.put(("capture_log", message)),
                 should_stop=self.capture_stop_event.is_set,
+                timestamp_names=True,
             )
             self.ui_queue.put(("capture_done", len(frames)))
         except Exception as exc:
@@ -880,13 +878,12 @@ class VisionToolApp:
         source = gray.tobytes()
         output = bytearray(width * height)
         thresholds = tuple(max(1, min(255, value)) for value in thresholds)
-        radius_x = max(COARSE_CENTER_X, WIDTH - 1 - COARSE_CENTER_X)
-        radius_y = max(COARSE_CENTER_Y, HEIGHT - 1 - COARSE_CENTER_Y)
+        radius = max(COARSE_CENTER_Y, HEIGHT - 1 - COARSE_CENTER_Y)
         for y in range(height):
             for x in range(width):
                 index = y * width + x
-                dx = (x - COARSE_CENTER_X) / radius_x
-                dy = (y - COARSE_CENTER_Y) / radius_y
+                dx = (x - COARSE_CENTER_X) / radius
+                dy = (y - COARSE_CENTER_Y) / radius
                 radius_sq = dx * dx + dy * dy
                 zone = (0 if radius_sq < 0.04 else
                         (1 if radius_sq < 0.16 else
@@ -1778,6 +1775,10 @@ def self_test() -> int:
     )
     assert coarse_test.getpixel((round(COARSE_CENTER_X), round(COARSE_CENTER_Y))) == 0
     assert coarse_test.getpixel((0, 0)) == 255
+    assert coarse_test.getpixel((round(COARSE_CENTER_X) + 42,
+                                 round(COARSE_CENTER_Y))) == 255
+    assert coarse_test.getpixel((round(COARSE_CENTER_X),
+                                 round(COARSE_CENTER_Y) + 42)) == 255
     assert VisionToolApp.candidate_type_text({"vehicle_valid": 1}) == "小车"
     assert VisionToolApp.candidate_type_text({"beacon_valid": 1}) == "信标"
     assert "未生成有效精连通域" in VisionToolApp.candidate_type_text({})

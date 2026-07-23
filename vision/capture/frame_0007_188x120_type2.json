@@ -6,12 +6,12 @@
   "boundary_num": 0,
   "telemetry": {
     "version": 1,
-    "image_seq": 8,
-    "input_seq": 30790,
-    "roll_deg": -0.8425153493881226,
-    "pitch_deg": -1.991344690322876,
-    "yaw_deg": -173.1363067626953,
-    "tof_height_cm": 142.3391876220703,
-    "fused_height_cm": 142.3391876220703
+    "image_seq": 12,
+    "input_seq": 97285,
+    "roll_deg": 6.134888648986816,
+    "pitch_deg": -14.063634872436523,
+    "yaw_deg": 128.6007080078125,
+    "tof_height_cm": 167.91868591308594,
+    "fused_height_cm": 167.91868591308594
   }
 }

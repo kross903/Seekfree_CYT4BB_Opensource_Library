@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import struct
 import time
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Callable
 
@@ -127,9 +128,22 @@ def payload_to_grayscale(payload: bytes, image_type: int, width: int, height: in
     return None
 
 
-def save_frame(frame: dict, out_dir: Path, prefix: str, index: int) -> dict:
+def save_frame(
+    frame: dict,
+    out_dir: Path,
+    prefix: str,
+    index: int,
+    timestamp_name: bool = False,
+) -> dict:
     out_dir.mkdir(parents=True, exist_ok=True)
-    stem = out_dir / f"{prefix}_{index:04d}_{frame['width']}x{frame['height']}_type{frame['image_type']}"
+    captured_at = datetime.now().astimezone()
+    if timestamp_name:
+        stem = out_dir / captured_at.strftime("%Y%m%d_%H%M%S_%f")
+        while any(stem.with_suffix(suffix).exists() for suffix in (".raw", ".png", ".json")):
+            captured_at += timedelta(microseconds=1)
+            stem = out_dir / captured_at.strftime("%Y%m%d_%H%M%S_%f")
+    else:
+        stem = out_dir / f"{prefix}_{index:04d}_{frame['width']}x{frame['height']}_type{frame['image_type']}"
     raw_path = stem.with_suffix(".raw")
     image_path = stem.with_suffix(".png")
     json_path = stem.with_suffix(".json")
@@ -140,6 +154,7 @@ def save_frame(frame: dict, out_dir: Path, prefix: str, index: int) -> dict:
     else:
         image_path = None
     json_path.write_text(json.dumps({
+        "captured_at": captured_at.isoformat(timespec="microseconds"),
         "image_type": frame["image_type"],
         "width": frame["width"],
         "height": frame["height"],
@@ -184,6 +199,7 @@ def capture_frames(
     on_frame: Callable[[dict], None],
     on_log: Callable[[str], None],
     should_stop: Callable[[], bool],
+    timestamp_names: bool = False,
 ) -> list[dict]:
     if serial is None:
         raise RuntimeError("pyserial is not installed; run: python -m pip install pyserial")
@@ -195,7 +211,13 @@ def capture_frames(
             if frame["skipped"]:
                 on_log(f"skip frame without image, boundary={frame['boundary_num']}")
                 continue
-            saved = save_frame(frame, out_dir, prefix, len(frames))
+            saved = save_frame(
+                frame,
+                out_dir,
+                prefix,
+                len(frames),
+                timestamp_name=timestamp_names,
+            )
             frames.append(saved)
             metadata = saved.get("metadata") or {}
             if metadata:
