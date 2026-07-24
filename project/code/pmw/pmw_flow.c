@@ -79,7 +79,7 @@
 #define PMW_FLOW_FUSION_RESET_CONFIRM_FRAMES (2U)
 #define PMW_FLOW_FUSION_PREDICT_HOLD_FRAMES (25U)
 #ifndef PMW_FLOW_KALMAN_ENABLE
-#define PMW_FLOW_KALMAN_ENABLE             (1U)
+#define PMW_FLOW_KALMAN_ENABLE             (0U)
 #endif
 #ifndef PMW_FLOW_KALMAN_Q_CMS2
 #define PMW_FLOW_KALMAN_Q_CMS2             (2.0f)
@@ -139,6 +139,8 @@ static float g_pmw_flow_fused_vx_cms = 0.0f;
 static float g_pmw_flow_fused_vy_cms = 0.0f;
 static float g_pmw_flow_fusion_imu_vx_last_cms = 0.0f;
 static float g_pmw_flow_fusion_imu_vy_last_cms = 0.0f;
+static float g_pmw_flow_fusion_imu_delta_x_accum_cms = 0.0f;
+static float g_pmw_flow_fusion_imu_delta_y_accum_cms = 0.0f;
 static uint8 g_pmw_flow_fusion_init = 0U;
 static uint8 g_pmw_flow_fusion_residual_reset_count = 0U;
 static uint8 g_pmw_flow_fusion_no_observation_frames = 0U;
@@ -580,6 +582,26 @@ static void pmw_flow_update_velocity_feedback(PMWFlowState_t *state,
         return;
     }
 
+    imu_velocity_valid = (uint8)(pmw_flow_is_valid_number(imu_velocity_x_cms) &&
+                                 pmw_flow_is_valid_number(imu_velocity_y_cms));
+    imu_vx_cms = imu_velocity_valid ?
+                 imu_velocity_x_cms * PMW_FLOW_FUSION_IMU_X_SIGN : 0.0f;
+    imu_vy_cms = imu_velocity_valid ?
+                 imu_velocity_y_cms * PMW_FLOW_FUSION_IMU_Y_SIGN : 0.0f;
+
+    state->fusion_imu_velocity_x_cms = imu_vx_cms;
+    state->fusion_imu_velocity_y_cms = imu_vy_cms;
+    state->fusion_imu_delta_x_cms = g_pmw_flow_fusion_imu_delta_x_accum_cms;
+    state->fusion_imu_delta_y_cms = g_pmw_flow_fusion_imu_delta_y_accum_cms;
+    state->fusion_prediction_x_cms = g_pmw_flow_fused_vx_cms;
+    state->fusion_prediction_y_cms = g_pmw_flow_fused_vy_cms;
+    state->fusion_residual_x_cms = 0.0f;
+    state->fusion_residual_y_cms = 0.0f;
+    state->fusion_correction_x_cms = 0.0f;
+    state->fusion_correction_y_cms = 0.0f;
+    state->fusion_output_x_cms = g_pmw_flow_fused_vx_cms;
+    state->fusion_output_y_cms = g_pmw_flow_fused_vy_cms;
+
     if(flow_observation_valid &&
        state->valid &&
        pmw_flow_is_valid_number(state->velocity_x_cms) &&
@@ -587,11 +609,6 @@ static void pmw_flow_update_velocity_feedback(PMWFlowState_t *state,
     {
         flow_used = 1U;
         g_pmw_flow_fusion_no_observation_frames = 0U;
-
-        imu_velocity_valid = (uint8)(pmw_flow_is_valid_number(imu_velocity_x_cms) &&
-                                     pmw_flow_is_valid_number(imu_velocity_y_cms));
-        imu_vx_cms = imu_velocity_x_cms * PMW_FLOW_FUSION_IMU_X_SIGN;
-        imu_vy_cms = imu_velocity_y_cms * PMW_FLOW_FUSION_IMU_Y_SIGN;
 
         if(imu_velocity_valid)
         {
@@ -821,8 +838,27 @@ static void pmw_flow_update_velocity_feedback(PMWFlowState_t *state,
             g_pmw_flow_fusion_init = 0U;
             g_pmw_flow_fusion_residual_reset_count = 0U;
             g_pmw_flow_fusion_no_observation_frames = PMW_FLOW_FUSION_PREDICT_HOLD_FRAMES;
+            g_pmw_flow_fusion_imu_delta_x_accum_cms = 0.0f;
+            g_pmw_flow_fusion_imu_delta_y_accum_cms = 0.0f;
             pmw_flow_kalman_reset();
         }
+    }
+
+    if(flow_used)
+    {
+        state->fusion_residual_x_cms = state->velocity_x_cms - state->fusion_prediction_x_cms;
+        state->fusion_residual_y_cms = state->velocity_y_cms - state->fusion_prediction_y_cms;
+        state->fusion_correction_x_cms = state->velocity_x_fused_cms - state->fusion_prediction_x_cms;
+        state->fusion_correction_y_cms = state->velocity_y_fused_cms - state->fusion_prediction_y_cms;
+        state->fusion_output_x_cms = state->velocity_x_fused_cms;
+        state->fusion_output_y_cms = state->velocity_y_fused_cms;
+        g_pmw_flow_fusion_imu_delta_x_accum_cms = 0.0f;
+        g_pmw_flow_fusion_imu_delta_y_accum_cms = 0.0f;
+    }
+    else
+    {
+        state->fusion_output_x_cms = state->velocity_x_fused_cms;
+        state->fusion_output_y_cms = state->velocity_y_fused_cms;
     }
 
     state->velocity_x_fused_residual_cms = state->velocity_x_cms - state->velocity_x_fused_cms;
@@ -1002,6 +1038,8 @@ void PMW_Flow_Reset(void)
     g_pmw_flow_fused_vy_cms = 0.0f;
     g_pmw_flow_fusion_imu_vx_last_cms = 0.0f;
     g_pmw_flow_fusion_imu_vy_last_cms = 0.0f;
+    g_pmw_flow_fusion_imu_delta_x_accum_cms = 0.0f;
+    g_pmw_flow_fusion_imu_delta_y_accum_cms = 0.0f;
     g_pmw_flow_fusion_init = 0U;
     g_pmw_flow_fusion_residual_reset_count = 0U;
     g_pmw_flow_fusion_no_observation_frames = 0U;
@@ -1028,6 +1066,8 @@ void PMW_Flow_PredictVelocity(float imu_velocity_x_cms, float imu_velocity_y_cms
     float imu_vy_cms;
     float imu_delta_x_cms;
     float imu_delta_y_cms;
+    float fused_vx_before_cms;
+    float fused_vy_before_cms;
 
     if(!(dt_s > 0.0f) ||
        !pmw_flow_is_valid_number(imu_velocity_x_cms) ||
@@ -1054,6 +1094,8 @@ void PMW_Flow_PredictVelocity(float imu_velocity_x_cms, float imu_velocity_y_cms
                                                    0.0f,
                                                    PMW_FLOW_FUSION_IMU_DELTA_LIMIT_CMS2,
                                                    dt_s);
+    fused_vx_before_cms = g_pmw_flow_fused_vx_cms;
+    fused_vy_before_cms = g_pmw_flow_fused_vy_cms;
 
 #if PMW_FLOW_KALMAN_ENABLE
     pmw_flow_kalman_predict_axis(&g_pmw_flow_kalman_x, imu_delta_x_cms);
@@ -1077,6 +1119,10 @@ void PMW_Flow_PredictVelocity(float imu_velocity_x_cms, float imu_velocity_y_cms
     g_pmw_flow_kalman_x.x = g_pmw_flow_fused_vx_cms;
     g_pmw_flow_kalman_y.x = g_pmw_flow_fused_vy_cms;
 #endif
+    g_pmw_flow_fusion_imu_delta_x_accum_cms +=
+        g_pmw_flow_fused_vx_cms - fused_vx_before_cms;
+    g_pmw_flow_fusion_imu_delta_y_accum_cms +=
+        g_pmw_flow_fused_vy_cms - fused_vy_before_cms;
 }
 
 void PMW_Flow_ResetWorldPosition(void)

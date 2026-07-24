@@ -1746,26 +1746,24 @@ void send_date_back(void)
         case 29:
         {
             PMWFlowState_t pmw_flow_state = {0};
-            uint8 tof_source = 0U;
 
             PMW_Flow_GetState(&pmw_flow_state);
-            PMW_Flow_Get_TOF_Status(NULL, NULL, &tof_source);
 
-            send_sixteen_date((float)pmw_flow_state.flow_delta_x_count,
-                              (float)pmw_flow_state.flow_delta_y_count,
-                              (float)pmw_flow_state.valid,
-                              pmw_flow_state.dt_s,
-                              pmw_flow_state.range_cm,
-                              (float)tof_source,
-                              pmw_flow_state.velocity_x_cms,
-                              pmw_flow_state.velocity_y_cms,
-                              pmw_flow_state.velocity_x_fused_cms,
-                              pmw_flow_state.velocity_y_fused_cms,
-                              pmw_flow_state.flow_confidence,
-                              pmw_flow_state.flow_residual_norm_cms,
-                              pmw_flow_state.flow_fusion_alpha,
+            send_sixteen_date(pmw_flow_state.velocity_x_cms,
+                              pmw_flow_state.fusion_imu_velocity_x_cms,
+                              pmw_flow_state.fusion_imu_delta_x_cms,
+                              pmw_flow_state.fusion_prediction_x_cms,
+                              pmw_flow_state.fusion_residual_x_cms,
+                              pmw_flow_state.fusion_correction_x_cms,
+                              pmw_flow_state.fusion_output_x_cms,
                               (float)pmw_flow_state.flow_used,
-                              (float)pmw_flow_state.acc_used,
+                              pmw_flow_state.velocity_y_cms,
+                              pmw_flow_state.fusion_imu_velocity_y_cms,
+                              pmw_flow_state.fusion_imu_delta_y_cms,
+                              pmw_flow_state.fusion_prediction_y_cms,
+                              pmw_flow_state.fusion_residual_y_cms,
+                              pmw_flow_state.fusion_correction_y_cms,
+                              pmw_flow_state.fusion_output_y_cms,
                               (float)pmw_flow_state.fused_velocity_valid);
             break;
         }

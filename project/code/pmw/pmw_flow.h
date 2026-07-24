@@ -44,6 +44,19 @@ typedef struct
     float velocity_y_fused_residual_cms;
     float flow_confidence;
     float flow_fusion_alpha;
+    /* 最近一次光流反馈更新时的融合分解快照。 */
+    float fusion_imu_velocity_x_cms;
+    float fusion_imu_velocity_y_cms;
+    float fusion_imu_delta_x_cms;
+    float fusion_imu_delta_y_cms;
+    float fusion_prediction_x_cms;
+    float fusion_prediction_y_cms;
+    float fusion_residual_x_cms;
+    float fusion_residual_y_cms;
+    float fusion_correction_x_cms;
+    float fusion_correction_y_cms;
+    float fusion_output_x_cms;
+    float fusion_output_y_cms;
     float kalman_k_x;
     float kalman_k_y;
     float kalman_p_x;
