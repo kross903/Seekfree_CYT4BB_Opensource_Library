@@ -34,7 +34,7 @@ static void send_sixteen_date(float date_1, float date_2, float date_3, float da
                               float date_9, float date_10, float date_11, float date_12,
                               float date_13, float date_14, float date_15, float date_16);
 
-/* 保留的回传模式：F1/F2/F3/F4/F5/F6/F7/F8/F9/FA/FC/FD/FE/FG/FI/FO/FU/FV/FW/FY/FZ。 */
+/* 保留的回传模式：F1/F2/F3/F4/F5/F6/F7/F8/F9/FA/FC/FD/FE/FG/FI/FL/FO/FU/FV/FW/FY/FZ。 */
 static int send_back_flag = 0;
 static uint8 send_back_command = 'R';
 
@@ -1270,6 +1270,8 @@ void USART_PID_Adjust(void)
                 case 'g': send_back_flag = 16; break;
                 case 'I':
                 case 'i': send_back_flag = 18; break;
+                case 'L':
+                case 'l': send_back_flag = 31; break;
                 case 'O':
                 case 'o': send_back_flag = 22; break;
                 case 'U':
@@ -1740,6 +1742,30 @@ void send_date_back(void)
                               flow_state.velocity_y_output_slew_cms,
                               flow_state.velocity_x_cms,
                               flow_state.velocity_y_cms);
+            break;
+        }
+
+        case 31:
+        {
+            PMWFlowState_t flow_state = {0};
+
+            PMW_Flow_GetState(&flow_state);
+            send_sixteen_date(flow_state.gyro_rate_x_rad_s,
+                              flow_state.gyro_rate_y_rad_s,
+                              flow_state.gyro_rate_z_rad_s,
+                              flow_state.gyro_flow_x_delta_rad,
+                              flow_state.gyro_flow_y_delta_rad,
+                              flow_state.gyro_flow_z_delta_rad,
+                              flow_state.velocity_x_camera_cms,
+                              flow_state.velocity_y_camera_cms,
+                              flow_state.mount_comp_velocity_x_cms,
+                              flow_state.mount_comp_velocity_y_cms,
+                              flow_state.velocity_x_center_body_cms,
+                              flow_state.velocity_y_center_body_cms,
+                              flow_state.velocity_x_raw_cms,
+                              flow_state.velocity_y_raw_cms,
+                              flow_state.flow_rx_dt_ms,
+                              (float)flow_state.flow_sync_valid);
             break;
         }
 

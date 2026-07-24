@@ -11,6 +11,7 @@
  * relationship configurable so PMW3901 and UP-FLOW-302 can use different signs. */
 #define PMW_FLOW_GYRO_X_DELTA_SIGN          (1.0f)
 #define PMW_FLOW_GYRO_Y_DELTA_SIGN          (1.0f)
+#define PMW_FLOW_GYRO_Z_DELTA_SIGN          (1.0f)
 #define PMW_FLOW_COMP_X_FROM_GYRO_X_SIGN    FLOW_SENSOR_COMP_X_FROM_GYRO_X_SIGN
 #define PMW_FLOW_COMP_X_FROM_GYRO_Y_SIGN    FLOW_SENSOR_COMP_X_FROM_GYRO_Y_SIGN
 #define PMW_FLOW_COMP_Y_FROM_GYRO_X_SIGN    FLOW_SENSOR_COMP_Y_FROM_GYRO_X_SIGN
@@ -26,8 +27,8 @@
  *   - 运行期可通过 PMW_Flow_SetGyroCompGain() 动态拨动（VOFA 调参用）。
  * 不动 RAD_PER_COUNT，速度尺度保持现状。
  */
-#define PMW_FLOW_GYRO_COMP_GAIN_X_DEFAULT   (0.82f)
-#define PMW_FLOW_GYRO_COMP_GAIN_Y_DEFAULT   (0.94f)
+#define PMW_FLOW_GYRO_COMP_GAIN_X_DEFAULT   (1.0f)
+#define PMW_FLOW_GYRO_COMP_GAIN_Y_DEFAULT   (1.0f)
 #define PMW_FLOW_GYRO_COMP_GAIN_MIN         (0.0f)
 #define PMW_FLOW_GYRO_COMP_GAIN_MAX         (4.0f)
 /*
@@ -38,6 +39,9 @@
  */
 #define PMW_FLOW_BODY_VX_FROM_FLOW_X_SIGN   (1.0f)
 #define PMW_FLOW_BODY_VY_FROM_FLOW_Y_SIGN   (1.0f)
+#define PMW_FLOW_SENSOR_OFFSET_X_CM          FLOW_SENSOR_OFFSET_X_CM
+#define PMW_FLOW_SENSOR_OFFSET_Y_CM          FLOW_SENSOR_OFFSET_Y_CM
+#define PMW_FLOW_SENSOR_OFFSET_Z_CM          FLOW_SENSOR_OFFSET_Z_CM
 #define PMW_FLOW_MIN_DT_S                   (FLOW_SENSOR_NOMINAL_DT_S * 0.5f)
 #define PMW_FLOW_MAX_DT_S                   (FLOW_SENSOR_NOMINAL_DT_S * 2.0f)
 #define PMW_FLOW_MAX_ABS_DELTA_COUNT        (5000)
@@ -78,6 +82,7 @@
 #define PMW_FLOW_FUSION_RESET_MIN_CONFIDENCE (0.60f)
 #define PMW_FLOW_FUSION_RESET_CONFIRM_FRAMES (2U)
 #define PMW_FLOW_FUSION_PREDICT_HOLD_FRAMES (25U)
+#define PMW_FLOW_FUSION_PREDICT_HOLD_S      (0.120f)
 #ifndef PMW_FLOW_KALMAN_ENABLE
 #define PMW_FLOW_KALMAN_ENABLE             (0U)
 #endif
@@ -97,6 +102,9 @@
 #define PMW_FLOW_INVALID_DECAY_FRAMES       (8U)
 #define PMW_FLOW_INVALID_DECAY_ALPHA        (0.85f)
 #define PMW_FLOW_WORLD_TILT_GATE_DEG        (25.0f)
+#define PMW_FLOW_DWT_LAR_UNLOCK             (0xC5ACCE55UL)
+#define PMW_FLOW_GYRO_SNAPSHOT_MAX_OFFSET_S (0.002f)
+#define PMW_FLOW_GYRO_SNAPSHOT_MAX_RETRIES  (4U)
 
 /*
  * 机体系 → 水平面投影时 1/cos 的下限保护：cos(60°)=0.5。
@@ -118,6 +126,25 @@ typedef struct
 
 static float g_pmw_flow_gyro_flow_x_delta_rad = 0.0f;
 static float g_pmw_flow_gyro_flow_y_delta_rad = 0.0f;
+static float g_pmw_flow_gyro_flow_z_delta_rad = 0.0f;
+static float g_pmw_flow_gyro_total_x_rad = 0.0f;
+static float g_pmw_flow_gyro_total_y_rad = 0.0f;
+static float g_pmw_flow_gyro_total_z_rad = 0.0f;
+static float g_pmw_flow_gyro_rate_x_rad_s = 0.0f;
+static float g_pmw_flow_gyro_rate_y_rad_s = 0.0f;
+static float g_pmw_flow_gyro_rate_z_rad_s = 0.0f;
+static uint32 g_pmw_flow_gyro_sample_cycle = 0U;
+static volatile uint32 g_pmw_flow_gyro_snapshot_seq = 0U;
+static uint8 g_pmw_flow_gyro_snapshot_valid = 0U;
+static uint8 g_pmw_flow_gyro_dwt_ready = 0U;
+static uint32 g_pmw_flow_sync_frame_seq = 0U;
+static float g_pmw_flow_sync_rx_dt_ms = 0.0f;
+static float g_pmw_flow_sync_sensor_dt_ms = 0.0f;
+static float g_pmw_flow_sync_gyro_window_dt_ms = 0.0f;
+static float g_pmw_flow_sync_consumer_delay_ms = 0.0f;
+static uint8 g_pmw_flow_sync_valid = 0U;
+static uint16 g_pmw_flow_sync_dropped_frame_count = 0U;
+static uint16 g_pmw_flow_sync_error_count = 0U;
 static float g_pmw_flow_gyro_comp_gain_x = PMW_FLOW_GYRO_COMP_GAIN_X_DEFAULT;
 static float g_pmw_flow_gyro_comp_gain_y = PMW_FLOW_GYRO_COMP_GAIN_Y_DEFAULT;
 static PMWFlowState_t g_pmw_flow_publish_slots[2] = {0};
@@ -144,6 +171,7 @@ static float g_pmw_flow_fusion_imu_delta_y_accum_cms = 0.0f;
 static uint8 g_pmw_flow_fusion_init = 0U;
 static uint8 g_pmw_flow_fusion_residual_reset_count = 0U;
 static uint8 g_pmw_flow_fusion_no_observation_frames = 0U;
+static float g_pmw_flow_fusion_observation_age_s = PMW_FLOW_FUSION_PREDICT_HOLD_S;
 static PMWFlowKalman1D_t g_pmw_flow_kalman_x = {0};
 static PMWFlowKalman1D_t g_pmw_flow_kalman_y = {0};
 static float g_pmw_flow_world_vx_cms = 0.0f;
@@ -165,6 +193,97 @@ static uint8 pmw_flow_is_valid_number(float value)
 static uint8 pmw_flow_is_valid_delta_count(int16 value)
 {
     return (uint8)((value > -PMW_FLOW_MAX_ABS_DELTA_COUNT) && (value < PMW_FLOW_MAX_ABS_DELTA_COUNT));
+}
+
+static void pmw_flow_ensure_dwt(void)
+{
+    if(g_pmw_flow_gyro_dwt_ready)
+    {
+        return;
+    }
+
+    CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+    if((DWT->CTRL & DWT_CTRL_NOCYCCNT_Msk) != 0U)
+    {
+        g_pmw_flow_gyro_dwt_ready = 0U;
+        return;
+    }
+
+    DWT->LAR = PMW_FLOW_DWT_LAR_UNLOCK;
+    DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
+    g_pmw_flow_gyro_dwt_ready =
+        ((DWT->CTRL & DWT_CTRL_CYCCNTENA_Msk) != 0U) ? 1U : 0U;
+}
+
+uint8 PMW_Flow_GetGyroSnapshotAtCycle(uint32 target_cycle,
+                                      float *total_x_rad,
+                                      float *total_y_rad,
+                                      float *total_z_rad)
+{
+    float snapshot_total_x_rad = 0.0f;
+    float snapshot_total_y_rad = 0.0f;
+    float snapshot_total_z_rad = 0.0f;
+    float snapshot_rate_x_rad_s = 0.0f;
+    float snapshot_rate_y_rad_s = 0.0f;
+    float snapshot_rate_z_rad_s = 0.0f;
+    uint32 snapshot_cycle = 0U;
+    uint32 seq_before;
+    uint32 seq_after;
+    uint8 snapshot_valid = 0U;
+    uint8 retry;
+
+    if(total_x_rad == NULL || total_y_rad == NULL ||
+       total_z_rad == NULL || SystemCoreClock == 0U)
+    {
+        return 0U;
+    }
+
+    for(retry = 0U; retry < PMW_FLOW_GYRO_SNAPSHOT_MAX_RETRIES; retry++)
+    {
+        seq_before = g_pmw_flow_gyro_snapshot_seq;
+        if(seq_before & 1U)
+        {
+            continue;
+        }
+
+        __DMB();
+        snapshot_total_x_rad = g_pmw_flow_gyro_total_x_rad;
+        snapshot_total_y_rad = g_pmw_flow_gyro_total_y_rad;
+        snapshot_total_z_rad = g_pmw_flow_gyro_total_z_rad;
+        snapshot_rate_x_rad_s = g_pmw_flow_gyro_rate_x_rad_s;
+        snapshot_rate_y_rad_s = g_pmw_flow_gyro_rate_y_rad_s;
+        snapshot_rate_z_rad_s = g_pmw_flow_gyro_rate_z_rad_s;
+        snapshot_cycle = g_pmw_flow_gyro_sample_cycle;
+        snapshot_valid = g_pmw_flow_gyro_snapshot_valid;
+        __DMB();
+        seq_after = g_pmw_flow_gyro_snapshot_seq;
+
+        if(seq_before == seq_after && !(seq_after & 1U))
+        {
+            break;
+        }
+    }
+
+    if(retry >= PMW_FLOW_GYRO_SNAPSHOT_MAX_RETRIES || !snapshot_valid)
+    {
+        return 0U;
+    }
+
+    {
+        int32 cycle_offset = (int32)(target_cycle - snapshot_cycle);
+        float offset_s = (float)cycle_offset / (float)SystemCoreClock;
+
+        if(offset_s < -PMW_FLOW_GYRO_SNAPSHOT_MAX_OFFSET_S ||
+           offset_s > PMW_FLOW_GYRO_SNAPSHOT_MAX_OFFSET_S)
+        {
+            return 0U;
+        }
+
+        *total_x_rad = snapshot_total_x_rad + snapshot_rate_x_rad_s * offset_s;
+        *total_y_rad = snapshot_total_y_rad + snapshot_rate_y_rad_s * offset_s;
+        *total_z_rad = snapshot_total_z_rad + snapshot_rate_z_rad_s * offset_s;
+    }
+    return 1U;
 }
 
 static float pmw_flow_apply_velocity_deadband(float velocity_cms)
@@ -553,7 +672,7 @@ static void pmw_flow_apply_invalid_velocity_hold(PMWFlowState_t *state)
 static uint8 pmw_flow_fusion_predict_hold_active(void)
 {
     return (uint8)(g_pmw_flow_fusion_init &&
-                   (g_pmw_flow_fusion_no_observation_frames < PMW_FLOW_FUSION_PREDICT_HOLD_FRAMES));
+                   (g_pmw_flow_fusion_observation_age_s < PMW_FLOW_FUSION_PREDICT_HOLD_S));
 }
 
 static void pmw_flow_update_velocity_feedback(PMWFlowState_t *state,
@@ -609,6 +728,7 @@ static void pmw_flow_update_velocity_feedback(PMWFlowState_t *state,
     {
         flow_used = 1U;
         g_pmw_flow_fusion_no_observation_frames = 0U;
+        g_pmw_flow_fusion_observation_age_s = 0.0f;
 
         if(imu_velocity_valid)
         {
@@ -801,6 +921,7 @@ static void pmw_flow_update_velocity_feedback(PMWFlowState_t *state,
             g_pmw_flow_fusion_init = 0U;
             g_pmw_flow_fusion_residual_reset_count = 0U;
             g_pmw_flow_fusion_no_observation_frames = 0U;
+            g_pmw_flow_fusion_observation_age_s = PMW_FLOW_FUSION_PREDICT_HOLD_S;
 #if PMW_FLOW_KALMAN_ENABLE
             pmw_flow_kalman_reset();
 #endif
@@ -924,10 +1045,8 @@ static void pmw_flow_update_world_odometry(PMWFlowState_t *state)
             cos_roll = PMW_FLOW_TILT_COS_FLOOR;
         }
 
-        delta_body_x_cm = PMW_FLOW_BODY_VX_FROM_FLOW_X_SIGN *
-                          (state->range_cm * state->flow_comp_x_rad / cos_pitch);
-        delta_body_y_cm = PMW_FLOW_BODY_VY_FROM_FLOW_Y_SIGN *
-                          (state->range_cm * state->flow_comp_y_rad / cos_roll);
+        delta_body_x_cm = state->velocity_x_center_body_cms * state->dt_s / cos_pitch;
+        delta_body_y_cm = state->velocity_y_center_body_cms * state->dt_s / cos_roll;
 
         g_pmw_flow_delta_world_x_cm = cos_yaw * delta_body_x_cm -
                                       sin_yaw * delta_body_y_cm;
@@ -944,9 +1063,10 @@ static void pmw_flow_update_world_odometry(PMWFlowState_t *state)
         g_pmw_flow_delta_world_y_cm = 0.0f;
     }
 
-    if(pmw_flow_is_valid_number(state->range_cm) &&
-       pmw_flow_is_valid_number(state->flow_comp_x_rad) &&
-       pmw_flow_is_valid_number(state->flow_comp_y_rad) &&
+    if(pmw_flow_is_valid_number(state->velocity_x_center_body_cms) &&
+       pmw_flow_is_valid_number(state->velocity_y_center_body_cms) &&
+       pmw_flow_is_valid_number(state->dt_s) &&
+       state->dt_s > 0.0f &&
        pmw_flow_is_valid_number(state->yaw_deg))
     {
         yaw_rad = state->yaw_deg * PMW_FLOW_DEG2RAD;
@@ -964,10 +1084,8 @@ static void pmw_flow_update_world_odometry(PMWFlowState_t *state)
             cos_roll = PMW_FLOW_TILT_COS_FLOOR;
         }
 
-        delta_body_x_cm = PMW_FLOW_BODY_VX_FROM_FLOW_X_SIGN *
-                          (state->range_cm * state->flow_comp_x_rad / cos_pitch);
-        delta_body_y_cm = PMW_FLOW_BODY_VY_FROM_FLOW_Y_SIGN *
-                          (state->range_cm * state->flow_comp_y_rad / cos_roll);
+        delta_body_x_cm = state->velocity_x_center_body_cms * state->dt_s / cos_pitch;
+        delta_body_y_cm = state->velocity_y_center_body_cms * state->dt_s / cos_roll;
 
         g_pmw_flow_direct_world_x_cm += cos_yaw * delta_body_x_cm -
                                         sin_yaw * delta_body_y_cm;
@@ -1011,6 +1129,9 @@ static void pmw_flow_publish_state(const PMWFlowState_t *state)
 void PMW_Flow_Init(void)
 {
     PMW_Flow_Reset();
+#if FLOW_SENSOR_SELECTED == FLOW_SENSOR_UPFLOW302
+    upflow302_set_gyro_snapshot_callback(PMW_Flow_GetGyroSnapshotAtCycle);
+#endif
 }
 
 void PMW_Flow_Reset(void)
@@ -1019,6 +1140,25 @@ void PMW_Flow_Reset(void)
 
     g_pmw_flow_gyro_flow_x_delta_rad = 0.0f;
     g_pmw_flow_gyro_flow_y_delta_rad = 0.0f;
+    g_pmw_flow_gyro_flow_z_delta_rad = 0.0f;
+    g_pmw_flow_gyro_total_x_rad = 0.0f;
+    g_pmw_flow_gyro_total_y_rad = 0.0f;
+    g_pmw_flow_gyro_total_z_rad = 0.0f;
+    g_pmw_flow_gyro_rate_x_rad_s = 0.0f;
+    g_pmw_flow_gyro_rate_y_rad_s = 0.0f;
+    g_pmw_flow_gyro_rate_z_rad_s = 0.0f;
+    g_pmw_flow_gyro_sample_cycle = 0U;
+    g_pmw_flow_gyro_snapshot_seq = 0U;
+    g_pmw_flow_gyro_snapshot_valid = 0U;
+    g_pmw_flow_gyro_dwt_ready = 0U;
+    g_pmw_flow_sync_frame_seq = 0U;
+    g_pmw_flow_sync_rx_dt_ms = 0.0f;
+    g_pmw_flow_sync_sensor_dt_ms = 0.0f;
+    g_pmw_flow_sync_gyro_window_dt_ms = 0.0f;
+    g_pmw_flow_sync_consumer_delay_ms = 0.0f;
+    g_pmw_flow_sync_valid = 0U;
+    g_pmw_flow_sync_dropped_frame_count = 0U;
+    g_pmw_flow_sync_error_count = 0U;
     g_pmw_flow_publish_slots[0] = cleared_state;
     g_pmw_flow_publish_slots[1] = cleared_state;
     g_pmw_flow_publish_index = 0U;
@@ -1043,21 +1183,122 @@ void PMW_Flow_Reset(void)
     g_pmw_flow_fusion_init = 0U;
     g_pmw_flow_fusion_residual_reset_count = 0U;
     g_pmw_flow_fusion_no_observation_frames = 0U;
+    g_pmw_flow_fusion_observation_age_s = PMW_FLOW_FUSION_PREDICT_HOLD_S;
     pmw_flow_kalman_reset();
     PMW_Flow_ResetWorldPosition();
 }
 
-void PMW_Flow_AccumulateGyro(float gyro_x_rate_dps, float gyro_y_rate_dps, float dt_s)
+void PMW_Flow_AccumulateGyro(float gyro_x_rate_dps,
+                             float gyro_y_rate_dps,
+                             float gyro_z_rate_dps,
+                             float dt_s)
 {
+    float rate_x_rad_s;
+    float rate_y_rad_s;
+    float rate_z_rad_s;
+    float total_x_rad;
+    float total_y_rad;
+    float total_z_rad;
+    uint32 sample_cycle = 0U;
+
     if(!(dt_s > 0.0f) ||
        !pmw_flow_is_valid_number(gyro_x_rate_dps) ||
-       !pmw_flow_is_valid_number(gyro_y_rate_dps))
+       !pmw_flow_is_valid_number(gyro_y_rate_dps) ||
+       !pmw_flow_is_valid_number(gyro_z_rate_dps))
     {
         return;
     }
 
-    g_pmw_flow_gyro_flow_x_delta_rad += gyro_x_rate_dps * PMW_FLOW_DEG2RAD * dt_s * PMW_FLOW_GYRO_X_DELTA_SIGN;
-    g_pmw_flow_gyro_flow_y_delta_rad += gyro_y_rate_dps * PMW_FLOW_DEG2RAD * dt_s * PMW_FLOW_GYRO_Y_DELTA_SIGN;
+    pmw_flow_ensure_dwt();
+    rate_x_rad_s = gyro_x_rate_dps * PMW_FLOW_DEG2RAD * PMW_FLOW_GYRO_X_DELTA_SIGN;
+    rate_y_rad_s = gyro_y_rate_dps * PMW_FLOW_DEG2RAD * PMW_FLOW_GYRO_Y_DELTA_SIGN;
+    rate_z_rad_s = gyro_z_rate_dps * PMW_FLOW_DEG2RAD * PMW_FLOW_GYRO_Z_DELTA_SIGN;
+
+#if FLOW_SENSOR_SELECTED == FLOW_SENSOR_PMW3901
+    g_pmw_flow_gyro_flow_x_delta_rad += rate_x_rad_s * dt_s;
+    g_pmw_flow_gyro_flow_y_delta_rad += rate_y_rad_s * dt_s;
+    g_pmw_flow_gyro_flow_z_delta_rad += rate_z_rad_s * dt_s;
+#endif
+
+    total_x_rad = g_pmw_flow_gyro_total_x_rad;
+    total_y_rad = g_pmw_flow_gyro_total_y_rad;
+    total_z_rad = g_pmw_flow_gyro_total_z_rad;
+    if(g_pmw_flow_gyro_dwt_ready)
+    {
+        sample_cycle = DWT->CYCCNT;
+        if(g_pmw_flow_gyro_snapshot_valid && SystemCoreClock != 0U)
+        {
+            uint32 cycle_delta = sample_cycle - g_pmw_flow_gyro_sample_cycle;
+            float actual_dt_s = (float)cycle_delta / (float)SystemCoreClock;
+
+            if(!(actual_dt_s > 0.0f) || actual_dt_s > PMW_FLOW_GYRO_SNAPSHOT_MAX_OFFSET_S)
+            {
+                actual_dt_s = dt_s;
+            }
+            total_x_rad += 0.5f * (g_pmw_flow_gyro_rate_x_rad_s + rate_x_rad_s) * actual_dt_s;
+            total_y_rad += 0.5f * (g_pmw_flow_gyro_rate_y_rad_s + rate_y_rad_s) * actual_dt_s;
+            total_z_rad += 0.5f * (g_pmw_flow_gyro_rate_z_rad_s + rate_z_rad_s) * actual_dt_s;
+        }
+        else
+        {
+            total_x_rad = 0.0f;
+            total_y_rad = 0.0f;
+            total_z_rad = 0.0f;
+        }
+    }
+
+    g_pmw_flow_gyro_snapshot_seq++;
+    __DMB();
+    g_pmw_flow_gyro_total_x_rad = total_x_rad;
+    g_pmw_flow_gyro_total_y_rad = total_y_rad;
+    g_pmw_flow_gyro_total_z_rad = total_z_rad;
+    g_pmw_flow_gyro_rate_x_rad_s = rate_x_rad_s;
+    g_pmw_flow_gyro_rate_y_rad_s = rate_y_rad_s;
+    g_pmw_flow_gyro_rate_z_rad_s = rate_z_rad_s;
+    g_pmw_flow_gyro_sample_cycle = sample_cycle;
+    g_pmw_flow_gyro_snapshot_valid = g_pmw_flow_gyro_dwt_ready;
+    __DMB();
+    g_pmw_flow_gyro_snapshot_seq++;
+}
+
+void PMW_Flow_GetAccumulatedGyroDelta(float *gyro_x_delta_rad,
+                                      float *gyro_y_delta_rad,
+                                      float *gyro_z_delta_rad)
+{
+    if(gyro_x_delta_rad != NULL)
+    {
+        *gyro_x_delta_rad = g_pmw_flow_gyro_flow_x_delta_rad;
+    }
+    if(gyro_y_delta_rad != NULL)
+    {
+        *gyro_y_delta_rad = g_pmw_flow_gyro_flow_y_delta_rad;
+    }
+    if(gyro_z_delta_rad != NULL)
+    {
+        *gyro_z_delta_rad = g_pmw_flow_gyro_flow_z_delta_rad;
+    }
+    g_pmw_flow_gyro_flow_x_delta_rad = 0.0f;
+    g_pmw_flow_gyro_flow_y_delta_rad = 0.0f;
+    g_pmw_flow_gyro_flow_z_delta_rad = 0.0f;
+}
+
+void PMW_Flow_SetSyncDiagnostics(uint32 frame_seq,
+                                 float rx_dt_ms,
+                                 float sensor_dt_ms,
+                                 float gyro_window_dt_ms,
+                                 float consumer_delay_ms,
+                                 uint8 sync_valid,
+                                 uint16 dropped_frame_count,
+                                 uint16 sync_error_count)
+{
+    g_pmw_flow_sync_frame_seq = frame_seq;
+    g_pmw_flow_sync_rx_dt_ms = rx_dt_ms;
+    g_pmw_flow_sync_sensor_dt_ms = sensor_dt_ms;
+    g_pmw_flow_sync_gyro_window_dt_ms = gyro_window_dt_ms;
+    g_pmw_flow_sync_consumer_delay_ms = consumer_delay_ms;
+    g_pmw_flow_sync_valid = sync_valid;
+    g_pmw_flow_sync_dropped_frame_count = dropped_frame_count;
+    g_pmw_flow_sync_error_count = sync_error_count;
 }
 
 void PMW_Flow_PredictVelocity(float imu_velocity_x_cms, float imu_velocity_y_cms, float dt_s)
@@ -1069,8 +1310,22 @@ void PMW_Flow_PredictVelocity(float imu_velocity_x_cms, float imu_velocity_y_cms
     float fused_vx_before_cms;
     float fused_vy_before_cms;
 
-    if(!(dt_s > 0.0f) ||
-       !pmw_flow_is_valid_number(imu_velocity_x_cms) ||
+    if(!(dt_s > 0.0f))
+    {
+        return;
+    }
+
+    if(g_pmw_flow_fusion_init &&
+       g_pmw_flow_fusion_observation_age_s < PMW_FLOW_FUSION_PREDICT_HOLD_S)
+    {
+        g_pmw_flow_fusion_observation_age_s += dt_s;
+        if(g_pmw_flow_fusion_observation_age_s > PMW_FLOW_FUSION_PREDICT_HOLD_S)
+        {
+            g_pmw_flow_fusion_observation_age_s = PMW_FLOW_FUSION_PREDICT_HOLD_S;
+        }
+    }
+
+    if(!pmw_flow_is_valid_number(imu_velocity_x_cms) ||
        !pmw_flow_is_valid_number(imu_velocity_y_cms))
     {
         return;
@@ -1080,6 +1335,13 @@ void PMW_Flow_PredictVelocity(float imu_velocity_x_cms, float imu_velocity_y_cms
     imu_vy_cms = imu_velocity_y_cms * PMW_FLOW_FUSION_IMU_Y_SIGN;
 
     if(!g_pmw_flow_fusion_init)
+    {
+        g_pmw_flow_fusion_imu_vx_last_cms = imu_vx_cms;
+        g_pmw_flow_fusion_imu_vy_last_cms = imu_vy_cms;
+        return;
+    }
+
+    if(!pmw_flow_fusion_predict_hold_active())
     {
         g_pmw_flow_fusion_imu_vx_last_cms = imu_vx_cms;
         g_pmw_flow_fusion_imu_vy_last_cms = imu_vy_cms;
@@ -1145,7 +1407,10 @@ void PMW_Flow_UpdateSample(int16 flow_delta_x,
                            uint8 tof_source,
                            float dt_s,
                            float imu_velocity_x_cms,
-                           float imu_velocity_y_cms)
+                           float imu_velocity_y_cms,
+                           float gyro_flow_x_delta_rad,
+                           float gyro_flow_y_delta_rad,
+                           float gyro_flow_z_delta_rad)
 {
     PMWFlowState_t new_state = {0};
     float range_used_cm;
@@ -1161,10 +1426,17 @@ void PMW_Flow_UpdateSample(int16 flow_delta_x,
     new_state.tof_los_cm = tof_height_cm;
     new_state.roll_deg = roll_deg;
     new_state.pitch_deg = pitch_deg;
-    new_state.gyro_flow_x_delta_rad = g_pmw_flow_gyro_flow_x_delta_rad;
-    new_state.gyro_flow_y_delta_rad = g_pmw_flow_gyro_flow_y_delta_rad;
-    g_pmw_flow_gyro_flow_x_delta_rad = 0.0f;
-    g_pmw_flow_gyro_flow_y_delta_rad = 0.0f;
+    new_state.gyro_flow_x_delta_rad = gyro_flow_x_delta_rad;
+    new_state.gyro_flow_y_delta_rad = gyro_flow_y_delta_rad;
+    new_state.gyro_flow_z_delta_rad = gyro_flow_z_delta_rad;
+    new_state.flow_frame_seq = g_pmw_flow_sync_frame_seq;
+    new_state.flow_rx_dt_ms = g_pmw_flow_sync_rx_dt_ms;
+    new_state.flow_sensor_dt_ms = g_pmw_flow_sync_sensor_dt_ms;
+    new_state.gyro_window_dt_ms = g_pmw_flow_sync_gyro_window_dt_ms;
+    new_state.flow_consumer_delay_ms = g_pmw_flow_sync_consumer_delay_ms;
+    new_state.flow_sync_valid = g_pmw_flow_sync_valid;
+    new_state.flow_dropped_frame_count = g_pmw_flow_sync_dropped_frame_count;
+    new_state.flow_sync_error_count = g_pmw_flow_sync_error_count;
 
     {
         int16 flow_input_x = flow_delta_x;
@@ -1189,6 +1461,7 @@ void PMW_Flow_UpdateSample(int16 flow_delta_x,
        !pmw_flow_is_valid_number(pitch_deg) ||
        !pmw_flow_is_valid_number(new_state.gyro_flow_x_delta_rad) ||
        !pmw_flow_is_valid_number(new_state.gyro_flow_y_delta_rad) ||
+       !pmw_flow_is_valid_number(new_state.gyro_flow_z_delta_rad) ||
        !pmw_flow_is_valid_delta_count(flow_delta_x) ||
        !pmw_flow_is_valid_delta_count(flow_delta_y) ||
        (tof_source == PMW_FLOW_TOF_SOURCE_NONE) ||
@@ -1239,8 +1512,31 @@ void PMW_Flow_UpdateSample(int16 flow_delta_x,
      *
      * 约定：v_body_x 正 → 机体前进；v_body_y 正 → 机体左移。 */
     {
-        float v_body_x = PMW_FLOW_BODY_VX_FROM_FLOW_X_SIGN * (range_used_cm * new_state.flow_comp_x_rad / dt_s);
-        float v_body_y = PMW_FLOW_BODY_VY_FROM_FLOW_Y_SIGN * (range_used_cm * new_state.flow_comp_y_rad / dt_s);
+        float v_camera_x = PMW_FLOW_BODY_VX_FROM_FLOW_X_SIGN *
+                           (range_used_cm * new_state.flow_comp_x_rad / dt_s);
+        float v_camera_y = PMW_FLOW_BODY_VY_FROM_FLOW_Y_SIGN *
+                           (range_used_cm * new_state.flow_comp_y_rad / dt_s);
+        float v_center_body_x;
+        float v_center_body_y;
+
+        new_state.gyro_rate_x_rad_s = new_state.gyro_flow_x_delta_rad / dt_s;
+        new_state.gyro_rate_y_rad_s = new_state.gyro_flow_y_delta_rad / dt_s;
+        new_state.gyro_rate_z_rad_s = new_state.gyro_flow_z_delta_rad / dt_s;
+        new_state.velocity_x_camera_cms = v_camera_x;
+        new_state.velocity_y_camera_cms = v_camera_y;
+
+        /* 镜头不在重心时，机体转动会产生真实的镜头平移速度 omega x r。
+         * 光流测到的是镜头速度，控制需要的是重心速度，因此在滤波前扣除该分量。 */
+        new_state.mount_comp_velocity_x_cms =
+            new_state.gyro_rate_y_rad_s * PMW_FLOW_SENSOR_OFFSET_Z_CM -
+            new_state.gyro_rate_z_rad_s * PMW_FLOW_SENSOR_OFFSET_Y_CM;
+        new_state.mount_comp_velocity_y_cms =
+            new_state.gyro_rate_z_rad_s * PMW_FLOW_SENSOR_OFFSET_X_CM -
+            new_state.gyro_rate_x_rad_s * PMW_FLOW_SENSOR_OFFSET_Z_CM;
+        v_center_body_x = v_camera_x - new_state.mount_comp_velocity_x_cms;
+        v_center_body_y = v_camera_y - new_state.mount_comp_velocity_y_cms;
+        new_state.velocity_x_center_body_cms = v_center_body_x;
+        new_state.velocity_y_center_body_cms = v_center_body_y;
 
         /* (4.1) 机体 → 水平面投影。
          *
@@ -1263,8 +1559,8 @@ void PMW_Flow_UpdateSample(int16 flow_delta_x,
             cos_roll = PMW_FLOW_TILT_COS_FLOOR;
         }
 
-        vx_raw = v_body_x / cos_pitch;
-        vy_raw = v_body_y / cos_roll;
+        vx_raw = v_center_body_x / cos_pitch;
+        vy_raw = v_center_body_y / cos_roll;
     }
     new_state.velocity_x_raw_cms = vx_raw;
     new_state.velocity_y_raw_cms = vy_raw;
@@ -1379,6 +1675,14 @@ void PMW_Flow_GetState(PMWFlowState_t *state)
     PMW_Flow_SyncMainLoopBuffer();
     *state = g_pmw_flow_mainloop_state;
     pmw_flow_sync_kalman_diag(state);
+    state->flow_frame_seq = g_pmw_flow_sync_frame_seq;
+    state->flow_rx_dt_ms = g_pmw_flow_sync_rx_dt_ms;
+    state->flow_sensor_dt_ms = g_pmw_flow_sync_sensor_dt_ms;
+    state->gyro_window_dt_ms = g_pmw_flow_sync_gyro_window_dt_ms;
+    state->flow_consumer_delay_ms = g_pmw_flow_sync_consumer_delay_ms;
+    state->flow_sync_valid = g_pmw_flow_sync_valid;
+    state->flow_dropped_frame_count = g_pmw_flow_sync_dropped_frame_count;
+    state->flow_sync_error_count = g_pmw_flow_sync_error_count;
 
     if(pmw_flow_fusion_predict_hold_active())
     {
@@ -1392,6 +1696,12 @@ void PMW_Flow_GetState(PMWFlowState_t *state)
                                               state->velocity_y_fused_residual_cms);
         state->acc_used = 1U;
         state->fused_velocity_valid = 1U;
+    }
+    else if(g_pmw_flow_fusion_init)
+    {
+        state->flow_used = 0U;
+        state->acc_used = 0U;
+        state->fused_velocity_valid = 0U;
     }
 }
 

@@ -25,8 +25,18 @@ typedef struct
     float flow_y_rad;
     float gyro_flow_x_delta_rad;
     float gyro_flow_y_delta_rad;
+    float gyro_flow_z_delta_rad;
     float flow_comp_x_rad;
     float flow_comp_y_rad;
+    float gyro_rate_x_rad_s;
+    float gyro_rate_y_rad_s;
+    float gyro_rate_z_rad_s;
+    float velocity_x_camera_cms;
+    float velocity_y_camera_cms;
+    float mount_comp_velocity_x_cms;
+    float mount_comp_velocity_y_cms;
+    float velocity_x_center_body_cms;
+    float velocity_y_center_body_cms;
     float velocity_x_raw_cms;
     float velocity_y_raw_cms;
     float velocity_x_slew_cms;
@@ -75,12 +85,38 @@ typedef struct
     uint8 flow_position_valid;
     float yaw_deg;
     float speed_cms;
+    uint32 flow_frame_seq;
+    float flow_rx_dt_ms;
+    float flow_sensor_dt_ms;
+    float gyro_window_dt_ms;
+    float flow_consumer_delay_ms;
+    uint8 flow_sync_valid;
+    uint16 flow_dropped_frame_count;
+    uint16 flow_sync_error_count;
 } PMWFlowState_t;
 
 void PMW_Flow_Init(void);
 void PMW_Flow_Reset(void);
-void PMW_Flow_AccumulateGyro(float gyro_x_rate_dps, float gyro_y_rate_dps, float dt_s);
+void PMW_Flow_AccumulateGyro(float gyro_x_rate_dps,
+                             float gyro_y_rate_dps,
+                             float gyro_z_rate_dps,
+                             float dt_s);
 void PMW_Flow_PredictVelocity(float imu_velocity_x_cms, float imu_velocity_y_cms, float dt_s);
+uint8 PMW_Flow_GetGyroSnapshotAtCycle(uint32 target_cycle,
+                                      float *total_x_rad,
+                                      float *total_y_rad,
+                                      float *total_z_rad);
+void PMW_Flow_GetAccumulatedGyroDelta(float *gyro_x_delta_rad,
+                                      float *gyro_y_delta_rad,
+                                      float *gyro_z_delta_rad);
+void PMW_Flow_SetSyncDiagnostics(uint32 frame_seq,
+                                 float rx_dt_ms,
+                                 float sensor_dt_ms,
+                                 float gyro_window_dt_ms,
+                                 float consumer_delay_ms,
+                                 uint8 sync_valid,
+                                 uint16 dropped_frame_count,
+                                 uint16 sync_error_count);
 void PMW_Flow_UpdateSample(int16 flow_delta_x,
                            int16 flow_delta_y,
                            float roll_deg,
@@ -89,7 +125,10 @@ void PMW_Flow_UpdateSample(int16 flow_delta_x,
                            uint8 tof_source,
                            float dt_s,
                            float imu_velocity_x_cms,
-                           float imu_velocity_y_cms);
+                           float imu_velocity_y_cms,
+                           float gyro_flow_x_delta_rad,
+                           float gyro_flow_y_delta_rad,
+                           float gyro_flow_z_delta_rad);
 void PMW_Flow_SyncMainLoopBuffer(void);
 void PMW_Flow_GetState(PMWFlowState_t *state);
 void PMW_Flow_ResetWorldPosition(void);

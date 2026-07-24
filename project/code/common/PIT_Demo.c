@@ -582,7 +582,10 @@ static void control_task_update_sensor_feedback(void)
                          g_vehicle_marker_pose_update_seq);
     Get_Attitude_Angle(&current_roll, &current_pitch, &current_yaw);
     Get_Angular_Rate(&current_gyro_roll, &current_gyro_pitch, &current_gyro_yaw);
-    PMW_Flow_AccumulateGyro(icm42688_gyro_x, icm42688_gyro_y, CONTROL_DT_S);
+    PMW_Flow_AccumulateGyro(icm42688_gyro_x,
+                            icm42688_gyro_y,
+                            icm42688_gyro_z,
+                            CONTROL_DT_S);
     PMW_Flow_PredictVelocity(X_V_F, Y_V_F, CONTROL_DT_S);
 }
 
