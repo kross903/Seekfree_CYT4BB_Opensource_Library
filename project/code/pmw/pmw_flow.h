@@ -31,6 +31,7 @@ typedef struct
     float gyro_rate_x_rad_s;
     float gyro_rate_y_rad_s;
     float gyro_rate_z_rad_s;
+    float gyro_accel_max_rad_s2;
     float velocity_x_camera_cms;
     float velocity_y_camera_cms;
     float mount_comp_velocity_x_cms;
@@ -53,6 +54,7 @@ typedef struct
     float velocity_x_fused_residual_cms;
     float velocity_y_fused_residual_cms;
     float flow_confidence;
+    float flow_rotation_confidence;
     float flow_fusion_alpha;
     /* 最近一次光流反馈更新时的融合分解快照。 */
     float fusion_imu_velocity_x_cms;
