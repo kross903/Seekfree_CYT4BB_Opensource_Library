@@ -114,8 +114,8 @@ static void init_default_pid_parameters(void)
     PID_Init(&gyro_pid_yaw,
              2.50f, 0.0f, 0.0f,
              200.0f, 5000.0f, 15.0f, 0.8f);
-    PID_Init(&HeightPID, 1.0f, 0.000f, 0.0f, 40.0f, 2000.0f, 20.0f, 0.3f);
-    PID_Init(&HeightVelPID, 4.0f, 0.00f, 4.0f, 150.0f, 2000.0f, 20.0f, 0.3f);
+    PID_Init(&HeightPID, 0.5f, 0.007f, 0.0f, 40.0f, 2000.0f, 20.0f, 0.3f);
+    PID_Init(&HeightVelPID, 2.5f, 0.00f, 4.0f, 150.0f, 2000.0f, 20.0f, 0.3f);
     PID_Init(&angle_pid_roll,  5.50f, 0.01f, 0.0f, 350.0f, 5000.0f, 5.0f, 0.80f);
     PID_Init(&angle_pid_pitch, 5.50f, 0.01f, 0.0f, 350.0f, 5000.0f, 5.0f, 0.80f);
     PID_Init(&angle_pid_yaw,   4.0f, 0.0f, 0.0f, 250.0f, 400.0f, 12.0f, 0.0f);
