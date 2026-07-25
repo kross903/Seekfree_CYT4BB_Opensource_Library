@@ -2293,11 +2293,21 @@ static void VisionRuntime_ProcessBlobs(
     for(i = 0U; i < s_vision_candidate_count; ++i)
     {
         uint8 vehicle_confirmed = 0U;
+        uint8 allow_small_vehicle;
         int raw_box_area =
             (s_vision_candidates[i].max_col - s_vision_candidates[i].min_col + 1) *
             (s_vision_candidates[i].max_row - s_vision_candidates[i].min_row + 1);
-        uint8 skip_vehicle = (uint8)(
-            raw_box_area < (int)VISION_RUNTIME_VEHICLE_MIN_RAW_BOX_AREA);
+        uint8 skip_vehicle;
+
+        allow_small_vehicle = (uint8)(
+            raw_box_area >= (int)VISION_RUNTIME_VEHICLE_SMALL_BOX_MIN_AREA &&
+            raw_box_area < (int)VISION_RUNTIME_VEHICLE_MIN_RAW_BOX_AREA &&
+            (uint32)s_vision_candidates[i].area * 100U <=
+                (uint32)raw_box_area *
+                    VISION_RUNTIME_VEHICLE_SMALL_BOX_MAX_FILL_PCT);
+        skip_vehicle = (uint8)(
+            raw_box_area < (int)VISION_RUNTIME_VEHICLE_MIN_RAW_BOX_AREA &&
+            !allow_small_vehicle);
 
         s_vision_candidate_annotations[i].raw_box_area_pixels = raw_box_area;
         s_vision_candidate_annotations[i].vehicle_skipped_small_box = skip_vehicle;

@@ -363,6 +363,11 @@ static int write_result(const char *path, const char *binary_path,
     fprintf(file, "  \"vehicle_min_raw_box_area\":%u,\n",
             (unsigned)VISION_RUNTIME_VEHICLE_MIN_RAW_BOX_AREA);
     fprintf(file,
+            "  \"vehicle_small_box_gate\":{\"min_area\":%u,"
+            "\"max_fill_percent\":%u},\n",
+            (unsigned)VISION_RUNTIME_VEHICLE_SMALL_BOX_MIN_AREA,
+            (unsigned)VISION_RUNTIME_VEHICLE_SMALL_BOX_MAX_FILL_PCT);
+    fprintf(file,
             "  \"binary_thresholds\":{\"inner\":%u,\"middle\":%u,\"outer\":%u},\n",
             (unsigned)vehicle_threshold,
             (unsigned)beacon_threshold,

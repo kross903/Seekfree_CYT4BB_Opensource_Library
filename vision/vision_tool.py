@@ -2035,6 +2035,7 @@ class VisionToolApp:
             )
         beacon_detail = "\n信标详情:\n" + "\n".join(beacon_lines) if beacon_lines else ""
         coarse_text = "/".join(str(value) for value in self.result_coarse_thresholds(result))
+        small_box_gate = result.get("vehicle_small_box_gate", {})
         self.set_result_info(
             f"连通域: {result.get('blob_count', 0)}\n"
             f"信标: {result.get('beacon_count', 0)}\n"
@@ -2043,7 +2044,9 @@ class VisionToolApp:
             f"({result.get('recognition_thresholds', {}).get('vehicle_fallback', '?')})/"
             f"{result.get('recognition_thresholds', {}).get('beacon', '?')}\n"
             f"粗筛五圈阈值（中心→边缘）: {coarse_text}\n"
-            f"箭头分流面积阈值: {result.get('vehicle_min_raw_box_area', '?')} 像素\n"
+            f"箭头分流面积阈值: 常规≥{result.get('vehicle_min_raw_box_area', '?')}；"
+            f"小框≥{small_box_gate.get('min_area', '?')}且粗占空比≤"
+            f"{small_box_gate.get('max_fill_percent', '?')}%\n"
             f"预览顺序: {binary_mode_text}\n"
             f"小车标志有效: {result.get('vehicle', {}).get('valid', 0)}\n"
             f"箭头目标平面高度: "
