@@ -368,10 +368,13 @@ static int write_result(const char *path, const char *binary_path,
             (unsigned)beacon_threshold,
             (unsigned)beacon_threshold);
     fprintf(file,
-            "  \"recognition_thresholds\":{\"vehicle\":%u,\"beacon\":%u},\n",
-            (unsigned)vehicle_threshold, (unsigned)beacon_threshold);
+            "  \"recognition_thresholds\":{\"vehicle\":%u,"
+            "\"vehicle_fallback\":%u,\"beacon\":%u},\n",
+            (unsigned)vehicle_threshold,
+            (unsigned)VISION_BINARY_THRESHOLD_VEHICLE_FALLBACK,
+            (unsigned)beacon_threshold);
     fprintf(file,
-            "  \"recognition_pipeline\":\"vehicle_first_dual_threshold_short_circuit\",\n");
+            "  \"recognition_pipeline\":\"vehicle_first_fallback_threshold_short_circuit\",\n");
     fprintf(file, "  \"physical_grid_enabled\":%u,\n",
             (unsigned)VISION_RUNTIME_PHYSICAL_GRID_ENABLE);
     fprintf(file, "  \"binary_mode\":\"%s\",\n",
@@ -636,7 +639,7 @@ int main(int argc, char **argv)
 
     if(input_path == NULL || output_path == NULL || !read_raw(input_path))
     {
-        fprintf(stderr, "usage: vision_sim --input frame.raw --output result.json [--binary binary.pgm] [--vehicle-threshold 150] [--beacon-threshold 10] [--coarse-center-threshold 150] [--coarse-near-threshold 60] [--coarse-middle-threshold 50] [--coarse-far-threshold 50] [--coarse-edge-threshold 50] [--binary-mode gray|pre_transform|undistort_binary_ipm|post_transform]\n");
+        fprintf(stderr, "usage: vision_sim --input frame.raw --output result.json [--binary binary.pgm] [--vehicle-threshold 145] [--beacon-threshold 10] [--coarse-center-threshold 150] [--coarse-near-threshold 60] [--coarse-middle-threshold 50] [--coarse-far-threshold 50] [--coarse-edge-threshold 50] [--binary-mode gray|pre_transform|undistort_binary_ipm|post_transform]\n");
         return 2;
     }
 

@@ -2318,6 +2318,33 @@ static void VisionRuntime_ProcessBlobs(
                     s_vision_candidate_annotations[i].vehicle_valid = 1U;
                 }
             }
+            if(!vehicle_confirmed && !skip_vehicle &&
+               s_vision_vehicle_threshold >
+                   (uint8)VISION_BINARY_THRESHOLD_VEHICLE_FALLBACK)
+            {
+                uint8 primary_vehicle_threshold = s_vision_vehicle_threshold;
+                uint8 fallback_binary_valid;
+
+                /* 复用箭头位图，仅对首轮失败候选进行低阈值重采样。 */
+                s_vision_vehicle_threshold =
+                    (uint8)VISION_BINARY_THRESHOLD_VEHICLE_FALLBACK;
+                fallback_binary_valid = VisionRuntime_BuildFineCandidateBinaries(
+                    image, &s_vision_candidates[i], i);
+                s_vision_vehicle_threshold = primary_vehicle_threshold;
+                if(fallback_binary_valid &&
+                   s_vision_candidate_vehicle_area[i] >=
+                       VISION_RUNTIME_FINE_MIN_FOREGROUND_PIXELS)
+                {
+                    vehicle_confirmed = VisionRuntime_ProcessFineROI(
+                        &s_vision_candidates[i],
+                        VISION_RUNTIME_FINE_TARGET_VEHICLE, i,
+                        s_vision_vehicle_binary);
+                    if(vehicle_confirmed)
+                    {
+                        s_vision_candidate_annotations[i].vehicle_valid = 1U;
+                    }
+                }
+            }
             if(!vehicle_confirmed &&
                s_vision_candidate_beacon_area[i] >=
                    VISION_RUNTIME_FINE_MIN_FOREGROUND_PIXELS)
