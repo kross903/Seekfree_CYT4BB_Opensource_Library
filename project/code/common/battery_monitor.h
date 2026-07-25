@@ -8,8 +8,8 @@
 #define BATTERY_ADC_CHANNEL                ADC0_CH21_P07_5
 
 #define BATTERY_COMP_REFERENCE_V           15.2f
+#define BATTERY_COMP_GAIN_SCALE            0.94f
 #define BATTERY_COMP_GAIN_MIN              0.55f
-#define BATTERY_COMP_GAIN_MAX              1.15f
 #define BATTERY_LOW_CELL_WARN_V            3.70f
 #define BATTERY_LOW_CELL_RECOVER_V         3.80f
 

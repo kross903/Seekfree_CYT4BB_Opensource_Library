@@ -90,12 +90,8 @@ static float battery_compensation_gain(float voltage_v)
         return 0.0f;
     }
 
-    gain = BATTERY_COMP_REFERENCE_V / voltage_v;
-    if(gain > BATTERY_COMP_GAIN_MAX)
-    {
-        gain = BATTERY_COMP_GAIN_MAX;
-    }
-    else if(gain < BATTERY_COMP_GAIN_MIN)
+    gain = (BATTERY_COMP_REFERENCE_V / voltage_v) * BATTERY_COMP_GAIN_SCALE;
+    if(gain < BATTERY_COMP_GAIN_MIN)
     {
         gain = BATTERY_COMP_GAIN_MIN;
     }
