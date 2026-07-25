@@ -12,6 +12,9 @@ volatile float car_bat_voltage = 0.0f;
 #define BATTERY_FILTER_ALPHA               0.05f
 #define BATTERY_FILTER_READY_SAMPLES       20U
 #define BATTERY_WARNING_CONFIRM_SAMPLES    20U
+#define BATTERY_INVALID_WARNING_HOLD_MS     2000U
+#define BATTERY_INVALID_WARNING_HOLD_SAMPLES \
+    (BATTERY_INVALID_WARNING_HOLD_MS / BATTERY_TASK_PERIOD_MS)
 #define BATTERY_REMOTE_TIMEOUT_MS          1000U
 #define BATTERY_4S_VALID_MIN_V             10.0f
 #define BATTERY_4S_VALID_MAX_V             18.0f
@@ -29,6 +32,7 @@ static uint8 s_pack_detect_count = 0U;
 static BatteryPackType s_pack_candidate = BATTERY_PACK_UNKNOWN;
 static uint8 s_low_sample_count = 0U;
 static uint8 s_recover_sample_count = 0U;
+static uint16 s_invalid_warning_samples = 0U;
 
 static BatteryPackType battery_detect_pack(float voltage_v)
 {
@@ -138,6 +142,22 @@ static void battery_update_warning(float voltage_v)
     }
 }
 
+static void battery_update_invalid_warning(void)
+{
+    if(s_battery_status.pack_type != BATTERY_PACK_UNKNOWN &&
+       !s_battery_status.local_valid)
+    {
+        s_invalid_warning_samples = BATTERY_INVALID_WARNING_HOLD_SAMPLES;
+    }
+    else if(s_invalid_warning_samples > 0U)
+    {
+        s_invalid_warning_samples--;
+    }
+
+    s_battery_status.invalid_warning =
+        (uint8)(s_invalid_warning_samples > 0U ? 1U : 0U);
+}
+
 void BatteryMonitor_Task_5ms(void)
 {
     float raw_voltage_v;
@@ -235,16 +255,18 @@ void BatteryMonitor_Task_5ms(void)
                                              (s_battery_status.remote_age_ms < BATTERY_REMOTE_TIMEOUT_MS));
 
     battery_update_warning(s_battery_status.local_filtered_voltage_v);
+    battery_update_invalid_warning();
     compensation_voltage_v = s_battery_status.local_raw_voltage_v;
     if(s_battery_status.local_filtered_voltage_v > compensation_voltage_v)
     {
         compensation_voltage_v = s_battery_status.local_filtered_voltage_v;
     }
-    s_battery_status.compensation_gain = s_battery_status.local_valid
-                                           ? battery_compensation_gain(compensation_voltage_v)
-                                           : 0.0f;
-
-    voltage = s_battery_status.local_valid ? s_battery_status.local_filtered_voltage_v : 0.0f;
+    if(s_battery_status.local_valid)
+    {
+        s_battery_status.output_voltage_v = compensation_voltage_v;
+        s_battery_status.compensation_gain = battery_compensation_gain(compensation_voltage_v);
+        voltage = s_battery_status.local_filtered_voltage_v;
+    }
     Flight_Safety_Update_Battery_Warning();
 }
 
@@ -286,5 +308,7 @@ void BatteryMonitor_GetStatus(BatteryStatus *status)
 
 float BatteryMonitor_GetCompensationGain(void)
 {
-    return s_battery_status.local_valid ? s_battery_status.compensation_gain : 0.0f;
+    return (s_battery_status.pack_type != BATTERY_PACK_UNKNOWN)
+               ? s_battery_status.compensation_gain
+               : 0.0f;
 }

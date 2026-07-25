@@ -66,12 +66,15 @@ static void build_monitor_runtime_snapshot(MonitorRuntimeSnapshot *snapshot)
     snapshot->control_mode = control_mode;
     snapshot->armed = (uint8)(armed ? 1U : 0U);
     snapshot->low_voltage = (uint8)(low_voltage_protect_flag ? 1U : 0U);
+    snapshot->battery_invalid = battery_status.invalid_warning;
     snapshot->has_nearest = ir_track_valid;
     snapshot->tof_ready = HeightManager_IsReadyForTakeoff();
     snapshot->rearm_inhibit_active =
         (uint8)(Flight_Safety_GetRearmInhibitRemainingMs() > 0U);
     snapshot->takeoff_state = (uint8)Flight_Takeoff_Get_State();
-    snapshot->voltage = battery_status.local_filtered_voltage_v;
+    snapshot->voltage = battery_status.local_valid
+                            ? battery_status.local_filtered_voltage_v
+                            : battery_status.output_voltage_v;
     snapshot->target_throttle = (int32)Flight_Control_Get_Target_Throttle();
     snapshot->base_throttle = (int32)base_throttle;
     snapshot->roll = current_roll;

@@ -174,6 +174,7 @@ void MotorHardware_WriteOutput(const volatile uint16 motor_throttle[4],
     s_voltage_comp_diag.bypassed = bypass_motor_trim ? 1U : 0U;
     s_voltage_comp_diag.hard_output_limit = 0.0f;
     s_voltage_comp_diag.battery_pack = (uint8)BATTERY_PACK_UNKNOWN;
+    s_voltage_comp_diag.battery_fallback_active = 0U;
     for(i = 0U; i < 4U; i++)
     {
         s_voltage_comp_diag.raw_output[i] = (float)motor_throttle[i];
@@ -199,10 +200,13 @@ void MotorHardware_WriteOutput(const volatile uint16 motor_throttle[4],
     BatteryMonitor_GetStatus(&battery_status);
     s_voltage_comp_diag.compensation_gain = battery_status.compensation_gain;
     s_voltage_comp_diag.battery_pack = (uint8)battery_status.pack_type;
-    if(!battery_status.local_valid ||
+    /* 解锁后采样失效时沿用最后可信参数，避免飞行中直接清零电机。 */
+    if((!battery_status.local_valid && !armed) ||
        battery_status.pack_type == BATTERY_PACK_UNKNOWN ||
-       !isfinite(battery_status.local_filtered_voltage_v) ||
-       battery_status.local_filtered_voltage_v <= 0.0f)
+       !isfinite(battery_status.output_voltage_v) ||
+       battery_status.output_voltage_v <= 0.0f ||
+       !isfinite(battery_status.compensation_gain) ||
+       battery_status.compensation_gain <= 0.0f)
     {
         s_voltage_comp_diag.invalid_output = 1U;
 #if MOTOR_OUTPUT_PROTOCOL == 0
@@ -219,11 +223,8 @@ void MotorHardware_WriteOutput(const volatile uint16 motor_throttle[4],
         return;
     }
 
-    limit_voltage_v = battery_status.local_raw_voltage_v;
-    if(battery_status.local_filtered_voltage_v > limit_voltage_v)
-    {
-        limit_voltage_v = battery_status.local_filtered_voltage_v;
-    }
+    s_voltage_comp_diag.battery_fallback_active = battery_status.local_valid ? 0U : 1U;
+    limit_voltage_v = battery_status.output_voltage_v;
     hard_limit = (float)MOTOR_OUTPUT_SCALE_MAX *
                  BATTERY_COMP_REFERENCE_V /
                  limit_voltage_v;

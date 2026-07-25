@@ -48,6 +48,11 @@
 #define UI_MONITOR_HINT_TOP_Y        288U
 #define UI_MONITOR_HINT_BOTTOM_Y     304U
 #define MONITOR_ARM_START_THROTTLE   400.0f
+#define UI_MONITOR_BAT_INVALID_BLINK_TICKS 4U
+
+static uint8 s_monitor_bat_invalid_active = 0U;
+static uint8 s_monitor_bat_invalid_red_phase = 0U;
+static uint8 s_monitor_bat_invalid_blink_ticks = 0U;
 
 static uint16 ui_origin_line_y(uint16 row)
 {
@@ -692,6 +697,28 @@ static void ui_monitor_show_view_page(const MonitorRuntimeSnapshot *snapshot, ui
     ui_monitor_draw_view_hud(&data);
 }
 
+static void ui_monitor_draw_battery_invalid_alert(const MonitorRuntimeSnapshot *snapshot)
+{
+    char voltage_text[32];
+
+    ips200_set_font(IPS200_8X16_FONT);
+    ips200_set_color(RGB565_WHITE, RGB565_RED);
+    ips200_clear();
+    ips200_show_string(64U, 112U, "BAT INVALID");
+    if(snapshot != NULL)
+    {
+        snprintf(voltage_text, sizeof(voltage_text), "LAST: %.2f V", snapshot->voltage);
+        ips200_show_string(64U, 144U, voltage_text);
+    }
+    ips200_show_string(32U, 176U, "OUTPUT CONTINUES");
+    ips200_set_color(RGB565_WHITE, RGB565_BLACK);
+}
+
+static uint8 ui_monitor_battery_invalid_in_flight(const MonitorRuntimeSnapshot *snapshot)
+{
+    return (uint8)((snapshot != NULL) && snapshot->armed && snapshot->battery_invalid);
+}
+
 /* ===================== ?????????? ===================== */
 
 static uint8 screen_consume_monitor_button_event(uint8 button_id, key_index_enum key_n)
@@ -786,14 +813,69 @@ void screen_monitor_enter_page(monitor_page_enum page, const MonitorRuntimeSnaps
 {
     if(page == MONITOR_PAGE_DATA)
     {
-        ui_monitor_show_view_page(snapshot, 1U);
+        s_monitor_bat_invalid_blink_ticks = 0U;
+        s_monitor_bat_invalid_active = ui_monitor_battery_invalid_in_flight(snapshot);
+        s_monitor_bat_invalid_red_phase = s_monitor_bat_invalid_active;
+        if(s_monitor_bat_invalid_red_phase)
+        {
+            ui_monitor_draw_battery_invalid_alert(snapshot);
+        }
+        else
+        {
+            ui_monitor_show_view_page(snapshot, 1U);
+        }
     }
 }
 
 void screen_monitor_refresh_page(monitor_page_enum page, const MonitorRuntimeSnapshot *snapshot)
 {
+    uint8 battery_invalid_active;
+
     if(page == MONITOR_PAGE_DATA)
     {
+        battery_invalid_active = ui_monitor_battery_invalid_in_flight(snapshot);
+        if(battery_invalid_active)
+        {
+            if(!s_monitor_bat_invalid_active)
+            {
+                s_monitor_bat_invalid_active = 1U;
+                s_monitor_bat_invalid_red_phase = 1U;
+                s_monitor_bat_invalid_blink_ticks = 0U;
+                ui_monitor_draw_battery_invalid_alert(snapshot);
+                return;
+            }
+
+            s_monitor_bat_invalid_blink_ticks++;
+            if(s_monitor_bat_invalid_blink_ticks >= UI_MONITOR_BAT_INVALID_BLINK_TICKS)
+            {
+                s_monitor_bat_invalid_blink_ticks = 0U;
+                s_monitor_bat_invalid_red_phase =
+                    s_monitor_bat_invalid_red_phase ? 0U : 1U;
+                if(s_monitor_bat_invalid_red_phase)
+                {
+                    ui_monitor_draw_battery_invalid_alert(snapshot);
+                }
+                else
+                {
+                    ui_monitor_show_view_page(snapshot, 1U);
+                }
+            }
+            else if(!s_monitor_bat_invalid_red_phase)
+            {
+                ui_monitor_show_view_page(snapshot, 0U);
+            }
+            return;
+        }
+
+        if(s_monitor_bat_invalid_active)
+        {
+            s_monitor_bat_invalid_active = 0U;
+            s_monitor_bat_invalid_red_phase = 0U;
+            s_monitor_bat_invalid_blink_ticks = 0U;
+            ui_monitor_show_view_page(snapshot, 1U);
+            return;
+        }
+
         ui_monitor_show_view_page(snapshot, 0U);
     }
 }

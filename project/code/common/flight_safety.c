@@ -184,8 +184,8 @@ uint8 Flight_Safety_Check_Battery(void)
         return 0U;
     }
 
-    Flight_Runtime_Emergency_Stop(EMERGENCY_STOP_REASON_BATTERY_INVALID);
-    return 1U;
+    /* 飞行中电池采样失效只告警，电机继续使用最后一次可信补偿值。 */
+    return 0U;
 }
 
 void Flight_Safety_ResetYawSpinMonitor(void)

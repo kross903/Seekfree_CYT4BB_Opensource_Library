@@ -16,6 +16,7 @@ typedef struct
     uint8 control_mode;
     uint8 armed;
     uint8 low_voltage;
+    uint8 battery_invalid;
     uint8 has_nearest;
     uint8 tof_ready;
     uint8 rearm_inhibit_active;

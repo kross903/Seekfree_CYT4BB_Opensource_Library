@@ -32,6 +32,7 @@ typedef struct
     float local_filtered_voltage_v;
     float remote_voltage_v;
     float compensation_gain;
+    float output_voltage_v;
     float low_warn_voltage_v;
     float low_recover_voltage_v;
     uint16 remote_age_ms;
@@ -39,6 +40,7 @@ typedef struct
     uint8 local_valid;
     uint8 remote_valid;
     uint8 low_warning;
+    uint8 invalid_warning;
 } BatteryStatus;
 
 extern float voltage;

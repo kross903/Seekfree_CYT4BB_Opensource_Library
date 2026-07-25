@@ -13,6 +13,7 @@ typedef struct
     uint8 bypassed;
     uint8 invalid_output;
     uint8 battery_pack;
+    uint8 battery_fallback_active;
 } MotorHardwareVoltageCompDiag;
 
 void MotorHardware_InitOnce(void);
