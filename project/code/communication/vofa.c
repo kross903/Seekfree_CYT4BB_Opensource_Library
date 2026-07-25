@@ -290,7 +290,8 @@ static uint8 set_height_vel_pid_value(uint8 item, float value)
  *
  * item:
  *   '1' Kp, '2' Ki, '3' Kd, '4' output_limit (deg), '5' integral_limit,
- *   '6' 目标角变化率前馈增益, '7' 前馈角速度限幅 (deg/s)
+ *   '6' 目标角变化率前馈增益, '7' 前馈角速度限幅 (deg/s),
+ *   '8' D支路低通截止频率 (Hz)
  *
  * 上层在 USART_PID_Adjust 已经按命令字符 'V'/'W' 区分轴，避免与角度环 R/P/Y 混淆。
  */
@@ -326,6 +327,8 @@ static uint8 set_vel_pid_value(uint8 axis, uint8 item, float value)
         case '7':
             Velocity_Loop_Get_Rate_Feedforward_Parameters(axis, &ff_gain, &ff_limit_dps);
             return Velocity_Loop_Set_Rate_Feedforward_Parameters(axis, ff_gain, value);
+        case '8':
+            return Velocity_Loop_Set_D_Filter_Hz(axis, value);
         default:  return 0U;
     }
 
@@ -480,7 +483,8 @@ static void send_pid_data_back(uint8 command)
             send_four_date(value_1, value_2, value_3,
                            vel_pid_x.output_limit,
                            vel_pid_x.integral_limit,
-                           ff_gain, ff_limit_dps, 0);
+                           ff_gain, ff_limit_dps,
+                           Velocity_Loop_Get_D_Filter_Hz(VELOCITY_LOOP_AXIS_X));
             return;
         }
 
@@ -498,7 +502,8 @@ static void send_pid_data_back(uint8 command)
             send_four_date(value_1, value_2, value_3,
                            vel_pid_y.output_limit,
                            vel_pid_y.integral_limit,
-                           ff_gain, ff_limit_dps, 0);
+                           ff_gain, ff_limit_dps,
+                           Velocity_Loop_Get_D_Filter_Hz(VELOCITY_LOOP_AXIS_Y));
             return;
         }
 
@@ -1808,7 +1813,7 @@ void send_date_back(void)
                               flow_state.fusion_alpha_x,
                               flow_state.fusion_bias_ki_x,
                               flow_state.fusion_accel_bias_x_cms2,
-                              flow_state.velocity_x_fused_cms,
+                              flow_state.fusion_output_x_cms,
                               flow_state.fusion_prediction_y_cms,
                               flow_state.velocity_y_cms,
                               flow_state.fusion_residual_y_cms,
@@ -1816,7 +1821,7 @@ void send_date_back(void)
                               flow_state.fusion_alpha_y,
                               flow_state.fusion_bias_ki_y,
                               flow_state.fusion_accel_bias_y_cms2,
-                              flow_state.velocity_y_fused_cms);
+                              flow_state.fusion_output_y_cms);
             break;
         }
 

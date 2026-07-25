@@ -9,6 +9,9 @@ extern PID_Controller vel_pid_y;
 
 #define VELOCITY_LOOP_AXIS_X    (0U)
 #define VELOCITY_LOOP_AXIS_Y    (1U)
+#define VELOCITY_LOOP_D_FILTER_DEFAULT_HZ (8.0f)
+#define VELOCITY_LOOP_D_FILTER_MIN_HZ     (1.0f)
+#define VELOCITY_LOOP_D_FILTER_MAX_HZ     (50.0f)
 
 typedef struct
 {
@@ -40,6 +43,9 @@ uint8 Velocity_Loop_Is_Enabled(void);
 void Velocity_Loop_Set_Target_Velocity(float vx_cms, float vy_cms);
 void Velocity_Loop_Get_Target_Velocity(float *vx_cms, float *vy_cms);
 void Velocity_Loop_Reset_Runtime(void);
+void Velocity_Loop_Reset_D_Filter_State(void);
+uint8 Velocity_Loop_Set_D_Filter_Hz(uint8 axis, float cutoff_hz);
+float Velocity_Loop_Get_D_Filter_Hz(uint8 axis);
 uint8 Velocity_Loop_Set_Rate_Feedforward_Parameters(uint8 axis,
                                                     float gain,
                                                     float limit_dps);

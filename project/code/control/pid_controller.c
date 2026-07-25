@@ -100,7 +100,11 @@ void PID_PrepareRuntimeDt(PID_Controller *pid, float runtime_dt_s)
  * PID 输出计算入口:
  * 按“误差 -> 积分 -> 微分 -> 限幅”的顺序算出本次控制输出。
  */
-float PID_CalculateError(PID_Controller *pid, float error, float dt)
+static float pid_calculate_error_internal(PID_Controller *pid,
+                                          float error,
+                                          float dt,
+                                          int use_external_derivative,
+                                          float external_derivative)
 {
     float output = 0.0f;
     float integral_factor = 1.0f;
@@ -127,10 +131,17 @@ float PID_CalculateError(PID_Controller *pid, float error, float dt)
         pid->integral = -pid->integral_limit;
     }
 
-    // 微分项采用一阶低通滤波，降低测量噪声带来的尖峰。
-    raw_derivative = (error - pid->prev_error) * pid->derivative_step_scale;
-    pid->derivative = pid->runtime_alpha * raw_derivative +
-                      (1.0f - pid->runtime_alpha) * pid->derivative;
+    if(use_external_derivative)
+    {
+        pid->derivative = isfinite(external_derivative) ? external_derivative : 0.0f;
+    }
+    else
+    {
+        // 微分项采用一阶低通滤波，降低测量噪声带来的尖峰。
+        raw_derivative = (error - pid->prev_error) * pid->derivative_step_scale;
+        pid->derivative = pid->runtime_alpha * raw_derivative +
+                          (1.0f - pid->runtime_alpha) * pid->derivative;
+    }
 
     // 计算 PID 输出
     output = pid->Kp * error + pid->Ki * pid->integral + pid->Kd * pid->derivative;
@@ -149,6 +160,19 @@ float PID_CalculateError(PID_Controller *pid, float error, float dt)
     pid->prev_error = error;
 
     return output;
+}
+
+float PID_CalculateError(PID_Controller *pid, float error, float dt)
+{
+    return pid_calculate_error_internal(pid, error, dt, 0, 0.0f);
+}
+
+float PID_CalculateErrorWithDerivative(PID_Controller *pid,
+                                       float error,
+                                       float derivative,
+                                       float dt)
+{
+    return pid_calculate_error_internal(pid, error, dt, 1, derivative);
 }
 
 float PID_Calculate(PID_Controller *pid, float target, float current, float dt)

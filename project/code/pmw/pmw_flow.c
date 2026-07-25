@@ -61,15 +61,14 @@
 #define PMW_FLOW_VEL_SLEW_MIN_STEP_CMS      (12.0f)
 #define PMW_FLOW_VEL_OUTPUT_SLEW_LIMIT_CMS2 PMW_FLOW_GRAVITY_CMS2
 /* 速度版Mahony：IMU负责短期预测，光流通过PI观测器缓慢修正速度与加速度零偏。 */
-#define PMW_FLOW_FUSION_ALPHA_MIN           (0.01f)
-#define PMW_FLOW_FUSION_ALPHA_MAX           (0.04f)
+#define PMW_FLOW_FUSION_SETTLE95_SLOW_S     (0.50f)
+#define PMW_FLOW_FUSION_SETTLE95_FAST_S     (0.05f)
 #define PMW_FLOW_FUSION_BIAS_KI_MIN         (0.02f)
 #define PMW_FLOW_FUSION_BIAS_KI_MAX         (0.05f)
 #define PMW_FLOW_FUSION_ACCEL_BIAS_LIMIT_CMS2 (30.0f)
-#define PMW_FLOW_FUSION_INNOV_DEADBAND_CMS  (10.0f)
-#define PMW_FLOW_FUSION_INNOV_FULL_CMS      (80.0f)
-#define PMW_FLOW_FUSION_EVIDENCE_RISE_S     (1.0f)
-#define PMW_FLOW_FUSION_EVIDENCE_DECAY_S    (0.20f)
+#define PMW_FLOW_FUSION_INNOV_LP_TAU_S      (0.15f)
+#define PMW_FLOW_FUSION_INNOV_EVIDENCE_LOW_CMS  (10.0f)
+#define PMW_FLOW_FUSION_INNOV_EVIDENCE_HIGH_CMS (50.0f)
 #define PMW_FLOW_CONFIDENCE_MIN_UPDATE      (0.10f)
 #define PMW_FLOW_CONFIDENCE_TILT_GOOD_DEG   (8.0f)
 #define PMW_FLOW_CONFIDENCE_RESIDUAL_GOOD_CMS (40.0f)
@@ -138,10 +137,9 @@ typedef struct
 {
     float accel_bias_cms2;
     float innovation_evidence;
-    float previous_innovation_cms;
+    float innovation_lp_cms;
     float alpha;
     float bias_ki;
-    uint8 previous_innovation_valid;
 } PMWFlowPIAxis_t;
 
 static float g_pmw_flow_gyro_flow_x_delta_rad = 0.0f;
@@ -532,6 +530,48 @@ static float pmw_flow_calc_rotation_confidence(const PMWFlowState_t *state)
     return pmw_flow_limit_float(rate_confidence * accel_confidence, 0.0f, 1.0f);
 }
 
+static float pmw_flow_pi_calc_alpha(float evidence, float dt_s)
+{
+    float settling_time_95_s;
+
+    evidence = pmw_flow_limit_float(evidence, 0.0f, 1.0f);
+    settling_time_95_s = PMW_FLOW_FUSION_SETTLE95_SLOW_S -
+                         (PMW_FLOW_FUSION_SETTLE95_SLOW_S -
+                          PMW_FLOW_FUSION_SETTLE95_FAST_S) * evidence;
+    if(!(dt_s > 0.0f))
+    {
+        dt_s = FLOW_SENSOR_NOMINAL_DT_S;
+    }
+
+    return pmw_flow_limit_float(1.0f - expf((-3.0f * dt_s) / settling_time_95_s),
+                                0.0f,
+                                1.0f);
+}
+
+static void pmw_flow_pi_update_evidence(PMWFlowPIAxis_t *axis,
+                                        float innovation_cms,
+                                        float dt_s)
+{
+    float innovation_lpf_alpha;
+    float evidence;
+
+    if((axis == NULL) || !(dt_s > 0.0f))
+    {
+        return;
+    }
+
+    innovation_lpf_alpha = 1.0f - expf(-dt_s / PMW_FLOW_FUSION_INNOV_LP_TAU_S);
+    innovation_lpf_alpha = pmw_flow_limit_float(innovation_lpf_alpha, 0.0f, 1.0f);
+    axis->innovation_lp_cms += innovation_lpf_alpha *
+                               (innovation_cms - axis->innovation_lp_cms);
+
+    evidence = (fabsf(axis->innovation_lp_cms) -
+                PMW_FLOW_FUSION_INNOV_EVIDENCE_LOW_CMS) /
+               (PMW_FLOW_FUSION_INNOV_EVIDENCE_HIGH_CMS -
+                PMW_FLOW_FUSION_INNOV_EVIDENCE_LOW_CMS);
+    axis->innovation_evidence = pmw_flow_limit_float(evidence, 0.0f, 1.0f);
+}
+
 static void pmw_flow_pi_reset_axis(PMWFlowPIAxis_t *axis)
 {
     if(axis == NULL)
@@ -541,16 +581,13 @@ static void pmw_flow_pi_reset_axis(PMWFlowPIAxis_t *axis)
 
     axis->accel_bias_cms2 = 0.0f;
     axis->innovation_evidence = 0.0f;
-    axis->previous_innovation_cms = 0.0f;
-    axis->alpha = PMW_FLOW_FUSION_ALPHA_MIN;
+    axis->innovation_lp_cms = 0.0f;
+    axis->alpha = pmw_flow_pi_calc_alpha(0.0f, FLOW_SENSOR_NOMINAL_DT_S);
     axis->bias_ki = PMW_FLOW_FUSION_BIAS_KI_MIN;
-    axis->previous_innovation_valid = 0U;
 }
 
 static void pmw_flow_pi_note_invalid(PMWFlowPIAxis_t *axis, float dt_s)
 {
-    float decay_step;
-
     if(axis == NULL)
     {
         return;
@@ -558,20 +595,26 @@ static void pmw_flow_pi_note_invalid(PMWFlowPIAxis_t *axis, float dt_s)
 
     if(dt_s > 0.0f)
     {
-        decay_step = dt_s / PMW_FLOW_FUSION_EVIDENCE_DECAY_S;
-        axis->innovation_evidence = pmw_flow_limit_float(
-            axis->innovation_evidence - decay_step,
-            0.0f,
-            1.0f);
+        pmw_flow_pi_update_evidence(axis, 0.0f, dt_s);
     }
 
-    axis->previous_innovation_valid = 0U;
-    axis->alpha = PMW_FLOW_FUSION_ALPHA_MIN +
-                  (PMW_FLOW_FUSION_ALPHA_MAX - PMW_FLOW_FUSION_ALPHA_MIN) *
-                  axis->innovation_evidence;
+    axis->alpha = pmw_flow_pi_calc_alpha(axis->innovation_evidence, dt_s);
     axis->bias_ki = PMW_FLOW_FUSION_BIAS_KI_MIN +
                     (PMW_FLOW_FUSION_BIAS_KI_MAX - PMW_FLOW_FUSION_BIAS_KI_MIN) *
                     axis->innovation_evidence;
+}
+
+static void pmw_flow_pi_clear_evidence(PMWFlowPIAxis_t *axis)
+{
+    if(axis == NULL)
+    {
+        return;
+    }
+
+    axis->innovation_evidence = 0.0f;
+    axis->innovation_lp_cms = 0.0f;
+    axis->alpha = pmw_flow_pi_calc_alpha(0.0f, FLOW_SENSOR_NOMINAL_DT_S);
+    axis->bias_ki = PMW_FLOW_FUSION_BIAS_KI_MIN;
 }
 
 static float pmw_flow_pi_update_axis(PMWFlowPIAxis_t *axis,
@@ -580,10 +623,6 @@ static float pmw_flow_pi_update_axis(PMWFlowPIAxis_t *axis,
                                      float dt_s)
 {
     float innovation_cms;
-    float innovation_abs_cms;
-    float magnitude_scale;
-    float evidence_step;
-    uint8 direction_stable;
 
     if(axis == NULL)
     {
@@ -591,36 +630,9 @@ static float pmw_flow_pi_update_axis(PMWFlowPIAxis_t *axis,
     }
 
     innovation_cms = measurement_cms - prediction_cms;
-    innovation_abs_cms = fabsf(innovation_cms);
-    direction_stable = (uint8)(!axis->previous_innovation_valid ||
-                               (fabsf(axis->previous_innovation_cms) <=
-                                PMW_FLOW_FUSION_INNOV_DEADBAND_CMS) ||
-                               ((innovation_cms * axis->previous_innovation_cms) > 0.0f));
+    pmw_flow_pi_update_evidence(axis, innovation_cms, dt_s);
 
-    if((innovation_abs_cms > PMW_FLOW_FUSION_INNOV_DEADBAND_CMS) &&
-       direction_stable &&
-       (dt_s > 0.0f))
-    {
-        magnitude_scale = innovation_abs_cms / PMW_FLOW_FUSION_INNOV_FULL_CMS;
-        magnitude_scale = pmw_flow_limit_float(magnitude_scale, 0.25f, 1.0f);
-        evidence_step = (dt_s / PMW_FLOW_FUSION_EVIDENCE_RISE_S) * magnitude_scale;
-        axis->innovation_evidence = pmw_flow_limit_float(
-            axis->innovation_evidence + evidence_step,
-            0.0f,
-            1.0f);
-    }
-    else if(dt_s > 0.0f)
-    {
-        evidence_step = dt_s / PMW_FLOW_FUSION_EVIDENCE_DECAY_S;
-        axis->innovation_evidence = pmw_flow_limit_float(
-            axis->innovation_evidence - evidence_step,
-            0.0f,
-            1.0f);
-    }
-
-    axis->alpha = PMW_FLOW_FUSION_ALPHA_MIN +
-                  (PMW_FLOW_FUSION_ALPHA_MAX - PMW_FLOW_FUSION_ALPHA_MIN) *
-                  axis->innovation_evidence;
+    axis->alpha = pmw_flow_pi_calc_alpha(axis->innovation_evidence, dt_s);
     axis->bias_ki = PMW_FLOW_FUSION_BIAS_KI_MIN +
                     (PMW_FLOW_FUSION_BIAS_KI_MAX - PMW_FLOW_FUSION_BIAS_KI_MIN) *
                     axis->innovation_evidence;
@@ -633,9 +645,6 @@ static float pmw_flow_pi_update_axis(PMWFlowPIAxis_t *axis,
             -PMW_FLOW_FUSION_ACCEL_BIAS_LIMIT_CMS2,
             PMW_FLOW_FUSION_ACCEL_BIAS_LIMIT_CMS2);
     }
-
-    axis->previous_innovation_cms = innovation_cms;
-    axis->previous_innovation_valid = 1U;
 
     return prediction_cms + axis->alpha * innovation_cms;
 }
@@ -931,8 +940,8 @@ static void pmw_flow_update_velocity_feedback(PMWFlowState_t *state,
                     imu_vy_cms,
                     -PMW_FLOW_VEL_ABS_LIMIT_CMS,
                     PMW_FLOW_VEL_ABS_LIMIT_CMS);
-                g_pmw_flow_pi_x.previous_innovation_valid = 0U;
-                g_pmw_flow_pi_y.previous_innovation_valid = 0U;
+                pmw_flow_pi_clear_evidence(&g_pmw_flow_pi_x);
+                pmw_flow_pi_clear_evidence(&g_pmw_flow_pi_y);
 #endif
                 g_pmw_flow_fusion_imu_vx_last_cms = imu_vx_cms;
                 g_pmw_flow_fusion_imu_vy_last_cms = imu_vy_cms;
@@ -1059,7 +1068,7 @@ static void pmw_flow_update_velocity_feedback(PMWFlowState_t *state,
             state->velocity_x_fused_cms = state->velocity_x_cms;
             state->velocity_y_fused_cms = state->velocity_y_cms;
             state->flow_confidence = 1.0f;
-            state->flow_fusion_alpha = PMW_FLOW_FUSION_ALPHA_MAX;
+            state->flow_fusion_alpha = 1.0f;
             state->flow_residual_norm_cms = 0.0f;
             g_pmw_flow_fused_vx_cms = state->velocity_x_cms;
             g_pmw_flow_fused_vy_cms = state->velocity_y_cms;
@@ -1479,10 +1488,8 @@ void PMW_Flow_PredictVelocity(float imu_velocity_x_cms, float imu_velocity_y_cms
         {
             g_pmw_flow_fusion_observation_age_s = PMW_FLOW_FUSION_PREDICT_HOLD_S;
 #if !PMW_FLOW_KALMAN_ENABLE
-            pmw_flow_pi_note_invalid(&g_pmw_flow_pi_x,
-                                     PMW_FLOW_FUSION_EVIDENCE_DECAY_S);
-            pmw_flow_pi_note_invalid(&g_pmw_flow_pi_y,
-                                     PMW_FLOW_FUSION_EVIDENCE_DECAY_S);
+            pmw_flow_pi_clear_evidence(&g_pmw_flow_pi_x);
+            pmw_flow_pi_clear_evidence(&g_pmw_flow_pi_y);
 #endif
         }
     }

@@ -38,6 +38,12 @@ float PID_Calculate(PID_Controller *pid, float target, float current, float dt);
 // 使用调用方已经处理好的误差计算输出，适用于周期角度等非普通减法误差。
 float PID_CalculateError(PID_Controller *pid, float error, float dt);
 
+// 使用调用方已经滤波好的微分值计算PID，P/I和总输出限幅仍沿用当前控制器配置。
+float PID_CalculateErrorWithDerivative(PID_Controller *pid,
+                                       float error,
+                                       float derivative,
+                                       float dt);
+
 // 清空 PID 内部历史量，通常在解锁、切模式或急停后调用。
 void PID_Reset(PID_Controller *pid);
 

@@ -119,10 +119,11 @@ static void init_default_pid_parameters(void)
     PID_Init(&angle_pid_roll,  5.50f, 0.01f, 0.0f, 350.0f, 5000.0f, 5.0f, 0.80f);
     PID_Init(&angle_pid_pitch, 5.50f, 0.01f, 0.0f, 350.0f, 5000.0f, 5.0f, 0.80f);
     PID_Init(&angle_pid_yaw,   4.0f, 0.0f, 0.0f, 250.0f, 400.0f, 12.0f, 0.0f);
-    PID_Init(&vel_pid_x, 0.05f, 0.00f, 0.0f, 10.0f, 1500.0f, 20.0f, 0.8f);
-    PID_Init(&vel_pid_y, 0.05f, 0.00f, 0.0f, 10.0f, 1500.0f, 20.0f, 0.8f);
-    PID_Init(&pos_pid_x, 0.5f, 0.00f, 0.0f, 120.0f, 120.0f, 15.0f, 1.0f);
-    PID_Init(&pos_pid_y, 0.5f, 0.00f, 0.0f, 120.0f, 1200.0f, 15.0f, 1.0f);
+    /* 速度D由velocity_loop.c独立滤波，末尾legacy alpha不参与速度D计算。 */
+    PID_Init(&vel_pid_x, 0.05f, 0.00f, 10.0f, 10.0f, 1500.0f, 20.0f, 0.3f);
+    PID_Init(&vel_pid_y, 0.05f, 0.00f, 10.0f, 10.0f, 1500.0f, 20.0f, 0.3f);
+    PID_Init(&pos_pid_x, 0.6f, 0.00f, 0.0f, 120.0f, 120.0f, 15.0f, 1.0f);
+    PID_Init(&pos_pid_y, 0.6f, 0.00f, 0.0f, 120.0f, 1200.0f, 15.0f, 1.0f);
 
     PID_SetReferenceDt(&gyro_pid_roll, LEGACY_FAST_PID_DT_S);
     PID_SetReferenceDt(&gyro_pid_pitch, LEGACY_FAST_PID_DT_S);
@@ -132,6 +133,10 @@ static void init_default_pid_parameters(void)
     PID_SetReferenceDt(&angle_pid_yaw, LEGACY_FAST_PID_DT_S);
     PID_SetReferenceDt(&vel_pid_x, LEGACY_FAST_PID_DT_S);
     PID_SetReferenceDt(&vel_pid_y, LEGACY_FAST_PID_DT_S);
+    (void)Velocity_Loop_Set_D_Filter_Hz(VELOCITY_LOOP_AXIS_X,
+                                        VELOCITY_LOOP_D_FILTER_DEFAULT_HZ);
+    (void)Velocity_Loop_Set_D_Filter_Hz(VELOCITY_LOOP_AXIS_Y,
+                                        VELOCITY_LOOP_D_FILTER_DEFAULT_HZ);
     PID_SetReferenceDt(&pos_pid_x, LEGACY_FAST_PID_DT_S);
     PID_SetReferenceDt(&pos_pid_y, LEGACY_FAST_PID_DT_S);
     PID_SetReferenceDt(&HeightPID, HEIGHT_PID_DT_S);

@@ -13,6 +13,18 @@
 #define VEL_LOOP_RATE_FF_GAIN_MAX       (2.0f)
 #define VEL_LOOP_RATE_FF_LIMIT_DEFAULT  (60.0f)
 #define VEL_LOOP_RATE_FF_LIMIT_MAX      (350.0f)
+#define VEL_LOOP_D_ACCEL_LIMIT_CMS2     (900.0f)
+#define VEL_LOOP_TWO_PI_F               (6.28318530718f)
+
+typedef struct
+{
+    float previous_velocity_cms;
+    float accel_history_cms2[3];
+    float filtered_accel_cms2;
+    volatile float cutoff_hz;
+    uint8 history_index;
+    uint8 initialized;
+} VelocityLoopDState_t;
 
 PID_Controller vel_pid_x;
 PID_Controller vel_pid_y;
@@ -36,6 +48,7 @@ static float g_velocity_loop_prev_roll_corr_deg = 0.0f;
 static uint8 g_velocity_loop_rate_ff_initialized = 0U;
 static VelocityLoopRateFeedforwardDiag_t g_velocity_loop_rate_ff_diag = {0};
 static volatile VelocityLoopAxisDiag_t g_velocity_loop_axis_diag[2];
+static VelocityLoopDState_t g_velocity_loop_d_state[2];
 
 static float velocity_loop_limit_float(float value, float min_value, float max_value)
 {
@@ -48,6 +61,120 @@ static float velocity_loop_limit_float(float value, float min_value, float max_v
         return min_value;
     }
     return value;
+}
+
+static float velocity_loop_median3(float a, float b, float c)
+{
+    float temp;
+
+    if(a > b)
+    {
+        temp = a;
+        a = b;
+        b = temp;
+    }
+    if(b > c)
+    {
+        temp = b;
+        b = c;
+        c = temp;
+    }
+    if(a > b)
+    {
+        b = a;
+    }
+    return b;
+}
+
+static void velocity_loop_reset_d_axis(VelocityLoopDState_t *state)
+{
+    if(state == NULL)
+    {
+        return;
+    }
+
+    state->previous_velocity_cms = 0.0f;
+    state->accel_history_cms2[0] = 0.0f;
+    state->accel_history_cms2[1] = 0.0f;
+    state->accel_history_cms2[2] = 0.0f;
+    state->filtered_accel_cms2 = 0.0f;
+    state->history_index = 0U;
+    state->initialized = 0U;
+}
+
+static void velocity_loop_reset_d_state(void)
+{
+    velocity_loop_reset_d_axis(&g_velocity_loop_d_state[VELOCITY_LOOP_AXIS_X]);
+    velocity_loop_reset_d_axis(&g_velocity_loop_d_state[VELOCITY_LOOP_AXIS_Y]);
+}
+
+static float velocity_loop_update_d_derivative(uint8 axis,
+                                               PID_Controller *pid,
+                                               float actual_velocity_cms,
+                                               float dt_s)
+{
+    VelocityLoopDState_t *state;
+    float raw_accel_cms2;
+    float median_accel_cms2;
+    float limited_accel_cms2;
+    float cutoff_hz;
+    float filter_alpha;
+    float reference_dt_s;
+
+    if((axis > VELOCITY_LOOP_AXIS_Y) || (pid == NULL))
+    {
+        return 0.0f;
+    }
+
+    state = &g_velocity_loop_d_state[axis];
+    if(!isfinite(actual_velocity_cms) || !isfinite(dt_s) || !(dt_s > 0.0f))
+    {
+        velocity_loop_reset_d_axis(state);
+        return 0.0f;
+    }
+
+    if(!state->initialized)
+    {
+        state->previous_velocity_cms = actual_velocity_cms;
+        state->initialized = 1U;
+        return 0.0f;
+    }
+
+    raw_accel_cms2 = -(actual_velocity_cms - state->previous_velocity_cms) / dt_s;
+    state->previous_velocity_cms = actual_velocity_cms;
+    if(!isfinite(raw_accel_cms2))
+    {
+        velocity_loop_reset_d_axis(state);
+        state->previous_velocity_cms = actual_velocity_cms;
+        state->initialized = 1U;
+        return 0.0f;
+    }
+
+    state->accel_history_cms2[state->history_index] = raw_accel_cms2;
+    state->history_index = (uint8)((state->history_index + 1U) % 3U);
+    median_accel_cms2 = velocity_loop_median3(state->accel_history_cms2[0],
+                                              state->accel_history_cms2[1],
+                                              state->accel_history_cms2[2]);
+    limited_accel_cms2 = velocity_loop_limit_float(median_accel_cms2,
+                                                   -VEL_LOOP_D_ACCEL_LIMIT_CMS2,
+                                                   VEL_LOOP_D_ACCEL_LIMIT_CMS2);
+
+    cutoff_hz = state->cutoff_hz;
+    if(!isfinite(cutoff_hz) ||
+       cutoff_hz < VELOCITY_LOOP_D_FILTER_MIN_HZ ||
+       cutoff_hz > VELOCITY_LOOP_D_FILTER_MAX_HZ)
+    {
+        cutoff_hz = VELOCITY_LOOP_D_FILTER_DEFAULT_HZ;
+    }
+    filter_alpha = 1.0f - expf(-VEL_LOOP_TWO_PI_F * cutoff_hz * dt_s);
+    filter_alpha = velocity_loop_limit_float(filter_alpha, 0.0f, 1.0f);
+    state->filtered_accel_cms2 += filter_alpha *
+                                  (limited_accel_cms2 - state->filtered_accel_cms2);
+
+    reference_dt_s = (isfinite(pid->reference_dt_s) && pid->reference_dt_s > 0.0f)
+                       ? pid->reference_dt_s
+                       : dt_s;
+    return state->filtered_accel_cms2 * reference_dt_s;
 }
 
 static void velocity_loop_reset_rate_feedforward(void)
@@ -153,6 +280,7 @@ static void velocity_loop_reset_feedback_diag(void)
 
 void Velocity_Loop_Set_Enabled(uint8 enabled)
 {
+    velocity_loop_reset_d_state();
     if(enabled)
     {
         g_velocity_loop_enabled = 1U;
@@ -197,10 +325,39 @@ void Velocity_Loop_Reset_Runtime(void)
     g_velocity_loop_target_vy_cms = 0.0f;
     PID_Reset(&vel_pid_x);
     PID_Reset(&vel_pid_y);
+    velocity_loop_reset_d_state();
     velocity_loop_reset_diag();
     velocity_loop_reset_feedback_diag();
     g_velocity_loop_active = 0U;
     velocity_loop_reset_rate_feedforward();
+}
+
+void Velocity_Loop_Reset_D_Filter_State(void)
+{
+    velocity_loop_reset_d_state();
+}
+
+uint8 Velocity_Loop_Set_D_Filter_Hz(uint8 axis, float cutoff_hz)
+{
+    if((axis > VELOCITY_LOOP_AXIS_Y) ||
+       !isfinite(cutoff_hz) ||
+       cutoff_hz < VELOCITY_LOOP_D_FILTER_MIN_HZ ||
+       cutoff_hz > VELOCITY_LOOP_D_FILTER_MAX_HZ)
+    {
+        return 0U;
+    }
+
+    g_velocity_loop_d_state[axis].cutoff_hz = cutoff_hz;
+    return 1U;
+}
+
+float Velocity_Loop_Get_D_Filter_Hz(uint8 axis)
+{
+    if(axis > VELOCITY_LOOP_AXIS_Y)
+    {
+        return 0.0f;
+    }
+    return g_velocity_loop_d_state[axis].cutoff_hz;
 }
 
 uint8 Velocity_Loop_Set_Rate_Feedforward_Parameters(uint8 axis,
@@ -305,6 +462,7 @@ void Velocity_Loop_Update_Attitude_Target(uint8 velocity_ready,
         *target_pitch = captured_pitch;
         PID_Reset(&vel_pid_x);
         PID_Reset(&vel_pid_y);
+        velocity_loop_reset_d_state();
         velocity_loop_reset_diag();
         velocity_loop_reset_feedback_diag();
         g_velocity_loop_active = 0U;
@@ -320,18 +478,30 @@ void Velocity_Loop_Update_Attitude_Target(uint8 velocity_ready,
         float roll_corr;
         float fb_vx_cms;
         float fb_vy_cms;
+        float x_derivative;
+        float y_derivative;
 
         fb_vx_cms = measured_vx_cms;
         fb_vy_cms = measured_vy_cms;
 
-        ax_cmd_cms2 = PID_Calculate(&vel_pid_x,
-                                    g_velocity_loop_target_vx_cms,
-                                    fb_vx_cms,
-                                    VELOCITY_LOOP_DT_S);
-        ay_cmd_cms2 = PID_Calculate(&vel_pid_y,
-                                    g_velocity_loop_target_vy_cms,
-                                    fb_vy_cms,
-                                    VELOCITY_LOOP_DT_S);
+        x_derivative = velocity_loop_update_d_derivative(VELOCITY_LOOP_AXIS_X,
+                                                         &vel_pid_x,
+                                                         fb_vx_cms,
+                                                         VELOCITY_LOOP_DT_S);
+        y_derivative = velocity_loop_update_d_derivative(VELOCITY_LOOP_AXIS_Y,
+                                                         &vel_pid_y,
+                                                         fb_vy_cms,
+                                                         VELOCITY_LOOP_DT_S);
+        ax_cmd_cms2 = PID_CalculateErrorWithDerivative(
+            &vel_pid_x,
+            g_velocity_loop_target_vx_cms - fb_vx_cms,
+            x_derivative,
+            VELOCITY_LOOP_DT_S);
+        ay_cmd_cms2 = PID_CalculateErrorWithDerivative(
+            &vel_pid_y,
+            g_velocity_loop_target_vy_cms - fb_vy_cms,
+            y_derivative,
+            VELOCITY_LOOP_DT_S);
 
         pitch_corr = ax_cmd_cms2;
         roll_corr  = ay_cmd_cms2;
@@ -371,6 +541,7 @@ void Velocity_Loop_Update_Attitude_Target(uint8 velocity_ready,
         *target_pitch = captured_pitch;
         PID_Reset(&vel_pid_x);
         PID_Reset(&vel_pid_y);
+        velocity_loop_reset_d_state();
         velocity_loop_reset_diag();
         velocity_loop_reset_feedback_diag();
         g_velocity_loop_active = 0U;
