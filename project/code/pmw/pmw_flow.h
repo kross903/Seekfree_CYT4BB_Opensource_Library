@@ -56,6 +56,14 @@ typedef struct
     float flow_confidence;
     float flow_rotation_confidence;
     float flow_fusion_alpha;
+    float fusion_alpha_x;
+    float fusion_alpha_y;
+    float fusion_bias_ki_x;
+    float fusion_bias_ki_y;
+    float fusion_accel_bias_x_cms2;
+    float fusion_accel_bias_y_cms2;
+    float fusion_innovation_evidence_x;
+    float fusion_innovation_evidence_y;
     /* 最近一次光流反馈更新时的融合分解快照。 */
     float fusion_imu_velocity_x_cms;
     float fusion_imu_velocity_y_cms;

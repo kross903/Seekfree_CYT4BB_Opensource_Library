@@ -60,12 +60,16 @@
 #define PMW_FLOW_VEL_SLEW_LIMIT_CMS2        (1500.0f)
 #define PMW_FLOW_VEL_SLEW_MIN_STEP_CMS      (12.0f)
 #define PMW_FLOW_VEL_OUTPUT_SLEW_LIMIT_CMS2 PMW_FLOW_GRAVITY_CMS2
-/* Dynamic confidence fusion is enabled; FU! reports the active confidence and alpha. */
-#define PMW_FLOW_CONFIDENCE_FUSION_ENABLE   (1U)
-#define PMW_FLOW_FUSION_ALPHA_DEFAULT       (0.20f)
-#define PMW_FLOW_FUSION_ALPHA_MIN           (0.15f)
-#define PMW_FLOW_FUSION_ALPHA_MAX           (0.40f)
-#define PMW_FLOW_FUSION_ALPHA_RISE_STEP     (0.05f)
+/* 速度版Mahony：IMU负责短期预测，光流通过PI观测器缓慢修正速度与加速度零偏。 */
+#define PMW_FLOW_FUSION_ALPHA_MIN           (0.01f)
+#define PMW_FLOW_FUSION_ALPHA_MAX           (0.04f)
+#define PMW_FLOW_FUSION_BIAS_KI_MIN         (0.02f)
+#define PMW_FLOW_FUSION_BIAS_KI_MAX         (0.05f)
+#define PMW_FLOW_FUSION_ACCEL_BIAS_LIMIT_CMS2 (30.0f)
+#define PMW_FLOW_FUSION_INNOV_DEADBAND_CMS  (10.0f)
+#define PMW_FLOW_FUSION_INNOV_FULL_CMS      (80.0f)
+#define PMW_FLOW_FUSION_EVIDENCE_RISE_S     (1.0f)
+#define PMW_FLOW_FUSION_EVIDENCE_DECAY_S    (0.20f)
 #define PMW_FLOW_CONFIDENCE_MIN_UPDATE      (0.10f)
 #define PMW_FLOW_CONFIDENCE_TILT_GOOD_DEG   (8.0f)
 #define PMW_FLOW_CONFIDENCE_RESIDUAL_GOOD_CMS (40.0f)
@@ -130,6 +134,16 @@ typedef struct
     uint8 initialized;
 } PMWFlowKalman1D_t;
 
+typedef struct
+{
+    float accel_bias_cms2;
+    float innovation_evidence;
+    float previous_innovation_cms;
+    float alpha;
+    float bias_ki;
+    uint8 previous_innovation_valid;
+} PMWFlowPIAxis_t;
+
 static float g_pmw_flow_gyro_flow_x_delta_rad = 0.0f;
 static float g_pmw_flow_gyro_flow_y_delta_rad = 0.0f;
 static float g_pmw_flow_gyro_flow_z_delta_rad = 0.0f;
@@ -178,7 +192,8 @@ static uint8 g_pmw_flow_fusion_init = 0U;
 static uint8 g_pmw_flow_fusion_residual_reset_count = 0U;
 static uint8 g_pmw_flow_fusion_no_observation_frames = 0U;
 static float g_pmw_flow_fusion_observation_age_s = PMW_FLOW_FUSION_PREDICT_HOLD_S;
-static float g_pmw_flow_fusion_alpha_state = 0.0f;
+static PMWFlowPIAxis_t g_pmw_flow_pi_x = {0};
+static PMWFlowPIAxis_t g_pmw_flow_pi_y = {0};
 static float g_pmw_flow_conf_prev_gyro_rate_x_rad_s = 0.0f;
 static float g_pmw_flow_conf_prev_gyro_rate_y_rad_s = 0.0f;
 static float g_pmw_flow_conf_prev_gyro_rate_z_rad_s = 0.0f;
@@ -517,46 +532,132 @@ static float pmw_flow_calc_rotation_confidence(const PMWFlowState_t *state)
     return pmw_flow_limit_float(rate_confidence * accel_confidence, 0.0f, 1.0f);
 }
 
-#if !PMW_FLOW_KALMAN_ENABLE
-static float pmw_flow_update_fusion_alpha(float confidence)
+static void pmw_flow_pi_reset_axis(PMWFlowPIAxis_t *axis)
 {
-    float confidence_for_alpha;
-    float target_alpha;
-
-    if(confidence < PMW_FLOW_CONFIDENCE_MIN_UPDATE)
+    if(axis == NULL)
     {
-        g_pmw_flow_fusion_alpha_state = 0.0f;
-        return 0.0f;
+        return;
     }
 
-    confidence_for_alpha =
-        (confidence - PMW_FLOW_CONFIDENCE_MIN_UPDATE) /
-        (1.0f - PMW_FLOW_CONFIDENCE_MIN_UPDATE);
-    confidence_for_alpha = pmw_flow_limit_float(confidence_for_alpha, 0.0f, 1.0f);
-    target_alpha = PMW_FLOW_FUSION_ALPHA_MIN +
-                   confidence_for_alpha *
-                   (PMW_FLOW_FUSION_ALPHA_MAX - PMW_FLOW_FUSION_ALPHA_MIN);
-
-    if(g_pmw_flow_fusion_alpha_state < PMW_FLOW_FUSION_ALPHA_MIN)
-    {
-        g_pmw_flow_fusion_alpha_state = PMW_FLOW_FUSION_ALPHA_MIN;
-    }
-    else if(target_alpha >
-            (g_pmw_flow_fusion_alpha_state + PMW_FLOW_FUSION_ALPHA_RISE_STEP))
-    {
-        g_pmw_flow_fusion_alpha_state += PMW_FLOW_FUSION_ALPHA_RISE_STEP;
-    }
-    else
-    {
-        g_pmw_flow_fusion_alpha_state = target_alpha;
-    }
-
-    return pmw_flow_limit_float(g_pmw_flow_fusion_alpha_state,
-                                0.0f,
-                                PMW_FLOW_FUSION_ALPHA_MAX);
+    axis->accel_bias_cms2 = 0.0f;
+    axis->innovation_evidence = 0.0f;
+    axis->previous_innovation_cms = 0.0f;
+    axis->alpha = PMW_FLOW_FUSION_ALPHA_MIN;
+    axis->bias_ki = PMW_FLOW_FUSION_BIAS_KI_MIN;
+    axis->previous_innovation_valid = 0U;
 }
-#endif
 
+static void pmw_flow_pi_note_invalid(PMWFlowPIAxis_t *axis, float dt_s)
+{
+    float decay_step;
+
+    if(axis == NULL)
+    {
+        return;
+    }
+
+    if(dt_s > 0.0f)
+    {
+        decay_step = dt_s / PMW_FLOW_FUSION_EVIDENCE_DECAY_S;
+        axis->innovation_evidence = pmw_flow_limit_float(
+            axis->innovation_evidence - decay_step,
+            0.0f,
+            1.0f);
+    }
+
+    axis->previous_innovation_valid = 0U;
+    axis->alpha = PMW_FLOW_FUSION_ALPHA_MIN +
+                  (PMW_FLOW_FUSION_ALPHA_MAX - PMW_FLOW_FUSION_ALPHA_MIN) *
+                  axis->innovation_evidence;
+    axis->bias_ki = PMW_FLOW_FUSION_BIAS_KI_MIN +
+                    (PMW_FLOW_FUSION_BIAS_KI_MAX - PMW_FLOW_FUSION_BIAS_KI_MIN) *
+                    axis->innovation_evidence;
+}
+
+static float pmw_flow_pi_update_axis(PMWFlowPIAxis_t *axis,
+                                     float prediction_cms,
+                                     float measurement_cms,
+                                     float dt_s)
+{
+    float innovation_cms;
+    float innovation_abs_cms;
+    float magnitude_scale;
+    float evidence_step;
+    uint8 direction_stable;
+
+    if(axis == NULL)
+    {
+        return prediction_cms;
+    }
+
+    innovation_cms = measurement_cms - prediction_cms;
+    innovation_abs_cms = fabsf(innovation_cms);
+    direction_stable = (uint8)(!axis->previous_innovation_valid ||
+                               (fabsf(axis->previous_innovation_cms) <=
+                                PMW_FLOW_FUSION_INNOV_DEADBAND_CMS) ||
+                               ((innovation_cms * axis->previous_innovation_cms) > 0.0f));
+
+    if((innovation_abs_cms > PMW_FLOW_FUSION_INNOV_DEADBAND_CMS) &&
+       direction_stable &&
+       (dt_s > 0.0f))
+    {
+        magnitude_scale = innovation_abs_cms / PMW_FLOW_FUSION_INNOV_FULL_CMS;
+        magnitude_scale = pmw_flow_limit_float(magnitude_scale, 0.25f, 1.0f);
+        evidence_step = (dt_s / PMW_FLOW_FUSION_EVIDENCE_RISE_S) * magnitude_scale;
+        axis->innovation_evidence = pmw_flow_limit_float(
+            axis->innovation_evidence + evidence_step,
+            0.0f,
+            1.0f);
+    }
+    else if(dt_s > 0.0f)
+    {
+        evidence_step = dt_s / PMW_FLOW_FUSION_EVIDENCE_DECAY_S;
+        axis->innovation_evidence = pmw_flow_limit_float(
+            axis->innovation_evidence - evidence_step,
+            0.0f,
+            1.0f);
+    }
+
+    axis->alpha = PMW_FLOW_FUSION_ALPHA_MIN +
+                  (PMW_FLOW_FUSION_ALPHA_MAX - PMW_FLOW_FUSION_ALPHA_MIN) *
+                  axis->innovation_evidence;
+    axis->bias_ki = PMW_FLOW_FUSION_BIAS_KI_MIN +
+                    (PMW_FLOW_FUSION_BIAS_KI_MAX - PMW_FLOW_FUSION_BIAS_KI_MIN) *
+                    axis->innovation_evidence;
+
+    if(dt_s > 0.0f)
+    {
+        axis->accel_bias_cms2 -= axis->bias_ki * innovation_cms * dt_s;
+        axis->accel_bias_cms2 = pmw_flow_limit_float(
+            axis->accel_bias_cms2,
+            -PMW_FLOW_FUSION_ACCEL_BIAS_LIMIT_CMS2,
+            PMW_FLOW_FUSION_ACCEL_BIAS_LIMIT_CMS2);
+    }
+
+    axis->previous_innovation_cms = innovation_cms;
+    axis->previous_innovation_valid = 1U;
+
+    return prediction_cms + axis->alpha * innovation_cms;
+}
+
+static void pmw_flow_sync_pi_diag(PMWFlowState_t *state)
+{
+    if(state == NULL)
+    {
+        return;
+    }
+
+    state->fusion_alpha_x = g_pmw_flow_pi_x.alpha;
+    state->fusion_alpha_y = g_pmw_flow_pi_y.alpha;
+    state->fusion_bias_ki_x = g_pmw_flow_pi_x.bias_ki;
+    state->fusion_bias_ki_y = g_pmw_flow_pi_y.bias_ki;
+    state->fusion_accel_bias_x_cms2 = g_pmw_flow_pi_x.accel_bias_cms2;
+    state->fusion_accel_bias_y_cms2 = g_pmw_flow_pi_y.accel_bias_cms2;
+    state->fusion_innovation_evidence_x = g_pmw_flow_pi_x.innovation_evidence;
+    state->fusion_innovation_evidence_y = g_pmw_flow_pi_y.innovation_evidence;
+}
+
+#if PMW_FLOW_KALMAN_ENABLE
 static float pmw_flow_calc_confidence(const PMWFlowState_t *state,
                                       uint8 tof_source,
                                       float fused_vx_cms,
@@ -635,6 +736,7 @@ static float pmw_flow_calc_confidence(const PMWFlowState_t *state,
 
     return confidence;
 }
+#endif
 
 static float pmw_flow_limit_velocity_slew(float sample_cms, float previous_cms, float dt_s)
 {
@@ -777,10 +879,6 @@ static void pmw_flow_update_velocity_feedback(PMWFlowState_t *state,
     float residual_y_cms;
     float residual_norm_cms;
     float flow_confidence;
-#if !PMW_FLOW_KALMAN_ENABLE
-    float fusion_alpha;
-#endif
-
     if(state == NULL)
     {
         return;
@@ -808,6 +906,7 @@ static void pmw_flow_update_velocity_feedback(PMWFlowState_t *state,
 
     if(flow_observation_valid &&
        state->valid &&
+       state->flow_sync_valid &&
        pmw_flow_is_valid_number(state->velocity_x_cms) &&
        pmw_flow_is_valid_number(state->velocity_y_cms))
     {
@@ -832,7 +931,8 @@ static void pmw_flow_update_velocity_feedback(PMWFlowState_t *state,
                     imu_vy_cms,
                     -PMW_FLOW_VEL_ABS_LIMIT_CMS,
                     PMW_FLOW_VEL_ABS_LIMIT_CMS);
-                g_pmw_flow_fusion_alpha_state = 0.0f;
+                g_pmw_flow_pi_x.previous_innovation_valid = 0U;
+                g_pmw_flow_pi_y.previous_innovation_valid = 0U;
 #endif
                 g_pmw_flow_fusion_imu_vx_last_cms = imu_vx_cms;
                 g_pmw_flow_fusion_imu_vy_last_cms = imu_vy_cms;
@@ -847,14 +947,21 @@ static void pmw_flow_update_velocity_feedback(PMWFlowState_t *state,
             g_pmw_flow_fusion_imu_vy_last_cms = imu_vy_cms;
 
             acc_used = 1U;
+            state->fusion_prediction_x_cms = g_pmw_flow_fused_vx_cms;
+            state->fusion_prediction_y_cms = g_pmw_flow_fused_vy_cms;
             residual_x_cms = state->velocity_x_cms - g_pmw_flow_fused_vx_cms;
             residual_y_cms = state->velocity_y_cms - g_pmw_flow_fused_vy_cms;
             residual_norm_cms = sqrtf(residual_x_cms * residual_x_cms +
                                       residual_y_cms * residual_y_cms);
+#if PMW_FLOW_KALMAN_ENABLE
             flow_confidence = pmw_flow_calc_confidence(state,
                                                        tof_source,
                                                        g_pmw_flow_fused_vx_cms,
                                                        g_pmw_flow_fused_vy_cms);
+#else
+            /* PI观测器只由光流、ToF和同步有效性门控，不使用旋转或创新量拒绝。 */
+            flow_confidence = 1.0f;
+#endif
             state->flow_confidence = flow_confidence;
             state->flow_residual_norm_cms = residual_norm_cms;
 
@@ -916,69 +1023,20 @@ static void pmw_flow_update_velocity_feedback(PMWFlowState_t *state,
             g_pmw_flow_fused_vx_cms = g_pmw_flow_kalman_x.x;
             g_pmw_flow_fused_vy_cms = g_pmw_flow_kalman_y.x;
 #else
-            fusion_alpha = pmw_flow_update_fusion_alpha(flow_confidence);
             state->flow_confidence = flow_confidence;
-            state->flow_fusion_alpha = fusion_alpha;
             state->flow_residual_norm_cms = residual_norm_cms;
-
-#if PMW_FLOW_CONFIDENCE_FUSION_ENABLE
-            if(residual_norm_cms > PMW_FLOW_FUSION_RESIDUAL_RESET_CMS)
-            {
-                if(flow_confidence >= PMW_FLOW_FUSION_RESET_MIN_CONFIDENCE &&
-                   state->flow_rotation_confidence >=
-                       PMW_FLOW_FUSION_RESET_MIN_ROT_CONFIDENCE)
-                {
-                    if(g_pmw_flow_fusion_residual_reset_count < PMW_FLOW_FUSION_RESET_CONFIRM_FRAMES)
-                    {
-                        g_pmw_flow_fusion_residual_reset_count++;
-                    }
-                }
-                else
-                {
-                    g_pmw_flow_fusion_residual_reset_count = 0U;
-                }
-
-                if(g_pmw_flow_fusion_residual_reset_count >= PMW_FLOW_FUSION_RESET_CONFIRM_FRAMES)
-                {
-                    g_pmw_flow_fused_vx_cms = state->velocity_x_cms;
-                    g_pmw_flow_fused_vy_cms = state->velocity_y_cms;
-                    g_pmw_flow_fusion_residual_reset_count = 0U;
-                }
-                else if(flow_confidence >= PMW_FLOW_CONFIDENCE_MIN_UPDATE)
-                {
-                    g_pmw_flow_fused_vx_cms += fusion_alpha * residual_x_cms;
-                    g_pmw_flow_fused_vy_cms += fusion_alpha * residual_y_cms;
-                }
-            }
-            else if(flow_confidence >= PMW_FLOW_CONFIDENCE_MIN_UPDATE)
-            {
-                g_pmw_flow_fusion_residual_reset_count = 0U;
-                g_pmw_flow_fused_vx_cms += fusion_alpha * residual_x_cms;
-                g_pmw_flow_fused_vy_cms += fusion_alpha * residual_y_cms;
-            }
-            else
-            {
-                g_pmw_flow_fusion_residual_reset_count = 0U;
-            }
-#else
-            if(fabsf(residual_x_cms) > PMW_FLOW_FUSION_RESIDUAL_RESET_CMS)
-            {
-                g_pmw_flow_fused_vx_cms = state->velocity_x_cms;
-            }
-            else
-            {
-                g_pmw_flow_fused_vx_cms += PMW_FLOW_FUSION_ALPHA_DEFAULT * residual_x_cms;
-            }
-
-            if(fabsf(residual_y_cms) > PMW_FLOW_FUSION_RESIDUAL_RESET_CMS)
-            {
-                g_pmw_flow_fused_vy_cms = state->velocity_y_cms;
-            }
-            else
-            {
-                g_pmw_flow_fused_vy_cms += PMW_FLOW_FUSION_ALPHA_DEFAULT * residual_y_cms;
-            }
-#endif
+            g_pmw_flow_fused_vx_cms = pmw_flow_pi_update_axis(
+                &g_pmw_flow_pi_x,
+                g_pmw_flow_fused_vx_cms,
+                state->velocity_x_cms,
+                state->dt_s);
+            g_pmw_flow_fused_vy_cms = pmw_flow_pi_update_axis(
+                &g_pmw_flow_pi_y,
+                g_pmw_flow_fused_vy_cms,
+                state->velocity_y_cms,
+                state->dt_s);
+            state->flow_fusion_alpha =
+                (g_pmw_flow_pi_x.alpha + g_pmw_flow_pi_y.alpha) * 0.5f;
 #endif
 
             g_pmw_flow_fused_vx_cms = pmw_flow_limit_float(g_pmw_flow_fused_vx_cms,
@@ -1009,9 +1067,6 @@ static void pmw_flow_update_velocity_feedback(PMWFlowState_t *state,
             g_pmw_flow_fusion_residual_reset_count = 0U;
             g_pmw_flow_fusion_no_observation_frames = 0U;
             g_pmw_flow_fusion_observation_age_s = PMW_FLOW_FUSION_PREDICT_HOLD_S;
-#if !PMW_FLOW_KALMAN_ENABLE
-            g_pmw_flow_fusion_alpha_state = 0.0f;
-#endif
 #if PMW_FLOW_KALMAN_ENABLE
             pmw_flow_kalman_reset();
 #endif
@@ -1024,7 +1079,8 @@ static void pmw_flow_update_velocity_feedback(PMWFlowState_t *state,
         state->flow_fusion_alpha = 0.0f;
         state->flow_residual_norm_cms = 0.0f;
 #if !PMW_FLOW_KALMAN_ENABLE
-        g_pmw_flow_fusion_alpha_state = 0.0f;
+        pmw_flow_pi_note_invalid(&g_pmw_flow_pi_x, state->dt_s);
+        pmw_flow_pi_note_invalid(&g_pmw_flow_pi_y, state->dt_s);
 #endif
 
         if(pmw_flow_fusion_predict_hold_active())
@@ -1081,6 +1137,7 @@ static void pmw_flow_update_velocity_feedback(PMWFlowState_t *state,
     state->acc_used = acc_used;
     state->fused_velocity_valid = fused_velocity_valid;
     pmw_flow_sync_kalman_diag(state);
+    pmw_flow_sync_pi_diag(state);
 }
 
 static void pmw_flow_update_world_odometry(PMWFlowState_t *state)
@@ -1277,7 +1334,8 @@ void PMW_Flow_Reset(void)
     g_pmw_flow_fusion_residual_reset_count = 0U;
     g_pmw_flow_fusion_no_observation_frames = 0U;
     g_pmw_flow_fusion_observation_age_s = PMW_FLOW_FUSION_PREDICT_HOLD_S;
-    g_pmw_flow_fusion_alpha_state = 0.0f;
+    pmw_flow_pi_reset_axis(&g_pmw_flow_pi_x);
+    pmw_flow_pi_reset_axis(&g_pmw_flow_pi_y);
     g_pmw_flow_conf_prev_gyro_rate_x_rad_s = 0.0f;
     g_pmw_flow_conf_prev_gyro_rate_y_rad_s = 0.0f;
     g_pmw_flow_conf_prev_gyro_rate_z_rad_s = 0.0f;
@@ -1417,9 +1475,15 @@ void PMW_Flow_PredictVelocity(float imu_velocity_x_cms, float imu_velocity_y_cms
        g_pmw_flow_fusion_observation_age_s < PMW_FLOW_FUSION_PREDICT_HOLD_S)
     {
         g_pmw_flow_fusion_observation_age_s += dt_s;
-        if(g_pmw_flow_fusion_observation_age_s > PMW_FLOW_FUSION_PREDICT_HOLD_S)
+        if(g_pmw_flow_fusion_observation_age_s >= PMW_FLOW_FUSION_PREDICT_HOLD_S)
         {
             g_pmw_flow_fusion_observation_age_s = PMW_FLOW_FUSION_PREDICT_HOLD_S;
+#if !PMW_FLOW_KALMAN_ENABLE
+            pmw_flow_pi_note_invalid(&g_pmw_flow_pi_x,
+                                     PMW_FLOW_FUSION_EVIDENCE_DECAY_S);
+            pmw_flow_pi_note_invalid(&g_pmw_flow_pi_y,
+                                     PMW_FLOW_FUSION_EVIDENCE_DECAY_S);
+#endif
         }
     }
 
@@ -1463,6 +1527,8 @@ void PMW_Flow_PredictVelocity(float imu_velocity_x_cms, float imu_velocity_y_cms
     g_pmw_flow_fused_vx_cms = g_pmw_flow_kalman_x.x;
     g_pmw_flow_fused_vy_cms = g_pmw_flow_kalman_y.x;
 #else
+    imu_delta_x_cms -= g_pmw_flow_pi_x.accel_bias_cms2 * dt_s;
+    imu_delta_y_cms -= g_pmw_flow_pi_y.accel_bias_cms2 * dt_s;
     g_pmw_flow_fused_vx_cms += imu_delta_x_cms;
     g_pmw_flow_fused_vy_cms += imu_delta_y_cms;
 #endif
@@ -1801,6 +1867,7 @@ void PMW_Flow_GetState(PMWFlowState_t *state)
     PMW_Flow_SyncMainLoopBuffer();
     *state = g_pmw_flow_mainloop_state;
     pmw_flow_sync_kalman_diag(state);
+    pmw_flow_sync_pi_diag(state);
     state->flow_frame_seq = g_pmw_flow_sync_frame_seq;
     state->flow_rx_dt_ms = g_pmw_flow_sync_rx_dt_ms;
     state->flow_sensor_dt_ms = g_pmw_flow_sync_sensor_dt_ms;

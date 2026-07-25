@@ -1270,6 +1270,8 @@ void USART_PID_Adjust(void)
                 case 'g': send_back_flag = 16; break;
                 case 'I':
                 case 'i': send_back_flag = 18; break;
+                case 'K':
+                case 'k': send_back_flag = 36; break;
                 case 'L':
                 case 'l': send_back_flag = 31; break;
                 case 'O':
@@ -1791,6 +1793,30 @@ void send_date_back(void)
                               pmw_flow_state.fusion_correction_y_cms,
                               pmw_flow_state.fusion_output_y_cms,
                               (float)pmw_flow_state.fused_velocity_valid);
+            break;
+        }
+
+        case 36:
+        {
+            PMWFlowState_t flow_state = {0};
+
+            PMW_Flow_GetState(&flow_state);
+            send_sixteen_date(flow_state.fusion_prediction_x_cms,
+                              flow_state.velocity_x_cms,
+                              flow_state.fusion_residual_x_cms,
+                              flow_state.fusion_innovation_evidence_x,
+                              flow_state.fusion_alpha_x,
+                              flow_state.fusion_bias_ki_x,
+                              flow_state.fusion_accel_bias_x_cms2,
+                              flow_state.velocity_x_fused_cms,
+                              flow_state.fusion_prediction_y_cms,
+                              flow_state.velocity_y_cms,
+                              flow_state.fusion_residual_y_cms,
+                              flow_state.fusion_innovation_evidence_y,
+                              flow_state.fusion_alpha_y,
+                              flow_state.fusion_bias_ki_y,
+                              flow_state.fusion_accel_bias_y_cms2,
+                              flow_state.velocity_y_fused_cms);
             break;
         }
 
