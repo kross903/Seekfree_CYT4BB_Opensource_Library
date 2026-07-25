@@ -1458,32 +1458,32 @@ void send_date_back(void)
         case 8:
         {
             /*
-             * F8 - 速度环监视。
-             * 左半 (I0~I3) X 轴: 目标速度 / 融合反馈 / 积分输出 / Pitch 修正；
-             * 右半 (I4~I7) Y 轴: 目标速度 / 融合反馈 / 积分输出 / Roll 修正。
+             * F8 - 双轴速度闭环诊断。
+             * I0~I7 为 X -> Pitch，I8~I15 为 Y -> Roll；
+             * 每轴依次发送目标、反馈、误差、P/I/D、限幅前总和及最终修正角。
              */
-            float vx_target_cms = 0.0f;
-            float vy_target_cms = 0.0f;
-            float pitch_corr_deg = 0.0f;
-            float roll_corr_deg = 0.0f;
-            float fb_vx_cms = 0.0f;
-            float fb_vy_cms = 0.0f;
-            float x_i_out = 0.0f;
-            float y_i_out = 0.0f;
+            VelocityLoopAxisDiag_t x_diag = {0};
+            VelocityLoopAxisDiag_t y_diag = {0};
 
-            Velocity_Loop_Get_Target_Velocity(&vx_target_cms, &vy_target_cms);
-            Velocity_Loop_Get_Diag(&pitch_corr_deg, &roll_corr_deg,
-                                   &fb_vx_cms, &fb_vy_cms,
-                                   &x_i_out, &y_i_out, NULL);
+            (void)Velocity_Loop_Get_Axis_Diag(VELOCITY_LOOP_AXIS_X, &x_diag);
+            (void)Velocity_Loop_Get_Axis_Diag(VELOCITY_LOOP_AXIS_Y, &y_diag);
 
-            send_four_date(vx_target_cms,
-                           fb_vx_cms,
-                           x_i_out,
-                           pitch_corr_deg,
-                           vy_target_cms,
-                           fb_vy_cms,
-                           y_i_out,
-                           roll_corr_deg);
+            send_sixteen_date(x_diag.target_velocity_cms,
+                              x_diag.actual_velocity_cms,
+                              x_diag.error_velocity_cms,
+                              x_diag.p_output_deg,
+                              x_diag.i_output_deg,
+                              x_diag.d_output_deg,
+                              x_diag.raw_output_deg,
+                              x_diag.output_deg,
+                              y_diag.target_velocity_cms,
+                              y_diag.actual_velocity_cms,
+                              y_diag.error_velocity_cms,
+                              y_diag.p_output_deg,
+                              y_diag.i_output_deg,
+                              y_diag.d_output_deg,
+                              y_diag.raw_output_deg,
+                              y_diag.output_deg);
             break;
         }
 
