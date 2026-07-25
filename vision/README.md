@@ -23,11 +23,22 @@ python vision_tool.py
 - 先二值化模式使用二值源图和最近邻采样；先变换模式使用灰度图双线性采样，完成几何变换后再按阈值二值化。
 - 在左侧编辑并保存 C/H 文件，下一次构建或运行会使用最新源码。
 - 构建日志、运行结果和中间二值图保存在 `runs/`。
+- “提取单张区域”可在原图中框选目标，保持 `188×120` 画布不变并将框外填黑；RAW、PNG和保留原元数据的JSON保存到 `capture/区域提取/`。
 
 ## 自检
 
 ```powershell
 python vision_tool.py --self-test
 ```
+
+## 信标姿态自适应拟合
+
+使用 `capture/分类` 下带姿态和 ToF 高度元数据的样本重新拟合轻量补偿系数：
+
+```powershell
+python fit_beacon_adaptive_thresholds.py
+```
+
+拟合报告写入 `runs/beacon_adaptive_fit/fit_report.json`。固件仅按候选中心、Roll、Pitch 和高度调整面积及形状门限，不生成信标逆透视图。
 
 仿真适配层位于 `sim/`，不改写固件工程中的硬件头文件。当前工具不会自动覆盖固件文件，源码保存操作只写入你在 UI 中选择的源码目录。

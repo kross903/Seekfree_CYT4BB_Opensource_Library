@@ -363,15 +363,23 @@ static int write_result(const char *path, const char *binary_path,
     fprintf(file, "  \"vehicle_min_raw_box_area\":%u,\n",
             (unsigned)VISION_RUNTIME_VEHICLE_MIN_RAW_BOX_AREA);
     fprintf(file,
+            "  \"vehicle_small_box_gate\":{\"min_area\":%u,"
+            "\"max_fill_percent\":%u},\n",
+            (unsigned)VISION_RUNTIME_VEHICLE_SMALL_BOX_MIN_AREA,
+            (unsigned)VISION_RUNTIME_VEHICLE_SMALL_BOX_MAX_FILL_PCT);
+    fprintf(file,
             "  \"binary_thresholds\":{\"inner\":%u,\"middle\":%u,\"outer\":%u},\n",
             (unsigned)vehicle_threshold,
             (unsigned)beacon_threshold,
             (unsigned)beacon_threshold);
     fprintf(file,
-            "  \"recognition_thresholds\":{\"vehicle\":%u,\"beacon\":%u},\n",
-            (unsigned)vehicle_threshold, (unsigned)beacon_threshold);
+            "  \"recognition_thresholds\":{\"vehicle\":%u,"
+            "\"vehicle_fallback\":%u,\"beacon\":%u},\n",
+            (unsigned)vehicle_threshold,
+            (unsigned)VISION_BINARY_THRESHOLD_VEHICLE_FALLBACK,
+            (unsigned)beacon_threshold);
     fprintf(file,
-            "  \"recognition_pipeline\":\"vehicle_first_dual_threshold_short_circuit\",\n");
+            "  \"recognition_pipeline\":\"vehicle_first_fallback_threshold_short_circuit\",\n");
     fprintf(file, "  \"physical_grid_enabled\":%u,\n",
             (unsigned)VISION_RUNTIME_PHYSICAL_GRID_ENABLE);
     fprintf(file, "  \"binary_mode\":\"%s\",\n",
@@ -452,10 +460,11 @@ static int write_result(const char *path, const char *binary_path,
                 slots[i].confidence_edge,
                 (i + 1 < VISION_RUNTIME_BEACON_SLOT_COUNT) ? "," : "");
     }
-    fprintf(file, "  ],\n  \"vehicle\":{\"valid\":%u,\"x_cm\":%.6f,\"y_cm\":%.6f,\"heading_deg\":%.6f},\n",
+    fprintf(file, "  ],\n  \"vehicle\":{\"valid\":%u,\"x_cm\":%.6f,\"y_cm\":%.6f,\"heading_deg\":%.6f,\"target_plane_height_cm\":%.6f},\n",
             (unsigned)g_vehicle_marker_pose.valid,
             g_vehicle_marker_pose.x, g_vehicle_marker_pose.y,
-            g_vehicle_marker_pose.heading_deg);
+            g_vehicle_marker_pose.heading_deg,
+            VEHICLE_MARKER_CHEVRON_PLANE_HEIGHT_CM);
     fprintf(file, "  \"coarse_candidates\":[\n");
     for(i = 0; i < (int)candidate_count; ++i)
     {
@@ -471,7 +480,11 @@ static int write_result(const char *path, const char *binary_path,
                 "\"area_cm2\":%.6f,\"circularity\":%.6f,"
                 "\"confidence_box_size\":%.6f,\"confidence_box_size_min\":%.6f,"
                 "\"confidence_stability\":%.6f,"
-                "\"confidence_area\":%.6f,\"confidence_edge\":%.6f}%s\n",
+                "\"confidence_area\":%.6f,\"confidence_edge\":%.6f,"
+                "\"adaptive_normalized_area_px\":%.6f,"
+                "\"adaptive_relaxation\":%.6f,"
+                "\"adaptive_min_area_px\":%.6f,\"adaptive_max_area_px\":%.6f,"
+                "\"adaptive_min_circularity\":%.6f}%s\n",
                 candidates[i].area,
                 candidates[i].raw_min_row, candidates[i].raw_max_row,
                 candidates[i].raw_min_col, candidates[i].raw_max_col,
@@ -493,6 +506,11 @@ static int write_result(const char *path, const char *binary_path,
                 candidates[i].confidence_stability,
                 candidates[i].confidence_area,
                 candidates[i].confidence_edge,
+                candidates[i].adaptive_normalized_area_px,
+                candidates[i].adaptive_relaxation,
+                candidates[i].adaptive_min_area_px,
+                candidates[i].adaptive_max_area_px,
+                candidates[i].adaptive_min_circularity,
                 (i + 1 < (int)candidate_count) ? "," : "");
     }
     full_rectified_point_to_raw(&chevron.apex_img, &apex_raw_u, &apex_raw_v);
@@ -626,7 +644,7 @@ int main(int argc, char **argv)
 
     if(input_path == NULL || output_path == NULL || !read_raw(input_path))
     {
-        fprintf(stderr, "usage: vision_sim --input frame.raw --output result.json [--binary binary.pgm] [--vehicle-threshold 110] [--beacon-threshold 10] [--coarse-center-threshold 50] [--coarse-near-threshold 45] [--coarse-middle-threshold 40] [--coarse-far-threshold 35] [--coarse-edge-threshold 30] [--binary-mode gray|pre_transform|undistort_binary_ipm|post_transform]\n");
+        fprintf(stderr, "usage: vision_sim --input frame.raw --output result.json [--binary binary.pgm] [--vehicle-threshold 145] [--beacon-threshold 10] [--coarse-center-threshold 150] [--coarse-near-threshold 60] [--coarse-middle-threshold 50] [--coarse-far-threshold 50] [--coarse-edge-threshold 50] [--binary-mode gray|pre_transform|undistort_binary_ipm|post_transform]\n");
         return 2;
     }
 

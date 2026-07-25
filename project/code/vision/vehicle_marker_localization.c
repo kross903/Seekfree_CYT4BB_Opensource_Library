@@ -271,11 +271,15 @@ void VehicleMarkerLocalization_ServiceLostProtection(void)
 #define VEHICLE_MARKER_CHEVRON_PHYSICAL_MAX_CIRCULARITY    (0.55f)
 #define VEHICLE_MARKER_CHEVRON_PHYSICAL_EXPECTED_CIRCULARITY (0.30f)
 #define VEHICLE_MARKER_CHEVRON_MIN_ARM_CM                  (10.5f)
-#define VEHICLE_MARKER_CHEVRON_MAX_ARM_CM                  (37.0f)
-#define VEHICLE_MARKER_CHEVRON_MIN_ARM_RATIO               (0.65f)
-#define VEHICLE_MARKER_CHEVRON_MAX_ARM_RATIO               (1.85f)
-#define VEHICLE_MARKER_CHEVRON_MIN_ANGLE_DEG               (55.0f)
-#define VEHICLE_MARKER_CHEVRON_MAX_ANGLE_DEG               (115.0f)
+#define VEHICLE_MARKER_CHEVRON_MAX_ARM_CM                  (42.0f)
+#define VEHICLE_MARKER_CHEVRON_MIN_ARM_RATIO               (0.55f)
+#define VEHICLE_MARKER_CHEVRON_MAX_ARM_RATIO               (2.90f)
+#define VEHICLE_MARKER_CHEVRON_EXPECTED_ANGLE_DEG          (70.0f)
+#define VEHICLE_MARKER_CHEVRON_EXPECTED_ANGLE_COS          (0.34202014f)
+/* 1/sin(70 deg)，将目标附近的余弦差近似换算为弧度误差。 */
+#define VEHICLE_MARKER_CHEVRON_COS_ERROR_TO_RAD            (1.06417777f)
+#define VEHICLE_MARKER_CHEVRON_MIN_ANGLE_DEG               (30.0f)
+#define VEHICLE_MARKER_CHEVRON_MAX_ANGLE_DEG               (90.0f)
 #define VEHICLE_MARKER_CHEVRON_MIN_BASE_CM                 (15.0f)
 #define VEHICLE_MARKER_CHEVRON_MAX_BASE_CM                 (46.0f)
 #define VEHICLE_MARKER_CHEVRON_MIN_TRIANGLE_HEIGHT_CM      (8.0f)
@@ -551,7 +555,9 @@ static uint8 vehicle_marker_chevron_world_to_image(const VehicleMarkerWorldPoint
         return 0U;
     }
 
-    if(!IPM_World2FullRectifiedImage(world->x, world->y, &img_x, &img_y))
+    if(!IPM_Plane2FullRectifiedImage(world->x, world->y,
+                                     VEHICLE_MARKER_CHEVRON_PLANE_HEIGHT_CM,
+                                     &img_x, &img_y))
     {
         return 0U;
     }
@@ -1185,13 +1191,14 @@ static uint8 vehicle_marker_chevron_extract_image_geometry(
         float by = triangle[b].v - triangle[i].v;
         float len_a_sq = ax * ax + ay * ay;
         float len_b_sq = bx * bx + by * by;
-        float angle;
+        float angle_cos;
         float error;
         if(len_a_sq <= 1.0f || len_b_sq <= 1.0f) continue;
-        angle = acosf(vehicle_marker_chevron_clamp_float(
+        angle_cos = vehicle_marker_chevron_clamp_float(
             (ax * bx + ay * by) / sqrtf(len_a_sq * len_b_sq),
-            -1.0f, 1.0f));
-        error = fabsf(angle - 1.57079633f);
+            -1.0f, 1.0f);
+        error = fabsf(angle_cos - VEHICLE_MARKER_CHEVRON_EXPECTED_ANGLE_COS) *
+                VEHICLE_MARKER_CHEVRON_COS_ERROR_TO_RAD;
         if(error < best_angle_error)
         {
             best_angle_error = error;
@@ -1246,9 +1253,10 @@ static uint8 vehicle_marker_chevron_extract_image_geometry(
         float seed_len = sqrtf((ax * ax + ay * ay) * (bx * bx + by * by));
         if(seed_len > 1.0f)
         {
-            seed_angle_error = fabsf(acosf(vehicle_marker_chevron_clamp_float(
-                (ax * bx + ay * by) / seed_len, -1.0f, 1.0f)) -
-                1.57079633f);
+            seed_angle_error = fabsf(vehicle_marker_chevron_clamp_float(
+                (ax * bx + ay * by) / seed_len, -1.0f, 1.0f) -
+                VEHICLE_MARKER_CHEVRON_EXPECTED_ANGLE_COS) *
+                VEHICLE_MARKER_CHEVRON_COS_ERROR_TO_RAD;
         }
     }
     {
@@ -1259,9 +1267,10 @@ static uint8 vehicle_marker_chevron_extract_image_geometry(
         float fitted_len = sqrtf((ax * ax + ay * ay) * (bx * bx + by * by));
         if(fitted_len > 1.0f)
         {
-            fitted_angle_error = fabsf(acosf(vehicle_marker_chevron_clamp_float(
-                (ax * bx + ay * by) / fitted_len, -1.0f, 1.0f)) -
-                1.57079633f);
+            fitted_angle_error = fabsf(vehicle_marker_chevron_clamp_float(
+                (ax * bx + ay * by) / fitted_len, -1.0f, 1.0f) -
+                VEHICLE_MARKER_CHEVRON_EXPECTED_ANGLE_COS) *
+                VEHICLE_MARKER_CHEVRON_COS_ERROR_TO_RAD;
         }
     }
     if(fitted_angle_error > seed_angle_error + 0.20f)
@@ -1339,12 +1348,17 @@ static uint8 vehicle_marker_chevron_process_candidate(
     s_vehicle_marker_chevron_debug.left_tip_img = left_tip_img;
     s_vehicle_marker_chevron_debug.right_tip_img = right_tip_img;
 
-    if(!IPM_FullRectifiedImage2WorldF(apex_img.u, apex_img.v,
-                                     &apex.x, &apex.y) ||
-       !IPM_FullRectifiedImage2WorldF(left_tip_img.u, left_tip_img.v,
-                                     &left_tip.x, &left_tip.y) ||
-       !IPM_FullRectifiedImage2WorldF(right_tip_img.u, right_tip_img.v,
-                                     &right_tip.x, &right_tip.y))
+    if(!IPM_FullRectifiedImage2PlaneF(
+           apex_img.u, apex_img.v, VEHICLE_MARKER_CHEVRON_PLANE_HEIGHT_CM,
+           &apex.x, &apex.y) ||
+       !IPM_FullRectifiedImage2PlaneF(
+           left_tip_img.u, left_tip_img.v,
+           VEHICLE_MARKER_CHEVRON_PLANE_HEIGHT_CM,
+           &left_tip.x, &left_tip.y) ||
+       !IPM_FullRectifiedImage2PlaneF(
+           right_tip_img.u, right_tip_img.v,
+           VEHICLE_MARKER_CHEVRON_PLANE_HEIGHT_CM,
+           &right_tip.x, &right_tip.y))
     {
         s_vehicle_marker_chevron_debug.reject_reason =
             VEHICLE_MARKER_CHEVRON_REJECT_WORLD_PROJECTION;
@@ -1511,9 +1525,10 @@ static uint8 vehicle_marker_chevron_process_candidate_legacy(VehicleMarkerPose_t
         float world_x = 0.0f;
         float world_y = 0.0f;
 
-        if(!IPM_FullRectifiedImage2WorldF(
+        if(!IPM_FullRectifiedImage2PlaneF(
                (float)s_vehicle_marker_chevron_candidates[0].contour.point_x[i],
                (float)s_vehicle_marker_chevron_candidates[0].contour.point_y[i],
+               VEHICLE_MARKER_CHEVRON_PLANE_HEIGHT_CM,
                &world_x,
                &world_y))
         {

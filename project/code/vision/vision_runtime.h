@@ -4,8 +4,13 @@
 #include "zf_common_headfile.h"
 
 /* 候选区完整分辨率精筛阈值：箭头较亮，信标允许保留较暗像素。 */
-#define VISION_BINARY_THRESHOLD_VEHICLE (150U) /* 箭头精筛二值化阈值 */
-#define VISION_BINARY_THRESHOLD_BEACON  (10U)  /* 信标精筛二值化阈值 */
+#define VISION_BINARY_THRESHOLD_VEHICLE          (145U) /* 箭头首轮精筛阈值 */
+#define VISION_BINARY_THRESHOLD_VEHICLE_FALLBACK (60U)  /* 首轮失败后的箭头回退阈值 */
+#define VISION_BINARY_THRESHOLD_BEACON           (10U)  /* 信标精筛二值化阈值 */
+#if VISION_BINARY_THRESHOLD_VEHICLE_FALLBACK == 0U || \
+    VISION_BINARY_THRESHOLD_VEHICLE_FALLBACK >= VISION_BINARY_THRESHOLD_VEHICLE
+#error "Vehicle fallback threshold must be lower than the primary threshold"
+#endif
 /* Legacy names keep the shared-memory interface source compatible. */
 #define VISION_BINARY_THRESHOLD_INNER  VISION_BINARY_THRESHOLD_VEHICLE
 #define VISION_BINARY_THRESHOLD_MIDDLE VISION_BINARY_THRESHOLD_BEACON
@@ -14,9 +19,9 @@
 #define VISION_RUNTIME_COARSE_ZONE_COUNT       (5U)  /* 中心到边缘共五个同心分区 */
 /* 粗筛阈值从中心向边缘递减：近处要求高，远处弱信标使用较低阈值。 */
 #define VISION_RUNTIME_COARSE_THRESHOLD_CENTER (150U) /* 光轴中心圈 */
-#define VISION_RUNTIME_COARSE_THRESHOLD_NEAR   (150U) /* 近圈 */
-#define VISION_RUNTIME_COARSE_THRESHOLD_MIDDLE (150U) /* 中圈 */
-#define VISION_RUNTIME_COARSE_THRESHOLD_FAR    (60U) /* 远圈 */
+#define VISION_RUNTIME_COARSE_THRESHOLD_NEAR   (60U) /* 近圈 */
+#define VISION_RUNTIME_COARSE_THRESHOLD_MIDDLE (50U) /* 中圈 */
+#define VISION_RUNTIME_COARSE_THRESHOLD_FAR    (50U) /* 远圈 */
 #define VISION_RUNTIME_COARSE_THRESHOLD_EDGE   (50U) /* 图像边缘圈 */
 /* Legacy single-threshold name keeps existing callers source compatible. */
 #define VISION_RUNTIME_COARSE_THRESHOLD VISION_RUNTIME_COARSE_THRESHOLD_CENTER
@@ -33,7 +38,14 @@
 #define VISION_RUNTIME_LOCAL_BIRDVIEW_MAX_HEIGHT (128U)
 #define VISION_RUNTIME_BEACON_BOX_AREA_MIN_PIXELS (8.0f)
 #define VISION_RUNTIME_BEACON_BOX_AREA_MAX_PIXELS (100.0f)
-#define VISION_RUNTIME_VEHICLE_MIN_RAW_BOX_AREA   (150U)
+#define VISION_RUNTIME_VEHICLE_MIN_RAW_BOX_AREA       (100U) /* 常规箭头候选框门槛 */
+#define VISION_RUNTIME_VEHICLE_SMALL_BOX_MIN_AREA     (90U)  /* 稀疏小箭头候选框门槛 */
+#define VISION_RUNTIME_VEHICLE_SMALL_BOX_MAX_FILL_PCT (70U)  /* 小框粗连通域最大占空比 */
+#if VISION_RUNTIME_VEHICLE_SMALL_BOX_MIN_AREA > \
+        VISION_RUNTIME_VEHICLE_MIN_RAW_BOX_AREA || \
+    VISION_RUNTIME_VEHICLE_SMALL_BOX_MAX_FILL_PCT > 100U
+#error "Invalid vehicle small-box gate"
+#endif
 #define VISION_RUNTIME_FINE_MIN_FOREGROUND_PIXELS (8U)
 #ifndef VISION_RUNTIME_PHYSICAL_GRID_ENABLE
 #define VISION_RUNTIME_PHYSICAL_GRID_ENABLE (0U)
@@ -95,6 +107,11 @@ typedef struct
     float confidence_stability;
     float confidence_area;
     float confidence_edge;
+    float adaptive_normalized_area_px;
+    float adaptive_relaxation;
+    float adaptive_min_area_px;
+    float adaptive_max_area_px;
+    float adaptive_min_circularity;
     uint8 detection_confidence;
     uint8 position_sigma_cm;
     float world_x;
@@ -201,6 +218,11 @@ typedef struct
     float confidence_stability;
     float confidence_area;
     float confidence_edge;
+    float adaptive_normalized_area_px;
+    float adaptive_relaxation;
+    float adaptive_min_area_px;
+    float adaptive_max_area_px;
+    float adaptive_min_circularity;
 } VisionRuntimeCandidateBox_t;
 
 void VisionRuntime_ProcessFrame(float height_cm);

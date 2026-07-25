@@ -11,8 +11,10 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
+from datetime import datetime, timedelta
 from pathlib import Path
 from tkinter import filedialog, messagebox, scrolledtext, ttk
 import tkinter as tk
@@ -20,28 +22,35 @@ import tkinter as tk
 from PIL import Image, ImageDraw, ImageTk
 
 from capture_serial import capture_frames, list_serial_ports
+from generate_coarse_circle_map import DEFAULT_FRACTIONS, build_zones, load_calibration
 
 
 APP_ROOT = Path(__file__).resolve().parent
-DEFAULT_SOURCE = Path(r"D:\code\project\Seekfree_CYT4BB_Opensource_Library\project\code\vision")
-DEFAULT_FRAMES = Path(r"D:\code\project\Seekfree_CYT4BB_Opensource_Library\vision\capture")
+REPO_ROOT = APP_ROOT.parent
+DEFAULT_SOURCE = REPO_ROOT / "project" / "code" / "vision"
+DEFAULT_FRAMES = APP_ROOT / "capture"
 SIM_ROOT = APP_ROOT / "sim"
 BUILD_ROOT = APP_ROOT / "build"
 RUN_ROOT = APP_ROOT / "runs"
-WIDTH = 188
-HEIGHT = 120
+WIDTH, HEIGHT, COARSE_CENTER_X, COARSE_CENTER_Y = load_calibration(
+    DEFAULT_SOURCE / "camera_calibration_params.h"
+)
 FINE_WIDTH = 376
 FINE_HEIGHT = 240
 FINE_STRIDE = (FINE_WIDTH + 7) // 8
-COARSE_CENTER_X = 95.4078135
-COARSE_CENTER_Y = 59.9547985
+COARSE_ZONE_VALUES, COARSE_ZONE_CUTOFFS, COARSE_ZONE_COUNTS = build_zones(
+    WIDTH, HEIGHT, COARSE_CENTER_X, COARSE_CENTER_Y, DEFAULT_FRACTIONS
+)
+COARSE_ZONE_MAP = bytes(COARSE_ZONE_VALUES)
 # 与固件五圈粗筛宏一致，顺序为中心、近圈、中圈、远圈、边缘圈。
 COARSE_ZONE_NAMES = ("center", "near", "middle", "far", "edge")
-COARSE_THRESHOLDS = (150, 150, 150, 60, 50)
+COARSE_THRESHOLDS = (150, 60, 50, 50, 50)
 COARSE_THRESHOLD = COARSE_THRESHOLDS[2]
 COARSE_MIN_AREA = 10
 MAP_CREATE_CONFIDENCE = 210
 MAP_CREATE_SIGMA_CM = 15
+ROI_OUTPUT_DIR = APP_ROOT / "capture" / "区域提取"
+ROI_DISPLAY_SCALE = 3
 RUNTIME_THRESHOLD_MACROS = (
     "VISION_BINARY_THRESHOLD_VEHICLE",
     "VISION_BINARY_THRESHOLD_BEACON",
@@ -82,6 +91,7 @@ class Simulator:
         names = [
             "vision_runtime.c",
             "beacon_detect.c",
+            "beacon_adaptive_threshold.c",
             "vehicle_marker_localization.c",
             "ipm_interface.c",
             "drone_ipm_embedded.c",
@@ -181,7 +191,7 @@ class Simulator:
         height: float,
         undistort: bool = False,
         birdview: bool = False,
-        vehicle_threshold: int = 110,
+        vehicle_threshold: int = 145,
         beacon_threshold: int = 10,
         coarse_threshold: int = COARSE_THRESHOLD,
         binary_mode: str = "gray",
@@ -270,7 +280,7 @@ class VisionToolApp:
         self.pitch_var = tk.StringVar(value="0")
         self.yaw_var = tk.StringVar(value="0")
         self.height_var = tk.StringVar(value="100")
-        self.vehicle_threshold_var = tk.StringVar(value="110")
+        self.vehicle_threshold_var = tk.StringVar(value="145")
         self.beacon_threshold_var = tk.StringVar(value="10")
         self.coarse_threshold_vars = [
             tk.StringVar(value=str(value)) for value in COARSE_THRESHOLDS
@@ -302,6 +312,18 @@ class VisionToolApp:
         self.current_candidate_coarse_binary: Image.Image | None = None
         self.current_frame: Path | None = None
         self.current_result: dict | None = None
+        self.roi_window: tk.Toplevel | None = None
+        self.roi_canvas: tk.Canvas | None = None
+        self.roi_preview_canvas: tk.Canvas | None = None
+        self.roi_photo: ImageTk.PhotoImage | None = None
+        self.roi_preview_photo: ImageTk.PhotoImage | None = None
+        self.roi_rect_id: int | None = None
+        self.roi_drag_start: tuple[int, int] | None = None
+        self.roi_selection: tuple[int, int, int, int] | None = None
+        self.roi_source_path: Path | None = None
+        self.roi_source_image: Image.Image | None = None
+        self.roi_status_var = tk.StringVar(value="未选择区域")
+        self.roi_save_button: ttk.Button | None = None
         self.ui_queue: queue.Queue[tuple[str, object]] = queue.Queue()
         self.simulation_queue: queue.Queue[
             tuple[Path, float, float, float, bool, bool, int, int,
@@ -441,12 +463,15 @@ class VisionToolApp:
         ttk.Button(action_bar, text="打开连通域候选区", command=self.open_current_candidate_window).grid(
             row=2, column=0, columnspan=2, sticky="ew", pady=(6, 0)
         )
+        ttk.Button(action_bar, text="提取单张区域", command=self.open_roi_window).grid(
+            row=3, column=0, columnspan=2, sticky="ew", pady=(6, 0)
+        )
         self.batch_button = ttk.Button(
             action_bar,
             text="批量验证分类目录",
             command=self.start_classified_batch,
         )
-        self.batch_button.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(6, 0))
+        self.batch_button.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(6, 0))
 
         capture_tab.columnconfigure(0, weight=1)
         capture_tab.rowconfigure(2, weight=1)
@@ -775,6 +800,7 @@ class VisionToolApp:
         except Exception as exc:
             self.status_var.set(f"读取帧失败: {exc}")
             return
+        self.close_roi_window()
         self.current_source_image = image
         self.current_undistorted_image = None
         self.current_birdview_image = None
@@ -796,6 +822,261 @@ class VisionToolApp:
         display = self.fit_image(image, self.preview_label.winfo_width() or 560, self.preview_label.winfo_height() or 360)
         self.preview_image = ImageTk.PhotoImage(display)
         self.preview_label.configure(image=self.preview_image, text="")
+
+    def open_roi_window(self) -> None:
+        if self.current_frame is None or self.current_source_image is None:
+            messagebox.showerror("无法提取", "请先选择一帧图像。")
+            return
+        if self.roi_window is not None and self.roi_window.winfo_exists():
+            self.roi_window.deiconify()
+            self.roi_window.lift()
+            return
+
+        self.roi_source_path = self.current_frame
+        self.roi_source_image = self.current_source_image.convert("L").copy()
+        self.roi_selection = None
+        self.roi_drag_start = None
+        self.roi_rect_id = None
+        self.roi_status_var.set("未选择区域")
+
+        display_size = (
+            self.roi_source_image.width * ROI_DISPLAY_SCALE,
+            self.roi_source_image.height * ROI_DISPLAY_SCALE,
+        )
+        self.roi_window = tk.Toplevel(self.root)
+        self.roi_window.title("单张区域提取")
+        self.roi_window.resizable(False, False)
+        body = ttk.Frame(self.roi_window, padding=8)
+        body.pack(fill=tk.BOTH, expand=True)
+        ttk.Label(body, text="原图").grid(row=0, column=0, sticky="w")
+        ttk.Label(body, text="提取结果").grid(row=0, column=1, sticky="w", padx=(8, 0))
+        self.roi_canvas = tk.Canvas(
+            body, width=display_size[0], height=display_size[1],
+            background="black", highlightthickness=1,
+        )
+        self.roi_canvas.grid(row=1, column=0, sticky="nsew")
+        self.roi_preview_canvas = tk.Canvas(
+            body, width=display_size[0], height=display_size[1],
+            background="black", highlightthickness=1,
+        )
+        self.roi_preview_canvas.grid(row=1, column=1, sticky="nsew", padx=(8, 0))
+
+        display = self.roi_source_image.resize(display_size, Image.Resampling.NEAREST)
+        self.roi_photo = ImageTk.PhotoImage(display)
+        self.roi_canvas.create_image(0, 0, image=self.roi_photo, anchor=tk.NW)
+        self._set_roi_preview(Image.new("L", self.roi_source_image.size, 0))
+        self.roi_canvas.bind("<ButtonPress-1>", self._roi_mouse_press)
+        self.roi_canvas.bind("<B1-Motion>", self._roi_mouse_drag)
+        self.roi_canvas.bind("<ButtonRelease-1>", self._roi_mouse_release)
+
+        controls = ttk.Frame(body)
+        controls.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(8, 0))
+        controls.columnconfigure(0, weight=1)
+        ttk.Label(controls, textvariable=self.roi_status_var).grid(row=0, column=0, sticky="w")
+        ttk.Button(controls, text="重新框选", command=self.clear_roi_selection).grid(
+            row=0, column=1, padx=(8, 4)
+        )
+        self.roi_save_button = ttk.Button(
+            controls, text="保存区域样本", command=self.save_roi_selection,
+            state=tk.DISABLED,
+        )
+        self.roi_save_button.grid(row=0, column=2, padx=4)
+        ttk.Button(controls, text="关闭", command=self.close_roi_window).grid(
+            row=0, column=3, padx=(4, 0)
+        )
+        self.roi_window.protocol("WM_DELETE_WINDOW", self.close_roi_window)
+
+    def close_roi_window(self) -> None:
+        if self.roi_window is not None and self.roi_window.winfo_exists():
+            self.roi_window.destroy()
+        self.roi_window = None
+        self.roi_canvas = None
+        self.roi_preview_canvas = None
+        self.roi_photo = None
+        self.roi_preview_photo = None
+        self.roi_rect_id = None
+        self.roi_drag_start = None
+        self.roi_selection = None
+        self.roi_source_path = None
+        self.roi_source_image = None
+        self.roi_save_button = None
+
+    @staticmethod
+    def normalize_roi_selection(
+        start: tuple[int, int],
+        end: tuple[int, int],
+        scale: int,
+        image_size: tuple[int, int],
+    ) -> tuple[int, int, int, int]:
+        width, height = image_size
+        max_x = max(0, width * scale - 1)
+        max_y = max(0, height * scale - 1)
+        start_x = min(max(start[0], 0), max_x)
+        start_y = min(max(start[1], 0), max_y)
+        end_x = min(max(end[0], 0), max_x)
+        end_y = min(max(end[1], 0), max_y)
+        left = min(start_x, end_x) // scale
+        top = min(start_y, end_y) // scale
+        right = max(start_x, end_x) // scale + 1
+        bottom = max(start_y, end_y) // scale + 1
+        return left, top, right, bottom
+
+    @staticmethod
+    def build_roi_image(
+        image: Image.Image,
+        roi: tuple[int, int, int, int],
+    ) -> Image.Image:
+        source = image.convert("L")
+        output = Image.new("L", source.size, 0)
+        output.paste(source.crop(roi), (roi[0], roi[1]))
+        return output
+
+    def _roi_mouse_press(self, event: tk.Event) -> None:
+        if self.roi_source_image is None or self.roi_canvas is None:
+            return
+        self.clear_roi_selection()
+        self.roi_drag_start = (int(event.x), int(event.y))
+        self.roi_rect_id = self.roi_canvas.create_rectangle(
+            event.x, event.y, event.x, event.y,
+            outline="#ffd400", width=2,
+        )
+
+    def _roi_mouse_drag(self, event: tk.Event) -> None:
+        if self.roi_drag_start is None or self.roi_canvas is None or self.roi_rect_id is None:
+            return
+        self.roi_canvas.coords(
+            self.roi_rect_id,
+            self.roi_drag_start[0], self.roi_drag_start[1], event.x, event.y,
+        )
+
+    def _roi_mouse_release(self, event: tk.Event) -> None:
+        if self.roi_drag_start is None or self.roi_source_image is None or self.roi_canvas is None:
+            return
+        roi = self.normalize_roi_selection(
+            self.roi_drag_start,
+            (int(event.x), int(event.y)),
+            ROI_DISPLAY_SCALE,
+            self.roi_source_image.size,
+        )
+        self.roi_drag_start = None
+        self.roi_selection = roi
+        if self.roi_rect_id is not None:
+            self.roi_canvas.coords(
+                self.roi_rect_id,
+                roi[0] * ROI_DISPLAY_SCALE,
+                roi[1] * ROI_DISPLAY_SCALE,
+                roi[2] * ROI_DISPLAY_SCALE,
+                roi[3] * ROI_DISPLAY_SCALE,
+            )
+        masked = self.build_roi_image(self.roi_source_image, roi)
+        self._set_roi_preview(masked)
+        self.roi_status_var.set(
+            f"区域 ({roi[0]},{roi[1]})-({roi[2] - 1},{roi[3] - 1})  "
+            f"{roi[2] - roi[0]}×{roi[3] - roi[1]}"
+        )
+        if self.roi_save_button is not None:
+            self.roi_save_button.configure(state=tk.NORMAL)
+
+    def _set_roi_preview(self, image: Image.Image) -> None:
+        if self.roi_preview_canvas is None:
+            return
+        display_size = (
+            image.width * ROI_DISPLAY_SCALE,
+            image.height * ROI_DISPLAY_SCALE,
+        )
+        display = image.resize(display_size, Image.Resampling.NEAREST)
+        self.roi_preview_photo = ImageTk.PhotoImage(display)
+        self.roi_preview_canvas.delete("all")
+        self.roi_preview_canvas.create_image(
+            0, 0, image=self.roi_preview_photo, anchor=tk.NW,
+        )
+
+    def clear_roi_selection(self) -> None:
+        if self.roi_canvas is not None and self.roi_rect_id is not None:
+            self.roi_canvas.delete(self.roi_rect_id)
+        self.roi_rect_id = None
+        self.roi_drag_start = None
+        self.roi_selection = None
+        self.roi_status_var.set("未选择区域")
+        if self.roi_source_image is not None:
+            self._set_roi_preview(Image.new("L", self.roi_source_image.size, 0))
+        if self.roi_save_button is not None:
+            self.roi_save_button.configure(state=tk.DISABLED)
+
+    @staticmethod
+    def save_roi_sample(
+        source_path: Path,
+        image: Image.Image,
+        roi: tuple[int, int, int, int],
+        output_dir: Path = ROI_OUTPUT_DIR,
+    ) -> dict[str, Path]:
+        if image.size != (WIDTH, HEIGHT):
+            raise ValueError(f"图像尺寸为 {image.width}×{image.height}，需要 {WIDTH}×{HEIGHT}")
+        metadata_path = source_path.with_suffix(".json")
+        if metadata_path.is_file():
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            if not isinstance(metadata, dict):
+                raise ValueError("帧JSON根节点必须是对象")
+        else:
+            metadata = {}
+        image_type = int(metadata.get("image_type", 2))
+        if image_type != 2:
+            raise ValueError(f"区域提取目前仅支持灰度RAW type2，当前为type{image_type}")
+
+        masked = VisionToolApp.build_roi_image(image, roi)
+        payload = masked.tobytes()
+        output_dir.mkdir(parents=True, exist_ok=True)
+        extracted_at = datetime.now().astimezone()
+        stem = output_dir / extracted_at.strftime("%Y%m%d_%H%M%S_%f")
+        while any(stem.with_suffix(suffix).exists() for suffix in (".raw", ".png", ".json")):
+            extracted_at += timedelta(microseconds=1)
+            stem = output_dir / extracted_at.strftime("%Y%m%d_%H%M%S_%f")
+
+        raw_path = stem.with_suffix(".raw")
+        png_path = stem.with_suffix(".png")
+        json_path = stem.with_suffix(".json")
+        raw_path.write_bytes(payload)
+        masked.save(png_path)
+        metadata["image_type"] = 2
+        metadata["width"] = image.width
+        metadata["height"] = image.height
+        metadata["payload_size"] = len(payload)
+        metadata["roi_extracted_at"] = extracted_at.isoformat(timespec="microseconds")
+        metadata["roi"] = {
+            "source_file": source_path.name,
+            "min_col": roi[0],
+            "max_col": roi[2] - 1,
+            "min_row": roi[1],
+            "max_row": roi[3] - 1,
+            "width": roi[2] - roi[0],
+            "height": roi[3] - roi[1],
+            "outside_value": 0,
+        }
+        json_path.write_text(
+            json.dumps(metadata, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        return {"raw_path": raw_path, "png_path": png_path, "json_path": json_path}
+
+    def save_roi_selection(self) -> None:
+        if self.roi_source_path is None or self.roi_source_image is None or self.roi_selection is None:
+            return
+        try:
+            saved = self.save_roi_sample(
+                self.roi_source_path,
+                self.roi_source_image,
+                self.roi_selection,
+            )
+        except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
+            messagebox.showerror("保存失败", str(exc), parent=self.roi_window)
+            return
+        self.status_var.set(f"区域样本已保存: {saved['raw_path'].name}")
+        self.log(f"区域样本已保存: {saved['raw_path'].parent}")
+        messagebox.showinfo(
+            "保存完成",
+            f"已保存到\n{saved['raw_path'].parent}",
+            parent=self.roi_window,
+        )
 
     def open_processed_window(self) -> None:
         if self.processed_window is not None and self.processed_window.winfo_exists():
@@ -878,17 +1159,10 @@ class VisionToolApp:
         source = gray.tobytes()
         output = bytearray(width * height)
         thresholds = tuple(max(1, min(255, value)) for value in thresholds)
-        radius = max(COARSE_CENTER_Y, HEIGHT - 1 - COARSE_CENTER_Y)
         for y in range(height):
             for x in range(width):
                 index = y * width + x
-                dx = (x - COARSE_CENTER_X) / radius
-                dy = (y - COARSE_CENTER_Y) / radius
-                radius_sq = dx * dx + dy * dy
-                zone = (0 if radius_sq < 0.04 else
-                        (1 if radius_sq < 0.16 else
-                         (2 if radius_sq < 0.36 else
-                          (3 if radius_sq < 0.64 else 4))))
+                zone = COARSE_ZONE_MAP[index]
                 output[index] = 255 if source[index] >= thresholds[zone] else 0
         return Image.frombytes("L", (width, height), bytes(output))
 
@@ -963,25 +1237,43 @@ class VisionToolApp:
 
         area_cm2 = float(candidate.get("area_cm2", 0.0))
         pixel_area = int(candidate.get("beacon_area_pixels", 0))
+        normalized_area = float(candidate.get("adaptive_normalized_area_px", 0.0))
+        adaptive_min_area = float(candidate.get("adaptive_min_area_px", 0.0))
+        adaptive_max_area = float(candidate.get("adaptive_max_area_px", 0.0))
         circularity = float(candidate.get("circularity", 0.0))
+        adaptive_min_circularity = float(candidate.get("adaptive_min_circularity", 0.0))
+        if normalized_area <= 0.0:
+            normalized_area = float(pixel_area)
+        if adaptive_min_area <= 0.0:
+            adaptive_min_area = 80.0
+        if adaptive_max_area <= 0.0:
+            adaptive_max_area = 500.0
+        if adaptive_min_circularity <= 0.0:
+            adaptive_min_circularity = 0.15
         box_score = float(candidate.get("confidence_box_size", 0.0))
         box_minimum = float(candidate.get("confidence_box_size_min", 0.0))
         confidence = int(candidate.get("detection_confidence", 0))
         reasons: list[str] = []
 
         if pixel_area > 0:
-            if pixel_area < 80:
-                reasons.append(f"去畸变面积{pixel_area}<80px")
-            elif pixel_area > 500:
-                reasons.append(f"去畸变面积{pixel_area}>500px")
+            if normalized_area < adaptive_min_area:
+                reasons.append(
+                    f"归一化面积{normalized_area:.1f}<{adaptive_min_area:.1f}px"
+                )
+            elif normalized_area > adaptive_max_area:
+                reasons.append(
+                    f"归一化面积{normalized_area:.1f}>{adaptive_max_area:.1f}px"
+                )
         elif area_cm2 <= 0.0:
             return "未通过（未生成有效精连通域/IPM数据）"
         elif area_cm2 < 480.0:
             reasons.append(f"物理面积{area_cm2:.1f}<480cm²")
         elif area_cm2 > 1500.0:
             reasons.append(f"物理面积{area_cm2:.1f}>1500cm²")
-        if circularity < 0.15:
-            reasons.append(f"圆度{circularity:.2f}<0.15")
+        if circularity < adaptive_min_circularity:
+            reasons.append(
+                f"圆度{circularity:.2f}<{adaptive_min_circularity:.2f}"
+            )
         if box_score <= box_minimum:
             reasons.append(f"B评分{box_score:.2f}≤门槛{box_minimum:.2f}")
         if 0 < confidence < 96:
@@ -1052,7 +1344,8 @@ class VisionToolApp:
             else:
                 area_text = (
                     f"去畸变面积: "
-                    f"{int(candidate.get('beacon_area_pixels', 0))} px"
+                    f"{int(candidate.get('beacon_area_pixels', 0))} px，"
+                    f"归一化: {candidate.get('adaptive_normalized_area_px', 0):.1f} px"
                 )
             vehicle_route = (
                 "跳过箭头，直接识别信标"
@@ -1075,7 +1368,9 @@ class VisionToolApp:
                     f"当前位置B门槛: {candidate.get('confidence_box_size_min', 0):.2f}  "
                     f"面积评分 A: {candidate.get('confidence_area', 0):.2f}  "
                     f"阈值稳定性评分 T: {candidate.get('confidence_stability', 0):.2f}  "
-                    f"边缘评分 E: {candidate.get('confidence_edge', 0):.2f}"
+                    f"边缘评分 E: {candidate.get('confidence_edge', 0):.2f}  "
+                    f"姿态放宽量: {candidate.get('adaptive_relaxation', 0):.2f}  "
+                    f"动态圆度门槛: {candidate.get('adaptive_min_circularity', 0.15):.3f}"
                 ),
             ).grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 6))
             left_label = ttk.Label(tab, text="原图候选区", anchor="center")
@@ -1290,20 +1585,29 @@ class VisionToolApp:
         ).start()
 
     @staticmethod
-    def classification_beacon_upper(frame_path: Path, root: Path, expected_arrow: bool) -> int:
+    def classification_set_type(frame_path: Path, root: Path) -> str:
         try:
             categories = frame_path.relative_to(root).parts[:-1]
         except ValueError:
-            return 0
+            return ""
         for category in categories:
-            counts = [int(value) for value in re.findall(r"\d+", category)]
-            if not counts:
-                continue
-            if "信标" in category:
-                return max(counts)
-            if "连通域" in category:
-                return max(0, max(counts) - (1 if expected_arrow else 0))
-        return 0
+            if category in {"准集", "粗集"}:
+                return category
+        return ""
+
+    @staticmethod
+    def classification_expected_beacon_count(frame_path: Path, root: Path) -> int | None:
+        if VisionToolApp.classification_set_type(frame_path, root) != "准集":
+            return None
+        try:
+            categories = frame_path.relative_to(root).parts[:-1]
+        except ValueError:
+            return None
+        for category in categories:
+            match = re.fullmatch(r"(\d+)信标", category)
+            if match:
+                return int(match.group(1))
+        return None
 
     def start_classified_batch(self) -> None:
         if self.batch_running:
@@ -1388,7 +1692,20 @@ class VisionToolApp:
                     raise RuntimeError(f"{raw_path.name} 仿真失败\n{log}")
                 payload = json.loads(result_path.read_text(encoding="utf-8"))
                 expected_arrow = "有箭头" in raw_path.parts
+                set_type = self.classification_set_type(raw_path, root)
+                expected_beacon_count = self.classification_expected_beacon_count(
+                    raw_path, root,
+                )
+                if set_type not in {"准集", "粗集"}:
+                    raise RuntimeError(
+                        f"{raw_path} 不在准集或粗集目录中"
+                    )
+                if set_type == "准集" and expected_beacon_count is None:
+                    raise RuntimeError(
+                        f"{raw_path} 的准集目录必须使用“数字+信标”命名"
+                    )
                 valid_beacons = [item for item in payload.get("beacons", []) if item.get("valid")]
+                beacon_count = len(valid_beacons)
                 map_ready = sum(
                     1 for item in valid_beacons
                     if int(item.get("detection_confidence", 0)) >= MAP_CREATE_CONFIDENCE
@@ -1396,11 +1713,16 @@ class VisionToolApp:
                 )
                 rows.append({
                     "frame": str(raw_path.relative_to(root)),
+                    "set_type": set_type,
                     "expected_arrow": expected_arrow,
                     "arrow_valid": bool(payload.get("vehicle", {}).get("valid")),
-                    "beacon_count": len(valid_beacons),
+                    "beacon_count": beacon_count,
                     "map_ready_count": map_ready,
-                    "beacon_upper": self.classification_beacon_upper(raw_path, root, expected_arrow),
+                    "expected_beacon_count": expected_beacon_count,
+                    "beacon_count_correct": (
+                        beacon_count == expected_beacon_count
+                        if expected_beacon_count is not None else None
+                    ),
                 })
                 self.ui_queue.put(("batch_progress", (index, len(raw_files))))
 
@@ -1414,16 +1736,42 @@ class VisionToolApp:
             no_arrow_rows = [item for item in rows if not item["expected_arrow"]]
             arrow_hits = sum(1 for item in expected_arrow_rows if item["arrow_valid"])
             false_arrows = sum(1 for item in no_arrow_rows if item["arrow_valid"])
-            beacon_count = sum(item["beacon_count"] for item in rows)
-            map_ready_count = sum(item["map_ready_count"] for item in rows)
-            beacon_upper = sum(item["beacon_upper"] for item in rows)
-            map_rate = 100.0 * map_ready_count / max(1, beacon_upper)
+            true_negatives = len(no_arrow_rows) - false_arrows
+            false_negatives = len(expected_arrow_rows) - arrow_hits
+            arrow_correct = arrow_hits + true_negatives
+            arrow_total = len(expected_arrow_rows) + len(no_arrow_rows)
+            arrow_accuracy = 100.0 * arrow_correct / max(1, arrow_total)
+            precise_rows = [
+                item for item in rows
+                if item["set_type"] == "准集"
+                and item["expected_beacon_count"] is not None
+            ]
+            coarse_rows = [item for item in rows if item["set_type"] == "粗集"]
+            precise_correct = sum(
+                1 for item in precise_rows if item["beacon_count_correct"]
+            )
+            precise_detected = sum(item["beacon_count"] for item in precise_rows)
+            precise_expected = sum(item["expected_beacon_count"] for item in precise_rows)
+            precise_map_ready = sum(item["map_ready_count"] for item in precise_rows)
+            precise_map_rate = (
+                100.0 * precise_map_ready / max(1, precise_expected)
+            )
+            coarse_detected = sum(item["beacon_count"] for item in coarse_rows)
+            coarse_map_ready = sum(item["map_ready_count"] for item in coarse_rows)
             text = (
                 f"分类批量验证完成\n"
-                f"箭头识别: {arrow_hits}/{len(expected_arrow_rows)}\n"
-                f"无箭头误检: {false_arrows}/{len(no_arrow_rows)}\n"
-                f"识别信标: {beacon_count}\n"
-                f"单帧制图质量合格: {map_ready_count}/{beacon_upper} ({map_rate:.1f}%)\n"
+                f"箭头总体正确率: {arrow_correct}/{arrow_total} "
+                f"({arrow_accuracy:.2f}%)\n"
+                f"TP/TN/FP/FN: {arrow_hits}/{true_negatives}/"
+                f"{false_arrows}/{false_negatives}\n"
+                f"准集样本: {len(precise_rows)}\n"
+                f"准集信标数量正确: {precise_correct}/{len(precise_rows)}\n"
+                f"准集识别/应有信标: {precise_detected}/{precise_expected}\n"
+                f"准集制图质量合格: {precise_map_ready}/{precise_expected} "
+                f"({precise_map_rate:.1f}%)\n"
+                f"粗集样本: {len(coarse_rows)}\n"
+                f"粗集识别信标: {coarse_detected}\n"
+                f"粗集制图质量合格: {coarse_map_ready}\n"
                 f"门槛: confidence≥{MAP_CREATE_CONFIDENCE}, σ≤{MAP_CREATE_SIGMA_CM}cm\n"
                 f"注: 连续5帧条件需在实车时验证\n"
                 f"结果: {summary_path}"
@@ -1688,16 +2036,22 @@ class VisionToolApp:
             )
         beacon_detail = "\n信标详情:\n" + "\n".join(beacon_lines) if beacon_lines else ""
         coarse_text = "/".join(str(value) for value in self.result_coarse_thresholds(result))
+        small_box_gate = result.get("vehicle_small_box_gate", {})
         self.set_result_info(
             f"连通域: {result.get('blob_count', 0)}\n"
             f"信标: {result.get('beacon_count', 0)}\n"
-            f"箭头/信标精筛阈值: "
-            f"{result.get('recognition_thresholds', {}).get('vehicle', '?')}/"
+            f"箭头首轮(回退)/信标精筛阈值: "
+            f"{result.get('recognition_thresholds', {}).get('vehicle', '?')}"
+            f"({result.get('recognition_thresholds', {}).get('vehicle_fallback', '?')})/"
             f"{result.get('recognition_thresholds', {}).get('beacon', '?')}\n"
             f"粗筛五圈阈值（中心→边缘）: {coarse_text}\n"
-            f"箭头分流面积阈值: {result.get('vehicle_min_raw_box_area', '?')} 像素\n"
+            f"箭头分流面积阈值: 常规≥{result.get('vehicle_min_raw_box_area', '?')}；"
+            f"小框≥{small_box_gate.get('min_area', '?')}且粗占空比≤"
+            f"{small_box_gate.get('max_fill_percent', '?')}%\n"
             f"预览顺序: {binary_mode_text}\n"
             f"小车标志有效: {result.get('vehicle', {}).get('valid', 0)}\n"
+            f"箭头目标平面高度: "
+            f"{result.get('vehicle', {}).get('target_plane_height_cm', 0):.1f} cm\n"
             f"{beacon_detail}"
             f"{chevron_info}\n"
             f"运行目录: {binary_path.parent}"
@@ -1764,10 +2118,10 @@ def self_test() -> int:
     assert Simulator(DEFAULT_SOURCE).source_files()
     macro_sample = "\n".join(
         f"#define {macro} ({value}U) /* test */"
-        for macro, value in zip(RUNTIME_THRESHOLD_MACROS, (150, 10, 100, 80, 70, 35, 10))
+        for macro, value in zip(RUNTIME_THRESHOLD_MACROS, (150, 10, 150, 60, 50, 50, 50))
     )
     assert VisionToolApp.parse_runtime_thresholds(macro_sample) == (
-        150, 10, 100, 80, 70, 35, 10,
+        150, 10, 150, 60, 50, 50, 50,
     )
     coarse_test = VisionToolApp.build_coarse_binary_image(
         Image.new("L", (WIDTH, HEIGHT), 50),
@@ -1775,10 +2129,46 @@ def self_test() -> int:
     )
     assert coarse_test.getpixel((round(COARSE_CENTER_X), round(COARSE_CENTER_Y))) == 0
     assert coarse_test.getpixel((0, 0)) == 255
-    assert coarse_test.getpixel((round(COARSE_CENTER_X) + 42,
-                                 round(COARSE_CENTER_Y))) == 255
+    assert tuple(COARSE_ZONE_COUNTS) == (4512, 4512, 2256, 4512, 6768)
+    assert coarse_test.getpixel((round(COARSE_CENTER_X) + 55,
+                                 round(COARSE_CENTER_Y))) == 0
     assert coarse_test.getpixel((round(COARSE_CENTER_X),
-                                 round(COARSE_CENTER_Y) + 42)) == 255
+                                 round(COARSE_CENTER_Y) - 55)) == 0
+    assert VisionToolApp.normalize_roi_selection(
+        (11, 8), (2, -4), 3, (4, 3),
+    ) == (0, 0, 4, 3)
+    roi_source = Image.frombytes("L", (4, 3), bytes(range(12)))
+    roi_image = VisionToolApp.build_roi_image(roi_source, (1, 1, 3, 3))
+    assert roi_image.size == roi_source.size
+    assert list(roi_image.tobytes()) == [
+        0, 0, 0, 0,
+        0, 5, 6, 0,
+        0, 9, 10, 0,
+    ]
+    with tempfile.TemporaryDirectory() as temp_dir_text:
+        temp_dir = Path(temp_dir_text)
+        source_path = temp_dir / "source.raw"
+        source_path.with_suffix(".json").write_text(
+            json.dumps({
+                "image_type": 2,
+                "width": WIDTH,
+                "height": HEIGHT,
+                "payload_size": WIDTH * HEIGHT,
+                "telemetry": {"roll_deg": 1.5, "tof_height_cm": 100.0},
+            }),
+            encoding="utf-8",
+        )
+        saved = VisionToolApp.save_roi_sample(
+            source_path,
+            Image.new("L", (WIDTH, HEIGHT), 127),
+            (10, 20, 30, 40),
+            temp_dir / "output",
+        )
+        assert saved["raw_path"].stat().st_size == WIDTH * HEIGHT
+        saved_metadata = json.loads(saved["json_path"].read_text(encoding="utf-8"))
+        assert saved_metadata["telemetry"]["roll_deg"] == 1.5
+        assert saved_metadata["roi"]["min_col"] == 10
+        assert saved_metadata["roi"]["max_row"] == 39
     assert VisionToolApp.candidate_type_text({"vehicle_valid": 1}) == "小车"
     assert VisionToolApp.candidate_type_text({"beacon_valid": 1}) == "信标"
     assert "未生成有效精连通域" in VisionToolApp.candidate_type_text({})
@@ -1791,26 +2181,26 @@ def self_test() -> int:
         "confidence_box_size_min": 0.3,
     })
     category_root = Path("分类")
-    assert VisionToolApp.classification_beacon_upper(
-        category_root / "4、5连通域" / "有箭头" / "frame.raw",
+    assert VisionToolApp.classification_set_type(
+        category_root / "准集" / "1信标" / "有箭头" / "frame.raw",
         category_root,
-        True,
-    ) == 4
-    assert VisionToolApp.classification_beacon_upper(
-        category_root / "5、6连通域" / "frame.raw",
+    ) == "准集"
+    assert VisionToolApp.classification_set_type(
+        category_root / "粗集" / "3、4信标" / "frame.raw",
         category_root,
-        False,
-    ) == 6
-    assert VisionToolApp.classification_beacon_upper(
-        category_root / "0信标" / "有箭头" / "frame.raw",
+    ) == "粗集"
+    assert VisionToolApp.classification_expected_beacon_count(
+        category_root / "准集" / "0信标" / "有箭头" / "frame.raw",
         category_root,
-        True,
     ) == 0
-    assert VisionToolApp.classification_beacon_upper(
+    assert VisionToolApp.classification_expected_beacon_count(
+        category_root / "准集" / "5信标" / "frame.raw",
+        category_root,
+    ) == 5
+    assert VisionToolApp.classification_expected_beacon_count(
         category_root / "粗集" / "3、4信标" / "有箭头" / "frame.raw",
         category_root,
-        True,
-    ) == 4
+    ) is None
     print("vision tool self-test passed")
     return 0
 

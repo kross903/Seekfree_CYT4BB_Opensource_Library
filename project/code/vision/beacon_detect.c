@@ -1,6 +1,8 @@
 #include "beacon_detect.h"
 #include "common/project_headfile.h"
+#include "vision/beacon_adaptive_threshold.h"
 #include "vision/camera_calibration.h"
+#include "vision/ipm_interface.h"
 #include <math.h>
 
 BeaconConfig_t g_beacon_config = {
@@ -41,18 +43,23 @@ static float BeaconDetect_GetBoxSizeMinimum(const VisionBlob_t *blob)
     }
     center_u = 0.5f * (float)(blob->raw_min_col + blob->raw_max_col);
     center_v = 0.5f * (float)(blob->raw_min_row + blob->raw_max_row);
-    /* Match the concentric coarse zones using the shorter image radius. */
-    radius = (CAMERA_CALIBRATION_CY >
-              ((float)BEACON_IMG_ROWS - 1.0f - CAMERA_CALIBRATION_CY)) ?
-             CAMERA_CALIBRATION_CY :
-             ((float)BEACON_IMG_ROWS - 1.0f - CAMERA_CALIBRATION_CY);
+    /* Preserve circular distance through the longer horizontal field. */
+    radius = (CAMERA_CALIBRATION_CX >
+              ((float)BEACON_IMG_COLS - 1.0f - CAMERA_CALIBRATION_CX)) ?
+             CAMERA_CALIBRATION_CX :
+             ((float)BEACON_IMG_COLS - 1.0f - CAMERA_CALIBRATION_CX);
     dx = (center_u - CAMERA_CALIBRATION_CX) / radius;
     dy = (center_v - CAMERA_CALIBRATION_CY) / radius;
     radius_sq = BeaconDetect_Clamp01(dx * dx + dy * dy);
     strictness = 1.0f - radius_sq;
     strictness *= strictness;
-    return BEACON_BOX_SIZE_MIN_EDGE +
-           (BEACON_BOX_SIZE_MIN_CENTER - BEACON_BOX_SIZE_MIN_EDGE) * strictness;
+    strictness = BEACON_BOX_SIZE_MIN_EDGE +
+                 (BEACON_BOX_SIZE_MIN_CENTER - BEACON_BOX_SIZE_MIN_EDGE) *
+                 strictness;
+#if BEACON_ADAPTIVE_ENABLE
+    strictness *= 1.0f - 0.25f * blob->adaptive_relaxation;
+#endif
+    return strictness;
 }
 
 static void BeaconDetect_UpdateConfidence(VisionBlob_t *blob)
@@ -96,22 +103,22 @@ static void BeaconDetect_UpdateConfidence(VisionBlob_t *blob)
                       BEACON_PHYSICAL_AREA_IDEAL_CM2);
     }
 #else
-    area = (float)blob->area;
-    if(area <= BEACON_UNDISTORTED_AREA_MIN_PX ||
-       area >= BEACON_UNDISTORTED_AREA_MAX_PX)
+    area = blob->adaptive_normalized_area_px;
+    if(area <= blob->adaptive_min_area_px ||
+       area >= blob->adaptive_max_area_px)
     {
         area_score = 0.0f;
     }
     else if(area <= BEACON_UNDISTORTED_AREA_IDEAL_PX)
     {
-        area_score = (area - BEACON_UNDISTORTED_AREA_MIN_PX) /
+        area_score = (area - blob->adaptive_min_area_px) /
                      (BEACON_UNDISTORTED_AREA_IDEAL_PX -
-                      BEACON_UNDISTORTED_AREA_MIN_PX);
+                      blob->adaptive_min_area_px);
     }
     else
     {
-        area_score = (BEACON_UNDISTORTED_AREA_MAX_PX - area) /
-                     (BEACON_UNDISTORTED_AREA_MAX_PX -
+        area_score = (blob->adaptive_max_area_px - area) /
+                     (blob->adaptive_max_area_px -
                       BEACON_UNDISTORTED_AREA_IDEAL_PX);
     }
 #endif
@@ -200,13 +207,20 @@ static void BeaconDetect_FillResultFromBlob(const VisionBlob_t *blob, BeaconResu
 
 void BeaconDetect_Init(void)
 {
+    BeaconAdaptiveThreshold_Init();
 }
 
 void BeaconDetect_BeginBlobFrame(BeaconResult_t *results, int max_results)
 {
+    float roll_deg = 0.0f;
+    float pitch_deg = 0.0f;
+    float height_cm = BEACON_ADAPTIVE_REFERENCE_HEIGHT_CM;
+
     s_beacon_frame_results = results;
     s_beacon_frame_max_results = max_results;
     s_beacon_frame_count = 0;
+    IPM_GetStatus(&roll_deg, &pitch_deg, &height_cm, NULL, NULL);
+    BeaconAdaptiveThreshold_UpdateFrame(roll_deg, pitch_deg, height_cm);
 }
 
 uint8 BeaconDetect_AppendBlob(VisionBlob_t *blob)
@@ -214,6 +228,10 @@ uint8 BeaconDetect_AppendBlob(VisionBlob_t *blob)
     float aspect_ratio;
     float occupancy_ratio;
     float circularity;
+#if !VISION_RUNTIME_PHYSICAL_GRID_ENABLE
+    BeaconAdaptiveBaseGate_t base_gate;
+    BeaconAdaptiveGate_t adaptive_gate;
+#endif
 
     if(blob == NULL || s_beacon_frame_results == NULL || s_beacon_frame_max_results <= 0)
     {
@@ -243,13 +261,31 @@ uint8 BeaconDetect_AppendBlob(VisionBlob_t *blob)
     occupancy_ratio = blob->physical_occupancy_ratio;
     circularity = blob->physical_circularity;
 #else
-    if((float)blob->area < BEACON_UNDISTORTED_AREA_MIN_PX ||
-       (float)blob->area > BEACON_UNDISTORTED_AREA_MAX_PX)
+    base_gate.min_area_px = BEACON_UNDISTORTED_AREA_MIN_PX;
+    base_gate.ideal_area_px = BEACON_UNDISTORTED_AREA_IDEAL_PX;
+    base_gate.max_area_px = BEACON_UNDISTORTED_AREA_MAX_PX;
+    base_gate.min_aspect = g_beacon_config.min_aspect;
+    base_gate.max_aspect = g_beacon_config.max_aspect;
+    base_gate.min_occupancy = g_beacon_config.min_occupancy;
+    base_gate.min_circularity = g_beacon_config.min_circularity;
+    BeaconAdaptiveThreshold_Evaluate(
+        0.5f * (float)(blob->raw_min_col + blob->raw_max_col),
+        0.5f * (float)(blob->raw_min_row + blob->raw_max_row),
+        (float)blob->area, &base_gate, &adaptive_gate);
+    blob->adaptive_normalized_area_px = adaptive_gate.normalized_area_px;
+    blob->adaptive_relaxation = adaptive_gate.relaxation;
+    blob->adaptive_min_area_px = adaptive_gate.min_area_px;
+    blob->adaptive_max_area_px = adaptive_gate.max_area_px;
+    blob->adaptive_min_circularity = adaptive_gate.min_circularity;
+
+    if(adaptive_gate.normalized_area_px < adaptive_gate.min_area_px ||
+       adaptive_gate.normalized_area_px > adaptive_gate.max_area_px)
     {
         return 0U;
     }
 #endif
 
+#if VISION_RUNTIME_PHYSICAL_GRID_ENABLE
     if(aspect_ratio < g_beacon_config.min_aspect ||
        aspect_ratio > g_beacon_config.max_aspect)
     {
@@ -263,6 +299,21 @@ uint8 BeaconDetect_AppendBlob(VisionBlob_t *blob)
     {
         return 0U;
     }
+#else
+    if(aspect_ratio < adaptive_gate.min_aspect ||
+       aspect_ratio > adaptive_gate.max_aspect)
+    {
+        return 0U;
+    }
+    if(occupancy_ratio < adaptive_gate.min_occupancy)
+    {
+        return 0U;
+    }
+    if(circularity < adaptive_gate.min_circularity)
+    {
+        return 0U;
+    }
+#endif
     if(blob->centroid_row > (BEACON_IMG_ROWS / 2) && blob->area < 10)
     {
         return 0U;
