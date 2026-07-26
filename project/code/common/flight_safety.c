@@ -17,6 +17,7 @@ int low_voltage_protect_flag = 0;
 #define FLIGHT_SAFETY_TICK_MS                 5U
 #define FLIGHT_ESTOP_REARM_INHIBIT_TICKS      (FLIGHT_ESTOP_REARM_INHIBIT_MS / FLIGHT_SAFETY_TICK_MS)
 #define FLIGHT_CONTROL_TICK_US                 250U
+#define FLIGHT_ARM_MIN_BATTERY_V               12.5f
 #define YAW_SPIN_RATE_LIMIT_DPS                200.0f
 #define YAW_SPIN_DURATION_MS                   150U
 #define YAW_SPIN_LIMIT_TICKS                   ((YAW_SPIN_DURATION_MS * 1000U) / FLIGHT_CONTROL_TICK_US)
@@ -280,9 +281,15 @@ uint8 Flight_Safety_Can_Arm(FlightArmRejectReason *reason)
     {
         reject_reason = FLIGHT_ARM_REJECT_ATTITUDE;
     }
-    else if(!battery_status.local_valid || battery_status.pack_type == BATTERY_PACK_UNKNOWN)
+    else if(!battery_status.local_valid ||
+            battery_status.pack_type == BATTERY_PACK_UNKNOWN ||
+            !isfinite(battery_status.local_filtered_voltage_v))
     {
         reject_reason = FLIGHT_ARM_REJECT_BATTERY_INVALID;
+    }
+    else if(battery_status.local_filtered_voltage_v < FLIGHT_ARM_MIN_BATTERY_V)
+    {
+        reject_reason = FLIGHT_ARM_REJECT_BATTERY_LOW;
     }
     else if(!MotorHardware_IsInitialized())
     {
