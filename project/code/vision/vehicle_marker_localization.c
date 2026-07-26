@@ -284,6 +284,7 @@ void VehicleMarkerLocalization_ServiceLostProtection(void)
 #define VEHICLE_MARKER_CHEVRON_MAX_BASE_CM                 (46.0f)
 #define VEHICLE_MARKER_CHEVRON_MIN_TRIANGLE_HEIGHT_CM      (8.0f)
 #define VEHICLE_MARKER_CHEVRON_MAX_TRIANGLE_HEIGHT_CM      (24.0f)
+#define VEHICLE_MARKER_POSITION_REAR_OFFSET_CM              (20.0f)
 #define VEHICLE_MARKER_CHEVRON_MIN_CONTOUR_POINTS          (8U)
 #define VEHICLE_MARKER_CHEVRON_POINT_EPS                   (1e-4f)
 #define VEHICLE_MARKER_CHEVRON_SEED_SAMPLE_POINTS          (64U)
@@ -794,6 +795,9 @@ static uint8 vehicle_marker_chevron_store_pose(const VehicleMarkerWorldPoint_t *
 {
     float center_x = 0.0f;
     float center_y = 0.0f;
+    float rear_direction_x = 0.0f;
+    float rear_direction_y = 0.0f;
+    float rear_direction_length = 0.0f;
     float filtered_center_x = 0.0f;
     float filtered_center_y = 0.0f;
     VehicleMarkerPoint2D_t apex_img = {0};
@@ -828,8 +832,19 @@ static uint8 vehicle_marker_chevron_store_pose(const VehicleMarkerWorldPoint_t *
         right_tip_img = *right_line_end_img;
     }
 
-    center_x = apex->x;
-    center_y = apex->y;
+    /* 小车位置取箭头顶点沿两翼中点方向向后偏移20 cm。 */
+    rear_direction_x = 0.5f * (left_tip->x + right_tip->x) - apex->x;
+    rear_direction_y = 0.5f * (left_tip->y + right_tip->y) - apex->y;
+    rear_direction_length = sqrtf(rear_direction_x * rear_direction_x +
+                                  rear_direction_y * rear_direction_y);
+    if(rear_direction_length <= VEHICLE_MARKER_CHEVRON_POINT_EPS)
+    {
+        return 0U;
+    }
+    center_x = apex->x + VEHICLE_MARKER_POSITION_REAR_OFFSET_CM *
+                           rear_direction_x / rear_direction_length;
+    center_y = apex->y + VEHICLE_MARKER_POSITION_REAR_OFFSET_CM *
+                           rear_direction_y / rear_direction_length;
     vehicle_marker_center_kalman_update(center_x, center_y,
                                         &filtered_center_x, &filtered_center_y);
 
