@@ -1121,7 +1121,16 @@
     <group>
         <name>app_port</name>
         <file>
+            <name>$PROJ_DIR$\..\..\code\vision\beacon_adaptive_threshold.c</name>
+        </file>
+        <file>
+            <name>$PROJ_DIR$\..\..\code\vision\beacon_adaptive_threshold.h</name>
+        </file>
+        <file>
             <name>$PROJ_DIR$\..\..\code\vision\beacon_detect.c</name>
+        </file>
+        <file>
+            <name>$PROJ_DIR$\..\..\code\vision\beacon_detect.h</name>
         </file>
         <file>
             <name>$PROJ_DIR$\..\..\code\vision\camera_calibration.c</name>
@@ -1139,13 +1148,37 @@
             <name>$PROJ_DIR$\..\..\code\vision\camera_undistort_rect_map.h</name>
         </file>
         <file>
+            <name>$PROJ_DIR$\..\..\code\vision\coarse_distance_zone_map.h</name>
+        </file>
+        <file>
             <name>$PROJ_DIR$\..\..\code\communication\cross_core_camera.c</name>
+        </file>
+        <file>
+            <name>$PROJ_DIR$\..\..\code\vision\drone_ipm.c</name>
+        </file>
+        <file>
+            <name>$PROJ_DIR$\..\..\code\vision\drone_ipm.h</name>
         </file>
         <file>
             <name>$PROJ_DIR$\..\..\code\vision\drone_ipm_embedded.c</name>
         </file>
         <file>
+            <name>$PROJ_DIR$\..\..\code\vision\drone_ipm_embedded.h</name>
+        </file>
+        <file>
+            <name>$PROJ_DIR$\..\..\code\vision\ipm_demo.c</name>
+        </file>
+        <file>
             <name>$PROJ_DIR$\..\..\code\vision\ipm_interface.c</name>
+        </file>
+        <file>
+            <name>$PROJ_DIR$\..\..\code\vision\ipm_interface.h</name>
+        </file>
+        <file>
+            <name>$PROJ_DIR$\..\..\code\vision\ir_localization.c</name>
+        </file>
+        <file>
+            <name>$PROJ_DIR$\..\..\code\vision\ir_localization.h</name>
         </file>
         <file>
             <name>$PROJ_DIR$\..\..\code\vision\vehicle_marker_localization.c</name>
@@ -1161,6 +1194,9 @@
         </file>
         <file>
             <name>$PROJ_DIR$\..\..\code\vision\vision_runtime.c</name>
+        </file>
+        <file>
+            <name>$PROJ_DIR$\..\..\code\vision\vision_runtime.h</name>
         </file>
     </group>
     <group>

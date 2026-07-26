@@ -1133,7 +1133,16 @@
             <name>$PROJ_DIR$\..\..\code\common\battery_monitor.c</name>
         </file>
         <file>
+            <name>$PROJ_DIR$\..\..\code\vision\beacon_adaptive_threshold.c</name>
+        </file>
+        <file>
+            <name>$PROJ_DIR$\..\..\code\vision\beacon_adaptive_threshold.h</name>
+        </file>
+        <file>
             <name>$PROJ_DIR$\..\..\code\vision\beacon_detect.c</name>
+        </file>
+        <file>
+            <name>$PROJ_DIR$\..\..\code\vision\beacon_detect.h</name>
         </file>
         <file>
             <name>$PROJ_DIR$\..\..\code\vision\camera_calibration.c</name>
@@ -1149,6 +1158,9 @@
         </file>
         <file>
             <name>$PROJ_DIR$\..\..\code\vision\camera_undistort_rect_map.h</name>
+        </file>
+        <file>
+            <name>$PROJ_DIR$\..\..\code\vision\coarse_distance_zone_map.h</name>
         </file>
         <file>
             <name>$PROJ_DIR$\..\..\code\communication\comm_mux.c</name>
@@ -1181,13 +1193,25 @@
             <name>$PROJ_DIR$\..\..\code\vision\drone_ipm.c</name>
         </file>
         <file>
+            <name>$PROJ_DIR$\..\..\code\vision\drone_ipm.h</name>
+        </file>
+        <file>
             <name>$PROJ_DIR$\..\..\code\vision\drone_ipm_embedded.c</name>
+        </file>
+        <file>
+            <name>$PROJ_DIR$\..\..\code\vision\drone_ipm_embedded.h</name>
         </file>
         <file>
             <name>$PROJ_DIR$\..\..\code\communication\dshot600.c</name>
         </file>
         <file>
             <name>$PROJ_DIR$\..\..\code\communication\dshot600.h</name>
+        </file>
+        <file>
+            <name>$PROJ_DIR$\..\..\code\control\dual_tof_manager.c</name>
+        </file>
+        <file>
+            <name>$PROJ_DIR$\..\..\code\control\dual_tof_manager.h</name>
         </file>
         <file>
             <name>$PROJ_DIR$\..\..\code\control\flight_control.c</name>
@@ -1214,12 +1238,6 @@
             <name>$PROJ_DIR$\..\..\code\control\height_manager.h</name>
         </file>
         <file>
-            <name>$PROJ_DIR$\..\..\code\control\dual_tof_manager.c</name>
-        </file>
-        <file>
-            <name>$PROJ_DIR$\..\..\code\control\dual_tof_manager.h</name>
-        </file>
-        <file>
             <name>$PROJ_DIR$\..\..\code\icm\icm.c</name>
         </file>
         <file>
@@ -1230,6 +1248,15 @@
         </file>
         <file>
             <name>$PROJ_DIR$\..\..\code\vision\ipm_interface.c</name>
+        </file>
+        <file>
+            <name>$PROJ_DIR$\..\..\code\vision\ipm_interface.h</name>
+        </file>
+        <file>
+            <name>$PROJ_DIR$\..\..\code\vision\ir_localization.c</name>
+        </file>
+        <file>
+            <name>$PROJ_DIR$\..\..\code\vision\ir_localization.h</name>
         </file>
         <file>
             <name>$PROJ_DIR$\..\..\code\menu\key.c</name>
@@ -1251,12 +1278,6 @@
         </file>
         <file>
             <name>$PROJ_DIR$\..\..\code\motor_hardware\motor_hardware.h</name>
-        </file>
-        <file>
-            <name>$PROJ_DIR$\..\..\code\motor_hardware\small_driver_uart_control.c</name>
-        </file>
-        <file>
-            <name>$PROJ_DIR$\..\..\code\motor_hardware\small_driver_uart_control.h</name>
         </file>
         <file>
             <name>$PROJ_DIR$\..\..\code\control\motor_mixer.c</name>
@@ -1307,6 +1328,12 @@
             <name>$PROJ_DIR$\..\..\code\common\shared_data.c</name>
         </file>
         <file>
+            <name>$PROJ_DIR$\..\..\code\motor_hardware\small_driver_uart_control.c</name>
+        </file>
+        <file>
+            <name>$PROJ_DIR$\..\..\code\motor_hardware\small_driver_uart_control.h</name>
+        </file>
+        <file>
             <name>$PROJ_DIR$\..\..\code\control\throttle_runtime.c</name>
         </file>
         <file>
@@ -1325,7 +1352,16 @@
             <name>$PROJ_DIR$\..\..\code\control\velocity_loop.h</name>
         </file>
         <file>
+            <name>$PROJ_DIR$\..\..\code\vision\vision_overlay.c</name>
+        </file>
+        <file>
+            <name>$PROJ_DIR$\..\..\code\vision\vision_overlay.h</name>
+        </file>
+        <file>
             <name>$PROJ_DIR$\..\..\code\vision\vision_runtime.c</name>
+        </file>
+        <file>
+            <name>$PROJ_DIR$\..\..\code\vision\vision_runtime.h</name>
         </file>
         <file>
             <name>$PROJ_DIR$\..\..\code\communication\vofa.c</name>

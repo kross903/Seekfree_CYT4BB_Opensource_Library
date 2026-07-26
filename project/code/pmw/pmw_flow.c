@@ -60,11 +60,10 @@
 #define PMW_FLOW_VEL_SLEW_LIMIT_CMS2        (1500.0f)
 #define PMW_FLOW_VEL_SLEW_MIN_STEP_CMS      (12.0f)
 #define PMW_FLOW_VEL_OUTPUT_SLEW_LIMIT_CMS2 PMW_FLOW_GRAVITY_CMS2
-/* 速度版Mahony：IMU负责短期预测，光流通过PI观测器缓慢修正速度与加速度零偏。 */
-#define PMW_FLOW_FUSION_SETTLE95_SLOW_S     (0.50f)
-#define PMW_FLOW_FUSION_SETTLE95_FAST_S     (0.05f)
-#define PMW_FLOW_FUSION_BIAS_KI_MIN         (0.02f)
-#define PMW_FLOW_FUSION_BIAS_KI_MAX         (0.05f)
+/* 速度版Mahony：IMU负责短期预测，光流只以固定低带宽修正速度与加速度零偏。 */
+#define PMW_FLOW_FUSION_SETTLE95_S          (1.50f)
+#define PMW_FLOW_FUSION_BIAS_KI             (0.02f)
+#define PMW_FLOW_FUSION_CORRECTION_LIMIT_CMS2 (100.0f)
 #define PMW_FLOW_FUSION_ACCEL_BIAS_LIMIT_CMS2 (30.0f)
 #define PMW_FLOW_FUSION_INNOV_LP_TAU_S      (0.15f)
 #define PMW_FLOW_FUSION_INNOV_EVIDENCE_LOW_CMS  (10.0f)
@@ -530,20 +529,15 @@ static float pmw_flow_calc_rotation_confidence(const PMWFlowState_t *state)
     return pmw_flow_limit_float(rate_confidence * accel_confidence, 0.0f, 1.0f);
 }
 
-static float pmw_flow_pi_calc_alpha(float evidence, float dt_s)
+static float pmw_flow_pi_calc_alpha(float dt_s)
 {
-    float settling_time_95_s;
-
-    evidence = pmw_flow_limit_float(evidence, 0.0f, 1.0f);
-    settling_time_95_s = PMW_FLOW_FUSION_SETTLE95_SLOW_S -
-                         (PMW_FLOW_FUSION_SETTLE95_SLOW_S -
-                          PMW_FLOW_FUSION_SETTLE95_FAST_S) * evidence;
     if(!(dt_s > 0.0f))
     {
         dt_s = FLOW_SENSOR_NOMINAL_DT_S;
     }
 
-    return pmw_flow_limit_float(1.0f - expf((-3.0f * dt_s) / settling_time_95_s),
+    return pmw_flow_limit_float(1.0f - expf((-3.0f * dt_s) /
+                                            PMW_FLOW_FUSION_SETTLE95_S),
                                 0.0f,
                                 1.0f);
 }
@@ -582,8 +576,8 @@ static void pmw_flow_pi_reset_axis(PMWFlowPIAxis_t *axis)
     axis->accel_bias_cms2 = 0.0f;
     axis->innovation_evidence = 0.0f;
     axis->innovation_lp_cms = 0.0f;
-    axis->alpha = pmw_flow_pi_calc_alpha(0.0f, FLOW_SENSOR_NOMINAL_DT_S);
-    axis->bias_ki = PMW_FLOW_FUSION_BIAS_KI_MIN;
+    axis->alpha = pmw_flow_pi_calc_alpha(FLOW_SENSOR_NOMINAL_DT_S);
+    axis->bias_ki = PMW_FLOW_FUSION_BIAS_KI;
 }
 
 static void pmw_flow_pi_note_invalid(PMWFlowPIAxis_t *axis, float dt_s)
@@ -598,10 +592,8 @@ static void pmw_flow_pi_note_invalid(PMWFlowPIAxis_t *axis, float dt_s)
         pmw_flow_pi_update_evidence(axis, 0.0f, dt_s);
     }
 
-    axis->alpha = pmw_flow_pi_calc_alpha(axis->innovation_evidence, dt_s);
-    axis->bias_ki = PMW_FLOW_FUSION_BIAS_KI_MIN +
-                    (PMW_FLOW_FUSION_BIAS_KI_MAX - PMW_FLOW_FUSION_BIAS_KI_MIN) *
-                    axis->innovation_evidence;
+    axis->alpha = pmw_flow_pi_calc_alpha(dt_s);
+    axis->bias_ki = PMW_FLOW_FUSION_BIAS_KI;
 }
 
 static void pmw_flow_pi_clear_evidence(PMWFlowPIAxis_t *axis)
@@ -613,8 +605,8 @@ static void pmw_flow_pi_clear_evidence(PMWFlowPIAxis_t *axis)
 
     axis->innovation_evidence = 0.0f;
     axis->innovation_lp_cms = 0.0f;
-    axis->alpha = pmw_flow_pi_calc_alpha(0.0f, FLOW_SENSOR_NOMINAL_DT_S);
-    axis->bias_ki = PMW_FLOW_FUSION_BIAS_KI_MIN;
+    axis->alpha = pmw_flow_pi_calc_alpha(FLOW_SENSOR_NOMINAL_DT_S);
+    axis->bias_ki = PMW_FLOW_FUSION_BIAS_KI;
 }
 
 static float pmw_flow_pi_update_axis(PMWFlowPIAxis_t *axis,
@@ -623,6 +615,9 @@ static float pmw_flow_pi_update_axis(PMWFlowPIAxis_t *axis,
                                      float dt_s)
 {
     float innovation_cms;
+    float correction_cms;
+    float correction_dt_s;
+    float correction_limit_cms;
 
     if(axis == NULL)
     {
@@ -632,10 +627,8 @@ static float pmw_flow_pi_update_axis(PMWFlowPIAxis_t *axis,
     innovation_cms = measurement_cms - prediction_cms;
     pmw_flow_pi_update_evidence(axis, innovation_cms, dt_s);
 
-    axis->alpha = pmw_flow_pi_calc_alpha(axis->innovation_evidence, dt_s);
-    axis->bias_ki = PMW_FLOW_FUSION_BIAS_KI_MIN +
-                    (PMW_FLOW_FUSION_BIAS_KI_MAX - PMW_FLOW_FUSION_BIAS_KI_MIN) *
-                    axis->innovation_evidence;
+    axis->alpha = pmw_flow_pi_calc_alpha(dt_s);
+    axis->bias_ki = PMW_FLOW_FUSION_BIAS_KI;
 
     if(dt_s > 0.0f)
     {
@@ -646,7 +639,13 @@ static float pmw_flow_pi_update_axis(PMWFlowPIAxis_t *axis,
             PMW_FLOW_FUSION_ACCEL_BIAS_LIMIT_CMS2);
     }
 
-    return prediction_cms + axis->alpha * innovation_cms;
+    correction_dt_s = (dt_s > 0.0f) ? dt_s : FLOW_SENSOR_NOMINAL_DT_S;
+    correction_limit_cms = PMW_FLOW_FUSION_CORRECTION_LIMIT_CMS2 * correction_dt_s;
+    correction_cms = pmw_flow_limit_float(axis->alpha * innovation_cms,
+                                          -correction_limit_cms,
+                                          correction_limit_cms);
+
+    return prediction_cms + correction_cms;
 }
 
 static void pmw_flow_sync_pi_diag(PMWFlowState_t *state)

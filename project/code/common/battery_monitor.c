@@ -16,8 +16,8 @@ volatile float car_bat_voltage = 0.0f;
 #define BATTERY_INVALID_WARNING_HOLD_SAMPLES \
     (BATTERY_INVALID_WARNING_HOLD_MS / BATTERY_TASK_PERIOD_MS)
 #define BATTERY_REMOTE_TIMEOUT_MS          1000U
-#define BATTERY_4S_VALID_MIN_V             10.0f
-#define BATTERY_4S_VALID_MAX_V             18.0f
+#define BATTERY_4S_VALID_MIN_V             6.0f
+#define BATTERY_4S_VALID_MAX_V             20.0f
 #define BATTERY_6S_VALID_MIN_V             18.0f
 #define BATTERY_6S_VALID_MAX_V             27.0f
 #define BATTERY_REMOTE_VALID_MIN_V         10.0f
