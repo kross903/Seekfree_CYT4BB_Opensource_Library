@@ -680,7 +680,6 @@ static float VisionRuntime_NormalizedAspect(int width, int height)
 }
 
 #define VISION_RUNTIME_MAX_CANDIDATES (16U)
-#define VISION_RUNTIME_CANDIDATE_MIN_AREA (10)
 #define VISION_RUNTIME_CANDIDATE_MARGIN (2)
 
 typedef struct
@@ -961,10 +960,19 @@ static uint8 VisionRuntime_FindCoarseCandidates(void)
                     break;
                 }
             }
-            if(complete && area >= VISION_RUNTIME_CANDIDATE_MIN_AREA)
+            if(complete)
             {
+                int center_row = (min_row + max_row) / 2;
+                int center_col = (min_col + max_col) / 2;
+                uint8 center_zone = g_vision_coarse_distance_zone[
+                    center_row * MT9V03X_W + center_col];
+                int minimum_area =
+                    (center_zone >= VISION_RUNTIME_OUTER_CANDIDATE_FIRST_ZONE) ?
+                    (int)VISION_RUNTIME_OUTER_CANDIDATE_MIN_AREA :
+                    (int)VISION_RUNTIME_COARSE_CANDIDATE_MIN_AREA;
                 int slot = (int)candidate_count;
 
+                if(area < minimum_area) continue;
                 if(candidate_count >= VISION_RUNTIME_MAX_CANDIDATES)
                 {
                     uint8 i;

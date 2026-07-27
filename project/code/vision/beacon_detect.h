@@ -41,6 +41,12 @@
 /* B 的位置动态门槛：中心严格，边缘宽松，中间使用二次曲线过渡。 */
 #define BEACON_BOX_SIZE_MIN_EDGE           (0.05f) /* 图像边缘最低 B 门槛 */
 #define BEACON_BOX_SIZE_MIN_CENTER         (0.50f) /* 图像中心最低 B 门槛 */
+/* 仅用于畸变较大的外圈：普通信标门限失败后执行轻量救援，不增加图像变换。 */
+#define BEACON_EDGE_RESCUE_MIN_RADIUS_SQ       (0.35f) /* 归一化半径平方下限 */
+#define BEACON_EDGE_RESCUE_MIN_AREA_PX        (65.0f) /* 去畸变后的最小归一化面积 */
+#define BEACON_EDGE_RESCUE_MIN_CIRCULARITY     (0.65f) /* 排除箭头碎片和细长噪声 */
+#define BEACON_EDGE_RESCUE_MIN_STABILITY       (0.45f) /* 多阈值质心与面积稳定性 */
+#define BEACON_EDGE_RESCUE_BOX_MIN_SCALE       (0.70f) /* B 至少达到原动态门槛的70% */
 #define BEACON_POSITION_SIGMA_MIN_CM        (5U)
 #define BEACON_POSITION_SIGMA_MAX_CM        (15U)
 
