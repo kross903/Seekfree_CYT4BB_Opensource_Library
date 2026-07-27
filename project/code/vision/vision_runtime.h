@@ -5,7 +5,7 @@
 
 /* 候选区完整分辨率精筛阈值：箭头较亮，信标允许保留较暗像素。 */
 #define VISION_BINARY_THRESHOLD_VEHICLE          (145U) /* 箭头首轮精筛阈值 */
-#define VISION_BINARY_THRESHOLD_VEHICLE_FALLBACK (60U)  /* 首轮失败后的箭头回退阈值 */
+#define VISION_BINARY_THRESHOLD_VEHICLE_FALLBACK (50U)  /* 首轮失败后的箭头回退阈值 */
 #define VISION_BINARY_THRESHOLD_BEACON           (10U)  /* 信标精筛二值化阈值 */
 #if VISION_BINARY_THRESHOLD_VEHICLE_FALLBACK == 0U || \
     VISION_BINARY_THRESHOLD_VEHICLE_FALLBACK >= VISION_BINARY_THRESHOLD_VEHICLE
@@ -22,9 +22,18 @@
 #define VISION_RUNTIME_COARSE_THRESHOLD_NEAR   (60U) /* 近圈 */
 #define VISION_RUNTIME_COARSE_THRESHOLD_MIDDLE (50U) /* 中圈 */
 #define VISION_RUNTIME_COARSE_THRESHOLD_FAR    (50U) /* 远圈 */
-#define VISION_RUNTIME_COARSE_THRESHOLD_EDGE   (50U) /* 图像边缘圈 */
+#define VISION_RUNTIME_COARSE_THRESHOLD_EDGE   (40U) /* 图像边缘圈：保留较弱的边缘信标 */
 /* Legacy single-threshold name keeps existing callers source compatible. */
 #define VISION_RUNTIME_COARSE_THRESHOLD VISION_RUNTIME_COARSE_THRESHOLD_CENTER
+#define VISION_RUNTIME_COARSE_CANDIDATE_MIN_AREA       (10U) /* 中心至中圈粗连通域最小面积 */
+#define VISION_RUNTIME_OUTER_CANDIDATE_MIN_AREA         (6U) /* 远圈和边缘圈允许更小的信标候选 */
+#define VISION_RUNTIME_OUTER_CANDIDATE_FIRST_ZONE       (3U) /* 3=远圈，4=边缘圈 */
+#if VISION_RUNTIME_OUTER_CANDIDATE_MIN_AREA > \
+        VISION_RUNTIME_COARSE_CANDIDATE_MIN_AREA || \
+    VISION_RUNTIME_OUTER_CANDIDATE_FIRST_ZONE >= \
+        VISION_RUNTIME_COARSE_ZONE_COUNT
+#error "Invalid outer coarse candidate gate"
+#endif
 #define VISION_BINARY_ZONE_INNER       (0U)
 #define VISION_BINARY_ZONE_MIDDLE      (1U)
 #define VISION_BINARY_ZONE_OUTER       (2U)

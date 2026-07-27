@@ -27,6 +27,26 @@ static float BeaconDetect_Clamp01(float value)
     return value;
 }
 
+#if !VISION_RUNTIME_PHYSICAL_GRID_ENABLE
+static uint8 BeaconDetect_IsEdgeRescueCandidate(
+    const VisionBlob_t *blob, const BeaconAdaptiveGate_t *gate,
+    float circularity)
+{
+    if(blob == NULL || gate == NULL) return 0U;
+    if(gate->normalized_radius_sq < BEACON_EDGE_RESCUE_MIN_RADIUS_SQ ||
+       gate->normalized_area_px < BEACON_EDGE_RESCUE_MIN_AREA_PX ||
+       gate->normalized_area_px > gate->max_area_px ||
+       circularity < BEACON_EDGE_RESCUE_MIN_CIRCULARITY ||
+       blob->confidence_stability < BEACON_EDGE_RESCUE_MIN_STABILITY ||
+       blob->confidence_box_size <
+           blob->confidence_box_size_min * BEACON_EDGE_RESCUE_BOX_MIN_SCALE)
+    {
+        return 0U;
+    }
+    return 1U;
+}
+#endif
+
 static float BeaconDetect_GetBoxSizeMinimum(const VisionBlob_t *blob)
 {
     float center_u;
@@ -231,6 +251,7 @@ uint8 BeaconDetect_AppendBlob(VisionBlob_t *blob)
 #if !VISION_RUNTIME_PHYSICAL_GRID_ENABLE
     BeaconAdaptiveBaseGate_t base_gate;
     BeaconAdaptiveGate_t adaptive_gate;
+    uint8 normal_area_valid;
 #endif
 
     if(blob == NULL || s_beacon_frame_results == NULL || s_beacon_frame_max_results <= 0)
@@ -278,8 +299,13 @@ uint8 BeaconDetect_AppendBlob(VisionBlob_t *blob)
     blob->adaptive_max_area_px = adaptive_gate.max_area_px;
     blob->adaptive_min_circularity = adaptive_gate.min_circularity;
 
-    if(adaptive_gate.normalized_area_px < adaptive_gate.min_area_px ||
-       adaptive_gate.normalized_area_px > adaptive_gate.max_area_px)
+    normal_area_valid = (uint8)(
+        adaptive_gate.normalized_area_px >= adaptive_gate.min_area_px &&
+        adaptive_gate.normalized_area_px <= adaptive_gate.max_area_px);
+    if(adaptive_gate.normalized_area_px > adaptive_gate.max_area_px ||
+       (adaptive_gate.normalized_area_px < adaptive_gate.min_area_px &&
+        (adaptive_gate.normalized_radius_sq < BEACON_EDGE_RESCUE_MIN_RADIUS_SQ ||
+         adaptive_gate.normalized_area_px < BEACON_EDGE_RESCUE_MIN_AREA_PX)))
     {
         return 0U;
     }
@@ -320,10 +346,19 @@ uint8 BeaconDetect_AppendBlob(VisionBlob_t *blob)
     }
 
     BeaconDetect_UpdateConfidence(blob);
+#if VISION_RUNTIME_PHYSICAL_GRID_ENABLE
     if(blob->confidence_box_size <= blob->confidence_box_size_min)
     {
         return 0U;
     }
+#else
+    if((!normal_area_valid ||
+        blob->confidence_box_size <= blob->confidence_box_size_min) &&
+       !BeaconDetect_IsEdgeRescueCandidate(blob, &adaptive_gate, circularity))
+    {
+        return 0U;
+    }
+#endif
     if(s_beacon_frame_count >= s_beacon_frame_max_results)
     {
         return 0U;
