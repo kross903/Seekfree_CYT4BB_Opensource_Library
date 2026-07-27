@@ -873,6 +873,7 @@ static void control_task_update_velocity_target(uint8 takeoff_active)
 
 static void control_task_update_angle_loop(void)
 {
+    BeaconSearch_ControlStep(0.002f, current_yaw, &target_angle_yaw);
     Angle_Loop_Update(target_angle_roll,
                       target_angle_pitch,
                       target_angle_yaw,

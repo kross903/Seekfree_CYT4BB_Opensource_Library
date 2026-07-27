@@ -1214,6 +1214,12 @@
             <name>$PROJ_DIR$\..\..\code\control\dual_tof_manager.h</name>
         </file>
         <file>
+            <name>$PROJ_DIR$\..\..\code\control\beacon_search.c</name>
+        </file>
+        <file>
+            <name>$PROJ_DIR$\..\..\code\control\beacon_search.h</name>
+        </file>
+        <file>
             <name>$PROJ_DIR$\..\..\code\control\flight_control.c</name>
         </file>
         <file>

@@ -356,6 +356,7 @@ static void core_link_user_send_beacon_observations(
 static void core_link_user_build_beacon_observations(
     core_link_beacon_observation_packet_struct *packet)
 {
+    VehicleMarkerLossDebug_t loss_debug = {0};
     VisionRuntimeBeaconSlot_t slots[VISION_RUNTIME_BEACON_SLOT_COUNT] = {0};
     uint8 slot_track_id[VISION_RUNTIME_BEACON_SLOT_COUNT] = {0};
     float car_absolute_yaw_deg = 0.0f;
@@ -436,6 +437,10 @@ static void core_link_user_build_beacon_observations(
         observation->flags = CORE_LINK_BEACON_OBSERVATION_FLAG_LIT;
         packet->count++;
     }
+
+    VehicleMarkerLocalization_GetLossDebug(&loss_debug);
+    BeaconSearch_OnObservationFrame(packet, loss_debug.process_count);
+    packet->frame_flags |= BeaconSearch_GetFrameFlags();
 }
 
 static void core_link_user_send_beacon_observations_if_due(void)
@@ -494,6 +499,7 @@ static void core_link_user_clear_remote_events(void)
 
 void core_link_user_init (void)
 {
+    BeaconSearch_Init();
     core_link_user_clear_remote_events();
     s_core_link_user_key_flag_remote = 0;
     s_core_link_user_screen_mirror_enabled = 0;
@@ -557,6 +563,14 @@ void core_link_user_tick (uint16 elapsed_ms)
     {
         s_core_link_user_beacon_uplink_valid = 0U;
     }
+
+    BeaconSearch_Tick(elapsed_ms,
+                      armed,
+                      (uint8)(control_mode == CONTROL_MODE_ANGLE),
+                      (uint8)!Flight_Takeoff_Is_Active(),
+                      Velocity_Loop_Is_Enabled(),
+                      s_core_link_user_beacon_uplink_valid,
+                      s_core_link_user_beacon_uplink_age_ms);
 }
 
 void core_link_user_get_beacon_diag(CoreLinkBeaconDiag_t *diag)

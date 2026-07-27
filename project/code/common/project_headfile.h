@@ -26,6 +26,7 @@
 
 // =================================================== Control ====================================================
 #include "control/ControlMath.h"
+#include "control/beacon_search.h"
 #include "control/dual_tof_manager.h"
 #include "control/angle_loop.h"
 #include "control/flight_control.h"
