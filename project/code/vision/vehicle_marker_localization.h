@@ -42,6 +42,8 @@ typedef struct
     float raw_x;
     float raw_y;
     float z;
+    /* 视觉箭头几何角，仅用于识别/诊断；噪声较大，禁止替代车机两端
+     * IMU/Mahony 计算的 car_yaw_rel_uav。 */
     float heading_deg;
     float square_side_cm;
     VehicleMarkerPoint2D_t img_pts[VEHICLE_MARKER_POINT_COUNT];
@@ -63,7 +65,7 @@ typedef struct
     VehicleMarkerPoint2D_t left_line_end_img;
     VehicleMarkerPoint2D_t right_line_start_img;
     VehicleMarkerPoint2D_t right_line_end_img;
-    float heading_deg;
+    float heading_deg;                       /* 仅视觉几何诊断，不参与车机相对Yaw。 */
     float physical_area_cm2;
     float physical_occupancy_ratio;
     float physical_circularity;

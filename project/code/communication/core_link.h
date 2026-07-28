@@ -90,7 +90,7 @@ typedef struct
     uint8 car_visible;
     int16 car_x_mm;
     int16 car_y_mm;
-    /* 0x12 legacy downlink: car heading in the UAV coordinate frame. */
+    /* IMU-derived car yaw relative to UAV yaw; never visual marker heading. */
     int16 car_yaw_rel_uav_ddeg;
     core_link_beacon_entry_struct beacon[CORE_LINK_BEACON_MAP_COUNT];
 } core_link_beacon_map_packet_struct;
@@ -100,7 +100,7 @@ typedef struct
     uint8 car_visible;
     int16 car_x_mm;
     int16 car_y_mm;
-    /* 0x13 uplink: absolute car heading in the yaw reference shared with UAV. */
+    /* Car IMU/Mahony yaw in the aligned yaw reference shared with UAV. */
     int16 car_absolute_yaw_ddeg;
     core_link_beacon_entry_struct beacon[CORE_LINK_BEACON_MAP_COUNT];
 } core_link_beacon_map_uplink_packet_struct;
@@ -127,8 +127,10 @@ typedef struct
 #endif
 
 /* 0x14 little-endian header: sequence, count, flags, car visibility,
- * car position in UAV X-forward/Y-left, UAV attitude yaw, then car yaw
- * relative to the UAV frame. Track IDs are session-local only. */
+ * car position in UAV X-forward/Y-left, UAV IMU yaw sampled with the vision
+ * frame, then IMU-derived car yaw relative to UAV yaw. The relative yaw must
+ * never be replaced by visual marker heading_deg. Both IMUs must use the same
+ * positive yaw direction and an aligned yaw zero. Track IDs are session-local. */
 
 typedef struct
 {

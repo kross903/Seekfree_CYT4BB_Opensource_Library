@@ -135,9 +135,9 @@ static uint8 core_link_user_get_uplink_car_absolute_yaw_deg(float *yaw_deg)
         return 0U;
     }
 
-    /* 0x13 car_absolute_yaw_ddeg is the car's heading in the common yaw
-     * reference. It remains valid even when car_visible is zero; that flag
-     * only guards the UAV-relative position and beacon-map fields. */
+    /* 0x13 carries car IMU/Mahony yaw, not visual marker heading. It remains
+     * valid when car_visible is zero. Car and UAV yaw must use the same
+     * positive direction and an aligned zero reference. */
     *yaw_deg = core_link_user_wrap_angle(
         ((float)s_core_link_user_beacon_uplink.car_absolute_yaw_ddeg) * 0.1f);
     return 1U;
@@ -393,9 +393,12 @@ static void core_link_user_build_beacon_observations(
         if(uav_yaw_valid &&
            core_link_user_get_uplink_car_absolute_yaw_deg(&car_absolute_yaw_deg))
         {
-            /* Both angles use the same absolute yaw reference. Subtracting
-             * the exact yaw used by this vision frame gives the car heading
-             * in the UAV image/ground coordinate frame. */
+            /* Use IMU yaw on both sides. CrossCoreCamera returns the UAV IMU
+             * yaw sampled with this vision frame; it is not a visual heading.
+             * Do not replace this calculation with
+             * g_vehicle_marker_pose.heading_deg: marker-angle noise is
+             * unsuitable for navigation heading. Both IMUs require the same
+             * sign and aligned yaw zero. */
             car_yaw_rel_uav_deg = core_link_user_wrap_angle(
                 car_absolute_yaw_deg - uav_yaw_deg);
             packet->frame_flags |= CORE_LINK_BEACON_FRAME_FLAG_CAR_YAW_VALID;
