@@ -15,7 +15,20 @@ typedef struct
     uint16 age_ms;
 } CoreLinkBeaconDiag_t;
 
+typedef struct
+{
+    uint8 valid;
+    uint8 flags;
+    uint8 sequence;
+    uint16 age_ms;
+    uint16 protocol_error_count;
+    float forward_speed_cms;
+    float left_speed_cms;
+    float car_yaw_deg;
+} CoreLinkCarMotionDiag_t;
+
 void core_link_user_get_beacon_diag(CoreLinkBeaconDiag_t *diag);
+void core_link_user_get_car_motion_diag(CoreLinkCarMotionDiag_t *diag);
 uint8 core_link_user_is_screen_mirror_enabled (void);
 uint8 core_link_user_consume_screen_mirror_enabled_changed (void);
 uint8 core_link_user_consume_monitor_exit_request (void);

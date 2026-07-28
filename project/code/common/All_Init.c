@@ -122,8 +122,8 @@ static void init_default_pid_parameters(void)
     /* 速度D由velocity_loop.c独立滤波，末尾legacy alpha不参与速度D计算。 */
     PID_Init(&vel_pid_x, 0.3f, 0.00f, 60.0f, 15.0f, 1500.0f, 20.0f, 0.3f);
     PID_Init(&vel_pid_y, 0.3f, 0.00f, 60.0f, 15.0f, 1500.0f, 20.0f, 0.3f);
-    PID_Init(&pos_pid_x, 0.5f, 0.00f, 0.0f, 120.0f, 120.0f, 15.0f, 1.0f);
-    PID_Init(&pos_pid_y, 0.5f, 0.00f, 0.0f, 120.0f, 1200.0f, 15.0f, 1.0f);
+    PID_Init(&pos_pid_x, 0.5f, 0.00f, 0.0f, 150.0f, 10000.0f, 15.0f, 1.0f);
+    PID_Init(&pos_pid_y, 0.5f, 0.00f, 0.0f, 150.0f, 10000.0f, 15.0f, 1.0f);
 
     PID_SetReferenceDt(&gyro_pid_roll, LEGACY_FAST_PID_DT_S);
     PID_SetReferenceDt(&gyro_pid_pitch, LEGACY_FAST_PID_DT_S);

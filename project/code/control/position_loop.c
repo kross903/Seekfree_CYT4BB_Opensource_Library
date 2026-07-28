@@ -11,8 +11,12 @@
 #define POSITION_LOOP_DEADZONE_CM      (3.0f)
 #define POSITION_LOOP_PREDICT_RELEASE_EPS_CM (1.0f)
 #define POSITION_LOOP_DT_S             0.020f
-#define POSITION_LOOP_TARGET_VEL_LIMIT_CMS  (70.0f)
+#define POSITION_LOOP_CORRECTION_LIMIT_CMS  (70.0f)
+#define POSITION_LOOP_TARGET_VEL_LIMIT_CMS  (150.0f)
 #define POSITION_LOOP_TARGET_VEL_SLEW_CMS2  (400.0f)
+#define POSITION_LOOP_CAR_FF_LPF_HZ          (5.0f)
+#define POSITION_LOOP_CAR_FF_GAIN_DEFAULT    (1.0f)
+#define POSITION_LOOP_CAR_FF_GAIN_MAX        (1.5f)
 
 PID_Controller pos_pid_x;
 PID_Controller pos_pid_y;
@@ -27,8 +31,19 @@ static volatile float g_position_loop_error_x_cm     = 0.0f;
 static volatile float g_position_loop_error_y_cm     = 0.0f;
 static volatile float g_position_loop_vx_cmd_cms     = 0.0f;
 static volatile float g_position_loop_vy_cmd_cms     = 0.0f;
+static volatile float g_position_loop_correction_vx_cms = 0.0f;
+static volatile float g_position_loop_correction_vy_cms = 0.0f;
+static volatile float g_position_loop_car_ff_raw_vx_cms = 0.0f;
+static volatile float g_position_loop_car_ff_raw_vy_cms = 0.0f;
+static volatile float g_position_loop_car_ff_filtered_vx_cms = 0.0f;
+static volatile float g_position_loop_car_ff_filtered_vy_cms = 0.0f;
+static volatile float g_position_loop_car_ff_gain_x = POSITION_LOOP_CAR_FF_GAIN_DEFAULT;
+static volatile float g_position_loop_car_ff_gain_y = POSITION_LOOP_CAR_FF_GAIN_DEFAULT;
 static volatile float g_position_loop_x_i_out        = 0.0f;
 static volatile float g_position_loop_y_i_out        = 0.0f;
+static volatile uint8 g_position_loop_car_ff_valid    = 0U;
+static volatile uint8 g_position_loop_limit_flags     = 0U;
+static uint8 g_position_loop_car_ff_lpf_initialized = 0U;
 static uint8 g_position_loop_last_pose_valid = 0U;
 static uint8 g_position_loop_predict_hold_active = 0U;
 static float g_position_loop_last_x_cm = 0.0f;
@@ -39,6 +54,82 @@ static float g_position_loop_hold_distance_cm = 0.0f;
 static float g_position_loop_hold_dx_cm = 0.0f;
 static float g_position_loop_hold_dy_cm = 0.0f;
 static uint32 g_position_loop_last_pose_seq = 0U;
+
+static uint8 position_loop_limit_vector(float *x, float *y, float limit)
+{
+    float magnitude;
+    float scale;
+
+    if((NULL == x) || (NULL == y) || (limit <= 0.0f))
+    {
+        return 0U;
+    }
+
+    magnitude = sqrtf((*x) * (*x) + (*y) * (*y));
+    if((magnitude <= limit) || (magnitude <= 0.0f))
+    {
+        return 0U;
+    }
+
+    scale = limit / magnitude;
+    *x *= scale;
+    *y *= scale;
+    return 1U;
+}
+
+static uint8 position_loop_limit_vector_slew(float target_x,
+                                             float target_y,
+                                             float previous_x,
+                                             float previous_y,
+                                             float *output_x,
+                                             float *output_y)
+{
+    float delta_x = target_x - previous_x;
+    float delta_y = target_y - previous_y;
+    float max_step = POSITION_LOOP_TARGET_VEL_SLEW_CMS2 * POSITION_LOOP_DT_S;
+    uint8 limited;
+
+    limited = position_loop_limit_vector(&delta_x, &delta_y, max_step);
+    *output_x = previous_x + delta_x;
+    *output_y = previous_y + delta_y;
+    return limited;
+}
+
+static void position_loop_update_car_feedforward(
+    const PositionLoopFeedforwardInput_t *feedforward)
+{
+    float target_x = 0.0f;
+    float target_y = 0.0f;
+    float tau_s = 1.0f / (6.283185307f * POSITION_LOOP_CAR_FF_LPF_HZ);
+    float alpha = POSITION_LOOP_DT_S / (tau_s + POSITION_LOOP_DT_S);
+
+    g_position_loop_car_ff_valid = 0U;
+    g_position_loop_car_ff_raw_vx_cms = 0.0f;
+    g_position_loop_car_ff_raw_vy_cms = 0.0f;
+    if((NULL != feedforward) && feedforward->valid &&
+       isfinite(feedforward->vx_uav_cms) && isfinite(feedforward->vy_uav_cms))
+    {
+        g_position_loop_car_ff_valid = 1U;
+        g_position_loop_car_ff_raw_vx_cms = feedforward->vx_uav_cms;
+        g_position_loop_car_ff_raw_vy_cms = feedforward->vy_uav_cms;
+        target_x = feedforward->vx_uav_cms * g_position_loop_car_ff_gain_x;
+        target_y = feedforward->vy_uav_cms * g_position_loop_car_ff_gain_y;
+    }
+
+    if(!g_position_loop_car_ff_lpf_initialized)
+    {
+        g_position_loop_car_ff_filtered_vx_cms = target_x;
+        g_position_loop_car_ff_filtered_vy_cms = target_y;
+        g_position_loop_car_ff_lpf_initialized = 1U;
+    }
+    else
+    {
+        g_position_loop_car_ff_filtered_vx_cms +=
+            alpha * (target_x - g_position_loop_car_ff_filtered_vx_cms);
+        g_position_loop_car_ff_filtered_vy_cms +=
+            alpha * (target_y - g_position_loop_car_ff_filtered_vy_cms);
+    }
+}
 
 static void position_loop_set_output(float vx_cms, float vy_cms, float *target_vx_cms, float *target_vy_cms)
 {
@@ -59,10 +150,14 @@ static void position_loop_reset_runtime(void)
     g_position_loop_active = 0U;
     g_position_loop_vx_cmd_cms = 0.0f;
     g_position_loop_vy_cmd_cms = 0.0f;
+    g_position_loop_correction_vx_cms = 0.0f;
+    g_position_loop_correction_vy_cms = 0.0f;
     g_position_loop_error_x_cm = 0.0f;
     g_position_loop_error_y_cm = 0.0f;
     g_position_loop_x_i_out = 0.0f;
     g_position_loop_y_i_out = 0.0f;
+    g_position_loop_limit_flags = 0U;
+    Position_Loop_Reset_Car_Velocity_Feedforward();
     g_position_loop_last_pose_valid = 0U;
     g_position_loop_predict_hold_active = 0U;
     g_position_loop_last_x_cm = 0.0f;
@@ -93,33 +188,6 @@ static float position_loop_apply_deadzone(float error_cm)
     }
 
     return error_cm;
-}
-
-static float position_loop_limit_velocity_command(float command_cms, float previous_cms)
-{
-    float max_step_cms = POSITION_LOOP_TARGET_VEL_SLEW_CMS2 * POSITION_LOOP_DT_S;
-    float delta_cms;
-
-    if(command_cms > POSITION_LOOP_TARGET_VEL_LIMIT_CMS)
-    {
-        command_cms = POSITION_LOOP_TARGET_VEL_LIMIT_CMS;
-    }
-    else if(command_cms < -POSITION_LOOP_TARGET_VEL_LIMIT_CMS)
-    {
-        command_cms = -POSITION_LOOP_TARGET_VEL_LIMIT_CMS;
-    }
-
-    delta_cms = command_cms - previous_cms;
-    if(delta_cms > max_step_cms)
-    {
-        command_cms = previous_cms + max_step_cms;
-    }
-    else if(delta_cms < -max_step_cms)
-    {
-        command_cms = previous_cms - max_step_cms;
-    }
-
-    return command_cms;
 }
 
 static uint8 position_loop_get_raw_ir_track_valid(void)
@@ -158,6 +226,9 @@ static uint8 position_loop_start_predict_hold(void)
 
 static uint8 position_loop_update_predict_hold(float measured_vx_cms,
                                                float measured_vy_cms,
+                                               uint8 car_velocity_valid,
+                                               float car_vx_cms,
+                                               float car_vy_cms,
                                                float *predict_x_cm,
                                                float *predict_y_cm)
 {
@@ -165,6 +236,8 @@ static uint8 position_loop_update_predict_hold(float measured_vx_cms,
     float predicted_x_cm;
     float predicted_y_cm;
     float predicted_distance_cm;
+    float relative_vx_cms = -measured_vx_cms;
+    float relative_vy_cms = -measured_vy_cms;
 
     if((predict_x_cm == NULL) || (predict_y_cm == NULL))
     {
@@ -179,12 +252,17 @@ static uint8 position_loop_update_predict_hold(float measured_vx_cms,
         }
     }
 
-    g_position_loop_hold_dx_cm += measured_vx_cms * POSITION_LOOP_DT_S;
-    g_position_loop_hold_dy_cm += measured_vy_cms * POSITION_LOOP_DT_S;
+    if(car_velocity_valid)
+    {
+        relative_vx_cms += car_vx_cms;
+        relative_vy_cms += car_vy_cms;
+    }
+    g_position_loop_hold_dx_cm += relative_vx_cms * POSITION_LOOP_DT_S;
+    g_position_loop_hold_dy_cm += relative_vy_cms * POSITION_LOOP_DT_S;
     displacement_distance_cm = sqrtf(g_position_loop_hold_dx_cm * g_position_loop_hold_dx_cm +
                                      g_position_loop_hold_dy_cm * g_position_loop_hold_dy_cm);
-    predicted_x_cm = g_position_loop_hold_start_x_cm - g_position_loop_hold_dx_cm;
-    predicted_y_cm = g_position_loop_hold_start_y_cm - g_position_loop_hold_dy_cm;
+    predicted_x_cm = g_position_loop_hold_start_x_cm + g_position_loop_hold_dx_cm;
+    predicted_y_cm = g_position_loop_hold_start_y_cm + g_position_loop_hold_dy_cm;
     predicted_distance_cm = sqrtf(predicted_x_cm * predicted_x_cm + predicted_y_cm * predicted_y_cm);
 
     if((displacement_distance_cm >= (g_position_loop_hold_distance_cm - POSITION_LOOP_PREDICT_RELEASE_EPS_CM)) ||
@@ -224,9 +302,53 @@ uint8 Position_Loop_Is_Enabled(void)
     return g_position_loop_enabled;
 }
 
+uint8 Position_Loop_Set_Car_Velocity_Feedforward_Gain(uint8 axis, float gain)
+{
+    if(!isfinite(gain) || (gain < 0.0f) || (gain > POSITION_LOOP_CAR_FF_GAIN_MAX))
+    {
+        return 0U;
+    }
+    if(0U == axis)
+    {
+        g_position_loop_car_ff_gain_x = gain;
+    }
+    else if(1U == axis)
+    {
+        g_position_loop_car_ff_gain_y = gain;
+    }
+    else
+    {
+        return 0U;
+    }
+    return 1U;
+}
+
+void Position_Loop_Get_Car_Velocity_Feedforward_Gain(float *gain_x, float *gain_y)
+{
+    if(NULL != gain_x)
+    {
+        *gain_x = g_position_loop_car_ff_gain_x;
+    }
+    if(NULL != gain_y)
+    {
+        *gain_y = g_position_loop_car_ff_gain_y;
+    }
+}
+
+void Position_Loop_Reset_Car_Velocity_Feedforward(void)
+{
+    g_position_loop_car_ff_raw_vx_cms = 0.0f;
+    g_position_loop_car_ff_raw_vy_cms = 0.0f;
+    g_position_loop_car_ff_filtered_vx_cms = 0.0f;
+    g_position_loop_car_ff_filtered_vy_cms = 0.0f;
+    g_position_loop_car_ff_valid = 0U;
+    g_position_loop_car_ff_lpf_initialized = 0U;
+}
+
 void Position_Loop_Update_Velocity_Target(uint8 velocity_ready,
                                           float measured_vx_cms,
                                           float measured_vy_cms,
+                                          const PositionLoopFeedforwardInput_t *feedforward,
                                           float *target_vx_cms,
                                           float *target_vy_cms)
 {
@@ -238,6 +360,16 @@ void Position_Loop_Update_Velocity_Target(uint8 velocity_ready,
     float position_input_y_cm = 0.0f;
     float pos_error_x_cm;
     float pos_error_y_cm;
+    float raw_correction_x;
+    float raw_correction_y;
+    float correction_vx_cms;
+    float correction_vy_cms;
+    float desired_vx_cms;
+    float desired_vy_cms;
+    float limited_vx_cms;
+    float limited_vy_cms;
+    float previous_integral_x;
+    float previous_integral_y;
 
     if(!g_position_loop_enabled || !velocity_ready)
     {
@@ -251,6 +383,8 @@ void Position_Loop_Update_Velocity_Target(uint8 velocity_ready,
         position_loop_reset_runtime();
         return;
     }
+
+    position_loop_update_car_feedforward(feedforward);
 
     if(new_visual_pose)
     {
@@ -267,6 +401,9 @@ void Position_Loop_Update_Velocity_Target(uint8 velocity_ready,
     {
         position_input_valid = position_loop_update_predict_hold(measured_vx_cms,
                                                                  measured_vy_cms,
+                                                                 g_position_loop_car_ff_valid,
+                                                                 g_position_loop_car_ff_raw_vx_cms,
+                                                                 g_position_loop_car_ff_raw_vy_cms,
                                                                  &position_input_x_cm,
                                                                  &position_input_y_cm);
     }
@@ -297,20 +434,57 @@ void Position_Loop_Update_Velocity_Target(uint8 velocity_ready,
         PID_Reset(&pos_pid_y);
     }
 
-    g_position_loop_vx_cmd_cms = position_loop_limit_velocity_command(
-                                      POSITION_LOOP_VX_SIGN *
-                                      PID_Calculate(&pos_pid_x,
-                                                    pos_error_x_cm,
-                                                    POSITION_LOOP_TARGET_X_CM,
-                                                    POSITION_LOOP_DT_S),
-                                      g_position_loop_vx_cmd_cms);
-    g_position_loop_vy_cmd_cms = position_loop_limit_velocity_command(
-                                      POSITION_LOOP_VY_SIGN *
-                                      PID_Calculate(&pos_pid_y,
-                                                    pos_error_y_cm,
-                                                    POSITION_LOOP_TARGET_Y_CM,
-                                                    POSITION_LOOP_DT_S),
-                                      g_position_loop_vy_cmd_cms);
+    previous_integral_x = pos_pid_x.integral;
+    previous_integral_y = pos_pid_y.integral;
+    raw_correction_x = POSITION_LOOP_VX_SIGN *
+                       PID_Calculate(&pos_pid_x,
+                                     pos_error_x_cm,
+                                     POSITION_LOOP_TARGET_X_CM,
+                                     POSITION_LOOP_DT_S);
+    raw_correction_y = POSITION_LOOP_VY_SIGN *
+                       PID_Calculate(&pos_pid_y,
+                                     pos_error_y_cm,
+                                     POSITION_LOOP_TARGET_Y_CM,
+                                     POSITION_LOOP_DT_S);
+
+    g_position_loop_limit_flags = 0U;
+    correction_vx_cms = raw_correction_x;
+    correction_vy_cms = raw_correction_y;
+    if(position_loop_limit_vector(&correction_vx_cms,
+                                  &correction_vy_cms,
+                                  POSITION_LOOP_CORRECTION_LIMIT_CMS))
+    {
+        g_position_loop_limit_flags |= POSITION_LOOP_STATUS_CORRECTION_LIMITED;
+        pos_pid_x.integral = previous_integral_x;
+        pos_pid_y.integral = previous_integral_y;
+    }
+    g_position_loop_correction_vx_cms = correction_vx_cms;
+    g_position_loop_correction_vy_cms = correction_vy_cms;
+
+    desired_vx_cms = g_position_loop_car_ff_filtered_vx_cms + correction_vx_cms;
+    desired_vy_cms = g_position_loop_car_ff_filtered_vy_cms + correction_vy_cms;
+    if(position_loop_limit_vector(&desired_vx_cms,
+                                  &desired_vy_cms,
+                                  POSITION_LOOP_TARGET_VEL_LIMIT_CMS))
+    {
+        g_position_loop_limit_flags |= POSITION_LOOP_STATUS_TARGET_LIMITED;
+        pos_pid_x.integral = previous_integral_x;
+        pos_pid_y.integral = previous_integral_y;
+    }
+
+    if(position_loop_limit_vector_slew(desired_vx_cms,
+                                      desired_vy_cms,
+                                      g_position_loop_vx_cmd_cms,
+                                      g_position_loop_vy_cmd_cms,
+                                      &limited_vx_cms,
+                                      &limited_vy_cms))
+    {
+        g_position_loop_limit_flags |= POSITION_LOOP_STATUS_SLEW_LIMITED;
+        pos_pid_x.integral = previous_integral_x;
+        pos_pid_y.integral = previous_integral_y;
+    }
+    g_position_loop_vx_cmd_cms = limited_vx_cms;
+    g_position_loop_vy_cmd_cms = limited_vy_cms;
 
     position_loop_set_output(g_position_loop_vx_cmd_cms, g_position_loop_vy_cmd_cms, target_vx_cms, target_vy_cms);
     g_position_loop_x_i_out = pos_pid_x.Ki * pos_pid_x.integral;
@@ -333,10 +507,20 @@ void Position_Loop_Get_Diag(PositionLoopDiag_t *diag)
     diag->error_y_cm = g_position_loop_error_y_cm;
     diag->vx_cmd_cms = g_position_loop_vx_cmd_cms;
     diag->vy_cmd_cms = g_position_loop_vy_cmd_cms;
+    diag->correction_vx_cms = g_position_loop_correction_vx_cms;
+    diag->correction_vy_cms = g_position_loop_correction_vy_cms;
+    diag->car_ff_raw_vx_cms = g_position_loop_car_ff_raw_vx_cms;
+    diag->car_ff_raw_vy_cms = g_position_loop_car_ff_raw_vy_cms;
+    diag->car_ff_filtered_vx_cms = g_position_loop_car_ff_filtered_vx_cms;
+    diag->car_ff_filtered_vy_cms = g_position_loop_car_ff_filtered_vy_cms;
+    diag->car_ff_gain_x = g_position_loop_car_ff_gain_x;
+    diag->car_ff_gain_y = g_position_loop_car_ff_gain_y;
     diag->x_i_out = g_position_loop_x_i_out;
     diag->y_i_out = g_position_loop_y_i_out;
     diag->enabled = g_position_loop_enabled;
     diag->active = g_position_loop_active;
     diag->ir_track_valid = g_position_loop_ir_track_valid;
     diag->velocity_ready = g_position_loop_velocity_ready;
+    diag->car_ff_valid = g_position_loop_car_ff_valid;
+    diag->limit_flags = g_position_loop_limit_flags;
 }

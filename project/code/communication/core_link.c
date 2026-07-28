@@ -390,6 +390,11 @@ void core_link_send_beacon_map_uplink(const core_link_beacon_map_uplink_packet_s
         payload[offset + 5U] = packet->beacon[i].state;
     }
 
+    payload[37] = packet->motion_flags;
+    payload[38] = packet->motion_sequence;
+    core_link_write_i16_le(&payload[39], packet->car_forward_speed_dcms);
+    core_link_write_i16_le(&payload[41], packet->car_left_speed_dcms);
+
     core_link_send_frame(CORE_LINK_PROTOCOL_BEACON_MAP_UPLINK,
                          payload,
                          CORE_LINK_BEACON_MAP_UPLINK_PAYLOAD_LEN);

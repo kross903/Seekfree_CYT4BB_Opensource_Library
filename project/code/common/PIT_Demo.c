@@ -823,17 +823,39 @@ static void control_task_update_position_target(uint8 takeoff_active)
 {
     float position_target_vx_cms = 0.0f;
     float position_target_vy_cms = 0.0f;
+    CoreLinkCarMotionDiag_t car_motion = {0};
+    PositionLoopFeedforwardInput_t feedforward = {0};
+    ICM_Health_t imu_health = {0};
     PMWFlowState_t flow_snap;
 
     if(takeoff_active)
     {
+        Position_Loop_Reset_Car_Velocity_Feedforward();
         return;
     }
 
     PMW_Flow_GetState(&flow_snap);
+    core_link_user_get_car_motion_diag(&car_motion);
+    ICM_GetHealth(&imu_health);
+    if(car_motion.valid && imu_health.attitude_valid && isfinite(current_yaw))
+    {
+        float yaw_delta_rad = Angle_WrapDeg180(car_motion.car_yaw_deg - current_yaw) *
+                              0.01745329252f;
+        float cos_yaw = cosf(yaw_delta_rad);
+        float sin_yaw = sinf(yaw_delta_rad);
+
+        feedforward.valid = 1U;
+        feedforward.vx_uav_cms =
+            cos_yaw * car_motion.forward_speed_cms -
+            sin_yaw * car_motion.left_speed_cms;
+        feedforward.vy_uav_cms =
+            sin_yaw * car_motion.forward_speed_cms +
+            cos_yaw * car_motion.left_speed_cms;
+    }
     Position_Loop_Update_Velocity_Target(flow_snap.fused_velocity_valid,
                                          flow_snap.velocity_x_fused_cms,
                                          flow_snap.velocity_y_fused_cms,
+                                         &feedforward,
                                          &position_target_vx_cms,
                                          &position_target_vy_cms);
     Velocity_Loop_Set_Target_Velocity(position_target_vx_cms, position_target_vy_cms);
@@ -942,6 +964,7 @@ static void control_task_finish_cycle(uint8 rate_due)
 {
     if(emergency_stop_triggered)
     {
+        Position_Loop_Reset_Car_Velocity_Feedforward();
         clear_motor_throttle_state();
         MotorHardware_ServiceEmergencyStop();
         return;

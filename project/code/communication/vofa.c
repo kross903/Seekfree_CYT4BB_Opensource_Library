@@ -34,7 +34,7 @@ static void send_sixteen_date(float date_1, float date_2, float date_3, float da
                               float date_9, float date_10, float date_11, float date_12,
                               float date_13, float date_14, float date_15, float date_16);
 
-/* 保留的回传模式：F1/F2/F3/F4/F5/F6/F7/F8/F9/FA/FC/FD/FE/FG/FI/FL/FO/FU/FV/FW/FY/FZ。 */
+/* 保留的回传模式：F1/F2/F3/F4/F5/F6/F7/F8/F9/FA/FC/FD/FE/FG/FI/FK/FL/FM/FO/FU/FV/FW/FY/FZ。 */
 static int send_back_flag = 0;
 static uint8 send_back_command = 'R';
 
@@ -371,6 +371,19 @@ static uint8 set_pos_pid_value(uint8 axis, uint8 item, float value)
     return 1U;
 }
 
+static uint8 set_position_feedforward_value(uint8 item, float value)
+{
+    if('1' == item)
+    {
+        return Position_Loop_Set_Car_Velocity_Feedforward_Gain(0U, value);
+    }
+    if('2' == item)
+    {
+        return Position_Loop_Set_Car_Velocity_Feedforward_Gain(1U, value);
+    }
+    return 0U;
+}
+
 static uint8 set_hover_angle_compensation_value(uint8 item, float value)
 {
     float hover_roll = 0.0f;
@@ -525,6 +538,11 @@ static void send_pid_data_back(uint8 command)
                            pos_pid_y.output_limit,
                            pos_pid_y.integral_limit,
                            (float)Position_Loop_Is_Enabled(), 0, 0);
+            return;
+
+        case 'M':
+            Position_Loop_Get_Car_Velocity_Feedforward_Gain(&value_1, &value_2);
+            send_four_date(value_1, value_2, 0, 0, 0, 0, 0, 0);
             return;
 
         case 'S':
@@ -1235,6 +1253,15 @@ void USART_PID_Adjust(void)
             reply_command = 'J';
             break;
 
+        case 'M':
+            if(has_value)
+            {
+                write_success = set_position_feedforward_value(item, data_get);
+            }
+            send_back_command = 'M';
+            reply_command = 'M';
+            break;
+
         case 'F':
             switch(item)
             {
@@ -1279,6 +1306,8 @@ void USART_PID_Adjust(void)
                 case 'k': send_back_flag = 36; break;
                 case 'L':
                 case 'l': send_back_flag = 31; break;
+                case 'M':
+                case 'm': send_back_flag = 23; break;
                 case 'O':
                 case 'o': send_back_flag = 22; break;
                 case 'U':
@@ -1749,6 +1778,47 @@ void send_date_back(void)
                               flow_state.velocity_y_output_slew_cms,
                               flow_state.velocity_x_cms,
                               flow_state.velocity_y_cms);
+            break;
+        }
+
+        case 23:
+        {
+            CoreLinkCarMotionDiag_t car_motion = {0};
+            PositionLoopDiag_t pos_diag = {0};
+            uint8 status_flags;
+
+            core_link_user_get_car_motion_diag(&car_motion);
+            Position_Loop_Get_Diag(&pos_diag);
+            status_flags = pos_diag.limit_flags;
+            if(!pos_diag.car_ff_valid)
+            {
+                status_flags |= 0x08U;
+            }
+            if(car_motion.protocol_error_count > 0U)
+            {
+                status_flags |= 0x10U;
+            }
+            if(car_motion.flags & CORE_LINK_CAR_MOTION_FLAG_SLIP_SUSPECT)
+            {
+                status_flags |= 0x20U;
+            }
+
+            send_sixteen_date(car_motion.forward_speed_cms,
+                              car_motion.left_speed_cms,
+                              car_motion.car_yaw_deg,
+                              current_yaw,
+                              pos_diag.car_ff_raw_vx_cms,
+                              pos_diag.car_ff_raw_vy_cms,
+                              pos_diag.car_ff_filtered_vx_cms,
+                              pos_diag.car_ff_filtered_vy_cms,
+                              pos_diag.correction_vx_cms,
+                              pos_diag.correction_vy_cms,
+                              pos_diag.vx_cmd_cms,
+                              pos_diag.vy_cmd_cms,
+                              (float)pos_diag.car_ff_valid,
+                              (float)car_motion.age_ms,
+                              (float)status_flags,
+                              (float)car_motion.sequence);
             break;
         }
 

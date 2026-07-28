@@ -75,7 +75,9 @@ typedef struct
 
 #define CORE_LINK_BEACON_MAP_COUNT         (5U)
 #define CORE_LINK_BEACON_MAP_PAYLOAD_LEN   (37U)
-#define CORE_LINK_BEACON_MAP_UPLINK_PAYLOAD_LEN   CORE_LINK_BEACON_MAP_PAYLOAD_LEN
+#define CORE_LINK_BEACON_MAP_UPLINK_PAYLOAD_LEN   (43U)
+#define CORE_LINK_CAR_MOTION_FLAG_VALID            (0x01U)
+#define CORE_LINK_CAR_MOTION_FLAG_SLIP_SUSPECT     (0x02U)
 
 typedef struct
 {
@@ -103,6 +105,10 @@ typedef struct
     /* Car IMU/Mahony yaw in the aligned yaw reference shared with UAV. */
     int16 car_absolute_yaw_ddeg;
     core_link_beacon_entry_struct beacon[CORE_LINK_BEACON_MAP_COUNT];
+    uint8 motion_flags;
+    uint8 motion_sequence;
+    int16 car_forward_speed_dcms;
+    int16 car_left_speed_dcms;
 } core_link_beacon_map_uplink_packet_struct;
 
 #define CORE_LINK_BEACON_OBSERVATION_MAX_COUNT     (6U)
