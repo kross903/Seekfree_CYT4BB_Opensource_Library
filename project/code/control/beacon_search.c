@@ -5,13 +5,13 @@
 
 #define BEACON_SEARCH_LOSS_DELAY_MS             (600U)
 #define BEACON_SEARCH_VERIFY_TIMEOUT_MS         (300U)
-#define BEACON_SEARCH_MAX_DURATION_MS         (18000U)
 #define BEACON_SEARCH_CONFIRM_FRAMES              (3U)
 #define BEACON_SEARCH_MIN_CONFIDENCE              (96U)
 #define BEACON_SEARCH_MIN_SIGMA_CM                 (5U)
 #define BEACON_SEARCH_MAX_SIGMA_CM                (15U)
 #define BEACON_SEARCH_YAW_RATE_DPS              (30.0f)
-#define BEACON_SEARCH_FULL_TURN_DEG             (360.0f)
+#define BEACON_SEARCH_TIMEOUT_MARGIN_MS          (6000U)
+#define BEACON_SEARCH_TIMEOUT_LIMIT_MS          (60000U)
 #define BEACON_SEARCH_MAX_YAW_STEP_DEG           (10.0f)
 
 typedef enum
@@ -41,6 +41,19 @@ static uint16 s_loss_age_ms = 0U;
 static uint16 s_search_elapsed_ms = 0U;
 static uint16 s_verify_elapsed_ms = 0U;
 static uint16 s_car_link_age_ms = 60000U;
+static uint8 s_position_window[BEACON_SEARCH_POSITION_WINDOW_FRAMES] = {0};
+static uint8 s_position_window_head = 0U;
+static uint8 s_position_window_count = 0U;
+static uint8 s_position_qualified_count = 0U;
+static uint8 s_stability_process_count_valid = 0U;
+static uint8 s_start_gate_ready = 0U;
+static uint8 s_position_sample_valid = 0U;
+static uint8 s_fused_velocity_valid = 0U;
+static uint32 s_stability_last_process_count = 0U;
+static uint16 s_speed_stable_ms = 0U;
+static uint16 s_vision_frame_age_ms = 60000U;
+static float s_position_distance_cm = 0.0f;
+static float s_horizontal_speed_cms = 0.0f;
 static BeaconSearchFailure_t s_failure_reason = BEACON_SEARCH_FAILURE_NONE;
 
 static uint16 beacon_search_add_ms(uint16 value, uint16 elapsed_ms)
@@ -50,6 +63,23 @@ static uint16 beacon_search_add_ms(uint16 value, uint16 elapsed_ms)
         return (uint16)(value + elapsed_ms);
     }
     return 60000U;
+}
+
+static uint16 beacon_search_get_max_duration_ms(void)
+{
+    float duration_ms = (BEACON_SEARCH_SWEEP_ANGLE_DEG /
+                         BEACON_SEARCH_YAW_RATE_DPS) * 1000.0f +
+                        (float)BEACON_SEARCH_TIMEOUT_MARGIN_MS;
+
+    if(!isfinite(duration_ms) || duration_ms >= (float)BEACON_SEARCH_TIMEOUT_LIMIT_MS)
+    {
+        return BEACON_SEARCH_TIMEOUT_LIMIT_MS;
+    }
+    if(duration_ms <= (float)BEACON_SEARCH_TIMEOUT_MARGIN_MS)
+    {
+        return BEACON_SEARCH_TIMEOUT_MARGIN_MS;
+    }
+    return (uint16)duration_ms;
 }
 
 static float beacon_search_wrap_deg(float angle_deg)
@@ -73,6 +103,163 @@ static void beacon_search_clear_candidate(void)
     s_verify_from_failed = 0U;
 }
 
+static void beacon_search_clear_position_window(void)
+{
+    memset(s_position_window, 0, sizeof(s_position_window));
+    s_position_window_head = 0U;
+    s_position_window_count = 0U;
+    s_position_qualified_count = 0U;
+}
+
+static void beacon_search_reset_stability(void)
+{
+    beacon_search_clear_position_window();
+    s_stability_process_count_valid = 0U;
+    s_start_gate_ready = 0U;
+    s_position_sample_valid = 0U;
+    s_fused_velocity_valid = 0U;
+    s_stability_last_process_count = 0U;
+    s_speed_stable_ms = 0U;
+    s_vision_frame_age_ms = 60000U;
+    s_position_distance_cm = 0.0f;
+    s_horizontal_speed_cms = 0.0f;
+}
+
+static void beacon_search_push_position_result(uint8 qualified)
+{
+    if(s_position_window_count >= BEACON_SEARCH_POSITION_WINDOW_FRAMES)
+    {
+        s_position_qualified_count = (uint8)(
+            s_position_qualified_count - s_position_window[s_position_window_head]);
+    }
+    else
+    {
+        s_position_window_count++;
+    }
+
+    s_position_window[s_position_window_head] = qualified ? 1U : 0U;
+    s_position_qualified_count = (uint8)(s_position_qualified_count +
+                                         s_position_window[s_position_window_head]);
+    s_position_window_head++;
+    if(s_position_window_head >= BEACON_SEARCH_POSITION_WINDOW_FRAMES)
+    {
+        s_position_window_head = 0U;
+    }
+}
+
+static void beacon_search_update_stability(
+    uint16 elapsed_ms,
+    const BeaconSearchStabilityInput_t *input)
+{
+    uint8 new_vision_frame = 0U;
+    uint8 position_qualified = 0U;
+    uint8 velocity_stable = 0U;
+
+    if(NULL == input)
+    {
+        beacon_search_reset_stability();
+        return;
+    }
+
+    if(input->vision_process_count != 0U)
+    {
+        if(!s_stability_process_count_valid)
+        {
+            s_stability_process_count_valid = 1U;
+            s_stability_last_process_count = input->vision_process_count;
+            s_vision_frame_age_ms = 0U;
+            new_vision_frame = 1U;
+        }
+        else if(input->vision_process_count != s_stability_last_process_count)
+        {
+            uint32 frame_delta = input->vision_process_count -
+                                 s_stability_last_process_count;
+
+            if((input->vision_process_count < s_stability_last_process_count) ||
+               (frame_delta > 1U))
+            {
+                beacon_search_clear_position_window();
+            }
+            s_stability_last_process_count = input->vision_process_count;
+            s_vision_frame_age_ms = 0U;
+            new_vision_frame = 1U;
+        }
+        else
+        {
+            uint16 previous_age_ms = s_vision_frame_age_ms;
+
+            s_vision_frame_age_ms = beacon_search_add_ms(s_vision_frame_age_ms,
+                                                          elapsed_ms);
+            if((previous_age_ms <= BEACON_SEARCH_VISION_FRAME_MAX_AGE_MS) &&
+               (s_vision_frame_age_ms > BEACON_SEARCH_VISION_FRAME_MAX_AGE_MS))
+            {
+                beacon_search_clear_position_window();
+                s_position_sample_valid = 0U;
+            }
+        }
+    }
+    else
+    {
+        beacon_search_clear_position_window();
+        s_vision_frame_age_ms = 60000U;
+        s_position_sample_valid = 0U;
+    }
+
+    if(new_vision_frame)
+    {
+        if(isfinite(input->position_error_x_cm) &&
+           isfinite(input->position_error_y_cm))
+        {
+            s_position_distance_cm = sqrtf(
+                input->position_error_x_cm * input->position_error_x_cm +
+                input->position_error_y_cm * input->position_error_y_cm);
+        }
+        else
+        {
+            s_position_distance_cm = 0.0f;
+        }
+
+        s_position_sample_valid = (uint8)(input->position_valid &&
+                                           isfinite(s_position_distance_cm));
+        position_qualified = (uint8)(s_position_sample_valid &&
+            (s_position_distance_cm <= BEACON_SEARCH_POSITION_GATE_CM));
+        beacon_search_push_position_result(position_qualified);
+    }
+
+    if(input->fused_velocity_valid &&
+       isfinite(input->fused_velocity_x_cms) &&
+       isfinite(input->fused_velocity_y_cms))
+    {
+        s_horizontal_speed_cms = sqrtf(
+            input->fused_velocity_x_cms * input->fused_velocity_x_cms +
+            input->fused_velocity_y_cms * input->fused_velocity_y_cms);
+        velocity_stable = (uint8)(isfinite(s_horizontal_speed_cms) &&
+            (s_horizontal_speed_cms <= BEACON_SEARCH_SPEED_GATE_CMS));
+        s_fused_velocity_valid = (uint8)isfinite(s_horizontal_speed_cms);
+    }
+    else
+    {
+        s_horizontal_speed_cms = 0.0f;
+        s_fused_velocity_valid = 0U;
+    }
+
+    if(velocity_stable)
+    {
+        s_speed_stable_ms = beacon_search_add_ms(s_speed_stable_ms, elapsed_ms);
+    }
+    else
+    {
+        s_speed_stable_ms = 0U;
+    }
+
+    s_start_gate_ready = (uint8)(
+        input->position_loop_enabled &&
+        (s_position_window_count >= BEACON_SEARCH_POSITION_WINDOW_FRAMES) &&
+        (s_position_qualified_count >= BEACON_SEARCH_POSITION_REQUIRED_FRAMES) &&
+        (s_vision_frame_age_ms <= BEACON_SEARCH_VISION_FRAME_MAX_AGE_MS) &&
+        (s_speed_stable_ms >= BEACON_SEARCH_SPEED_STABLE_MS));
+}
+
 static void beacon_search_reset_session(void)
 {
     s_state = BEACON_SEARCH_DISABLED;
@@ -86,6 +273,7 @@ static void beacon_search_reset_session(void)
     s_process_count_valid = 0U;
     s_last_process_count = 0U;
     beacon_search_clear_candidate();
+    beacon_search_reset_stability();
 }
 
 static void beacon_search_begin(void)
@@ -197,7 +385,8 @@ void BeaconSearch_Tick(uint16 elapsed_ms,
                        uint8 flight_ready,
                        uint8 velocity_loop_enabled,
                        uint8 car_link_valid,
-                       uint16 car_link_age_ms)
+                       uint16 car_link_age_ms,
+                       const BeaconSearchStabilityInput_t *stability_input)
 {
     uint8 eligible;
 
@@ -215,7 +404,9 @@ void BeaconSearch_Tick(uint16 elapsed_ms,
         s_was_armed = 1U;
     }
 
-    eligible = (uint8)(angle_mode && flight_ready && velocity_loop_enabled);
+    eligible = (uint8)(angle_mode && flight_ready && velocity_loop_enabled &&
+                       (NULL != stability_input) &&
+                       stability_input->position_loop_enabled);
     s_eligible = eligible;
     if(!eligible)
     {
@@ -225,8 +416,11 @@ void BeaconSearch_Tick(uint16 elapsed_ms,
         s_search_elapsed_ms = 0U;
         s_failure_reason = BEACON_SEARCH_FAILURE_NONE;
         beacon_search_clear_candidate();
+        beacon_search_reset_stability();
         return;
     }
+
+    beacon_search_update_stability(elapsed_ms, stability_input);
 
     if(BEACON_SEARCH_DISABLED == s_state)
     {
@@ -238,7 +432,7 @@ void BeaconSearch_Tick(uint16 elapsed_ms,
     if(s_turn_complete_event)
     {
         s_turn_complete_event = 0U;
-        beacon_search_fail(BEACON_SEARCH_FAILURE_FULL_TURN);
+        beacon_search_fail(BEACON_SEARCH_FAILURE_SWEEP_COMPLETE);
         return;
     }
 
@@ -257,7 +451,7 @@ void BeaconSearch_Tick(uint16 elapsed_ms,
     {
         s_search_elapsed_ms = beacon_search_add_ms(s_search_elapsed_ms,
                                                    elapsed_ms);
-        if(s_search_elapsed_ms >= BEACON_SEARCH_MAX_DURATION_MS)
+        if(s_search_elapsed_ms >= beacon_search_get_max_duration_ms())
         {
             beacon_search_fail(BEACON_SEARCH_FAILURE_TIMEOUT);
             return;
@@ -291,11 +485,11 @@ void BeaconSearch_Tick(uint16 elapsed_ms,
         s_state = BEACON_SEARCH_LOSS_WAIT;
         if(s_loss_age_ms >= BEACON_SEARCH_LOSS_DELAY_MS)
         {
-            if(car_link_valid)
+            if(car_link_valid && s_start_gate_ready)
             {
                 beacon_search_begin();
             }
-            else
+            else if(!car_link_valid)
             {
                 beacon_search_fail(BEACON_SEARCH_FAILURE_CAR_LINK);
             }
@@ -437,7 +631,7 @@ void BeaconSearch_ControlStep(float dt_s,
             }
         }
 
-        if(s_turn_progress_deg >= BEACON_SEARCH_FULL_TURN_DEG)
+        if(s_turn_progress_deg >= BEACON_SEARCH_SWEEP_ANGLE_DEG)
         {
             s_control = BEACON_SEARCH_CONTROL_HOLD;
             s_turn_complete_event = 1U;
@@ -492,6 +686,16 @@ void BeaconSearch_GetDiag(BeaconSearchDiag_t *diag)
     diag->current_yaw_deg = s_current_yaw_deg;
     diag->target_yaw_deg = s_target_yaw_deg;
     diag->turn_progress_deg = s_turn_progress_deg;
+    diag->sweep_angle_deg = BEACON_SEARCH_SWEEP_ANGLE_DEG;
+    diag->position_distance_cm = s_position_distance_cm;
+    diag->horizontal_speed_cms = s_horizontal_speed_cms;
+    diag->speed_stable_ms = s_speed_stable_ms;
+    diag->vision_frame_age_ms = s_vision_frame_age_ms;
+    diag->position_window_count = s_position_window_count;
+    diag->position_qualified_count = s_position_qualified_count;
+    diag->position_sample_valid = s_position_sample_valid;
+    diag->fused_velocity_valid = s_fused_velocity_valid;
+    diag->start_gate_ready = s_start_gate_ready;
     if(0U == irq_state)
     {
         __enable_irq();

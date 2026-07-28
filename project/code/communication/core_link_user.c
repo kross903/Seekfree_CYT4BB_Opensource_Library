@@ -544,6 +544,10 @@ void core_link_user_poll (void)
 
 void core_link_user_tick (uint16 elapsed_ms)
 {
+    BeaconSearchStabilityInput_t search_stability = {0};
+    PMWFlowState_t flow_state = {0};
+    VehicleMarkerLossDebug_t marker_loss = {0};
+
     if(s_core_link_user_beacon_tx_elapsed_ms <= (uint16)(60000U - elapsed_ms))
     {
         s_core_link_user_beacon_tx_elapsed_ms += elapsed_ms;
@@ -567,13 +571,27 @@ void core_link_user_tick (uint16 elapsed_ms)
         s_core_link_user_beacon_uplink_valid = 0U;
     }
 
+    PMW_Flow_GetState(&flow_state);
+    VehicleMarkerLocalization_GetLossDebug(&marker_loss);
+    search_stability.vision_process_count = marker_loss.process_count;
+    search_stability.position_loop_enabled = Position_Loop_Is_Enabled();
+    search_stability.position_valid = (uint8)(marker_loss.raw_detect_valid &&
+                                               marker_loss.pose_valid &&
+                                               !marker_loss.lost_flag);
+    search_stability.fused_velocity_valid = flow_state.fused_velocity_valid;
+    search_stability.position_error_x_cm = g_vehicle_marker_pose.x;
+    search_stability.position_error_y_cm = g_vehicle_marker_pose.y;
+    search_stability.fused_velocity_x_cms = flow_state.velocity_x_fused_cms;
+    search_stability.fused_velocity_y_cms = flow_state.velocity_y_fused_cms;
+
     BeaconSearch_Tick(elapsed_ms,
                       armed,
                       (uint8)(control_mode == CONTROL_MODE_ANGLE),
                       (uint8)!Flight_Takeoff_Is_Active(),
                       Velocity_Loop_Is_Enabled(),
                       s_core_link_user_beacon_uplink_valid,
-                      s_core_link_user_beacon_uplink_age_ms);
+                      s_core_link_user_beacon_uplink_age_ms,
+                      &search_stability);
 }
 
 void core_link_user_get_beacon_diag(CoreLinkBeaconDiag_t *diag)

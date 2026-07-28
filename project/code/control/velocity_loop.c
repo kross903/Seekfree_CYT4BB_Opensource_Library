@@ -9,7 +9,7 @@
 #define VEL_LOOP_PITCH_SIGN            (1.0f)
 #define VEL_LOOP_ROLL_SIGN             (-1.0f)
 #define VEL_LOOP_RATE_FF_LPF_ALPHA      (0.31407784f) /* 15 Hz @ 250 Hz */
-#define VEL_LOOP_RATE_FF_GAIN_DEFAULT   (0.0f)
+#define VEL_LOOP_RATE_FF_GAIN_DEFAULT   (0.2f)
 #define VEL_LOOP_RATE_FF_GAIN_MAX       (2.0f)
 #define VEL_LOOP_RATE_FF_LIMIT_DEFAULT  (60.0f)
 #define VEL_LOOP_RATE_FF_LIMIT_MAX      (350.0f)
