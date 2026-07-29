@@ -1773,7 +1773,12 @@ uint8 VehicleMarkerLocalization_EndBlobFrame(VehicleMarkerPose_t *out_pose)
             VEHICLE_MARKER_CHEVRON_REJECT_NO_CANDIDATE;
         s_vehicle_marker_debug_process_fail_count++;
         s_vehicle_marker_chevron_debug.valid = 0U;
-        vehicle_marker_set_position_lost();
+        /* 单帧漏检不清除最后可信位置，由5 ms看门狗统一判定150 ms超时。 */
+        if(!s_vehicle_marker_has_trackable_pose &&
+           !g_vehicle_marker_position_lost_flag)
+        {
+            vehicle_marker_set_position_lost();
+        }
         if(out_pose != NULL)
         {
             vehicle_marker_copy_pose(out_pose);
@@ -1825,7 +1830,11 @@ uint8 VehicleMarkerLocalization_EndBlobFrame(VehicleMarkerPose_t *out_pose)
         255U : (uint8)s_vehicle_marker_chevron_geometry_reject_count;
     s_vehicle_marker_debug_process_fail_count++;
     s_vehicle_marker_chevron_debug.valid = 0U;
-    vehicle_marker_set_position_lost();
+    if(!s_vehicle_marker_has_trackable_pose &&
+       !g_vehicle_marker_position_lost_flag)
+    {
+        vehicle_marker_set_position_lost();
+    }
     if(out_pose != NULL)
     {
         vehicle_marker_copy_pose(out_pose);

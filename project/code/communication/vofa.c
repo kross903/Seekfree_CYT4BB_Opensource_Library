@@ -34,7 +34,7 @@ static void send_sixteen_date(float date_1, float date_2, float date_3, float da
                               float date_9, float date_10, float date_11, float date_12,
                               float date_13, float date_14, float date_15, float date_16);
 
-/* 保留的回传模式：F1/F2/F3/F4/F5/F6/F7/F8/F9/FA/FC/FD/FE/FG/FI/FK/FL/FM/FO/FU/FV/FW/FY/FZ。 */
+/* 保留的回传模式：F1/F2/F3/F4/F5/F6/F7/F8/F9/FA/FC/FD/FE/FG/FI/FK/FL/FM/FN/FO/FU/FV/FW/FY/FZ。 */
 static int send_back_flag = 0;
 static uint8 send_back_command = 'R';
 
@@ -373,6 +373,8 @@ static uint8 set_pos_pid_value(uint8 axis, uint8 item, float value)
 
 static uint8 set_position_feedforward_value(uint8 item, float value)
 {
+    PositionLoopBrakeConfig_t brake_config = {0};
+
     if('1' == item)
     {
         return Position_Loop_Set_Car_Velocity_Feedforward_Gain(0U, value);
@@ -381,7 +383,18 @@ static uint8 set_position_feedforward_value(uint8 item, float value)
     {
         return Position_Loop_Set_Car_Velocity_Feedforward_Gain(1U, value);
     }
-    return 0U;
+
+    Position_Loop_Get_Brake_Config(&brake_config);
+    switch(item)
+    {
+        case '3': brake_config.brake_accel_cms2 = value; break;
+        case '4': brake_config.delay_s = value; break;
+        case '5': brake_config.reverse_limit_cms = value; break;
+        case '6': brake_config.stop_radius_cm = value; break;
+        case '7': brake_config.enabled = (value > 0.5f) ? 1U : 0U; break;
+        default: return 0U;
+    }
+    return Position_Loop_Set_Brake_Config(&brake_config);
 }
 
 static uint8 set_hover_angle_compensation_value(uint8 item, float value)
@@ -541,9 +554,21 @@ static void send_pid_data_back(uint8 command)
             return;
 
         case 'M':
+        {
+            PositionLoopBrakeConfig_t brake_config = {0};
+
             Position_Loop_Get_Car_Velocity_Feedforward_Gain(&value_1, &value_2);
-            send_four_date(value_1, value_2, 0, 0, 0, 0, 0, 0);
+            Position_Loop_Get_Brake_Config(&brake_config);
+            send_four_date(value_1,
+                           value_2,
+                           brake_config.brake_accel_cms2,
+                           brake_config.delay_s,
+                           brake_config.reverse_limit_cms,
+                           brake_config.stop_radius_cm,
+                           (float)brake_config.enabled,
+                           POSITION_LOOP_BRAKE_REL_VEL_LPF_HZ);
             return;
+        }
 
         case 'S':
             value_1 = Flight_Control_Get_Target_Throttle();
@@ -1308,6 +1333,8 @@ void USART_PID_Adjust(void)
                 case 'l': send_back_flag = 31; break;
                 case 'M':
                 case 'm': send_back_flag = 23; break;
+                case 'N':
+                case 'n': send_back_flag = 37; break;
                 case 'O':
                 case 'o': send_back_flag = 22; break;
                 case 'U':
@@ -1819,6 +1846,30 @@ void send_date_back(void)
                               (float)car_motion.age_ms,
                               (float)status_flags,
                               (float)car_motion.sequence);
+            break;
+        }
+
+        case 37:
+        {
+            PositionLoopDiag_t pos_diag = {0};
+
+            Position_Loop_Get_Diag(&pos_diag);
+            send_sixteen_date(pos_diag.brake_position_x_cm,
+                              pos_diag.brake_position_y_cm,
+                              pos_diag.brake_distance_cm,
+                              pos_diag.brake_closing_speed_cms,
+                              pos_diag.brake_physical_distance_cm,
+                              pos_diag.brake_delay_distance_cm,
+                              pos_diag.brake_envelope_speed_cms,
+                              pos_diag.brake_overspeed_cms,
+                              pos_diag.brake_base_correction_vx_cms,
+                              pos_diag.brake_base_correction_vy_cms,
+                              pos_diag.brake_candidate_vx_cms,
+                              pos_diag.brake_candidate_vy_cms,
+                              pos_diag.brake_combined_vx_cms,
+                              pos_diag.brake_combined_vy_cms,
+                              (float)pos_diag.brake_active,
+                              (float)pos_diag.brake_status_flags);
             break;
         }
 

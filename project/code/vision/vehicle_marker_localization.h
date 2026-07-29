@@ -12,7 +12,7 @@ extern "C" {
 /* Pose storage keeps four slots for the existing cross-core data layout;
  * chevron recognition uses apex, left tip and right tip. */
 #define VEHICLE_MARKER_POINT_COUNT             (4)
-#define VEHICLE_MARKER_POSITION_LOST_HOLD_MS   (500U)
+#define VEHICLE_MARKER_POSITION_LOST_HOLD_MS   (150U)
 #define VEHICLE_MARKER_TASK_PERIOD_MS          (5U)
 #define VEHICLE_MARKER_CHEVRON_PLANE_HEIGHT_CM (17.0f)
 
