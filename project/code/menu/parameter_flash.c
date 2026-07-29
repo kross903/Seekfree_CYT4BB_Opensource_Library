@@ -4,7 +4,7 @@
 #include <string.h>
 
 #define PARAMETER_FLASH_MAGIC        0x5041524DU
-#define PARAMETER_FLASH_VERSION      1U
+#define PARAMETER_FLASH_VERSION      2U
 
 #define PARAM_UI_TITLE_Y             10U
 #define PARAM_UI_START_Y             40U
@@ -140,20 +140,19 @@ ParameterConfig param_config[] = {
     PARAM_CFG("Height Out Limit",       33,  &HeightPID.output_limit,           0.0f,  1000.0f,  10.0f,    PARAM_GROUP_HEIGHT,  PARAM_OBJECT_HEIGHT, PARAM_ITEM_OUTPUT_LIMIT),
     PARAM_CFG("Height Int Limit",       34,  &HeightPID.integral_limit,         0.0f,  1000.0f,   5.0f,    PARAM_GROUP_HEIGHT,  PARAM_OBJECT_HEIGHT, PARAM_ITEM_INTEGRAL_LIMIT),
 
-    /* 速度环 X (vel_pid_x): 前向速度 vx_cms -> pitch 修正
-     * 速度环 Y (vel_pid_y): 左向速度 vy_cms -> roll  修正
-     * Output Limit / Integral Limit 单位: deg，速度环输出限幅只由 PID 内部 output_limit 决定。 */
-    PARAM_CFG("Vel X Kp",               35,  &vel_pid_x.Kp,                    -10.0f,   10.0f,   0.01f,  PARAM_GROUP_VELOCITY, PARAM_OBJECT_VEL_X,  PARAM_ITEM_KP),
-    PARAM_CFG("Vel X Ki",               36,  &vel_pid_x.Ki,                    -10.0f,   10.0f,   0.001f, PARAM_GROUP_VELOCITY, PARAM_OBJECT_VEL_X,  PARAM_ITEM_KI),
-    PARAM_CFG("Vel X Kd",               37,  &vel_pid_x.Kd,                    -10.0f,   10.0f,   0.001f, PARAM_GROUP_VELOCITY, PARAM_OBJECT_VEL_X,  PARAM_ITEM_KD),
-    PARAM_CFG("Vel X Out Limit",        38,  &vel_pid_x.output_limit,            0.0f,   30.0f,   0.5f,   PARAM_GROUP_VELOCITY, PARAM_OBJECT_VEL_X,  PARAM_ITEM_OUTPUT_LIMIT),
-    PARAM_CFG("Vel X Int Limit",        39,  &vel_pid_x.integral_limit,          0.0f,   30.0f,   0.5f,   PARAM_GROUP_VELOCITY, PARAM_OBJECT_VEL_X,  PARAM_ITEM_INTEGRAL_LIMIT),
+    /* 速度环在惯性系计算，P/I/D输出单位均为cm/s^2。
+     * Output Limit限制二维目标加速度，Integral Limit限制I项加速度贡献。 */
+    PARAM_CFG("Vel X Kp",               35,  &vel_pid_x.Kp,                      0.0f,   20.0f,   0.01f,  PARAM_GROUP_VELOCITY, PARAM_OBJECT_VEL_X,  PARAM_ITEM_KP),
+    PARAM_CFG("Vel X Ki",               36,  &vel_pid_x.Ki,                      0.0f,   10.0f,   0.001f, PARAM_GROUP_VELOCITY, PARAM_OBJECT_VEL_X,  PARAM_ITEM_KI),
+    PARAM_CFG("Vel X Kd",               37,  &vel_pid_x.Kd,                      0.0f,    2.0f,   0.001f, PARAM_GROUP_VELOCITY, PARAM_OBJECT_VEL_X,  PARAM_ITEM_KD),
+    PARAM_CFG("Vel X Out Limit",        38,  &vel_pid_x.output_limit,           20.0f,  400.0f,   5.0f,   PARAM_GROUP_VELOCITY, PARAM_OBJECT_VEL_X,  PARAM_ITEM_OUTPUT_LIMIT),
+    PARAM_CFG("Vel X Int Limit",        39,  &vel_pid_x.integral_limit,          0.0f,  200.0f,   5.0f,   PARAM_GROUP_VELOCITY, PARAM_OBJECT_VEL_X,  PARAM_ITEM_INTEGRAL_LIMIT),
 
-    PARAM_CFG("Vel Y Kp",               40,  &vel_pid_y.Kp,                    -10.0f,   10.0f,   0.01f,  PARAM_GROUP_VELOCITY, PARAM_OBJECT_VEL_Y,  PARAM_ITEM_KP),
-    PARAM_CFG("Vel Y Ki",               41,  &vel_pid_y.Ki,                    -10.0f,   10.0f,   0.001f, PARAM_GROUP_VELOCITY, PARAM_OBJECT_VEL_Y,  PARAM_ITEM_KI),
-    PARAM_CFG("Vel Y Kd",               42,  &vel_pid_y.Kd,                    -10.0f,   10.0f,   0.001f, PARAM_GROUP_VELOCITY, PARAM_OBJECT_VEL_Y,  PARAM_ITEM_KD),
-    PARAM_CFG("Vel Y Out Limit",        43,  &vel_pid_y.output_limit,            0.0f,   30.0f,   0.5f,   PARAM_GROUP_VELOCITY, PARAM_OBJECT_VEL_Y,  PARAM_ITEM_OUTPUT_LIMIT),
-    PARAM_CFG("Vel Y Int Limit",        44,  &vel_pid_y.integral_limit,          0.0f,   30.0f,   0.5f,   PARAM_GROUP_VELOCITY, PARAM_OBJECT_VEL_Y,  PARAM_ITEM_INTEGRAL_LIMIT)
+    PARAM_CFG("Vel Y Kp",               40,  &vel_pid_y.Kp,                      0.0f,   20.0f,   0.01f,  PARAM_GROUP_VELOCITY, PARAM_OBJECT_VEL_Y,  PARAM_ITEM_KP),
+    PARAM_CFG("Vel Y Ki",               41,  &vel_pid_y.Ki,                      0.0f,   10.0f,   0.001f, PARAM_GROUP_VELOCITY, PARAM_OBJECT_VEL_Y,  PARAM_ITEM_KI),
+    PARAM_CFG("Vel Y Kd",               42,  &vel_pid_y.Kd,                      0.0f,    2.0f,   0.001f, PARAM_GROUP_VELOCITY, PARAM_OBJECT_VEL_Y,  PARAM_ITEM_KD),
+    PARAM_CFG("Vel Y Out Limit",        43,  &vel_pid_y.output_limit,           20.0f,  400.0f,   5.0f,   PARAM_GROUP_VELOCITY, PARAM_OBJECT_VEL_Y,  PARAM_ITEM_OUTPUT_LIMIT),
+    PARAM_CFG("Vel Y Int Limit",        44,  &vel_pid_y.integral_limit,          0.0f,  200.0f,   5.0f,   PARAM_GROUP_VELOCITY, PARAM_OBJECT_VEL_Y,  PARAM_ITEM_INTEGRAL_LIMIT)
 };
 
 uint8 parameter_count = (uint8)(sizeof(param_config) / sizeof(param_config[0]));
@@ -1000,4 +999,3 @@ uint8 check_parameter_index_conflicts(void)
 
     return conflicts;
 }
-

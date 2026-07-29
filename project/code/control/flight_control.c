@@ -427,8 +427,6 @@ void Flight_Control_Reset_All_PID(void)
     PID_Reset(&vel_pid_x);
     PID_Reset(&vel_pid_y);
     Velocity_Loop_Reset_D_Filter_State();
-    PID_Reset(&pos_pid_x);
-    PID_Reset(&pos_pid_y);
     PID_Reset(&HeightPID);
     PID_Reset(&HeightVelPID);
 

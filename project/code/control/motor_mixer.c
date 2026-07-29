@@ -10,6 +10,7 @@
 
 float motor_output[4] = {0.0f, 0.0f, 0.0f, 0.0f};
 static uint8 s_invalid_output = 0U;
+static volatile MotorMixerSaturation_t s_saturation = {0};
 
 static uint16 motor_mixer_output_limit_max(void)
 {
@@ -58,12 +59,17 @@ static void motor_mixer_update_with_base(volatile uint16 motor_throttle_out[4],
                                          float pitch_deg)
 {
     uint8 i = 0U;
+    uint16 output_limit = motor_mixer_output_limit_max();
     float roll_rad;
     float pitch_rad;
     float tilt_cos;
     float thrust_base_comp;
 
     s_invalid_output = 0U;
+    s_saturation.high = 0U;
+    s_saturation.low = 0U;
+    s_saturation.roll_limited = 0U;
+    s_saturation.pitch_limited = 0U;
     roll_rad = roll_deg * DEG2RAD;
     pitch_rad = pitch_deg * DEG2RAD;
     tilt_cos = cosf(roll_rad) * cosf(pitch_rad);
@@ -85,7 +91,24 @@ static void motor_mixer_update_with_base(volatile uint16 motor_throttle_out[4],
             motor_output[i] = 0.0f;
             s_invalid_output = 1U;
         }
+        else
+        {
+            if(motor_output[i] > (float)output_limit)
+            {
+                s_saturation.high = 1U;
+            }
+            if((armed_state != 0U) && (thrust_base_comp > 0.0f) &&
+               (motor_output[i] < SAFE_MIN_THROTTLE))
+            {
+                s_saturation.low = 1U;
+            }
+        }
         motor_throttle_out[i] = motor_mixer_flight_limit(motor_output[i], armed_state, thrust_base_comp);
+    }
+    if(s_saturation.high || s_saturation.low)
+    {
+        s_saturation.roll_limited = (uint8)(fabsf(roll_output) > 0.01f);
+        s_saturation.pitch_limited = (uint8)(fabsf(pitch_output) > 0.01f);
     }
 }
 
@@ -112,6 +135,23 @@ void Motor_Mixer_Update(volatile uint16 motor_throttle_out[4],
 uint8 Motor_Mixer_HasInvalidOutput(void)
 {
     return s_invalid_output;
+}
+
+void Motor_Mixer_Get_Saturation(MotorMixerSaturation_t *saturation)
+{
+    uint32 irq_state;
+
+    if(saturation == NULL)
+    {
+        return;
+    }
+    irq_state = __get_PRIMASK();
+    __disable_irq();
+    *saturation = s_saturation;
+    if(irq_state == 0U)
+    {
+        __enable_irq();
+    }
 }
 
 void Motor_Mixer_Update_BaseOnly(volatile uint16 motor_throttle_out[4],

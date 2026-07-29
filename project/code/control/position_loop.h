@@ -2,21 +2,13 @@
 #define POSITION_LOOP_H_
 
 #include "zf_common_headfile.h"
-#include "control/pid_controller.h"
 
 #define POSITION_LOOP_STATUS_CORRECTION_LIMITED  (0x01U)
 #define POSITION_LOOP_STATUS_TARGET_LIMITED      (0x02U)
-#define POSITION_LOOP_STATUS_SLEW_LIMITED        (0x04U)
-#define POSITION_LOOP_BRAKE_REL_VEL_LPF_HZ       (8.0f)
-
-#define POSITION_LOOP_BRAKE_STATUS_ENABLED              (0x01U)
-#define POSITION_LOOP_BRAKE_STATUS_CAR_VELOCITY_FALLBACK (0x02U)
-#define POSITION_LOOP_BRAKE_STATUS_DIRECTION_VALID      (0x04U)
-#define POSITION_LOOP_BRAKE_STATUS_APPROACHING           (0x08U)
-#define POSITION_LOOP_BRAKE_STATUS_INSIDE_STOP_RADIUS    (0x10U)
-#define POSITION_LOOP_BRAKE_STATUS_REVERSE_LIMITED       (0x20U)
-#define POSITION_LOOP_BRAKE_STATUS_CORRECTION_LIMITED    (0x40U)
-#define POSITION_LOOP_BRAKE_STATUS_VELOCITY_FILTER_READY (0x80U)
+#define POSITION_LOOP_STATUS_ACCEL_LIMITED       (0x04U)
+#define POSITION_LOOP_STATUS_JERK_LIMITED        (0x08U)
+#define POSITION_LOOP_STATUS_CAR_FF_VALID        (0x10U)
+#define POSITION_LOOP_STATUS_TRAJECTORY_READY    (0x20U)
 
 #define POSITION_LOOP_OBSERVATION_INVALID      (0U)
 #define POSITION_LOOP_OBSERVATION_LIVE         (1U)
@@ -32,12 +24,12 @@ typedef struct
 
 typedef struct
 {
-    uint8 enabled;
-    float brake_accel_cms2;
-    float delay_s;
-    float reverse_limit_cms;
-    float stop_radius_cm;
-} PositionLoopBrakeConfig_t;
+    float position_kp;
+    float correction_speed_max_cms;
+    float target_speed_max_cms;
+    float acceleration_max_cms2;
+    float jerk_max_cms3;
+} PositionLoopTrajectoryConfig_t;
 
 typedef struct
 {
@@ -57,52 +49,40 @@ typedef struct
     float car_ff_filtered_vy_cms;
     float car_ff_gain_x;
     float car_ff_gain_y;
-    float x_i_out;
-    float y_i_out;
-    float brake_position_x_cm;
-    float brake_position_y_cm;
-    float brake_distance_cm;
-    float brake_closing_speed_cms;
-    float brake_physical_distance_cm;
-    float brake_delay_distance_cm;
-    float brake_envelope_speed_cms;
-    float brake_overspeed_cms;
-    float brake_base_correction_vx_cms;
-    float brake_base_correction_vy_cms;
-    float brake_candidate_vx_cms;
-    float brake_candidate_vy_cms;
-    float brake_combined_vx_cms;
-    float brake_combined_vy_cms;
+    float desired_vx_cms;
+    float desired_vy_cms;
+    float target_accel_x_cms2;
+    float target_accel_y_cms2;
+    float position_error_distance_cm;
+    float position_correction_speed_cms;
     float vision_innovation_cm;
     uint16 vision_hold_age_ms;
     uint8 vision_observation_state;
     uint8 vision_reacquire_count;
     uint8 car_ff_valid;
     uint8 limit_flags;
-    uint8 brake_active;
-    uint8 brake_status_flags;
     uint8 enabled;
     uint8 active;
     uint8 ir_track_valid;
     uint8 velocity_ready;
 } PositionLoopDiag_t;
 
-extern PID_Controller pos_pid_x;
-extern PID_Controller pos_pid_y;
-
 void Position_Loop_Set_Enabled(uint8 enabled);
 uint8 Position_Loop_Is_Enabled(void);
 void Position_Loop_Update_Velocity_Target(uint8 velocity_ready,
-                                          float measured_vx_cms,
-                                          float measured_vy_cms,
+                                          float measured_vx_body_cms,
+                                          float measured_vy_body_cms,
+                                          float yaw_deg,
                                           const PositionLoopFeedforwardInput_t *feedforward,
-                                          float *target_vx_cms,
-                                          float *target_vy_cms);
+                                          float *target_vx_earth_cms,
+                                          float *target_vy_earth_cms,
+                                          float *target_ax_earth_cms2,
+                                          float *target_ay_earth_cms2);
 uint8 Position_Loop_Set_Car_Velocity_Feedforward_Gain(uint8 axis, float gain);
 void Position_Loop_Get_Car_Velocity_Feedforward_Gain(float *gain_x, float *gain_y);
 void Position_Loop_Reset_Car_Velocity_Feedforward(void);
-uint8 Position_Loop_Set_Brake_Config(const PositionLoopBrakeConfig_t *config);
-void Position_Loop_Get_Brake_Config(PositionLoopBrakeConfig_t *config);
+uint8 Position_Loop_Set_Trajectory_Config(const PositionLoopTrajectoryConfig_t *config);
+void Position_Loop_Get_Trajectory_Config(PositionLoopTrajectoryConfig_t *config);
 void Position_Loop_Get_Diag(PositionLoopDiag_t *diag);
 
 #endif

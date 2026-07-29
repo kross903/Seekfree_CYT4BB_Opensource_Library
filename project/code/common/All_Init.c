@@ -16,7 +16,6 @@ bool Send_state = 0;
 #define RATE_PID_RUNTIME_DT_S       0.001f
 #define ANGLE_PID_RUNTIME_DT_S      0.002f
 #define VELOCITY_PID_RUNTIME_DT_S   0.004f
-#define POSITION_PID_RUNTIME_DT_S   0.020f
 
 typedef enum
 {
@@ -120,10 +119,10 @@ static void init_default_pid_parameters(void)
     PID_Init(&angle_pid_pitch, 6.50f, 0.01f, 0.0f, 350.0f, 5000.0f, 5.0f, 0.80f);
     PID_Init(&angle_pid_yaw,   6.0f, 0.0f, 0.0f, 250.0f, 400.0f, 12.0f, 0.0f);
     /* 速度D由velocity_loop.c独立滤波，末尾legacy alpha不参与速度D计算。 */
-    PID_Init(&vel_pid_x, 0.35f, 0.00f, 60.0f, 15.0f, 1500.0f, 20.0f, 0.3f);
-    PID_Init(&vel_pid_y, 0.35f, 0.00f, 60.0f, 15.0f, 1500.0f, 20.0f, 0.3f);
-    PID_Init(&pos_pid_x, 0.5f, 0.00f, 0.0f, 150.0f, 10000.0f, 15.0f, 1.0f);
-    PID_Init(&pos_pid_y, 0.5f, 0.00f, 0.0f, 150.0f, 10000.0f, 15.0f, 1.0f);
+    /* 水平速度PID输出单位统一为cm/s^2，积分限幅也表示加速度贡献。 */
+    PID_Init(&vel_pid_x, 4.0f, 1.0f, 0.20f, 263.0f, 80.0f, 0.0f, 0.0f);
+    PID_Init(&vel_pid_y, 4.0f, 1.0f, 0.20f, 263.0f, 80.0f, 0.0f, 0.0f);
+    /* 二维位置参数由position_loop.c中的轨迹配置统一初始化。 */
 
     PID_SetReferenceDt(&gyro_pid_roll, LEGACY_FAST_PID_DT_S);
     PID_SetReferenceDt(&gyro_pid_pitch, LEGACY_FAST_PID_DT_S);
@@ -137,8 +136,6 @@ static void init_default_pid_parameters(void)
                                         VELOCITY_LOOP_D_FILTER_DEFAULT_HZ);
     (void)Velocity_Loop_Set_D_Filter_Hz(VELOCITY_LOOP_AXIS_Y,
                                         VELOCITY_LOOP_D_FILTER_DEFAULT_HZ);
-    PID_SetReferenceDt(&pos_pid_x, LEGACY_FAST_PID_DT_S);
-    PID_SetReferenceDt(&pos_pid_y, LEGACY_FAST_PID_DT_S);
     PID_SetReferenceDt(&HeightPID, HEIGHT_PID_DT_S);
     PID_SetReferenceDt(&HeightVelPID, HEIGHT_PID_DT_S);
 
@@ -150,8 +147,6 @@ static void init_default_pid_parameters(void)
     PID_PrepareRuntimeDt(&angle_pid_yaw, ANGLE_PID_RUNTIME_DT_S);
     PID_PrepareRuntimeDt(&vel_pid_x, VELOCITY_PID_RUNTIME_DT_S);
     PID_PrepareRuntimeDt(&vel_pid_y, VELOCITY_PID_RUNTIME_DT_S);
-    PID_PrepareRuntimeDt(&pos_pid_x, POSITION_PID_RUNTIME_DT_S);
-    PID_PrepareRuntimeDt(&pos_pid_y, POSITION_PID_RUNTIME_DT_S);
     PID_PrepareRuntimeDt(&HeightPID, HEIGHT_PID_DT_S);
     PID_PrepareRuntimeDt(&HeightVelPID, HEIGHT_PID_DT_S);
     Angle_Loop_InitTiming();
@@ -177,8 +172,6 @@ static void init_default_pid_parameters(void)
     PID_Init(&angle_pid_yaw, 5.0f, 0.0f, 0.0f, 100.0f, 20.0f, 0.0f, 0.0f);
     PID_Init(&vel_pid_x, 0.8f, 0.000f, 0.0f, 120.0f, 30.0f, 10000.0f, 0.8f);
     PID_Init(&vel_pid_y, 0.8f, 0.000f, 0.0f, 120.0f, 30.0f, 10000.0f, 0.8f);
-    PID_Init(&pos_pid_x, 1.0f, 0.00f, 0.0f, 100.0f, 30.0f, 10000.0f, 1.0f);
-    PID_Init(&pos_pid_y, 1.0f, 0.00f, 0.0f, 100.0f, 30.0f, 10000.0f, 1.0f);
 }
      * 光流速度闭环 PID @ 250Hz 软件分频。
       * 反馈: 光流 + ICM 融合后的机体水平速度 velocity_x/y_fused_cms (cm/s)。

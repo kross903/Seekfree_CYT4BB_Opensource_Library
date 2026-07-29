@@ -33,7 +33,6 @@
 #define ANGLE_SLOT_PHASE               3U
 #define VELOCITY_SLOT_DIVISOR          16U
 #define VELOCITY_SLOT_PHASE            2U
-#define POSITION_SLOT_PHASE            1U
 
 /*
  * 真位置闭环参数。
@@ -823,6 +822,8 @@ static void control_task_update_position_target(uint8 takeoff_active)
 {
     float position_target_vx_cms = 0.0f;
     float position_target_vy_cms = 0.0f;
+    float position_target_ax_cms2 = 0.0f;
+    float position_target_ay_cms2 = 0.0f;
     CoreLinkCarMotionDiag_t car_motion = {0};
     PositionLoopFeedforwardInput_t feedforward = {0};
     ICM_Health_t imu_health = {0};
@@ -855,10 +856,16 @@ static void control_task_update_position_target(uint8 takeoff_active)
     Position_Loop_Update_Velocity_Target(flow_snap.fused_velocity_valid,
                                          flow_snap.velocity_x_fused_cms,
                                          flow_snap.velocity_y_fused_cms,
+                                         current_yaw,
                                          &feedforward,
                                          &position_target_vx_cms,
-                                         &position_target_vy_cms);
-    Velocity_Loop_Set_Target_Velocity(position_target_vx_cms, position_target_vy_cms);
+                                         &position_target_vy_cms,
+                                         &position_target_ax_cms2,
+                                         &position_target_ay_cms2);
+    Velocity_Loop_Set_Target_State(position_target_vx_cms,
+                                   position_target_vy_cms,
+                                   position_target_ax_cms2,
+                                   position_target_ay_cms2);
 
     pos_fusion_r_adc    = 0.0f;
     pos_fusion_r_tof    = 0.0f;
@@ -885,6 +892,7 @@ static void control_task_update_velocity_target(uint8 takeoff_active)
     Velocity_Loop_Update_Attitude_Target(flow_snap.fused_velocity_valid,
                                          flow_snap.velocity_x_fused_cms,
                                          flow_snap.velocity_y_fused_cms,
+                                         current_yaw,
                                          captured_roll,
                                          captured_pitch,
                                          &velocity_target_roll,
@@ -937,7 +945,8 @@ static void control_scheduler_begin_tick(uint8 *rate_due,
     *rate_due = (uint8)((tick % RATE_SLOT_DIVISOR) == 0U);
     *angle_due = (uint8)((tick % ANGLE_SLOT_DIVISOR) == ANGLE_SLOT_PHASE);
     *velocity_due = (uint8)((tick % VELOCITY_SLOT_DIVISOR) == VELOCITY_SLOT_PHASE);
-    *position_due = (uint8)(tick == POSITION_SLOT_PHASE);
+    /* 水平位置轨迹与速度控制统一在250 Hz同一节拍更新。 */
+    *position_due = *velocity_due;
 
     if(*rate_due) s_rate_slot_count++;
     if(*angle_due) s_angle_slot_count++;

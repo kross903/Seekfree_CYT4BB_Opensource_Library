@@ -285,11 +285,11 @@ static uint8 set_height_vel_pid_value(uint8 item, float value)
 /*
  * VOFA 调参: 光流速度闭环 PID。
  *
- * axis = 0 → vel_pid_x (前向速度 vx_cms 反馈, 输出 Pitch 修正角)
- * axis = 1 → vel_pid_y (左向速度 vy_cms 反馈, 输出 Roll 修正角)
+ * axis = 0 → 惯性系X速度PID，输出X加速度修正
+ * axis = 1 → 惯性系Y速度PID，输出Y加速度修正
  *
  * item:
- *   '1' Kp, '2' Ki, '3' Kd, '4' output_limit (deg), '5' integral_limit,
+ *   '1' Kp, '2' Ki, '3' Kd, '4' 加速度输出限幅, '5' I项加速度限幅,
  *   '6' 目标角变化率前馈增益, '7' 前馈角速度限幅 (deg/s),
  *   '8' D支路低通截止频率 (Hz)
  *
@@ -314,13 +314,18 @@ static uint8 set_vel_pid_value(uint8 axis, uint8 item, float value)
         return 0U;
     }
 
+    if(!isfinite(value))
+    {
+        return 0U;
+    }
+
     switch(item)
     {
-        case '1': pid->Kp = value; break;
-        case '2': pid->Ki = value; break;
-        case '3': pid->Kd = value; break;
-        case '4': pid->output_limit = value; break;
-        case '5': pid->integral_limit = value; break;
+        case '1': if(value < 0.0f || value > 20.0f) return 0U; pid->Kp = value; break;
+        case '2': if(value < 0.0f || value > 10.0f) return 0U; pid->Ki = value; break;
+        case '3': if(value < 0.0f || value > 2.0f) return 0U; pid->Kd = value; break;
+        case '4': if(value < 20.0f || value > 400.0f) return 0U; pid->output_limit = value; break;
+        case '5': if(value < 0.0f || value > 200.0f) return 0U; pid->integral_limit = value; break;
         case '6':
             Velocity_Loop_Get_Rate_Feedforward_Parameters(axis, &ff_gain, &ff_limit_dps);
             return Velocity_Loop_Set_Rate_Feedforward_Parameters(axis, value, ff_limit_dps);
@@ -335,9 +340,9 @@ static uint8 set_vel_pid_value(uint8 axis, uint8 item, float value)
     return 1U;
 }
 
-static uint8 set_pos_pid_value(uint8 axis, uint8 item, float value)
+static uint8 set_position_loop_value(uint8 axis, uint8 item, float value)
 {
-    PID_Controller *pid = NULL;
+    PositionLoopTrajectoryConfig_t trajectory = {0};
 
     if(item == '0')
     {
@@ -345,36 +350,31 @@ static uint8 set_pos_pid_value(uint8 axis, uint8 item, float value)
         return 1U;
     }
 
-    if(axis == 0U)
-    {
-        pid = &pos_pid_x;
-    }
-    else if(axis == 1U)
-    {
-        pid = &pos_pid_y;
-    }
-    else
+    if(axis > 1U)
     {
         return 0U;
     }
 
     switch(item)
     {
-        case '1': pid->Kp = value; break;
-        case '2': pid->Ki = value; break;
-        case '3': pid->Kd = value; break;
-        case '4': pid->output_limit = value; break;
-        case '5': pid->integral_limit = value; break;
+        case '1':
+            Position_Loop_Get_Trajectory_Config(&trajectory);
+            trajectory.position_kp = value;
+            return Position_Loop_Set_Trajectory_Config(&trajectory);
+        case '2':
+        case '3':
+        case '4':
+        case '5':
+            return 0U;
         default:  return 0U;
     }
-
-    return 1U;
 }
 
 static uint8 set_position_feedforward_value(uint8 item, float value)
 {
-    PositionLoopBrakeConfig_t brake_config = {0};
+    PositionLoopTrajectoryConfig_t trajectory = {0};
 
+    /* M1/M2分别设置X/Y小车速度前馈增益。 */
     if('1' == item)
     {
         return Position_Loop_Set_Car_Velocity_Feedforward_Gain(0U, value);
@@ -384,17 +384,18 @@ static uint8 set_position_feedforward_value(uint8 item, float value)
         return Position_Loop_Set_Car_Velocity_Feedforward_Gain(1U, value);
     }
 
-    Position_Loop_Get_Brake_Config(&brake_config);
+    Position_Loop_Get_Trajectory_Config(&trajectory);
+    /* M3～M7依次设置位置P、修正速度、目标速度、加速度和Jerk上限。 */
     switch(item)
     {
-        case '3': brake_config.brake_accel_cms2 = value; break;
-        case '4': brake_config.delay_s = value; break;
-        case '5': brake_config.reverse_limit_cms = value; break;
-        case '6': brake_config.stop_radius_cm = value; break;
-        case '7': brake_config.enabled = (value > 0.5f) ? 1U : 0U; break;
+        case '3': trajectory.position_kp = value; break;
+        case '4': trajectory.correction_speed_max_cms = value; break;
+        case '5': trajectory.target_speed_max_cms = value; break;
+        case '6': trajectory.acceleration_max_cms2 = value; break;
+        case '7': trajectory.jerk_max_cms3 = value; break;
         default: return 0U;
     }
-    return Position_Loop_Set_Brake_Config(&brake_config);
+    return Position_Loop_Set_Trajectory_Config(&trajectory);
 }
 
 static uint8 set_hover_angle_compensation_value(uint8 item, float value)
@@ -534,39 +535,36 @@ static void send_pid_data_back(uint8 command)
         }
 
         case 'I':
-            value_1 = pos_pid_x.Kp;
-            value_2 = pos_pid_x.Ki;
-            value_3 = pos_pid_x.Kd;
-            send_four_date(value_1, value_2, value_3,
-                           pos_pid_x.output_limit,
-                           pos_pid_x.integral_limit,
-                           (float)Position_Loop_Is_Enabled(), 0, 0);
-            return;
-
         case 'J':
-            value_1 = pos_pid_y.Kp;
-            value_2 = pos_pid_y.Ki;
-            value_3 = pos_pid_y.Kd;
-            send_four_date(value_1, value_2, value_3,
-                           pos_pid_y.output_limit,
-                           pos_pid_y.integral_limit,
-                           (float)Position_Loop_Is_Enabled(), 0, 0);
+        {
+            PositionLoopTrajectoryConfig_t trajectory = {0};
+
+            Position_Loop_Get_Trajectory_Config(&trajectory);
+            send_four_date(trajectory.position_kp,
+                           0.0f,
+                           0.0f,
+                           trajectory.correction_speed_max_cms,
+                           0.0f,
+                           (float)Position_Loop_Is_Enabled(),
+                           0.0f,
+                           0.0f);
             return;
+        }
 
         case 'M':
         {
-            PositionLoopBrakeConfig_t brake_config = {0};
+            PositionLoopTrajectoryConfig_t trajectory = {0};
 
             Position_Loop_Get_Car_Velocity_Feedforward_Gain(&value_1, &value_2);
-            Position_Loop_Get_Brake_Config(&brake_config);
+            Position_Loop_Get_Trajectory_Config(&trajectory);
             send_four_date(value_1,
                            value_2,
-                           brake_config.brake_accel_cms2,
-                           brake_config.delay_s,
-                           brake_config.reverse_limit_cms,
-                           brake_config.stop_radius_cm,
-                           (float)brake_config.enabled,
-                           POSITION_LOOP_BRAKE_REL_VEL_LPF_HZ);
+                           trajectory.position_kp,
+                           trajectory.correction_speed_max_cms,
+                           trajectory.target_speed_max_cms,
+                           trajectory.acceleration_max_cms2,
+                           trajectory.jerk_max_cms3,
+                           0.0f);
             return;
         }
 
@@ -837,11 +835,11 @@ static void send_velocity_loop_tuning_data(uint8 axis)
     send_sixteen_date(diag.target_velocity_cms,
                       diag.actual_velocity_cms,
                       diag.error_velocity_cms,
-                      diag.p_output_deg,
-                      diag.i_output_deg,
-                      diag.d_output_deg,
-                      diag.raw_output_deg,
-                      diag.output_deg,
+                      diag.p_output_cms2,
+                      diag.i_output_cms2,
+                      diag.d_output_cms2,
+                      diag.acceleration_ff_cms2,
+                      diag.output_cms2,
                       (float)diag.saturated,
                       target_angle_deg,
                       actual_angle_deg,
@@ -1263,7 +1261,7 @@ void USART_PID_Adjust(void)
         case 'I':
             if(has_value)
             {
-                write_success = set_pos_pid_value(0U, item, data_get);
+                write_success = set_position_loop_value(0U, item, data_get);
             }
             send_back_command = 'I';
             reply_command = 'I';
@@ -1272,7 +1270,7 @@ void USART_PID_Adjust(void)
         case 'J':
             if(has_value)
             {
-                write_success = set_pos_pid_value(1U, item, data_get);
+                write_success = set_position_loop_value(1U, item, data_get);
             }
             send_back_command = 'J';
             reply_command = 'J';
@@ -1413,14 +1411,14 @@ void send_date_back(void)
         case 2:
         {
             PositionLoopDiag_t pos_diag = {0};
-            PMWFlowState_t pmw_flow_state = {0};
+            VelocityLoopHorizontalDiag_t horizontal_diag = {0};
             float target_vx_cms = 0.0f;
             float target_vy_cms = 0.0f;
             float frame_interval_ms = 0.0f;
             uint32 now_cycle = 0U;
 
             Position_Loop_Get_Diag(&pos_diag);
-            PMW_Flow_GetState(&pmw_flow_state);
+            Velocity_Loop_Get_Horizontal_Diag(&horizontal_diag);
             Velocity_Loop_Get_Target_Velocity(&target_vx_cms, &target_vy_cms);
 
             vofa_loop_profiler_init();
@@ -1448,9 +1446,9 @@ void send_date_back(void)
                               target_pitch_rate,
                               current_gyro_pitch,
                               target_vx_cms,
-                              pmw_flow_state.velocity_x_fused_cms,
+                              horizontal_diag.actual_vx_earth_cms,
                               target_vy_cms,
-                              pmw_flow_state.velocity_y_fused_cms,
+                              horizontal_diag.actual_vy_earth_cms,
                               pos_diag.error_x_cm,
                               pos_diag.error_y_cm,
                               (float)f2_frame_sequence,
@@ -1534,19 +1532,19 @@ void send_date_back(void)
             send_sixteen_date(x_diag.target_velocity_cms,
                               x_diag.actual_velocity_cms,
                               x_diag.error_velocity_cms,
-                              x_diag.p_output_deg,
-                              x_diag.i_output_deg,
-                              x_diag.d_output_deg,
-                              x_diag.raw_output_deg,
-                              x_diag.output_deg,
+                              x_diag.p_output_cms2,
+                              x_diag.i_output_cms2,
+                              x_diag.d_output_cms2,
+                              x_diag.acceleration_ff_cms2,
+                              x_diag.output_cms2,
                               y_diag.target_velocity_cms,
                               y_diag.actual_velocity_cms,
                               y_diag.error_velocity_cms,
-                              y_diag.p_output_deg,
-                              y_diag.i_output_deg,
-                              y_diag.d_output_deg,
-                              y_diag.raw_output_deg,
-                              y_diag.output_deg);
+                              y_diag.p_output_cms2,
+                              y_diag.i_output_cms2,
+                              y_diag.d_output_cms2,
+                              y_diag.acceleration_ff_cms2,
+                              y_diag.output_cms2);
             break;
         }
 
@@ -1724,24 +1722,20 @@ void send_date_back(void)
         case 18:
         {
             PositionLoopDiag_t pos_diag = {0};
-            float x_p_out;
-            float y_p_out;
 
             Position_Loop_Get_Diag(&pos_diag);
-            x_p_out = pos_pid_x.Kp * pos_diag.error_x_cm;
-            y_p_out = pos_pid_y.Kp * pos_diag.error_y_cm;
 
             send_sixteen_date(pos_diag.target_x_cm,
                               pos_diag.fb_x_cm,
                               pos_diag.error_x_cm,
-                              x_p_out,
-                              pos_diag.x_i_out,
+                              pos_diag.correction_vx_cms,
+                              pos_diag.car_ff_filtered_vx_cms,
                               pos_diag.vx_cmd_cms,
                               pos_diag.target_y_cm,
                               pos_diag.fb_y_cm,
                               pos_diag.error_y_cm,
-                              y_p_out,
-                              pos_diag.y_i_out,
+                              pos_diag.correction_vy_cms,
+                              pos_diag.car_ff_filtered_vy_cms,
                               pos_diag.vy_cmd_cms,
                               (float)pos_diag.enabled,
                               (float)pos_diag.active,
@@ -1816,18 +1810,22 @@ void send_date_back(void)
 
             core_link_user_get_car_motion_diag(&car_motion);
             Position_Loop_Get_Diag(&pos_diag);
-            status_flags = pos_diag.limit_flags;
+            status_flags = (uint8)(pos_diag.limit_flags & 0x0FU);
             if(!pos_diag.car_ff_valid)
-            {
-                status_flags |= 0x08U;
-            }
-            if(car_motion.protocol_error_count > 0U)
             {
                 status_flags |= 0x10U;
             }
-            if(car_motion.flags & CORE_LINK_CAR_MOTION_FLAG_SLIP_SUSPECT)
+            if(car_motion.protocol_error_count > 0U)
             {
                 status_flags |= 0x20U;
+            }
+            if(car_motion.flags & CORE_LINK_CAR_MOTION_FLAG_SLIP_SUSPECT)
+            {
+                status_flags |= 0x40U;
+            }
+            if(pos_diag.limit_flags & POSITION_LOOP_STATUS_TRAJECTORY_READY)
+            {
+                status_flags |= 0x80U;
             }
 
             send_sixteen_date(car_motion.forward_speed_cms,
@@ -1852,24 +1850,26 @@ void send_date_back(void)
         case 37:
         {
             PositionLoopDiag_t pos_diag = {0};
+            VelocityLoopHorizontalDiag_t vel_diag = {0};
 
             Position_Loop_Get_Diag(&pos_diag);
-            send_sixteen_date(pos_diag.brake_position_x_cm,
-                              pos_diag.brake_position_y_cm,
-                              pos_diag.brake_distance_cm,
-                              pos_diag.brake_closing_speed_cms,
-                              pos_diag.brake_physical_distance_cm,
-                              pos_diag.brake_delay_distance_cm,
-                              pos_diag.brake_envelope_speed_cms,
-                              pos_diag.brake_overspeed_cms,
-                              pos_diag.brake_base_correction_vx_cms,
-                              pos_diag.brake_base_correction_vy_cms,
-                              pos_diag.brake_candidate_vx_cms,
-                              pos_diag.brake_candidate_vy_cms,
-                              pos_diag.brake_combined_vx_cms,
-                              pos_diag.brake_combined_vy_cms,
-                              (float)pos_diag.brake_active,
-                              (float)pos_diag.brake_status_flags);
+            Velocity_Loop_Get_Horizontal_Diag(&vel_diag);
+            send_sixteen_date(pos_diag.error_x_cm,
+                              pos_diag.error_y_cm,
+                              pos_diag.correction_vx_cms,
+                              pos_diag.correction_vy_cms,
+                              pos_diag.car_ff_filtered_vx_cms,
+                              pos_diag.car_ff_filtered_vy_cms,
+                              pos_diag.vx_cmd_cms,
+                              pos_diag.vy_cmd_cms,
+                              pos_diag.target_accel_x_cms2,
+                              pos_diag.target_accel_y_cms2,
+                              vel_diag.acceleration_correction_x_earth_cms2,
+                              vel_diag.acceleration_correction_y_earth_cms2,
+                              vel_diag.acceleration_target_x_earth_cms2,
+                              vel_diag.acceleration_target_y_earth_cms2,
+                              (float)vel_diag.status_flags,
+                              (float)pos_diag.limit_flags);
             break;
         }
 
