@@ -15,8 +15,8 @@
 #define POSITION_LOOP_TARGET_VEL_LIMIT_CMS  (150.0f)
 #define POSITION_LOOP_TARGET_VEL_SLEW_CMS2  (400.0f)
 #define POSITION_LOOP_CAR_FF_LPF_HZ          (5.0f)
-#define POSITION_LOOP_CAR_FF_GAIN_DEFAULT    (1.0f)
-#define POSITION_LOOP_CAR_FF_GAIN_MAX        (1.5f)
+#define POSITION_LOOP_CAR_FF_GAIN_DEFAULT    (0.15f)
+#define POSITION_LOOP_CAR_FF_GAIN_MAX        (0.15f)
 
 PID_Controller pos_pid_x;
 PID_Controller pos_pid_y;
