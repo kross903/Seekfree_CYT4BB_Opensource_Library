@@ -75,6 +75,10 @@ typedef struct
     float position_error_distance_cm;
     float position_correction_speed_cms;
     float relative_closing_speed_cms;
+    float filtered_closing_speed_cms;
+    float brake_schedule_ratio;
+    float brake_accel_limit_cms2;
+    float brake_jerk_limit_cms3;
     float relative_velocity_x_cms;
     float relative_velocity_y_cms;
     float relative_speed_cms;
@@ -100,6 +104,7 @@ typedef struct
     uint8 timing_valid;
     uint8 trajectory_reset_reason;
     uint8 stop_prediction_flags;
+    uint8 brake_schedule_active;
 } PositionLoopDiag_t;
 
 void Position_Loop_Set_Enabled(uint8 enabled);

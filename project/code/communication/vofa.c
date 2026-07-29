@@ -1339,6 +1339,8 @@ void USART_PID_Adjust(void)
                 case 'p': send_back_flag = 38; break;
                 case 'Q':
                 case 'q': send_back_flag = 39; break;
+                case 'R':
+                case 'r': send_back_flag = 40; break;
                 case 'U':
                 case 'u': send_back_flag = 29; break;
                 case 'V':
@@ -1922,6 +1924,32 @@ void send_date_back(void)
                               pos_diag.correction_vy_cms,
                               pos_diag.desired_vx_cms,
                               pos_diag.desired_vy_cms);
+            break;
+        }
+
+        case 40:
+        {
+            PositionLoopDiag_t pos_diag = {0};
+            PositionLoopTrajectoryConfig_t trajectory = {0};
+
+            Position_Loop_Get_Diag(&pos_diag);
+            Position_Loop_Get_Trajectory_Config(&trajectory);
+            send_sixteen_date(pos_diag.relative_closing_speed_cms,
+                              pos_diag.filtered_closing_speed_cms,
+                              pos_diag.brake_schedule_ratio,
+                              (float)pos_diag.brake_schedule_active,
+                              trajectory.acceleration_max_cms2,
+                              pos_diag.brake_accel_limit_cms2,
+                              trajectory.jerk_max_cms3,
+                              pos_diag.brake_jerk_limit_cms3,
+                              pos_diag.relative_velocity_x_cms,
+                              pos_diag.relative_velocity_y_cms,
+                              pos_diag.desired_vx_cms,
+                              pos_diag.desired_vy_cms,
+                              pos_diag.target_accel_x_cms2,
+                              pos_diag.target_accel_y_cms2,
+                              pos_diag.position_error_distance_cm,
+                              (float)pos_diag.stop_prediction_flags);
             break;
         }
 

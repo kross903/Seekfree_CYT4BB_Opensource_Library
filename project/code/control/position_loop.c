@@ -2,12 +2,12 @@
 #include "vision/vehicle_marker_localization.h"
 #include <math.h>
 
-#define POSITION_LOOP_CAR_FF_GAIN_DEFAULT          (0.0f)   // M1/M2：小车X/Y速度前馈增益上电默认值
+#define POSITION_LOOP_CAR_FF_GAIN_DEFAULT          (0.10f)   // M1/M2：小车X/Y速度前馈增益上电默认值
 #define POSITION_LOOP_CAR_FF_GAIN_MAX              (1.2f)    // M1/M2：小车X/Y速度前馈增益允许上限
-#define POSITION_LOOP_POSITION_KP_DEFAULT          (0.3f)    // M3：二维位置P增益默认值，单位s^-1
+#define POSITION_LOOP_POSITION_KP_DEFAULT          (0.30f)    // M3：二维位置P增益默认值，单位s^-1
 #define POSITION_LOOP_CORRECTION_MAX_DEFAULT_CMS   (70.0f)   // M4：位置修正速度模长上限，单位cm/s
 #define POSITION_LOOP_TARGET_MAX_DEFAULT_CMS       (150.0f)  // M5：合成后目标速度模长上限，单位cm/s
-#define POSITION_LOOP_ACCEL_MAX_DEFAULT_CMS2       (80.0f)   // M6：轨迹加速度模长上限，单位cm/s^2
+#define POSITION_LOOP_ACCEL_MAX_DEFAULT_CMS2       (180.0f)   // M6：轨迹加速度模长上限，单位cm/s^2
 #define POSITION_LOOP_JERK_MAX_DEFAULT_CMS3        (200.0f)  // M7：轨迹Jerk模长上限，单位cm/s^3
 #define POSITION_LOOP_VISION_HOLD_MS               (150U)    // 视觉断帧后相对位置预测保持时间，单位ms
 #define POSITION_LOOP_VISION_INNOVATION_GATE_CM    (20.0f)   // 新视觉位置相对可信轨迹的创新门限，单位cm
@@ -15,6 +15,12 @@
 #define POSITION_LOOP_VISION_REACQUIRE_FRAMES      (3U)      // 视觉重捕获所需的连续一致候选帧数
 #define POSITION_LOOP_EPSILON                      (0.0001f) // 二维距离归一化时的除零保护阈值
 #define POSITION_LOOP_YAW_RESET_THRESHOLD_DEG      (30.0f)   // 单个水平控制周期内超过该变化视为Yaw参考系重置
+#define POSITION_LOOP_BRAKE_SPEED_START_CMS         (30.0f)   // 径向接近速度达到该值后开始提高制动能力，单位cm/s
+#define POSITION_LOOP_BRAKE_SPEED_FULL_CMS          (80.0f)  // 径向接近速度达到该值后使用全部高速制动能力，单位cm/s
+#define POSITION_LOOP_BRAKE_ACCEL_HIGH_CMS2         (250.0f)  // 高速制动时允许的二维目标加速度上限，单位cm/s^2
+#define POSITION_LOOP_BRAKE_JERK_HIGH_CMS3          (280.0f)  // 高速制动时允许的二维Jerk上限，单位cm/s^3
+#define POSITION_LOOP_CLOSING_SPEED_LPF_HZ          (3.0f)    // 径向接近速度调度低通截止频率，单位Hz
+#define POSITION_LOOP_TWO_PI                        (6.28318530718f) // 一阶低通系数计算使用的2π常量
 
 static volatile uint8 g_enabled = 0U;
 static volatile PositionLoopTrajectoryConfig_t g_config = {
@@ -37,6 +43,8 @@ static uint8 g_trajectory_reset_reason = POSITION_LOOP_RESET_NONE;
 static uint32 g_trajectory_reset_count = 0U;
 static float g_last_yaw_deg = 0.0f;
 static uint8 g_yaw_initialized = 0U;
+static float g_filtered_closing_speed_cms = 0.0f;
+static uint8 g_closing_speed_initialized = 0U;
 
 static uint8 g_last_pose_valid = 0U;
 static uint8 g_predict_hold_active = 0U;
@@ -101,6 +109,63 @@ static float position_loop_wrap_deg180(float angle_deg)
     while(angle_deg > 180.0f) angle_deg -= 360.0f;
     while(angle_deg < -180.0f) angle_deg += 360.0f;
     return angle_deg;
+}
+
+static void position_loop_update_brake_schedule(float closing_speed,
+                                                float dt_s,
+                                                const PositionLoopTrajectoryConfig_t *config,
+                                                float *schedule_ratio,
+                                                float *acceleration_limit,
+                                                float *jerk_limit)
+{
+    float alpha;
+    float ratio;
+    float high_acceleration;
+    float high_jerk;
+
+    if((config == NULL) || (schedule_ratio == NULL) ||
+       (acceleration_limit == NULL) || (jerk_limit == NULL))
+    {
+        return;
+    }
+    if(!isfinite(closing_speed) || !isfinite(dt_s) || !(dt_s > 0.0f))
+    {
+        *schedule_ratio = 0.0f;
+        *acceleration_limit = config->acceleration_max_cms2;
+        *jerk_limit = config->jerk_max_cms3;
+        return;
+    }
+
+    if(!g_closing_speed_initialized)
+    {
+        g_filtered_closing_speed_cms = closing_speed;
+        g_closing_speed_initialized = 1U;
+    }
+    else
+    {
+        alpha = 1.0f - expf(-POSITION_LOOP_TWO_PI *
+                            POSITION_LOOP_CLOSING_SPEED_LPF_HZ * dt_s);
+        alpha = position_loop_limit_float(alpha, 0.0f, 1.0f);
+        g_filtered_closing_speed_cms +=
+            alpha * (closing_speed - g_filtered_closing_speed_cms);
+    }
+
+    ratio = (g_filtered_closing_speed_cms - POSITION_LOOP_BRAKE_SPEED_START_CMS) /
+            (POSITION_LOOP_BRAKE_SPEED_FULL_CMS - POSITION_LOOP_BRAKE_SPEED_START_CMS);
+    ratio = position_loop_limit_float(ratio, 0.0f, 1.0f);
+    ratio = ratio * ratio * (3.0f - 2.0f * ratio);
+
+    high_acceleration = (POSITION_LOOP_BRAKE_ACCEL_HIGH_CMS2 >
+                         config->acceleration_max_cms2) ?
+                        POSITION_LOOP_BRAKE_ACCEL_HIGH_CMS2 :
+                        config->acceleration_max_cms2;
+    high_jerk = (POSITION_LOOP_BRAKE_JERK_HIGH_CMS3 > config->jerk_max_cms3) ?
+                POSITION_LOOP_BRAKE_JERK_HIGH_CMS3 : config->jerk_max_cms3;
+    *schedule_ratio = ratio;
+    *acceleration_limit = config->acceleration_max_cms2 +
+                          ratio * (high_acceleration - config->acceleration_max_cms2);
+    *jerk_limit = config->jerk_max_cms3 +
+                  ratio * (high_jerk - config->jerk_max_cms3);
 }
 
 /* 从零加速度开始并以零加速度停止时，按A/J约束计算完整S曲线停止距离。 */
@@ -192,11 +257,18 @@ void Position_Loop_Reset_Trajectory(uint8 reason)
     g_target_ay_earth_cms2 = 0.0f;
     g_trajectory_initialized = 0U;
     g_trajectory_reset_reason = reason;
+    g_filtered_closing_speed_cms = 0.0f;
+    g_closing_speed_initialized = 0U;
     g_diag.vx_cmd_cms = 0.0f;
     g_diag.vy_cmd_cms = 0.0f;
     g_diag.target_accel_x_cms2 = 0.0f;
     g_diag.target_accel_y_cms2 = 0.0f;
     g_diag.relative_closing_speed_cms = 0.0f;
+    g_diag.filtered_closing_speed_cms = 0.0f;
+    g_diag.brake_schedule_ratio = 0.0f;
+    g_diag.brake_accel_limit_cms2 = 0.0f;
+    g_diag.brake_jerk_limit_cms3 = 0.0f;
+    g_diag.brake_schedule_active = 0U;
     g_diag.relative_velocity_x_cms = 0.0f;
     g_diag.relative_velocity_y_cms = 0.0f;
     g_diag.relative_speed_cms = 0.0f;
@@ -382,6 +454,8 @@ static void position_loop_shape_velocity(float desired_vx,
     float desired_ay = 0.0f;
     float old_ax = g_target_ax_earth_cms2;
     float old_ay = g_target_ay_earth_cms2;
+    float old_acceleration_magnitude;
+    float acceleration_clamp;
     float jerk_x;
     float jerk_y;
 
@@ -414,9 +488,16 @@ static void position_loop_shape_velocity(float desired_vx,
     }
     g_target_ax_earth_cms2 += jerk_x * dt_s;
     g_target_ay_earth_cms2 += jerk_y * dt_s;
+    old_acceleration_magnitude = sqrtf(old_ax * old_ax + old_ay * old_ay);
+    acceleration_clamp = config->acceleration_max_cms2;
+    if(old_acceleration_magnitude > acceleration_clamp)
+    {
+        /* 动态制动退出时保留当前包络，让加速度按Jerk逐步退回基础上限。 */
+        acceleration_clamp = old_acceleration_magnitude;
+    }
     if(position_loop_limit_vector(&g_target_ax_earth_cms2,
                                   &g_target_ay_earth_cms2,
-                                  config->acceleration_max_cms2))
+                                  acceleration_clamp))
     {
         *flags |= POSITION_LOOP_STATUS_ACCEL_LIMITED;
     }
@@ -534,6 +615,7 @@ void Position_Loop_Update_Velocity_Target(uint8 velocity_ready,
                                           float *target_ay_earth_cms2)
 {
     PositionLoopTrajectoryConfig_t config;
+    PositionLoopTrajectoryConfig_t shape_config;
     float measured_vx_earth = 0.0f;
     float measured_vy_earth = 0.0f;
     float car_vx_earth = 0.0f;
@@ -554,6 +636,11 @@ void Position_Loop_Update_Velocity_Target(uint8 velocity_ready,
     float relative_velocity_y = 0.0f;
     float relative_speed = 0.0f;
     float closing_speed = 0.0f;
+    float target_direction_x = 0.0f;
+    float target_direction_y = 0.0f;
+    float brake_schedule_ratio = 0.0f;
+    float brake_accel_limit = 0.0f;
+    float brake_jerk_limit = 0.0f;
     float stopping_distance = 0.0f;
     float stop_offset_x = 0.0f;
     float stop_offset_y = 0.0f;
@@ -562,6 +649,7 @@ void Position_Loop_Update_Velocity_Target(uint8 velocity_ready,
     uint8 car_velocity_valid = 0U;
     uint8 flags = 0U;
     uint8 stop_prediction_flags = 0U;
+    uint8 brake_schedule_active = 0U;
     uint8 raw_visual_valid;
     uint8 new_visual_pose;
 
@@ -596,6 +684,7 @@ void Position_Loop_Update_Velocity_Target(uint8 velocity_ready,
         g_diag.velocity_ready = velocity_ready;
         g_diag.timing_valid = 0U;
         g_diag.trajectory_dt_s = dt_s;
+        g_diag.brake_schedule_active = 0U;
         g_diag.limit_flags &= (uint8)~POSITION_LOOP_STATUS_TIMING_VALID;
         return;
     }
@@ -620,6 +709,9 @@ void Position_Loop_Update_Velocity_Target(uint8 velocity_ready,
     }
 
     config = g_config;
+    shape_config = config;
+    brake_accel_limit = config.acceleration_max_cms2;
+    brake_jerk_limit = config.jerk_max_cms3;
     position_loop_body_to_earth(measured_vx_body_cms, measured_vy_body_cms,
                                 yaw_deg, &measured_vx_earth, &measured_vy_earth);
     if((feedforward != NULL) && feedforward->valid &&
@@ -721,15 +813,22 @@ void Position_Loop_Update_Velocity_Target(uint8 velocity_ready,
                                    predicted_error_y * predicted_error_y);
         if(distance > POSITION_LOOP_EPSILON)
         {
-            float direction_x = position_x / distance;
-            float direction_y = position_y / distance;
+            target_direction_x = position_x / distance;
+            target_direction_y = position_y / distance;
 
-            closing_speed = relative_velocity_x * direction_x +
-                            relative_velocity_y * direction_y;
+            closing_speed = relative_velocity_x * target_direction_x +
+                            relative_velocity_y * target_direction_y;
+            position_loop_update_brake_schedule(closing_speed,
+                                                dt_s,
+                                                &config,
+                                                &brake_schedule_ratio,
+                                                &brake_accel_limit,
+                                                &brake_jerk_limit);
             envelope_speed = position_loop_envelope_speed(distance,
                                                           config.acceleration_max_cms2,
                                                           config.jerk_max_cms3);
-            if((stop_offset_x * direction_x + stop_offset_y * direction_y) >= distance)
+            if((stop_offset_x * target_direction_x +
+                stop_offset_y * target_direction_y) >= distance)
             {
                 stop_prediction_flags |= POSITION_LOOP_STOP_PRED_OVERSHOOT;
             }
@@ -755,6 +854,15 @@ void Position_Loop_Update_Velocity_Target(uint8 velocity_ready,
         }
     }
 
+    if(!position_valid)
+    {
+        g_filtered_closing_speed_cms = 0.0f;
+        g_closing_speed_initialized = 0U;
+        brake_schedule_ratio = 0.0f;
+        brake_accel_limit = config.acceleration_max_cms2;
+        brake_jerk_limit = config.jerk_max_cms3;
+    }
+
     if(!g_trajectory_initialized)
     {
         g_target_vx_earth_cms = measured_vx_earth;
@@ -767,7 +875,25 @@ void Position_Loop_Update_Velocity_Target(uint8 velocity_ready,
             g_trajectory_reset_reason = POSITION_LOOP_RESET_VELOCITY_RECOVERED;
         }
     }
-    position_loop_shape_velocity(desired_vx, desired_vy, &config, dt_s, &flags);
+    if(position_valid && (distance > POSITION_LOOP_EPSILON) &&
+       (closing_speed > 0.0f) &&
+       (g_filtered_closing_speed_cms > 0.0f))
+    {
+        float delta_vx = desired_vx - g_target_vx_earth_cms;
+        float delta_vy = desired_vy - g_target_vy_earth_cms;
+        float radial_delta_velocity = delta_vx * target_direction_x +
+                                      delta_vy * target_direction_y;
+
+        if(radial_delta_velocity < 0.0f)
+        {
+            shape_config.acceleration_max_cms2 = brake_accel_limit;
+            shape_config.jerk_max_cms3 = brake_jerk_limit;
+            brake_schedule_active = (uint8)((brake_schedule_ratio > 0.0f) &&
+                ((brake_accel_limit > config.acceleration_max_cms2) ||
+                 (brake_jerk_limit > config.jerk_max_cms3)));
+        }
+    }
+    position_loop_shape_velocity(desired_vx, desired_vy, &shape_config, dt_s, &flags);
     flags |= POSITION_LOOP_STATUS_TRAJECTORY_READY;
 
     *target_vx_earth_cms = g_target_vx_earth_cms;
@@ -798,6 +924,11 @@ void Position_Loop_Update_Velocity_Target(uint8 velocity_ready,
     g_diag.position_correction_speed_cms = sqrtf(correction_vx * correction_vx +
                                                    correction_vy * correction_vy);
     g_diag.relative_closing_speed_cms = closing_speed;
+    g_diag.filtered_closing_speed_cms = g_filtered_closing_speed_cms;
+    g_diag.brake_schedule_ratio = brake_schedule_ratio;
+    g_diag.brake_accel_limit_cms2 = brake_accel_limit;
+    g_diag.brake_jerk_limit_cms3 = brake_jerk_limit;
+    g_diag.brake_schedule_active = brake_schedule_active;
     g_diag.relative_velocity_x_cms = relative_velocity_x;
     g_diag.relative_velocity_y_cms = relative_velocity_y;
     g_diag.relative_speed_cms = relative_speed;
