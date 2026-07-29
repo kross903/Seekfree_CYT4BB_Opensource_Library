@@ -7,6 +7,8 @@
 #define POSITION_LOOP_STATUS_CORRECTION_LIMITED  (0x01U)
 #define POSITION_LOOP_STATUS_TARGET_LIMITED      (0x02U)
 #define POSITION_LOOP_STATUS_SLEW_LIMITED        (0x04U)
+#define POSITION_LOOP_STATUS_COMMAND_ENVELOPE_LIMITED (0x40U)
+#define POSITION_LOOP_STATUS_BRAKE_PHASE_LATCHED (0x80U)
 #define POSITION_LOOP_BRAKE_REL_VEL_LPF_HZ       (8.0f)
 
 #define POSITION_LOOP_BRAKE_STATUS_ENABLED              (0x01U)
@@ -22,6 +24,10 @@
 #define POSITION_LOOP_OBSERVATION_LIVE         (1U)
 #define POSITION_LOOP_OBSERVATION_HOLD         (2U)
 #define POSITION_LOOP_OBSERVATION_REACQUIRING  (3U)
+
+#define POSITION_LOOP_BRAKE_PHASE_APPROACH  (0U)
+#define POSITION_LOOP_BRAKE_PHASE_BRAKING   (1U)
+#define POSITION_LOOP_BRAKE_PHASE_SETTLED   (2U)
 
 typedef struct
 {
@@ -73,10 +79,22 @@ typedef struct
     float brake_candidate_vy_cms;
     float brake_combined_vx_cms;
     float brake_combined_vy_cms;
+    float command_envelope_allowed_speed_cms;
+    float command_envelope_raw_radial_cms;
+    float command_envelope_limited_radial_cms;
+    float command_envelope_vx_cms;
+    float command_envelope_vy_cms;
+    float brake_profile_reference_speed_cms;
+    float brake_profile_trigger_distance_cm;
+    float brake_profile_target_speed_cms;
     float vision_innovation_cm;
     uint16 vision_hold_age_ms;
+    uint16 brake_profile_settle_ms;
     uint8 vision_observation_state;
     uint8 vision_reacquire_count;
+    uint8 command_envelope_active;
+    uint8 brake_profile_phase;
+    uint8 brake_profile_restart_count;
     uint8 car_ff_valid;
     uint8 limit_flags;
     uint8 brake_active;

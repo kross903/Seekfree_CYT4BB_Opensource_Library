@@ -9,7 +9,6 @@
  * sign to keep a front/left target commanding positive front/left velocity. */
 #define POSITION_LOOP_VX_SIGN          (1.0f)
 #define POSITION_LOOP_VY_SIGN          (1.0f)
-#define POSITION_LOOP_DEADZONE_CM      (3.0f)
 #define POSITION_LOOP_DT_S             0.020f
 #define POSITION_LOOP_PERIOD_MS        (20U)
 #define POSITION_LOOP_CORRECTION_LIMIT_CMS  (70.0f)
@@ -18,18 +17,24 @@
 #define POSITION_LOOP_CAR_FF_LPF_HZ          (5.0f)
 #define POSITION_LOOP_CAR_FF_GAIN_DEFAULT    (0.15f)
 #define POSITION_LOOP_CAR_FF_GAIN_MAX        (0.15f)
-#define POSITION_LOOP_BRAKE_ACCEL_DEFAULT_CMS2 (100.0f)
+#define POSITION_LOOP_BRAKE_ACCEL_DEFAULT_CMS2  (60.0f)
 #define POSITION_LOOP_BRAKE_DELAY_DEFAULT_S    (0.35f)
 #define POSITION_LOOP_BRAKE_REVERSE_DEFAULT_CMS (30.0f)
 #define POSITION_LOOP_BRAKE_STOP_RADIUS_DEFAULT_CM (5.0f)
-#define POSITION_LOOP_BRAKE_SLEW_ENTRY_CMS2      (80.0f)
-#define POSITION_LOOP_BRAKE_SLEW_EXIT_CMS2      (150.0f)
+#define POSITION_LOOP_BRAKE_SLEW_ENTRY_CMS2      (40.0f)
+#define POSITION_LOOP_BRAKE_SLEW_EXIT_CMS2      (100.0f)
 #define POSITION_LOOP_BRAKE_OVERSPEED_ENTRY_CMS  (5.0f)
 #define POSITION_LOOP_BRAKE_OVERSPEED_EXIT_CMS   (2.0f)
 #define POSITION_LOOP_VISION_HOLD_MS              (150U)
 #define POSITION_LOOP_VISION_INNOVATION_GATE_CM   (20.0f)
 #define POSITION_LOOP_VISION_REACQUIRE_GATE_CM    (10.0f)
 #define POSITION_LOOP_VISION_REACQUIRE_FRAMES     (3U)
+#define POSITION_LOOP_BRAKE_PROFILE_DECEL_CMS2    (40.0f)
+#define POSITION_LOOP_BRAKE_TRIGGER_MARGIN_CM      (10.0f)
+#define POSITION_LOOP_BRAKE_SETTLE_SPEED_CMS       (5.0f)
+#define POSITION_LOOP_BRAKE_SETTLE_TIME_MS         (300U)
+#define POSITION_LOOP_BRAKE_RESTART_DISTANCE_CM    (12.0f)
+#define POSITION_LOOP_BRAKE_RESTART_FRAMES         (3U)
 #define POSITION_LOOP_BRAKE_ACCEL_MIN_CMS2     (20.0f)
 #define POSITION_LOOP_BRAKE_ACCEL_MAX_CMS2     (300.0f)
 #define POSITION_LOOP_BRAKE_DELAY_MIN_S         (0.0f)
@@ -86,6 +91,20 @@ static volatile float g_position_loop_brake_candidate_vx_cms = 0.0f;
 static volatile float g_position_loop_brake_candidate_vy_cms = 0.0f;
 static volatile float g_position_loop_brake_combined_vx_cms = 0.0f;
 static volatile float g_position_loop_brake_combined_vy_cms = 0.0f;
+static volatile float g_position_loop_command_envelope_allowed_speed_cms = 0.0f;
+static volatile float g_position_loop_command_envelope_raw_radial_cms = 0.0f;
+static volatile float g_position_loop_command_envelope_limited_radial_cms = 0.0f;
+static volatile float g_position_loop_command_envelope_vx_cms = 0.0f;
+static volatile float g_position_loop_command_envelope_vy_cms = 0.0f;
+static volatile uint8 g_position_loop_command_envelope_active = 0U;
+static volatile float g_position_loop_brake_profile_reference_speed_cms = 0.0f;
+static volatile float g_position_loop_brake_profile_trigger_distance_cm = 0.0f;
+static volatile float g_position_loop_brake_profile_target_speed_cms = 0.0f;
+static volatile uint16 g_position_loop_brake_profile_settle_ms = 0U;
+static volatile uint8 g_position_loop_brake_profile_phase =
+    POSITION_LOOP_BRAKE_PHASE_APPROACH;
+static volatile uint8 g_position_loop_brake_profile_restart_count = 0U;
+static uint8 g_position_loop_brake_profile_initialized = 0U;
 static volatile uint8 g_position_loop_brake_active = 0U;
 static volatile uint8 g_position_loop_brake_status_flags = 0U;
 static uint8 g_position_loop_car_ff_lpf_initialized = 0U;
@@ -167,6 +186,259 @@ static void position_loop_update_brake_slew(float target_x,
     g_position_loop_brake_slew_vy_cms += delta_y;
 }
 
+static void position_loop_reset_brake_profile(void)
+{
+    g_position_loop_brake_profile_reference_speed_cms = 0.0f;
+    g_position_loop_brake_profile_trigger_distance_cm = 0.0f;
+    g_position_loop_brake_profile_target_speed_cms = 0.0f;
+    g_position_loop_brake_profile_settle_ms = 0U;
+    g_position_loop_brake_profile_phase = POSITION_LOOP_BRAKE_PHASE_APPROACH;
+    g_position_loop_brake_profile_restart_count = 0U;
+    g_position_loop_brake_profile_initialized = 0U;
+}
+
+static uint8 position_loop_apply_command_envelope(float position_x_cm,
+                                                  float position_y_cm,
+                                                  float measured_vx_cms,
+                                                  float measured_vy_cms,
+                                                  float input_vx_cms,
+                                                  float input_vy_cms,
+                                                  uint8 new_visual_frame,
+                                                  float *output_vx_cms,
+                                                  float *output_vy_cms)
+{
+    PositionLoopBrakeConfig_t config = {0};
+    float car_vx_cms = 0.0f;
+    float car_vy_cms = 0.0f;
+    float relative_vx_cms;
+    float relative_vy_cms;
+    float relative_speed_cms;
+    float distance_cm;
+    float remaining_distance_cm;
+    float direction_x = 0.0f;
+    float direction_y = 0.0f;
+    float actual_closing_speed_cms = 0.0f;
+    float raw_radial_cms = 0.0f;
+    float limited_radial_cms = 0.0f;
+    float reference_speed_cms;
+    float effective_decel_cms2;
+    float accel_delay_cms;
+    float allowed_speed_cms = 0.0f;
+    float desired_profile_speed_cms;
+    float max_profile_step_cms =
+        POSITION_LOOP_BRAKE_PROFILE_DECEL_CMS2 * POSITION_LOOP_DT_S;
+
+    if((output_vx_cms == NULL) || (output_vy_cms == NULL))
+    {
+        return 0U;
+    }
+
+    *output_vx_cms = input_vx_cms;
+    *output_vy_cms = input_vy_cms;
+    g_position_loop_command_envelope_allowed_speed_cms = 0.0f;
+    g_position_loop_command_envelope_raw_radial_cms = 0.0f;
+    g_position_loop_command_envelope_limited_radial_cms = 0.0f;
+    g_position_loop_command_envelope_vx_cms = input_vx_cms;
+    g_position_loop_command_envelope_vy_cms = input_vy_cms;
+    g_position_loop_command_envelope_active = 0U;
+
+    config.enabled = g_position_loop_brake_config.enabled;
+    config.brake_accel_cms2 = g_position_loop_brake_config.brake_accel_cms2;
+    config.delay_s = g_position_loop_brake_config.delay_s;
+    config.stop_radius_cm = g_position_loop_brake_config.stop_radius_cm;
+    if(!config.enabled)
+    {
+        position_loop_reset_brake_profile();
+        return 0U;
+    }
+
+    if(g_position_loop_car_ff_valid)
+    {
+        car_vx_cms = g_position_loop_car_ff_raw_vx_cms;
+        car_vy_cms = g_position_loop_car_ff_raw_vy_cms;
+    }
+    relative_vx_cms = measured_vx_cms - car_vx_cms;
+    relative_vy_cms = measured_vy_cms - car_vy_cms;
+    relative_speed_cms = sqrtf(relative_vx_cms * relative_vx_cms +
+                               relative_vy_cms * relative_vy_cms);
+    distance_cm = sqrtf(position_x_cm * position_x_cm +
+                        position_y_cm * position_y_cm);
+    if(distance_cm > POSITION_LOOP_BRAKE_DIRECTION_EPS)
+    {
+        direction_x = position_x_cm / distance_cm;
+        direction_y = position_y_cm / distance_cm;
+        raw_radial_cms = input_vx_cms * direction_x +
+                         input_vy_cms * direction_y;
+        actual_closing_speed_cms = relative_vx_cms * direction_x +
+                                   relative_vy_cms * direction_y;
+    }
+    limited_radial_cms = raw_radial_cms;
+    reference_speed_cms = actual_closing_speed_cms;
+    if(reference_speed_cms < raw_radial_cms)
+    {
+        reference_speed_cms = raw_radial_cms;
+    }
+    if(reference_speed_cms < 0.0f)
+    {
+        reference_speed_cms = 0.0f;
+    }
+    effective_decel_cms2 = config.brake_accel_cms2;
+    if(effective_decel_cms2 > POSITION_LOOP_BRAKE_PROFILE_DECEL_CMS2)
+    {
+        effective_decel_cms2 = POSITION_LOOP_BRAKE_PROFILE_DECEL_CMS2;
+    }
+    g_position_loop_brake_profile_reference_speed_cms = reference_speed_cms;
+    g_position_loop_brake_profile_trigger_distance_cm =
+        config.stop_radius_cm +
+        reference_speed_cms * config.delay_s +
+        reference_speed_cms * reference_speed_cms /
+            (2.0f * effective_decel_cms2) +
+        POSITION_LOOP_BRAKE_TRIGGER_MARGIN_CM;
+
+    remaining_distance_cm = distance_cm - config.stop_radius_cm;
+    if(remaining_distance_cm < 0.0f)
+    {
+        remaining_distance_cm = 0.0f;
+    }
+    accel_delay_cms = effective_decel_cms2 * config.delay_s;
+    allowed_speed_cms = sqrtf(accel_delay_cms * accel_delay_cms +
+                              2.0f * effective_decel_cms2 *
+                              remaining_distance_cm) - accel_delay_cms;
+    if(allowed_speed_cms < 0.0f)
+    {
+        allowed_speed_cms = 0.0f;
+    }
+
+    if((g_position_loop_brake_profile_phase ==
+        POSITION_LOOP_BRAKE_PHASE_APPROACH) &&
+       (reference_speed_cms > POSITION_LOOP_BRAKE_DIRECTION_EPS) &&
+       (distance_cm <= g_position_loop_brake_profile_trigger_distance_cm))
+    {
+        g_position_loop_brake_profile_phase = POSITION_LOOP_BRAKE_PHASE_BRAKING;
+        g_position_loop_brake_profile_target_speed_cms =
+            (raw_radial_cms > 0.0f) ? raw_radial_cms : 0.0f;
+        g_position_loop_brake_profile_initialized = 1U;
+        g_position_loop_brake_profile_settle_ms = 0U;
+        g_position_loop_brake_profile_restart_count = 0U;
+    }
+
+    if(g_position_loop_brake_profile_phase ==
+       POSITION_LOOP_BRAKE_PHASE_BRAKING)
+    {
+        desired_profile_speed_cms = raw_radial_cms;
+        if(desired_profile_speed_cms < 0.0f)
+        {
+            desired_profile_speed_cms = 0.0f;
+        }
+        if(desired_profile_speed_cms > allowed_speed_cms)
+        {
+            desired_profile_speed_cms = allowed_speed_cms;
+        }
+        if(!g_position_loop_brake_profile_initialized)
+        {
+            g_position_loop_brake_profile_target_speed_cms =
+                (raw_radial_cms > 0.0f) ? raw_radial_cms : 0.0f;
+            g_position_loop_brake_profile_initialized = 1U;
+        }
+        if(desired_profile_speed_cms <
+           g_position_loop_brake_profile_target_speed_cms)
+        {
+            g_position_loop_brake_profile_target_speed_cms -=
+                max_profile_step_cms;
+            if(g_position_loop_brake_profile_target_speed_cms <
+               desired_profile_speed_cms)
+            {
+                g_position_loop_brake_profile_target_speed_cms =
+                    desired_profile_speed_cms;
+            }
+        }
+        limited_radial_cms =
+            g_position_loop_brake_profile_target_speed_cms;
+
+        if(distance_cm > POSITION_LOOP_BRAKE_DIRECTION_EPS)
+        {
+            *output_vx_cms += (limited_radial_cms - raw_radial_cms) *
+                              direction_x;
+            *output_vy_cms += (limited_radial_cms - raw_radial_cms) *
+                              direction_y;
+        }
+        else
+        {
+            *output_vx_cms = 0.0f;
+            *output_vy_cms = 0.0f;
+            limited_radial_cms = 0.0f;
+        }
+
+        if((distance_cm <= config.stop_radius_cm) &&
+           (relative_speed_cms <= POSITION_LOOP_BRAKE_SETTLE_SPEED_CMS))
+        {
+            if(g_position_loop_brake_profile_settle_ms <
+               POSITION_LOOP_BRAKE_SETTLE_TIME_MS)
+            {
+                g_position_loop_brake_profile_settle_ms +=
+                    POSITION_LOOP_PERIOD_MS;
+            }
+            if(g_position_loop_brake_profile_settle_ms >=
+               POSITION_LOOP_BRAKE_SETTLE_TIME_MS)
+            {
+                g_position_loop_brake_profile_phase =
+                    POSITION_LOOP_BRAKE_PHASE_SETTLED;
+                g_position_loop_brake_profile_target_speed_cms = 0.0f;
+                g_position_loop_brake_profile_initialized = 0U;
+                *output_vx_cms = 0.0f;
+                *output_vy_cms = 0.0f;
+                limited_radial_cms = 0.0f;
+            }
+        }
+        else
+        {
+            g_position_loop_brake_profile_settle_ms = 0U;
+        }
+    }
+
+    if(g_position_loop_brake_profile_phase ==
+       POSITION_LOOP_BRAKE_PHASE_SETTLED)
+    {
+        *output_vx_cms = 0.0f;
+        *output_vy_cms = 0.0f;
+        limited_radial_cms = 0.0f;
+        if(new_visual_frame)
+        {
+            if(distance_cm > POSITION_LOOP_BRAKE_RESTART_DISTANCE_CM)
+            {
+                if(g_position_loop_brake_profile_restart_count <
+                   POSITION_LOOP_BRAKE_RESTART_FRAMES)
+                {
+                    g_position_loop_brake_profile_restart_count++;
+                }
+            }
+            else
+            {
+                g_position_loop_brake_profile_restart_count = 0U;
+            }
+        }
+        if(g_position_loop_brake_profile_restart_count >=
+           POSITION_LOOP_BRAKE_RESTART_FRAMES)
+        {
+            position_loop_reset_brake_profile();
+        }
+    }
+
+    g_position_loop_command_envelope_allowed_speed_cms = allowed_speed_cms;
+    g_position_loop_command_envelope_raw_radial_cms = raw_radial_cms;
+    g_position_loop_command_envelope_limited_radial_cms = limited_radial_cms;
+    g_position_loop_command_envelope_vx_cms = *output_vx_cms;
+    g_position_loop_command_envelope_vy_cms = *output_vy_cms;
+    if((fabsf(*output_vx_cms - input_vx_cms) >
+        POSITION_LOOP_BRAKE_DIRECTION_EPS) ||
+       (fabsf(*output_vy_cms - input_vy_cms) >
+        POSITION_LOOP_BRAKE_DIRECTION_EPS))
+    {
+        g_position_loop_command_envelope_active = 1U;
+    }
+    return g_position_loop_command_envelope_active;
+}
+
 static void position_loop_update_car_feedforward(
     const PositionLoopFeedforwardInput_t *feedforward)
 {
@@ -219,6 +491,13 @@ static void position_loop_reset_brake_runtime(void)
     g_position_loop_brake_candidate_vy_cms = 0.0f;
     g_position_loop_brake_combined_vx_cms = 0.0f;
     g_position_loop_brake_combined_vy_cms = 0.0f;
+    g_position_loop_command_envelope_allowed_speed_cms = 0.0f;
+    g_position_loop_command_envelope_raw_radial_cms = 0.0f;
+    g_position_loop_command_envelope_limited_radial_cms = 0.0f;
+    g_position_loop_command_envelope_vx_cms = 0.0f;
+    g_position_loop_command_envelope_vy_cms = 0.0f;
+    g_position_loop_command_envelope_active = 0U;
+    position_loop_reset_brake_profile();
     g_position_loop_brake_active = 0U;
     g_position_loop_brake_status_flags = 0U;
     g_position_loop_brake_velocity_lpf_initialized = 0U;
@@ -563,16 +842,6 @@ static uint8 position_loop_try_accept_visual_pose(float pose_x_cm,
     return 0U;
 }
 
-static float position_loop_apply_deadzone(float error_cm)
-{
-    if(error_cm >= -POSITION_LOOP_DEADZONE_CM && error_cm <= POSITION_LOOP_DEADZONE_CM)
-    {
-        return 0.0f;
-    }
-
-    return error_cm;
-}
-
 static uint8 position_loop_get_raw_ir_track_valid(void)
 {
     VehicleMarkerLossDebug_t ir_loss_debug = {0};
@@ -751,7 +1020,7 @@ uint8 Position_Loop_Set_Brake_Config(const PositionLoopBrakeConfig_t *config)
     irq_state = __get_PRIMASK();
     __disable_irq();
     g_position_loop_brake_config = *config;
-    g_position_loop_brake_velocity_lpf_initialized = 0U;
+    position_loop_reset_brake_runtime();
     if(0U == irq_state)
     {
         __enable_irq();
@@ -787,14 +1056,16 @@ void Position_Loop_Update_Velocity_Target(uint8 velocity_ready,
     uint8 raw_ir_track_valid = position_loop_get_raw_ir_track_valid();
     uint8 new_visual_pose = (uint8)(raw_ir_track_valid &&
                                     g_vehicle_marker_pose_update_seq != g_position_loop_last_pose_seq);
+    uint8 accepted_new_visual_pose = 0U;
     uint8 position_input_valid = 0U;
     float position_input_x_cm = 0.0f;
     float position_input_y_cm = 0.0f;
-    float position_distance_cm;
     float pos_error_x_cm;
     float pos_error_y_cm;
     float raw_correction_x;
     float raw_correction_y;
+    float enveloped_correction_x;
+    float enveloped_correction_y;
     float correction_vx_cms;
     float correction_vy_cms;
     float desired_vx_cms;
@@ -837,6 +1108,7 @@ void Position_Loop_Update_Velocity_Target(uint8 velocity_ready,
             &position_input_y_cm);
         if(position_input_valid)
         {
+            accepted_new_visual_pose = 1U;
             g_position_loop_last_pose_valid = 1U;
             g_position_loop_last_x_cm = position_input_x_cm;
             g_position_loop_last_y_cm = position_input_y_cm;
@@ -856,16 +1128,8 @@ void Position_Loop_Update_Velocity_Target(uint8 velocity_ready,
                                                                  &position_input_y_cm);
     }
 
-    pos_error_x_cm = position_loop_apply_deadzone(position_input_x_cm);
-    pos_error_y_cm = position_loop_apply_deadzone(position_input_y_cm);
-    position_distance_cm = sqrtf(position_input_x_cm * position_input_x_cm +
-                                 position_input_y_cm * position_input_y_cm);
-    if(g_position_loop_brake_config.enabled &&
-       (position_distance_cm <= g_position_loop_brake_config.stop_radius_cm))
-    {
-        pos_error_x_cm = 0.0f;
-        pos_error_y_cm = 0.0f;
-    }
+    pos_error_x_cm = position_input_x_cm;
+    pos_error_y_cm = position_input_y_cm;
 
     g_position_loop_ir_track_valid = position_input_valid;
     g_position_loop_velocity_ready = velocity_ready;
@@ -926,14 +1190,46 @@ void Position_Loop_Update_Velocity_Target(uint8 velocity_ready,
                                      POSITION_LOOP_DT_S);
 
     g_position_loop_limit_flags = 0U;
+    if(position_loop_apply_command_envelope(position_input_x_cm,
+                                            position_input_y_cm,
+                                            measured_vx_cms,
+                                            measured_vy_cms,
+                                            raw_correction_x,
+                                            raw_correction_y,
+                                            accepted_new_visual_pose,
+                                            &enveloped_correction_x,
+                                            &enveloped_correction_y))
+    {
+        g_position_loop_limit_flags |=
+            POSITION_LOOP_STATUS_COMMAND_ENVELOPE_LIMITED;
+        if(g_position_loop_brake_profile_phase ==
+           POSITION_LOOP_BRAKE_PHASE_SETTLED)
+        {
+            PID_Reset(&pos_pid_x);
+            PID_Reset(&pos_pid_y);
+        }
+        else
+        {
+            pos_pid_x.integral = previous_integral_x;
+            pos_pid_y.integral = previous_integral_y;
+        }
+    }
+    if(g_position_loop_brake_profile_phase !=
+       POSITION_LOOP_BRAKE_PHASE_APPROACH)
+    {
+        g_position_loop_limit_flags |=
+            POSITION_LOOP_STATUS_BRAKE_PHASE_LATCHED;
+    }
     position_loop_apply_brake_envelope(position_input_x_cm,
                                        position_input_y_cm,
                                        measured_vx_cms,
                                        measured_vy_cms,
-                                       raw_correction_x,
-                                       raw_correction_y,
+                                       enveloped_correction_x,
+                                       enveloped_correction_y,
                                        &correction_vx_cms,
                                        &correction_vy_cms);
+    g_position_loop_brake_base_vx_cms = raw_correction_x;
+    g_position_loop_brake_base_vy_cms = raw_correction_y;
     if(position_loop_limit_vector(&correction_vx_cms,
                                   &correction_vy_cms,
                                   POSITION_LOOP_CORRECTION_LIMIT_CMS))
@@ -1020,10 +1316,29 @@ void Position_Loop_Get_Diag(PositionLoopDiag_t *diag)
     diag->brake_candidate_vy_cms = g_position_loop_brake_candidate_vy_cms;
     diag->brake_combined_vx_cms = g_position_loop_brake_combined_vx_cms;
     diag->brake_combined_vy_cms = g_position_loop_brake_combined_vy_cms;
+    diag->command_envelope_allowed_speed_cms =
+        g_position_loop_command_envelope_allowed_speed_cms;
+    diag->command_envelope_raw_radial_cms =
+        g_position_loop_command_envelope_raw_radial_cms;
+    diag->command_envelope_limited_radial_cms =
+        g_position_loop_command_envelope_limited_radial_cms;
+    diag->command_envelope_vx_cms = g_position_loop_command_envelope_vx_cms;
+    diag->command_envelope_vy_cms = g_position_loop_command_envelope_vy_cms;
+    diag->brake_profile_reference_speed_cms =
+        g_position_loop_brake_profile_reference_speed_cms;
+    diag->brake_profile_trigger_distance_cm =
+        g_position_loop_brake_profile_trigger_distance_cm;
+    diag->brake_profile_target_speed_cms =
+        g_position_loop_brake_profile_target_speed_cms;
     diag->vision_innovation_cm = g_position_loop_vision_innovation_cm;
     diag->vision_hold_age_ms = g_position_loop_hold_elapsed_ms;
+    diag->brake_profile_settle_ms = g_position_loop_brake_profile_settle_ms;
     diag->vision_observation_state = g_position_loop_observation_state;
     diag->vision_reacquire_count = g_position_loop_reacquire_count;
+    diag->command_envelope_active = g_position_loop_command_envelope_active;
+    diag->brake_profile_phase = g_position_loop_brake_profile_phase;
+    diag->brake_profile_restart_count =
+        g_position_loop_brake_profile_restart_count;
     diag->enabled = g_position_loop_enabled;
     diag->active = g_position_loop_active;
     diag->ir_track_valid = g_position_loop_ir_track_valid;
