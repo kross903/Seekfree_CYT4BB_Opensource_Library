@@ -10,6 +10,12 @@
 #define POSITION_LOOP_STATUS_CAR_FF_VALID        (0x10U)
 #define POSITION_LOOP_STATUS_TRAJECTORY_READY    (0x20U)
 #define POSITION_LOOP_STATUS_TIMING_VALID        (0x40U)
+#define POSITION_LOOP_STATUS_STOP_PREDICTION     (0x80U)
+
+#define POSITION_LOOP_STOP_PRED_CAR_VELOCITY_VALID  (0x01U)
+#define POSITION_LOOP_STOP_PRED_ACTIVE              (0x02U)
+#define POSITION_LOOP_STOP_PRED_OVERSHOOT           (0x04U)
+#define POSITION_LOOP_STOP_PRED_STATIC_FALLBACK     (0x08U)
 
 #define POSITION_LOOP_OBSERVATION_INVALID      (0U)
 #define POSITION_LOOP_OBSERVATION_LIVE         (1U)
@@ -69,7 +75,15 @@ typedef struct
     float position_error_distance_cm;
     float position_correction_speed_cms;
     float relative_closing_speed_cms;
+    float relative_velocity_x_cms;
+    float relative_velocity_y_cms;
+    float relative_speed_cms;
     float stopping_distance_cm;
+    float stop_offset_x_cm;
+    float stop_offset_y_cm;
+    float predicted_error_x_cm;
+    float predicted_error_y_cm;
+    float predicted_error_distance_cm;
     float envelope_speed_cms;
     float trajectory_dt_s;
     float vision_innovation_cm;
@@ -85,6 +99,7 @@ typedef struct
     uint8 velocity_ready;
     uint8 timing_valid;
     uint8 trajectory_reset_reason;
+    uint8 stop_prediction_flags;
 } PositionLoopDiag_t;
 
 void Position_Loop_Set_Enabled(uint8 enabled);

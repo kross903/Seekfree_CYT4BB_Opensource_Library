@@ -2,9 +2,9 @@
 #include "vision/vehicle_marker_localization.h"
 #include <math.h>
 
-#define POSITION_LOOP_CAR_FF_GAIN_DEFAULT          (0.15f)   // M1/M2：小车X/Y速度前馈增益上电默认值
+#define POSITION_LOOP_CAR_FF_GAIN_DEFAULT          (0.0f)   // M1/M2：小车X/Y速度前馈增益上电默认值
 #define POSITION_LOOP_CAR_FF_GAIN_MAX              (1.2f)    // M1/M2：小车X/Y速度前馈增益允许上限
-#define POSITION_LOOP_POSITION_KP_DEFAULT          (0.2f)    // M3：二维位置P增益默认值，单位s^-1
+#define POSITION_LOOP_POSITION_KP_DEFAULT          (0.3f)    // M3：二维位置P增益默认值，单位s^-1
 #define POSITION_LOOP_CORRECTION_MAX_DEFAULT_CMS   (70.0f)   // M4：位置修正速度模长上限，单位cm/s
 #define POSITION_LOOP_TARGET_MAX_DEFAULT_CMS       (150.0f)  // M5：合成后目标速度模长上限，单位cm/s
 #define POSITION_LOOP_ACCEL_MAX_DEFAULT_CMS2       (80.0f)   // M6：轨迹加速度模长上限，单位cm/s^2
@@ -196,8 +196,20 @@ void Position_Loop_Reset_Trajectory(uint8 reason)
     g_diag.vy_cmd_cms = 0.0f;
     g_diag.target_accel_x_cms2 = 0.0f;
     g_diag.target_accel_y_cms2 = 0.0f;
+    g_diag.relative_closing_speed_cms = 0.0f;
+    g_diag.relative_velocity_x_cms = 0.0f;
+    g_diag.relative_velocity_y_cms = 0.0f;
+    g_diag.relative_speed_cms = 0.0f;
+    g_diag.stopping_distance_cm = 0.0f;
+    g_diag.stop_offset_x_cm = 0.0f;
+    g_diag.stop_offset_y_cm = 0.0f;
+    g_diag.predicted_error_x_cm = 0.0f;
+    g_diag.predicted_error_y_cm = 0.0f;
+    g_diag.predicted_error_distance_cm = 0.0f;
+    g_diag.stop_prediction_flags = 0U;
     g_diag.limit_flags &= (uint8)~(POSITION_LOOP_STATUS_TRAJECTORY_READY |
-                                  POSITION_LOOP_STATUS_TIMING_VALID);
+                                  POSITION_LOOP_STATUS_TIMING_VALID |
+                                  POSITION_LOOP_STATUS_STOP_PREDICTION);
     g_diag.trajectory_reset_reason = reason;
     g_diag.trajectory_reset_count = g_trajectory_reset_count;
 }
@@ -530,17 +542,26 @@ void Position_Loop_Update_Velocity_Target(uint8 velocity_ready,
     float car_actual_vy_earth = 0.0f;
     float position_x = 0.0f;
     float position_y = 0.0f;
+    float predicted_error_x = 0.0f;
+    float predicted_error_y = 0.0f;
     float desired_vx = 0.0f;
     float desired_vy = 0.0f;
     float correction_vx = 0.0f;
     float correction_vy = 0.0f;
     float distance = 0.0f;
+    float predicted_distance = 0.0f;
+    float relative_velocity_x = 0.0f;
+    float relative_velocity_y = 0.0f;
+    float relative_speed = 0.0f;
     float closing_speed = 0.0f;
     float stopping_distance = 0.0f;
+    float stop_offset_x = 0.0f;
+    float stop_offset_y = 0.0f;
     float envelope_speed = 0.0f;
     uint8 position_valid = 0U;
     uint8 car_velocity_valid = 0U;
     uint8 flags = 0U;
+    uint8 stop_prediction_flags = 0U;
     uint8 raw_visual_valid;
     uint8 new_visual_pose;
 
@@ -662,28 +683,64 @@ void Position_Loop_Update_Velocity_Target(uint8 velocity_ready,
 
     if(position_valid)
     {
+        /* 用真实二维相对速度预测制动后的落点，位置纠偏针对预测误差而非当前误差。 */
         distance = sqrtf(position_x * position_x + position_y * position_y);
+        relative_velocity_x = measured_vx_earth -
+                              (car_velocity_valid ? car_actual_vx_earth : 0.0f);
+        relative_velocity_y = measured_vy_earth -
+                              (car_velocity_valid ? car_actual_vy_earth : 0.0f);
+        relative_speed = sqrtf(relative_velocity_x * relative_velocity_x +
+                               relative_velocity_y * relative_velocity_y);
+        predicted_error_x = position_x;
+        predicted_error_y = position_y;
+        if(car_velocity_valid)
+        {
+            stop_prediction_flags |= POSITION_LOOP_STOP_PRED_CAR_VELOCITY_VALID;
+        }
+        else
+        {
+            stop_prediction_flags |= POSITION_LOOP_STOP_PRED_STATIC_FALLBACK;
+        }
+        if(relative_speed > POSITION_LOOP_EPSILON)
+        {
+            float stop_scale;
+
+            stopping_distance = position_loop_stopping_distance(
+                relative_speed,
+                config.acceleration_max_cms2,
+                config.jerk_max_cms3);
+            stop_scale = stopping_distance / relative_speed;
+            stop_offset_x = relative_velocity_x * stop_scale;
+            stop_offset_y = relative_velocity_y * stop_scale;
+            predicted_error_x -= stop_offset_x;
+            predicted_error_y -= stop_offset_y;
+            stop_prediction_flags |= POSITION_LOOP_STOP_PRED_ACTIVE;
+            flags |= POSITION_LOOP_STATUS_STOP_PREDICTION;
+        }
+        predicted_distance = sqrtf(predicted_error_x * predicted_error_x +
+                                   predicted_error_y * predicted_error_y);
         if(distance > POSITION_LOOP_EPSILON)
         {
-            float correction_speed = position_loop_correction_speed(distance, &config);
             float direction_x = position_x / distance;
             float direction_y = position_y / distance;
 
-            correction_vx = correction_speed * position_x / distance;
-            correction_vy = correction_speed * position_y / distance;
-            closing_speed = (measured_vx_earth -
-                             (car_velocity_valid ? car_actual_vx_earth : 0.0f)) *
-                            direction_x +
-                            (measured_vy_earth -
-                             (car_velocity_valid ? car_actual_vy_earth : 0.0f)) *
-                            direction_y;
-            stopping_distance = position_loop_stopping_distance(
-                (closing_speed > 0.0f) ? closing_speed : 0.0f,
-                config.acceleration_max_cms2,
-                config.jerk_max_cms3);
+            closing_speed = relative_velocity_x * direction_x +
+                            relative_velocity_y * direction_y;
             envelope_speed = position_loop_envelope_speed(distance,
                                                           config.acceleration_max_cms2,
                                                           config.jerk_max_cms3);
+            if((stop_offset_x * direction_x + stop_offset_y * direction_y) >= distance)
+            {
+                stop_prediction_flags |= POSITION_LOOP_STOP_PRED_OVERSHOOT;
+            }
+        }
+        if(predicted_distance > POSITION_LOOP_EPSILON)
+        {
+            float correction_speed = position_loop_correction_speed(predicted_distance,
+                                                                     &config);
+
+            correction_vx = correction_speed * predicted_error_x / predicted_distance;
+            correction_vy = correction_speed * predicted_error_y / predicted_distance;
             if(correction_speed >= (config.correction_speed_max_cms - 0.001f))
             {
                 flags |= POSITION_LOOP_STATUS_CORRECTION_LIMITED;
@@ -741,7 +798,15 @@ void Position_Loop_Update_Velocity_Target(uint8 velocity_ready,
     g_diag.position_correction_speed_cms = sqrtf(correction_vx * correction_vx +
                                                    correction_vy * correction_vy);
     g_diag.relative_closing_speed_cms = closing_speed;
+    g_diag.relative_velocity_x_cms = relative_velocity_x;
+    g_diag.relative_velocity_y_cms = relative_velocity_y;
+    g_diag.relative_speed_cms = relative_speed;
     g_diag.stopping_distance_cm = stopping_distance;
+    g_diag.stop_offset_x_cm = stop_offset_x;
+    g_diag.stop_offset_y_cm = stop_offset_y;
+    g_diag.predicted_error_x_cm = predicted_error_x;
+    g_diag.predicted_error_y_cm = predicted_error_y;
+    g_diag.predicted_error_distance_cm = predicted_distance;
     g_diag.envelope_speed_cms = envelope_speed;
     g_diag.trajectory_dt_s = dt_s;
     g_diag.vision_innovation_cm = g_vision_innovation_cm;
@@ -757,6 +822,7 @@ void Position_Loop_Update_Velocity_Target(uint8 velocity_ready,
     g_diag.timing_valid = timing_valid;
     g_diag.trajectory_reset_reason = g_trajectory_reset_reason;
     g_diag.trajectory_reset_count = g_trajectory_reset_count;
+    g_diag.stop_prediction_flags = stop_prediction_flags;
 }
 
 void Position_Loop_Get_Diag(PositionLoopDiag_t *diag)
