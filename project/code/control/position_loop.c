@@ -2,21 +2,19 @@
 #include "vision/vehicle_marker_localization.h"
 #include <math.h>
 
-#define POSITION_LOOP_DT_S                         (0.004f)
-#define POSITION_LOOP_PERIOD_MS                    (4U)
 #define POSITION_LOOP_CAR_FF_GAIN_DEFAULT          (0.15f)   // M1/M2：小车X/Y速度前馈增益上电默认值
-#define POSITION_LOOP_CAR_FF_GAIN_MAX              (0.15f)   // M1/M2：小车X/Y速度前馈增益允许上限
-#define POSITION_LOOP_POSITION_KP_DEFAULT          (0.5f)    // M3：二维位置P增益默认值，单位s^-1
+#define POSITION_LOOP_CAR_FF_GAIN_MAX              (1.2f)    // M1/M2：小车X/Y速度前馈增益允许上限
+#define POSITION_LOOP_POSITION_KP_DEFAULT          (0.2f)    // M3：二维位置P增益默认值，单位s^-1
 #define POSITION_LOOP_CORRECTION_MAX_DEFAULT_CMS   (70.0f)   // M4：位置修正速度模长上限，单位cm/s
 #define POSITION_LOOP_TARGET_MAX_DEFAULT_CMS       (150.0f)  // M5：合成后目标速度模长上限，单位cm/s
-#define POSITION_LOOP_ACCEL_MAX_DEFAULT_CMS2       (60.0f)   // M6：轨迹加速度模长上限，单位cm/s^2
-#define POSITION_LOOP_JERK_MAX_DEFAULT_CMS3        (120.0f)  // M7：轨迹Jerk模长上限，单位cm/s^3
-#define POSITION_LOOP_SHAPING_TC_S                 (0.25f)   // 目标速度临界阻尼整形时间常数，单位s
+#define POSITION_LOOP_ACCEL_MAX_DEFAULT_CMS2       (80.0f)   // M6：轨迹加速度模长上限，单位cm/s^2
+#define POSITION_LOOP_JERK_MAX_DEFAULT_CMS3        (200.0f)  // M7：轨迹Jerk模长上限，单位cm/s^3
 #define POSITION_LOOP_VISION_HOLD_MS               (150U)    // 视觉断帧后相对位置预测保持时间，单位ms
 #define POSITION_LOOP_VISION_INNOVATION_GATE_CM    (20.0f)   // 新视觉位置相对可信轨迹的创新门限，单位cm
 #define POSITION_LOOP_VISION_REACQUIRE_GATE_CM     (10.0f)   // 视觉重捕获候选位置的一致性门限，单位cm
 #define POSITION_LOOP_VISION_REACQUIRE_FRAMES      (3U)      // 视觉重捕获所需的连续一致候选帧数
 #define POSITION_LOOP_EPSILON                      (0.0001f) // 二维距离归一化时的除零保护阈值
+#define POSITION_LOOP_YAW_RESET_THRESHOLD_DEG      (30.0f)   // 单个水平控制周期内超过该变化视为Yaw参考系重置
 
 static volatile uint8 g_enabled = 0U;
 static volatile PositionLoopTrajectoryConfig_t g_config = {
@@ -35,6 +33,10 @@ static float g_target_vy_earth_cms = 0.0f;
 static float g_target_ax_earth_cms2 = 0.0f;
 static float g_target_ay_earth_cms2 = 0.0f;
 static uint8 g_trajectory_initialized = 0U;
+static uint8 g_trajectory_reset_reason = POSITION_LOOP_RESET_NONE;
+static uint32 g_trajectory_reset_count = 0U;
+static float g_last_yaw_deg = 0.0f;
+static uint8 g_yaw_initialized = 0U;
 
 static uint8 g_last_pose_valid = 0U;
 static uint8 g_predict_hold_active = 0U;
@@ -94,46 +96,58 @@ static void position_loop_body_to_earth(float body_x,
     *earth_y = sine * body_x + cosine * body_y;
 }
 
-/* 与ArduPilot sqrt_controller相同的线性段/平方根段连续控制规律。 */
-static float position_loop_sqrt_controller(float error,
-                                           float p_gain,
-                                           float second_order_limit,
-                                           float dt_s)
+static float position_loop_wrap_deg180(float angle_deg)
 {
-    float correction;
+    while(angle_deg > 180.0f) angle_deg -= 360.0f;
+    while(angle_deg < -180.0f) angle_deg += 360.0f;
+    return angle_deg;
+}
 
-    if(!isfinite(error) || !isfinite(p_gain) || !isfinite(second_order_limit) ||
-       !(p_gain > 0.0f) || !(second_order_limit > 0.0f))
+/* 从零加速度开始并以零加速度停止时，按A/J约束计算完整S曲线停止距离。 */
+static float position_loop_stopping_distance(float speed,
+                                             float acceleration_limit,
+                                             float jerk_limit)
+{
+    float switch_speed;
+
+    if(!isfinite(speed) || !isfinite(acceleration_limit) ||
+       !isfinite(jerk_limit) || !(speed > 0.0f) ||
+       !(acceleration_limit > 0.0f) || !(jerk_limit > 0.0f))
     {
         return 0.0f;
     }
-
+    switch_speed = acceleration_limit * acceleration_limit / jerk_limit;
+    if(speed <= switch_speed)
     {
-        float linear_distance = second_order_limit / (p_gain * p_gain);
-        if(error > linear_distance)
-        {
-            correction = sqrtf(2.0f * second_order_limit *
-                               (error - 0.5f * linear_distance));
-        }
-        else if(error < -linear_distance)
-        {
-            correction = -sqrtf(2.0f * second_order_limit *
-                                (-error - 0.5f * linear_distance));
-        }
-        else
-        {
-            correction = p_gain * error;
-        }
+        return speed * sqrtf(speed / jerk_limit);
     }
+    return speed * speed / (2.0f * acceleration_limit) +
+           speed * acceleration_limit / (2.0f * jerk_limit);
+}
 
-    if(isfinite(dt_s) && (dt_s > 0.0f))
+static float position_loop_envelope_speed(float distance,
+                                          float acceleration_limit,
+                                          float jerk_limit)
+{
+    float switch_distance;
+    float acceleration_jerk_ratio;
+
+    if(!isfinite(distance) || !isfinite(acceleration_limit) ||
+       !isfinite(jerk_limit) || !(distance > 0.0f) ||
+       !(acceleration_limit > 0.0f) || !(jerk_limit > 0.0f))
     {
-        float correction_limit = fabsf(error) / dt_s;
-        correction = position_loop_limit_float(correction,
-                                               -correction_limit,
-                                               correction_limit);
+        return 0.0f;
     }
-    return correction;
+    switch_distance = acceleration_limit * acceleration_limit * acceleration_limit /
+                      (jerk_limit * jerk_limit);
+    if(distance <= switch_distance)
+    {
+        return powf(distance * sqrtf(jerk_limit), 0.6666666667f);
+    }
+    acceleration_jerk_ratio = acceleration_limit * acceleration_limit / jerk_limit;
+    return (sqrtf(acceleration_jerk_ratio * acceleration_jerk_ratio +
+                  8.0f * acceleration_limit * distance) -
+            acceleration_jerk_ratio) * 0.5f;
 }
 
 static void position_loop_reset_reacquisition(void)
@@ -162,16 +176,40 @@ void Position_Loop_Reset_Car_Velocity_Feedforward(void)
     g_diag.car_ff_valid = 0U;
 }
 
-static void position_loop_reset_runtime(void)
+void Position_Loop_Reset_Trajectory(uint8 reason)
 {
-    PositionLoopDiag_t empty_diag = {0};
-
+    if(reason > POSITION_LOOP_RESET_YAW_RESET)
+    {
+        reason = POSITION_LOOP_RESET_NONE;
+    }
+    if(g_trajectory_initialized)
+    {
+        g_trajectory_reset_count++;
+    }
     g_target_vx_earth_cms = 0.0f;
     g_target_vy_earth_cms = 0.0f;
     g_target_ax_earth_cms2 = 0.0f;
     g_target_ay_earth_cms2 = 0.0f;
     g_trajectory_initialized = 0U;
+    g_trajectory_reset_reason = reason;
+    g_diag.vx_cmd_cms = 0.0f;
+    g_diag.vy_cmd_cms = 0.0f;
+    g_diag.target_accel_x_cms2 = 0.0f;
+    g_diag.target_accel_y_cms2 = 0.0f;
+    g_diag.limit_flags &= (uint8)~(POSITION_LOOP_STATUS_TRAJECTORY_READY |
+                                  POSITION_LOOP_STATUS_TIMING_VALID);
+    g_diag.trajectory_reset_reason = reason;
+    g_diag.trajectory_reset_count = g_trajectory_reset_count;
+}
+
+static void position_loop_reset_runtime(uint8 reason)
+{
+    PositionLoopDiag_t empty_diag = {0};
+
+    Position_Loop_Reset_Trajectory(reason);
     g_last_pose_valid = 0U;
+    g_last_yaw_deg = 0.0f;
+    g_yaw_initialized = 0U;
     position_loop_reset_predict_hold();
     position_loop_reset_reacquisition();
     g_last_x_earth_cm = 0.0f;
@@ -183,6 +221,8 @@ static void position_loop_reset_runtime(void)
     g_diag.enabled = g_enabled;
     g_diag.car_ff_gain_x = g_car_ff_gain_x;
     g_diag.car_ff_gain_y = g_car_ff_gain_y;
+    g_diag.trajectory_reset_reason = g_trajectory_reset_reason;
+    g_diag.trajectory_reset_count = g_trajectory_reset_count;
 }
 
 static uint8 position_loop_raw_visual_valid(void)
@@ -260,9 +300,13 @@ static uint8 position_loop_predict_hold(float measured_vx_earth,
                                         uint8 car_velocity_valid,
                                         float car_vx_earth,
                                         float car_vy_earth,
+                                        float dt_s,
                                         float *position_x,
                                         float *position_y)
 {
+    uint16 elapsed_ms = (uint16)(dt_s * 1000.0f + 0.5f);
+
+    if(elapsed_ms == 0U) elapsed_ms = 1U;
     if(!g_last_pose_valid)
     {
         return 0U;
@@ -276,7 +320,7 @@ static uint8 position_loop_predict_hold(float measured_vx_earth,
         g_hold_elapsed_ms = 0U;
         g_predict_hold_active = 1U;
     }
-    if(((uint32)g_hold_elapsed_ms + POSITION_LOOP_PERIOD_MS) >
+    if(((uint32)g_hold_elapsed_ms + elapsed_ms) >
        POSITION_LOOP_VISION_HOLD_MS)
     {
         g_last_pose_valid = 0U;
@@ -285,11 +329,11 @@ static uint8 position_loop_predict_hold(float measured_vx_earth,
         return 0U;
     }
 
-    g_hold_elapsed_ms += POSITION_LOOP_PERIOD_MS;
+    g_hold_elapsed_ms += elapsed_ms;
     g_hold_dx_earth_cm += ((car_velocity_valid ? car_vx_earth : 0.0f) -
-                           measured_vx_earth) * POSITION_LOOP_DT_S;
+                           measured_vx_earth) * dt_s;
     g_hold_dy_earth_cm += ((car_velocity_valid ? car_vy_earth : 0.0f) -
-                           measured_vy_earth) * POSITION_LOOP_DT_S;
+                           measured_vy_earth) * dt_s;
     *position_x = g_hold_start_x_earth_cm + g_hold_dx_earth_cm;
     *position_y = g_hold_start_y_earth_cm + g_hold_dy_earth_cm;
     g_last_x_earth_cm = *position_x;
@@ -304,34 +348,60 @@ static uint8 position_loop_predict_hold(float measured_vx_earth,
 static float position_loop_correction_speed(float distance,
                                             const PositionLoopTrajectoryConfig_t *config)
 {
-    float speed = position_loop_sqrt_controller(distance,
-                                                config->position_kp,
-                                                config->acceleration_max_cms2,
-                                                POSITION_LOOP_DT_S);
+    float proportional_speed = config->position_kp * distance;
+    float envelope_speed = position_loop_envelope_speed(distance,
+                                                        config->acceleration_max_cms2,
+                                                        config->jerk_max_cms3);
+    float speed = (proportional_speed < envelope_speed) ?
+                  proportional_speed : envelope_speed;
     return position_loop_limit_float(speed, 0.0f, config->correction_speed_max_cms);
 }
 
 static void position_loop_shape_velocity(float desired_vx,
                                          float desired_vy,
                                          const PositionLoopTrajectoryConfig_t *config,
+                                         float dt_s,
                                          uint8 *flags)
 {
-    float error_x = desired_vx - g_target_vx_earth_cms;
-    float error_y = desired_vy - g_target_vy_earth_cms;
-    float omega = 1.0f / POSITION_LOOP_SHAPING_TC_S;
-    float jerk_x = omega * omega * error_x -
-                   2.0f * omega * g_target_ax_earth_cms2;
-    float jerk_y = omega * omega * error_y -
-                   2.0f * omega * g_target_ay_earth_cms2;
+    float delta_vx = desired_vx - g_target_vx_earth_cms;
+    float delta_vy = desired_vy - g_target_vy_earth_cms;
+    float delta_speed = sqrtf(delta_vx * delta_vx + delta_vy * delta_vy);
+    float desired_ax = 0.0f;
+    float desired_ay = 0.0f;
+    float old_ax = g_target_ax_earth_cms2;
+    float old_ay = g_target_ay_earth_cms2;
+    float jerk_x;
+    float jerk_y;
 
-    /* 临界阻尼速度轨迹：位置状态为目标速度，加速度为一阶状态，
-     * Jerk负责让二者连续收敛，避免目标速度附近反复越过。 */
+    if(delta_speed > POSITION_LOOP_EPSILON)
+    {
+        float direction_x = delta_vx / delta_speed;
+        float direction_y = delta_vy / delta_speed;
+        float acceleration_parallel = g_target_ax_earth_cms2 * direction_x +
+                                      g_target_ay_earth_cms2 * direction_y;
+        float delta_v_to_zero_accel = 0.0f;
+
+        if(acceleration_parallel > 0.0f)
+        {
+            delta_v_to_zero_accel = acceleration_parallel * acceleration_parallel /
+                                    (2.0f * config->jerk_max_cms3);
+        }
+        /* 剩余速度差不足以让当前加速度按Jerk回零时，立即开始撤销加速度。 */
+        if(delta_speed > delta_v_to_zero_accel)
+        {
+            desired_ax = config->acceleration_max_cms2 * direction_x;
+            desired_ay = config->acceleration_max_cms2 * direction_y;
+        }
+    }
+
+    jerk_x = (desired_ax - g_target_ax_earth_cms2) / dt_s;
+    jerk_y = (desired_ay - g_target_ay_earth_cms2) / dt_s;
     if(position_loop_limit_vector(&jerk_x, &jerk_y, config->jerk_max_cms3))
     {
         *flags |= POSITION_LOOP_STATUS_JERK_LIMITED;
     }
-    g_target_ax_earth_cms2 += jerk_x * POSITION_LOOP_DT_S;
-    g_target_ay_earth_cms2 += jerk_y * POSITION_LOOP_DT_S;
+    g_target_ax_earth_cms2 += jerk_x * dt_s;
+    g_target_ay_earth_cms2 += jerk_y * dt_s;
     if(position_loop_limit_vector(&g_target_ax_earth_cms2,
                                   &g_target_ay_earth_cms2,
                                   config->acceleration_max_cms2))
@@ -339,8 +409,19 @@ static void position_loop_shape_velocity(float desired_vx,
         *flags |= POSITION_LOOP_STATUS_ACCEL_LIMITED;
     }
 
-    g_target_vx_earth_cms += g_target_ax_earth_cms2 * POSITION_LOOP_DT_S;
-    g_target_vy_earth_cms += g_target_ay_earth_cms2 * POSITION_LOOP_DT_S;
+    g_target_vx_earth_cms += 0.5f * (old_ax + g_target_ax_earth_cms2) * dt_s;
+    g_target_vy_earth_cms += 0.5f * (old_ay + g_target_ay_earth_cms2) * dt_s;
+
+    if((delta_speed <= config->jerk_max_cms3 * dt_s * dt_s) &&
+       (sqrtf(g_target_ax_earth_cms2 * g_target_ax_earth_cms2 +
+              g_target_ay_earth_cms2 * g_target_ay_earth_cms2) <=
+        config->jerk_max_cms3 * dt_s))
+    {
+        g_target_vx_earth_cms = desired_vx;
+        g_target_vy_earth_cms = desired_vy;
+        g_target_ax_earth_cms2 = 0.0f;
+        g_target_ay_earth_cms2 = 0.0f;
+    }
     if(position_loop_limit_vector(&g_target_vx_earth_cms,
                                   &g_target_vy_earth_cms,
                                   config->target_speed_max_cms))
@@ -362,7 +443,8 @@ static void position_loop_shape_velocity(float desired_vx,
 void Position_Loop_Set_Enabled(uint8 enabled)
 {
     g_enabled = enabled ? 1U : 0U;
-    position_loop_reset_runtime();
+    position_loop_reset_runtime(g_enabled ? POSITION_LOOP_RESET_FIRST_ENABLE :
+                                            POSITION_LOOP_RESET_CONTROL_DISABLED);
 }
 
 uint8 Position_Loop_Is_Enabled(void)
@@ -431,6 +513,8 @@ void Position_Loop_Update_Velocity_Target(uint8 velocity_ready,
                                           float measured_vx_body_cms,
                                           float measured_vy_body_cms,
                                           float yaw_deg,
+                                          float dt_s,
+                                          uint8 timing_valid,
                                           const PositionLoopFeedforwardInput_t *feedforward,
                                           float *target_vx_earth_cms,
                                           float *target_vy_earth_cms,
@@ -442,6 +526,8 @@ void Position_Loop_Update_Velocity_Target(uint8 velocity_ready,
     float measured_vy_earth = 0.0f;
     float car_vx_earth = 0.0f;
     float car_vy_earth = 0.0f;
+    float car_actual_vx_earth = 0.0f;
+    float car_actual_vy_earth = 0.0f;
     float position_x = 0.0f;
     float position_y = 0.0f;
     float desired_vx = 0.0f;
@@ -449,6 +535,9 @@ void Position_Loop_Update_Velocity_Target(uint8 velocity_ready,
     float correction_vx = 0.0f;
     float correction_vy = 0.0f;
     float distance = 0.0f;
+    float closing_speed = 0.0f;
+    float stopping_distance = 0.0f;
+    float envelope_speed = 0.0f;
     uint8 position_valid = 0U;
     uint8 car_velocity_valid = 0U;
     uint8 flags = 0U;
@@ -462,12 +551,51 @@ void Position_Loop_Update_Velocity_Target(uint8 velocity_ready,
     *target_ax_earth_cms2 = 0.0f;
     *target_ay_earth_cms2 = 0.0f;
 
-    if(!g_enabled || !velocity_ready || !isfinite(yaw_deg) ||
+    if(!g_enabled)
+    {
+        position_loop_reset_runtime(POSITION_LOOP_RESET_CONTROL_DISABLED);
+        return;
+    }
+    if(!velocity_ready || !isfinite(yaw_deg) ||
        !isfinite(measured_vx_body_cms) || !isfinite(measured_vy_body_cms))
     {
-        position_loop_reset_runtime();
+        Position_Loop_Reset_Trajectory(POSITION_LOOP_RESET_VELOCITY_INVALID);
         g_diag.velocity_ready = velocity_ready;
+        g_diag.timing_valid = timing_valid;
+        g_diag.trajectory_dt_s = dt_s;
+        g_diag.limit_flags &= (uint8)~POSITION_LOOP_STATUS_TIMING_VALID;
         return;
+    }
+    if(!timing_valid || !isfinite(dt_s) || (dt_s < 0.002f) || (dt_s > 0.008f))
+    {
+        *target_vx_earth_cms = g_target_vx_earth_cms;
+        *target_vy_earth_cms = g_target_vy_earth_cms;
+        *target_ax_earth_cms2 = g_target_ax_earth_cms2;
+        *target_ay_earth_cms2 = g_target_ay_earth_cms2;
+        g_diag.velocity_ready = velocity_ready;
+        g_diag.timing_valid = 0U;
+        g_diag.trajectory_dt_s = dt_s;
+        g_diag.limit_flags &= (uint8)~POSITION_LOOP_STATUS_TIMING_VALID;
+        return;
+    }
+    flags |= POSITION_LOOP_STATUS_TIMING_VALID;
+
+    if(!g_yaw_initialized)
+    {
+        g_last_yaw_deg = yaw_deg;
+        g_yaw_initialized = 1U;
+    }
+    else
+    {
+        float yaw_delta = position_loop_wrap_deg180(yaw_deg - g_last_yaw_deg);
+
+        g_last_yaw_deg = yaw_deg;
+        if(fabsf(yaw_delta) > POSITION_LOOP_YAW_RESET_THRESHOLD_DEG)
+        {
+            position_loop_reset_runtime(POSITION_LOOP_RESET_YAW_RESET);
+            g_last_yaw_deg = yaw_deg;
+            g_yaw_initialized = 1U;
+        }
     }
 
     config = g_config;
@@ -476,8 +604,16 @@ void Position_Loop_Update_Velocity_Target(uint8 velocity_ready,
     if((feedforward != NULL) && feedforward->valid &&
        isfinite(feedforward->vx_uav_cms) && isfinite(feedforward->vy_uav_cms))
     {
-        float gained_body_x = feedforward->vx_uav_cms * g_car_ff_gain_x;
-        float gained_body_y = feedforward->vy_uav_cms * g_car_ff_gain_y;
+        float gained_body_x;
+        float gained_body_y;
+
+        position_loop_body_to_earth(feedforward->vx_uav_cms,
+                                    feedforward->vy_uav_cms,
+                                    yaw_deg,
+                                    &car_actual_vx_earth,
+                                    &car_actual_vy_earth);
+        gained_body_x = feedforward->vx_uav_cms * g_car_ff_gain_x;
+        gained_body_y = feedforward->vy_uav_cms * g_car_ff_gain_y;
         position_loop_body_to_earth(gained_body_x, gained_body_y, yaw_deg,
                                     &car_vx_earth, &car_vy_earth);
         car_velocity_valid = 1U;
@@ -517,8 +653,9 @@ void Position_Loop_Update_Velocity_Target(uint8 velocity_ready,
         position_valid = position_loop_predict_hold(measured_vx_earth,
                                                     measured_vy_earth,
                                                     car_velocity_valid,
-                                                    car_vx_earth,
-                                                    car_vy_earth,
+                                                    car_actual_vx_earth,
+                                                    car_actual_vy_earth,
+                                                    dt_s,
                                                     &position_x,
                                                     &position_y);
     }
@@ -529,8 +666,24 @@ void Position_Loop_Update_Velocity_Target(uint8 velocity_ready,
         if(distance > POSITION_LOOP_EPSILON)
         {
             float correction_speed = position_loop_correction_speed(distance, &config);
+            float direction_x = position_x / distance;
+            float direction_y = position_y / distance;
+
             correction_vx = correction_speed * position_x / distance;
             correction_vy = correction_speed * position_y / distance;
+            closing_speed = (measured_vx_earth -
+                             (car_velocity_valid ? car_actual_vx_earth : 0.0f)) *
+                            direction_x +
+                            (measured_vy_earth -
+                             (car_velocity_valid ? car_actual_vy_earth : 0.0f)) *
+                            direction_y;
+            stopping_distance = position_loop_stopping_distance(
+                (closing_speed > 0.0f) ? closing_speed : 0.0f,
+                config.acceleration_max_cms2,
+                config.jerk_max_cms3);
+            envelope_speed = position_loop_envelope_speed(distance,
+                                                          config.acceleration_max_cms2,
+                                                          config.jerk_max_cms3);
             if(correction_speed >= (config.correction_speed_max_cms - 0.001f))
             {
                 flags |= POSITION_LOOP_STATUS_CORRECTION_LIMITED;
@@ -552,8 +705,12 @@ void Position_Loop_Update_Velocity_Target(uint8 velocity_ready,
         g_target_ax_earth_cms2 = 0.0f;
         g_target_ay_earth_cms2 = 0.0f;
         g_trajectory_initialized = 1U;
+        if(g_trajectory_reset_reason == POSITION_LOOP_RESET_VELOCITY_INVALID)
+        {
+            g_trajectory_reset_reason = POSITION_LOOP_RESET_VELOCITY_RECOVERED;
+        }
     }
-    position_loop_shape_velocity(desired_vx, desired_vy, &config, &flags);
+    position_loop_shape_velocity(desired_vx, desired_vy, &config, dt_s, &flags);
     flags |= POSITION_LOOP_STATUS_TRAJECTORY_READY;
 
     *target_vx_earth_cms = g_target_vx_earth_cms;
@@ -582,7 +739,11 @@ void Position_Loop_Update_Velocity_Target(uint8 velocity_ready,
     g_diag.target_accel_y_cms2 = g_target_ay_earth_cms2;
     g_diag.position_error_distance_cm = distance;
     g_diag.position_correction_speed_cms = sqrtf(correction_vx * correction_vx +
-                                                  correction_vy * correction_vy);
+                                                   correction_vy * correction_vy);
+    g_diag.relative_closing_speed_cms = closing_speed;
+    g_diag.stopping_distance_cm = stopping_distance;
+    g_diag.envelope_speed_cms = envelope_speed;
+    g_diag.trajectory_dt_s = dt_s;
     g_diag.vision_innovation_cm = g_vision_innovation_cm;
     g_diag.vision_hold_age_ms = g_hold_elapsed_ms;
     g_diag.vision_observation_state = g_observation_state;
@@ -593,6 +754,9 @@ void Position_Loop_Update_Velocity_Target(uint8 velocity_ready,
     g_diag.active = position_valid;
     g_diag.ir_track_valid = position_valid;
     g_diag.velocity_ready = velocity_ready;
+    g_diag.timing_valid = timing_valid;
+    g_diag.trajectory_reset_reason = g_trajectory_reset_reason;
+    g_diag.trajectory_reset_count = g_trajectory_reset_count;
 }
 
 void Position_Loop_Get_Diag(PositionLoopDiag_t *diag)

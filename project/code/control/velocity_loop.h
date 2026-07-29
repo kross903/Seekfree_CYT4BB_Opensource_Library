@@ -56,7 +56,9 @@ typedef struct
     float acceleration_target_y_earth_cms2;
     float target_roll_deg;
     float target_pitch_deg;
+    float dt_s;
     uint8 status_flags;
+    uint8 timing_valid;
 } VelocityLoopHorizontalDiag_t;
 
 void Velocity_Loop_Set_Enabled(uint8 enabled);
@@ -84,6 +86,7 @@ void Velocity_Loop_Update_Attitude_Target(uint8 velocity_ready,
                                           float measured_vx_body_cms,
                                           float measured_vy_body_cms,
                                           float yaw_deg,
+                                          float dt_s,
                                           float captured_roll,
                                           float captured_pitch,
                                           float *target_roll,

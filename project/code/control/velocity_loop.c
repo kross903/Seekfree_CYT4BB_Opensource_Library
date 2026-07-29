@@ -3,7 +3,6 @@
 #include "control/motor_mixer.h"
 #include <math.h>
 
-#define VELOCITY_LOOP_DT_S                (0.004f)
 #define VELOCITY_LOOP_GRAVITY_CMS2        (981.0f)
 #define VELOCITY_LOOP_MAX_TILT_DEG        (15.0f)
 #define VELOCITY_LOOP_RATE_FF_LPF_HZ      (15.0f)
@@ -113,7 +112,9 @@ static void velocity_loop_reset_d_state(void)
     velocity_loop_reset_d_axis(&g_d_state[VELOCITY_LOOP_AXIS_Y]);
 }
 
-static float velocity_loop_update_d(uint8 axis, float measured_velocity_cms)
+static float velocity_loop_update_d(uint8 axis,
+                                    float measured_velocity_cms,
+                                    float dt_s)
 {
     VelocityLoopDState_t *state = &g_d_state[axis];
     float raw_negative_accel;
@@ -126,10 +127,10 @@ static float velocity_loop_update_d(uint8 axis, float measured_velocity_cms)
         return 0.0f;
     }
     raw_negative_accel = -(measured_velocity_cms - state->previous_velocity_cms) /
-                         VELOCITY_LOOP_DT_S;
+                         dt_s;
     state->previous_velocity_cms = measured_velocity_cms;
     alpha = 1.0f - expf(-VELOCITY_LOOP_TWO_PI * state->cutoff_hz *
-                        VELOCITY_LOOP_DT_S);
+                        dt_s);
     state->filtered_negative_accel_cms2 += alpha *
         (raw_negative_accel - state->filtered_negative_accel_cms2);
     return state->filtered_negative_accel_cms2;
@@ -147,11 +148,12 @@ static void velocity_loop_reset_rate_feedforward(void)
 }
 
 static void velocity_loop_update_rate_feedforward(float roll_corr_deg,
-                                                  float pitch_corr_deg)
+                                                  float pitch_corr_deg,
+                                                  float dt_s)
 {
     float alpha = 1.0f - expf(-VELOCITY_LOOP_TWO_PI *
                               VELOCITY_LOOP_RATE_FF_LPF_HZ *
-                              VELOCITY_LOOP_DT_S);
+                              dt_s);
 
     if(!g_rate_ff_initialized)
     {
@@ -163,9 +165,9 @@ static void velocity_loop_update_rate_feedforward(float roll_corr_deg,
     }
 
     g_rate_ff_diag.roll_target_rate_raw_dps =
-        (roll_corr_deg - g_prev_roll_corr_deg) / VELOCITY_LOOP_DT_S;
+        (roll_corr_deg - g_prev_roll_corr_deg) / dt_s;
     g_rate_ff_diag.pitch_target_rate_raw_dps =
-        (pitch_corr_deg - g_prev_pitch_corr_deg) / VELOCITY_LOOP_DT_S;
+        (pitch_corr_deg - g_prev_pitch_corr_deg) / dt_s;
     g_prev_roll_corr_deg = roll_corr_deg;
     g_prev_pitch_corr_deg = pitch_corr_deg;
     g_rate_ff_diag.roll_target_rate_filt_dps += alpha *
@@ -344,6 +346,7 @@ void Velocity_Loop_Update_Attitude_Target(uint8 velocity_ready,
                                           float measured_vx_body_cms,
                                           float measured_vy_body_cms,
                                           float yaw_deg,
+                                          float dt_s,
                                           float captured_roll,
                                           float captured_pitch,
                                           float *target_roll,
@@ -377,6 +380,7 @@ void Velocity_Loop_Update_Attitude_Target(uint8 velocity_ready,
 
     if((target_roll == NULL) || (target_pitch == NULL)) return;
     if(!g_enabled || !velocity_ready || !isfinite(yaw_deg) ||
+       !isfinite(dt_s) || (dt_s < 0.002f) || (dt_s > 0.008f) ||
        !isfinite(measured_vx_body_cms) || !isfinite(measured_vy_body_cms))
     {
         *target_roll = captured_roll;
@@ -389,8 +393,12 @@ void Velocity_Loop_Update_Attitude_Target(uint8 velocity_ready,
                                 yaw_deg, &measured_vx_earth, &measured_vy_earth);
     error_x = g_target_vx_earth_cms - measured_vx_earth;
     error_y = g_target_vy_earth_cms - measured_vy_earth;
-    d_measure_x = velocity_loop_update_d(VELOCITY_LOOP_AXIS_X, measured_vx_earth);
-    d_measure_y = velocity_loop_update_d(VELOCITY_LOOP_AXIS_Y, measured_vy_earth);
+    d_measure_x = velocity_loop_update_d(VELOCITY_LOOP_AXIS_X,
+                                         measured_vx_earth,
+                                         dt_s);
+    d_measure_y = velocity_loop_update_d(VELOCITY_LOOP_AXIS_Y,
+                                         measured_vy_earth,
+                                         dt_s);
     p_x = vel_pid_x.Kp * error_x;
     p_y = vel_pid_y.Kp * error_y;
     d_x = vel_pid_x.Kd * d_measure_x;
@@ -406,7 +414,7 @@ void Velocity_Loop_Update_Attitude_Target(uint8 velocity_ready,
     candidate_i_y = previous_i_y;
     if((!motor_limited || (error_x * previous_i_x < 0.0f)) && (vel_pid_x.Ki > 0.0f))
     {
-        candidate_i_x += vel_pid_x.Ki * error_x * VELOCITY_LOOP_DT_S;
+        candidate_i_x += vel_pid_x.Ki * error_x * dt_s;
     }
     else if(motor_limited)
     {
@@ -414,7 +422,7 @@ void Velocity_Loop_Update_Attitude_Target(uint8 velocity_ready,
     }
     if((!motor_limited || (error_y * previous_i_y < 0.0f)) && (vel_pid_y.Ki > 0.0f))
     {
-        candidate_i_y += vel_pid_y.Ki * error_y * VELOCITY_LOOP_DT_S;
+        candidate_i_y += vel_pid_y.Ki * error_y * dt_s;
     }
     else if(motor_limited)
     {
@@ -480,7 +488,7 @@ void Velocity_Loop_Update_Attitude_Target(uint8 velocity_ready,
                               VELOCITY_LOOP_GRAVITY_CMS2) * VELOCITY_LOOP_RAD2DEG;
     *target_pitch = captured_pitch + g_pitch_corr_deg;
     *target_roll = captured_roll + g_roll_corr_deg;
-    velocity_loop_update_rate_feedforward(g_roll_corr_deg, g_pitch_corr_deg);
+    velocity_loop_update_rate_feedforward(g_roll_corr_deg, g_pitch_corr_deg, dt_s);
 
     g_axis_diag[0].target_velocity_cms = g_target_vx_earth_cms;
     g_axis_diag[0].actual_velocity_cms = measured_vx_earth;
@@ -516,7 +524,9 @@ void Velocity_Loop_Update_Attitude_Target(uint8 velocity_ready,
     g_horizontal_diag.acceleration_target_y_earth_cms2 = acceleration_y;
     g_horizontal_diag.target_roll_deg = *target_roll;
     g_horizontal_diag.target_pitch_deg = *target_pitch;
+    g_horizontal_diag.dt_s = dt_s;
     g_horizontal_diag.status_flags = status;
+    g_horizontal_diag.timing_valid = 1U;
     g_fb_vx_earth_cms = measured_vx_earth;
     g_fb_vy_earth_cms = measured_vy_earth;
     g_active = 1U;

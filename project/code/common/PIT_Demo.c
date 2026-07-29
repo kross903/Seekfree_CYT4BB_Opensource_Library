@@ -33,6 +33,10 @@
 #define ANGLE_SLOT_PHASE               3U
 #define VELOCITY_SLOT_DIVISOR          16U
 #define VELOCITY_SLOT_PHASE            2U
+#define HORIZONTAL_DT_DEFAULT_S        0.004f
+#define HORIZONTAL_DT_MIN_S            0.002f
+#define HORIZONTAL_DT_MAX_S            0.008f
+#define HORIZONTAL_TIMING_RESET_COUNT  3U
 
 /*
  * 真位置闭环参数。
@@ -120,6 +124,12 @@ static uint32 s_angle_slot_count = 0U;
 static uint32 s_velocity_slot_count = 0U;
 static uint32 s_position_slot_count = 0U;
 static uint8 s_control_scheduler_tick = 0U;
+static uint32 s_horizontal_last_cycle = 0U;
+static float s_horizontal_dt_s = HORIZONTAL_DT_DEFAULT_S;
+static uint8 s_horizontal_timing_initialized = 0U;
+static uint8 s_horizontal_timing_valid = 1U;
+static uint8 s_horizontal_timing_error_count = 0U;
+static uint8 s_horizontal_reset_reason = POSITION_LOOP_RESET_NONE;
 
 static void flight_realtime_init(void)
 {
@@ -136,6 +146,72 @@ static void flight_realtime_init(void)
     DWT->LAR = FLIGHT_REALTIME_DWT_LAR_UNLOCK;
     DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
     s_realtime_ready = 1U;
+}
+
+static void control_task_reset_horizontal_timing(uint8 reason)
+{
+    s_horizontal_last_cycle = 0U;
+    s_horizontal_dt_s = HORIZONTAL_DT_DEFAULT_S;
+    s_horizontal_timing_initialized = 0U;
+    s_horizontal_timing_valid = 1U;
+    s_horizontal_timing_error_count = 0U;
+    if(reason != s_horizontal_reset_reason)
+    {
+        Position_Loop_Reset_Trajectory(reason);
+        Velocity_Loop_Reset_Runtime();
+        s_horizontal_reset_reason = reason;
+    }
+}
+
+static void control_task_update_horizontal_timing(void)
+{
+    uint32 now_cycle;
+    float dt_s;
+
+    flight_realtime_init();
+    if(!s_realtime_ready || (SystemCoreClock == 0U))
+    {
+        s_horizontal_dt_s = HORIZONTAL_DT_DEFAULT_S;
+        s_horizontal_timing_valid = 1U;
+        return;
+    }
+
+    now_cycle = DWT->CYCCNT;
+    if(!s_horizontal_timing_initialized)
+    {
+        s_horizontal_last_cycle = now_cycle;
+        s_horizontal_dt_s = HORIZONTAL_DT_DEFAULT_S;
+        s_horizontal_timing_initialized = 1U;
+        s_horizontal_timing_valid = 1U;
+        s_horizontal_timing_error_count = 0U;
+        s_horizontal_reset_reason = POSITION_LOOP_RESET_NONE;
+        return;
+    }
+
+    dt_s = (float)(now_cycle - s_horizontal_last_cycle) /
+           (float)SystemCoreClock;
+    s_horizontal_last_cycle = now_cycle;
+    s_horizontal_dt_s = dt_s;
+    if(isfinite(dt_s) && (dt_s >= HORIZONTAL_DT_MIN_S) &&
+       (dt_s <= HORIZONTAL_DT_MAX_S))
+    {
+        s_horizontal_timing_valid = 1U;
+        s_horizontal_timing_error_count = 0U;
+        s_horizontal_reset_reason = POSITION_LOOP_RESET_NONE;
+        return;
+    }
+
+    s_horizontal_timing_valid = 0U;
+    if(s_horizontal_timing_error_count < 0xFFU)
+    {
+        s_horizontal_timing_error_count++;
+    }
+    if(s_horizontal_timing_error_count == HORIZONTAL_TIMING_RESET_COUNT)
+    {
+        Position_Loop_Reset_Trajectory(POSITION_LOOP_RESET_TIMING_INVALID);
+        Velocity_Loop_Reset_Runtime();
+        s_horizontal_reset_reason = POSITION_LOOP_RESET_TIMING_INVALID;
+    }
 }
 
 static uint32 flight_realtime_us_to_cycles(uint32 time_us)
@@ -708,6 +784,7 @@ static uint8 control_task_handle_disarmed(void)
 {
     if(!armed)
     {
+        control_task_reset_horizontal_timing(POSITION_LOOP_RESET_DISARMED);
         Angle_Loop_Reset_Rate_Cmd_Lpf();
         clear_motor_throttle_state();
         return 1U;
@@ -742,6 +819,7 @@ static uint8 control_task_handle_takeoff_base_only(void)
     {
         Position_Loop_Set_Enabled(0U);
     }
+    control_task_reset_horizontal_timing(POSITION_LOOP_RESET_TAKEOFF);
 
     equal_output = Motor_Mixer_Limit_Output(Flight_Takeoff_Get_Commanded_Base_Throttle());
     motor_throttle[0] = equal_output;
@@ -794,6 +872,7 @@ static uint8 control_task_handle_manual_mode(void)
     {
         Velocity_Loop_Set_Enabled(0U);
     }
+    control_task_reset_horizontal_timing(POSITION_LOOP_RESET_MANUAL_MODE);
     Velocity_Loop_Set_Target_Velocity(0.0f, 0.0f);
     Angle_Loop_Reset_Rate_Cmd_Lpf();
     motor_throttle[0] = manual_output;
@@ -831,6 +910,7 @@ static void control_task_update_position_target(uint8 takeoff_active)
 
     if(takeoff_active)
     {
+        control_task_reset_horizontal_timing(POSITION_LOOP_RESET_TAKEOFF);
         Position_Loop_Reset_Car_Velocity_Feedforward();
         return;
     }
@@ -857,6 +937,8 @@ static void control_task_update_position_target(uint8 takeoff_active)
                                          flow_snap.velocity_x_fused_cms,
                                          flow_snap.velocity_y_fused_cms,
                                          current_yaw,
+                                         s_horizontal_dt_s,
+                                         s_horizontal_timing_valid,
                                          &feedforward,
                                          &position_target_vx_cms,
                                          &position_target_vy_cms,
@@ -886,6 +968,10 @@ static void control_task_update_velocity_target(uint8 takeoff_active)
     {
         return;
     }
+    if(!s_horizontal_timing_valid)
+    {
+        return;
+    }
 
     Flight_Takeoff_Get_Captured_Angles(&captured_roll, &captured_pitch);
     PMW_Flow_GetState(&flow_snap);
@@ -893,6 +979,7 @@ static void control_task_update_velocity_target(uint8 takeoff_active)
                                          flow_snap.velocity_x_fused_cms,
                                          flow_snap.velocity_y_fused_cms,
                                          current_yaw,
+                                         s_horizontal_dt_s,
                                          captured_roll,
                                          captured_pitch,
                                          &velocity_target_roll,
@@ -973,6 +1060,7 @@ static void control_task_finish_cycle(uint8 rate_due)
 {
     if(emergency_stop_triggered)
     {
+        control_task_reset_horizontal_timing(POSITION_LOOP_RESET_ESTOP);
         Position_Loop_Reset_Car_Velocity_Feedforward();
         clear_motor_throttle_state();
         MotorHardware_ServiceEmergencyStop();
@@ -1065,6 +1153,7 @@ void PIT_Control_Task_250us(void)
     control_task_prepare_angle_mode(takeoff_active);
     if(position_due)
     {
+        control_task_update_horizontal_timing();
         control_task_update_position_target(takeoff_active);
     }
     if(velocity_due)
