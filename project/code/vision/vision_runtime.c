@@ -2093,8 +2093,8 @@ typedef enum
 static uint8 VisionRuntime_DispatchFineComponent(
     uint16 run_count,
     VisionRuntimeFineTarget_t target, const VisionRuntimeCandidate_t *candidate,
-    uint8 candidate_index, const float *open_v_gate_score,
-    float *measured_open_v_score)
+    uint8 candidate_index, const VehicleMarkerOpenVGate_t *open_v_gate,
+    VehicleMarkerOpenVGate_t *measured_open_v)
 {
     VisionBlob_t blob;
     VisionContour_t contour;
@@ -2200,8 +2200,8 @@ static uint8 VisionRuntime_DispatchFineComponent(
             binary_view.stride = VISION_RUNTIME_FINE_STRIDE;
             ++s_vision_runtime_diag.ir_split_count;
             if(VehicleMarkerLocalization_AppendAndValidateBlob(
-                   &blob, &contour, &binary_view, open_v_gate_score,
-                   measured_open_v_score))
+                   &blob, &contour, &binary_view, open_v_gate,
+                   measured_open_v))
             {
                 ++s_vision_runtime_diag.ir_blob_count;
                 return 1U;
@@ -2271,8 +2271,8 @@ static uint8 VisionRuntime_DispatchFineComponent(
 static uint8 VisionRuntime_ProcessFineROI(
     const VisionRuntimeCandidate_t *candidate,
     VisionRuntimeFineTarget_t target, uint8 candidate_index,
-    const uint8 *binary, const float *open_v_gate_score,
-    float *max_measured_open_v_score)
+    const uint8 *binary, const VehicleMarkerOpenVGate_t *open_v_gate,
+    VehicleMarkerOpenVGate_t *max_measured_open_v)
 {
     int min_col;
     int max_col;
@@ -2281,9 +2281,9 @@ static uint8 VisionRuntime_ProcessFineROI(
     int row;
     int col;
 
-    if(max_measured_open_v_score != NULL)
+    if(max_measured_open_v != NULL)
     {
-        *max_measured_open_v_score = 0.0f;
+        memset(max_measured_open_v, 0, sizeof(*max_measured_open_v));
     }
     if(candidate == NULL || binary == NULL) return 0U;
     s_vision_active_binary = binary;
@@ -2321,15 +2321,15 @@ static uint8 VisionRuntime_ProcessFineROI(
                     return 0U;
                 }
             }
-            float measured_open_v_score = 0.0f;
+            VehicleMarkerOpenVGate_t measured_open_v = {0};
             uint8 component_accepted = VisionRuntime_DispatchFineComponent(
                 run_count, target, candidate, candidate_index,
-                open_v_gate_score, &measured_open_v_score);
+                open_v_gate, &measured_open_v);
 
-            if(max_measured_open_v_score != NULL &&
-               measured_open_v_score > *max_measured_open_v_score)
+            if(max_measured_open_v != NULL &&
+               measured_open_v.score > max_measured_open_v->score)
             {
-                *max_measured_open_v_score = measured_open_v_score;
+                *max_measured_open_v = measured_open_v;
             }
             if(component_accepted)
             {
@@ -2353,7 +2353,7 @@ static void VisionRuntime_ProcessBlobs(
     {
         uint8 vehicle_confirmed = 0U;
         uint8 allow_small_vehicle;
-        float primary_open_v_score = 0.0f;
+        VehicleMarkerOpenVGate_t primary_open_v = {0};
         int raw_box_area =
             (s_vision_candidates[i].max_col - s_vision_candidates[i].min_col + 1) *
             (s_vision_candidates[i].max_row - s_vision_candidates[i].min_row + 1);
@@ -2383,7 +2383,7 @@ static void VisionRuntime_ProcessBlobs(
                     &s_vision_candidates[i],
                     VISION_RUNTIME_FINE_TARGET_VEHICLE, i,
                     s_vision_vehicle_binary, NULL,
-                    &primary_open_v_score);
+                    &primary_open_v);
                 if(vehicle_confirmed)
                 {
                     s_vision_candidate_annotations[i].vehicle_valid = 1U;
@@ -2409,7 +2409,7 @@ static void VisionRuntime_ProcessBlobs(
                     vehicle_confirmed = VisionRuntime_ProcessFineROI(
                         &s_vision_candidates[i],
                         VISION_RUNTIME_FINE_TARGET_VEHICLE, i,
-                        s_vision_vehicle_binary, &primary_open_v_score,
+                        s_vision_vehicle_binary, &primary_open_v,
                         NULL);
                     if(vehicle_confirmed)
                     {
