@@ -793,6 +793,18 @@ static uint8 control_task_handle_disarmed(void)
     return 0U;
 }
 
+static uint8 control_task_handle_auto_land_disarm(void)
+{
+    if(!FlightAutoLand_TakeDisarmRequest())
+    {
+        return 0U;
+    }
+
+    Flight_Control_Disarm();
+    clear_motor_throttle_state();
+    return 1U;
+}
+
 static uint8 control_task_handle_takeoff_base_only(void)
 {
     uint16 equal_output;
@@ -831,10 +843,18 @@ static uint8 control_task_handle_takeoff_base_only(void)
 
 static void control_task_update_cruise_throttle(uint8 takeoff_active)
 {
+    float landing_throttle;
+
     if(!takeoff_active)
     {
         Throttle_Runtime_Ramp(target_throttle, &current_throttle, THROTTLE_RAMP_RATE, CONTROL_DT_MS);
         base_throttle = current_throttle;
+    }
+    if(FlightAutoLand_GetThrottleOverride(&landing_throttle))
+    {
+        target_throttle = landing_throttle;
+        current_throttle = landing_throttle;
+        base_throttle = landing_throttle;
     }
 }
 
@@ -1117,6 +1137,12 @@ void PIT_Control_Task_250us(void)
     }
 
     if(emergency_stop_triggered)
+    {
+        control_task_finish_cycle(rate_due);
+        return;
+    }
+
+    if(control_task_handle_auto_land_disarm())
     {
         control_task_finish_cycle(rate_due);
         return;

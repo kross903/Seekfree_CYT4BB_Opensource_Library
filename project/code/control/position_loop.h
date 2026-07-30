@@ -105,6 +105,7 @@ typedef struct
     uint8 trajectory_reset_reason;
     uint8 stop_prediction_flags;
     uint8 brake_schedule_active;
+    uint8 frozen_hold_active;
 } PositionLoopDiag_t;
 
 void Position_Loop_Set_Enabled(uint8 enabled);
@@ -123,6 +124,9 @@ void Position_Loop_Update_Velocity_Target(uint8 velocity_ready,
 uint8 Position_Loop_Set_Car_Velocity_Feedforward_Gain(uint8 axis, float gain);
 void Position_Loop_Get_Car_Velocity_Feedforward_Gain(float *gain_x, float *gain_y);
 void Position_Loop_Reset_Car_Velocity_Feedforward(void);
+uint8 Position_Loop_Begin_Frozen_Hold(void);
+void Position_Loop_End_Frozen_Hold(void);
+uint8 Position_Loop_Is_Frozen_Hold_Active(void);
 void Position_Loop_Reset_Trajectory(uint8 reason);
 uint8 Position_Loop_Set_Trajectory_Config(const PositionLoopTrajectoryConfig_t *config);
 void Position_Loop_Get_Trajectory_Config(PositionLoopTrajectoryConfig_t *config);

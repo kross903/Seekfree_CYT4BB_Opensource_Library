@@ -1220,6 +1220,12 @@
             <name>$PROJ_DIR$\..\..\code\control\beacon_search.h</name>
         </file>
         <file>
+            <name>$PROJ_DIR$\..\..\code\control\flight_auto_land.c</name>
+        </file>
+        <file>
+            <name>$PROJ_DIR$\..\..\code\control\flight_auto_land.h</name>
+        </file>
+        <file>
             <name>$PROJ_DIR$\..\..\code\control\flight_control.c</name>
         </file>
         <file>

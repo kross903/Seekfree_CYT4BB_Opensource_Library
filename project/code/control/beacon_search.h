@@ -4,7 +4,7 @@
 #include "zf_common_headfile.h"
 #include "communication/core_link.h"
 
-#define BEACON_SEARCH_SWEEP_ANGLE_DEG             (90.0f)
+#define BEACON_SEARCH_SWEEP_ANGLE_DEG            (360.0f)
 #define BEACON_SEARCH_POSITION_GATE_CM            (50.0f)
 #define BEACON_SEARCH_POSITION_WINDOW_FRAMES      (10U)
 #define BEACON_SEARCH_POSITION_REQUIRED_FRAMES    (5U)

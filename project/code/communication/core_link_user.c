@@ -538,6 +538,7 @@ static void core_link_user_clear_remote_events(void)
 void core_link_user_init (void)
 {
     BeaconSearch_Init();
+    FlightAutoLand_Init();
     core_link_user_clear_remote_events();
     s_core_link_user_key_flag_remote = 0;
     s_core_link_user_screen_mirror_enabled = 0;
@@ -652,6 +653,7 @@ void core_link_user_tick (uint16 elapsed_ms)
                       s_core_link_user_beacon_uplink_valid,
                       s_core_link_user_beacon_uplink_age_ms,
                       &search_stability);
+    FlightAutoLand_Tick(elapsed_ms);
 }
 
 void core_link_user_get_beacon_diag(CoreLinkBeaconDiag_t *diag)

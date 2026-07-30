@@ -20,6 +20,9 @@ extern volatile uint8 armed;
 #define HEIGHT_TARGET_ERROR_LIMIT_CM      40.0f
 #define HEIGHT_TARGET_RAMP_DURATION_S     3.0f
 #define HEIGHT_VEL_TARGET_LIMIT_CMS       40.0f
+#define HEIGHT_AUTO_LAND_RATE_CMS         20.0f
+#define HEIGHT_AUTO_LAND_MIN_CM           15.0f
+#define HEIGHT_AUTO_LAND_TOUCHDOWN_TICKS  30U
 
 #define HEIGHT_ACC_GRAVITY_BIAS_MG        997.0f
 #define HEIGHT_ACC_CMS2_PER_MG            0.981f
@@ -109,6 +112,10 @@ static float s_height_takeoff_target_step_cm = 0.0f;
 static uint8 s_soft_takeoff_prepared = 0U;
 static uint8 s_soft_takeoff_active = 0U;
 static float s_soft_takeoff_output_blend = 1.0f;
+static volatile uint8 s_auto_landing_active = 0U;
+static volatile uint8 s_auto_landing_touchdown = 0U;
+static float s_auto_landing_target_cm = HEIGHT_AUTO_LAND_MIN_CM;
+static uint8 s_auto_landing_touchdown_ticks = 0U;
 
 static float height_clamp_float(float value, float min_value, float max_value)
 {
@@ -310,6 +317,10 @@ float HeightManager_Get_Target(void)
 
 float HeightManager_Get_Active_Target(void)
 {
+    if(s_auto_landing_active)
+    {
+        return s_auto_landing_target_cm;
+    }
     return s_height_takeoff_target_active ? s_height_takeoff_target_cm : g_height_target_cm;
 }
 
@@ -416,6 +427,70 @@ void HeightManager_AbortSoftTakeoff(void)
     PID_Reset(&HeightVelPID);
     height_reset_velocity_estimator();
     height_clear_control_diag();
+}
+
+uint8 HeightManager_BeginAutoLanding(void)
+{
+    uint32 irq_state = __get_PRIMASK();
+    uint8 started = 0U;
+
+    __disable_irq();
+    if(armed && tof_valid && (s_tof_state == HEIGHT_TOF_STATE_LIVE) &&
+       isfinite(g_height_result.height_cm))
+    {
+        s_auto_landing_active = 1U;
+        s_auto_landing_touchdown = 0U;
+        s_auto_landing_touchdown_ticks = 0U;
+        s_auto_landing_target_cm = g_height_result.height_cm;
+        if(s_auto_landing_target_cm < HEIGHT_AUTO_LAND_MIN_CM)
+        {
+            s_auto_landing_target_cm = HEIGHT_AUTO_LAND_MIN_CM;
+        }
+        s_height_takeoff_target_active = 0U;
+        PID_Reset(&HeightPID);
+        PID_Reset(&HeightVelPID);
+        started = 1U;
+    }
+    if(irq_state == 0U)
+    {
+        __enable_irq();
+    }
+    return started;
+}
+
+void HeightManager_EndAutoLanding(void)
+{
+    uint32 irq_state = __get_PRIMASK();
+
+    __disable_irq();
+    if(s_auto_landing_active)
+    {
+        s_auto_landing_active = 0U;
+        s_auto_landing_touchdown = 0U;
+        s_auto_landing_touchdown_ticks = 0U;
+        HeightSpeedPID_output = 0.0f;
+        PID_Reset(&HeightPID);
+        PID_Reset(&HeightVelPID);
+    }
+    if(irq_state == 0U)
+    {
+        __enable_irq();
+    }
+}
+
+uint8 HeightManager_IsAutoLandingActive(void)
+{
+    return s_auto_landing_active ? 1U : 0U;
+}
+
+uint8 HeightManager_AutoLandingTouchdownConfirmed(void)
+{
+    return s_auto_landing_touchdown ? 1U : 0U;
+}
+
+float HeightManager_GetAutoLandingTarget(void)
+{
+    return s_auto_landing_target_cm;
 }
 
 static float body_y_down_offset_cm(float offset_y_cm, float roll_deg, float pitch_deg)
@@ -764,6 +839,10 @@ void HeightManager_Init(float initial_height_cm)
     s_soft_takeoff_prepared = 0U;
     s_soft_takeoff_active = 0U;
     s_soft_takeoff_output_blend = 1.0f;
+    s_auto_landing_active = 0U;
+    s_auto_landing_touchdown = 0U;
+    s_auto_landing_target_cm = HEIGHT_AUTO_LAND_MIN_CM;
+    s_auto_landing_touchdown_ticks = 0U;
 
     memset(&s_height_diag, 0, sizeof(s_height_diag));
     memset(s_tof_snapshot_buffer, 0, sizeof(s_tof_snapshot_buffer));
@@ -789,6 +868,7 @@ void HeightManager_Task_10ms(void)
     uint8 tof_raw_new_sample = 0U;
     uint8 tof_sample_accepted = 0U;
     float raw_los_cm;
+    float auto_land_open_loop_throttle;
 
     height_increment_u16(&s_tof_raw_age_ticks);
     height_increment_u16(&s_tof_accepted_age_ticks);
@@ -860,7 +940,46 @@ void HeightManager_Task_10ms(void)
 
     update_acc_velocity_estimator(tof_valid);
     publish_estimator_result();
+
+    if(s_auto_landing_active)
+    {
+        if(tof_valid)
+        {
+            s_auto_landing_target_cm -= HEIGHT_AUTO_LAND_RATE_CMS * TOF_DT;
+            if(s_auto_landing_target_cm < HEIGHT_AUTO_LAND_MIN_CM)
+            {
+                s_auto_landing_target_cm = HEIGHT_AUTO_LAND_MIN_CM;
+            }
+        }
+        if(tof_valid && (s_tof_state == HEIGHT_TOF_STATE_LIVE) &&
+           (g_height_result.height_cm <= HEIGHT_AUTO_LAND_MIN_CM))
+        {
+            if(s_auto_landing_touchdown_ticks < HEIGHT_AUTO_LAND_TOUCHDOWN_TICKS)
+            {
+                s_auto_landing_touchdown_ticks++;
+            }
+            if(s_auto_landing_touchdown_ticks >= HEIGHT_AUTO_LAND_TOUCHDOWN_TICKS)
+            {
+                s_auto_landing_touchdown = 1U;
+            }
+        }
+        else
+        {
+            s_auto_landing_touchdown_ticks = 0U;
+        }
+    }
+    FlightAutoLand_HeightTick_10ms();
     height_publish_tof_snapshot(tof_raw_new_sample);
+
+    if(FlightAutoLand_GetThrottleOverride(&auto_land_open_loop_throttle))
+    {
+        (void)auto_land_open_loop_throttle;
+        HeightSpeedPID_output = 0.0f;
+        PID_Reset(&HeightPID);
+        PID_Reset(&HeightVelPID);
+        height_clear_control_diag();
+        return;
+    }
 
     if(!armed)
     {
@@ -870,6 +989,9 @@ void HeightManager_Task_10ms(void)
         s_height_loop_enabled = 0U;
         s_height_takeoff_target_active = 0U;
         s_height_takeoff_target_cm = HEIGHT_TARGET_START_CM;
+        s_auto_landing_active = 0U;
+        s_auto_landing_touchdown = 0U;
+        s_auto_landing_touchdown_ticks = 0U;
         HeightSpeedPID_output = 0.0f;
         PID_Reset(&HeightPID);
         PID_Reset(&HeightVelPID);
@@ -889,7 +1011,8 @@ void HeightManager_Task_10ms(void)
 
     {
         float actual_cm = g_height_result.height_cm;
-        float target_cm = g_height_target_cm;
+        float target_cm = s_auto_landing_active ?
+                          s_auto_landing_target_cm : g_height_target_cm;
         float error_cm;
 
         if(s_soft_takeoff_prepared && !s_soft_takeoff_active)
@@ -930,7 +1053,7 @@ void HeightManager_Task_10ms(void)
             height_reset_velocity_estimator();
         }
 
-        if(s_height_takeoff_target_active)
+        if(s_height_takeoff_target_active && !s_auto_landing_active)
         {
             s_height_takeoff_target_cm += s_height_takeoff_target_step_cm;
 

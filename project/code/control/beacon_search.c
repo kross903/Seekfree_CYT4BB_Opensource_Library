@@ -3,13 +3,13 @@
 #include <math.h>
 #include <string.h>
 
-#define BEACON_SEARCH_LOSS_DELAY_MS             (600U)
+#define BEACON_SEARCH_LOSS_DELAY_MS             (300U)
 #define BEACON_SEARCH_VERIFY_TIMEOUT_MS         (300U)
 #define BEACON_SEARCH_CONFIRM_FRAMES              (3U)
 #define BEACON_SEARCH_MIN_CONFIDENCE              (96U)
 #define BEACON_SEARCH_MIN_SIGMA_CM                 (5U)
 #define BEACON_SEARCH_MAX_SIGMA_CM                (15U)
-#define BEACON_SEARCH_YAW_RATE_DPS              (30.0f)
+#define BEACON_SEARCH_YAW_RATE_DPS              (60.0f)
 #define BEACON_SEARCH_TIMEOUT_MARGIN_MS          (6000U)
 #define BEACON_SEARCH_TIMEOUT_LIMIT_MS          (60000U)
 #define BEACON_SEARCH_MAX_YAW_STEP_DEG           (10.0f)
@@ -478,7 +478,8 @@ void BeaconSearch_Tick(uint16 elapsed_ms,
         return;
     }
 
-    if((BEACON_SEARCH_TRACKING == s_state) ||
+    if((BEACON_SEARCH_WAIT_FIRST == s_state) ||
+       (BEACON_SEARCH_TRACKING == s_state) ||
        (BEACON_SEARCH_LOSS_WAIT == s_state))
     {
         s_loss_age_ms = beacon_search_add_ms(s_loss_age_ms, elapsed_ms);
@@ -650,14 +651,15 @@ void BeaconSearch_ControlStep(float dt_s,
 
 uint8 BeaconSearch_GetFrameFlags(void)
 {
+    if((BEACON_SEARCH_FAILED == s_state) ||
+       ((BEACON_SEARCH_VERIFYING == s_state) && s_verify_from_failed))
+    {
+        return CORE_LINK_BEACON_FRAME_FLAG_SEARCH_FAILED;
+    }
     if((BEACON_SEARCH_SPINNING == s_state) ||
        (BEACON_SEARCH_VERIFYING == s_state))
     {
         return CORE_LINK_BEACON_FRAME_FLAG_SEARCH_ACTIVE;
-    }
-    if(BEACON_SEARCH_FAILED == s_state)
-    {
-        return CORE_LINK_BEACON_FRAME_FLAG_SEARCH_FAILED;
     }
     return 0U;
 }

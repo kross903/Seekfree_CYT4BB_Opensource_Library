@@ -398,7 +398,30 @@ typedef struct
     uint8 takeoff_state;
     float takeoff_progress;
     FlightTakeoffDiag takeoff_diag;
+    FlightAutoLandDiag_t auto_land_diag;
 } MonitorViewHudData;
+
+static const char *ui_monitor_auto_land_text(const FlightAutoLandDiag_t *diag)
+{
+    if(diag == NULL)
+    {
+        return NULL;
+    }
+
+    switch((FlightAutoLandState_t)diag->state)
+    {
+        case AUTO_LAND_CONFIRMING: return "LAND CHECK 5S";
+        case AUTO_LAND_ALIGNING:   return "LAND ALIGN";
+        case AUTO_LAND_DESCENDING: return "AUTO LAND";
+        case AUTO_LAND_OPEN_LOOP:  return "LAND TOF OPEN";
+        case AUTO_LAND_COMPLETE:   return "LAND COMPLETE";
+        case AUTO_LAND_BLOCKED:
+            return (diag->block_reason == AUTO_LAND_BLOCK_NO_LAND_POINT) ?
+                   "NO LAND POINT" : "LAND WAIT TOF";
+        case AUTO_LAND_IDLE:
+        default:                   return NULL;
+    }
+}
 
 static const char *ui_monitor_mode_text(uint8 control_mode)
 {
@@ -423,9 +446,11 @@ static const char *ui_monitor_hint_top_text(uint8 armed,
                                             uint8 rearm_inhibit_active,
                                             uint8 takeoff_state,
                                             uint32 imu_fault_mask,
-                                            const char *esc_report_text)
+                                            const char *esc_report_text,
+                                            const char *auto_land_text)
 {
     if(esc_report_text != NULL) return esc_report_text;
+    if(auto_land_text != NULL) return auto_land_text;
     if(armed) return ui_monitor_takeoff_phase_text(takeoff_state);
     if(rearm_inhibit_active) return "ESTOP LOCK - WAIT 2S";
     if((imu_fault_mask & ICM_HEALTH_CRITICAL_FAULT_MASK) != 0U) return "IMU FAULT - CHECK F4";
@@ -448,9 +473,12 @@ static uint16 ui_monitor_hint_color(uint8 armed,
                                     uint8 rearm_inhibit_active,
                                     uint32 imu_fault_mask,
                                     const char *esc_report_text,
-                                    uint8 esc_active_fault)
+                                    uint8 esc_active_fault,
+                                    const FlightAutoLandDiag_t *auto_land_diag)
 {
     if(esc_report_text != NULL) return esc_active_fault ? RGB565_RED : RGB565_YELLOW;
+    if(auto_land_diag != NULL && auto_land_diag->state == AUTO_LAND_OPEN_LOOP) return RGB565_RED;
+    if(auto_land_diag != NULL && auto_land_diag->state != AUTO_LAND_IDLE) return RGB565_YELLOW;
     if(armed || rearm_inhibit_active ||
        (imu_fault_mask & ICM_HEALTH_CRITICAL_FAULT_MASK) != 0U) return RGB565_RED;
     return RGB565_WHITE;
@@ -459,6 +487,7 @@ static uint16 ui_monitor_hint_color(uint8 armed,
 static void ui_monitor_fill_view_hud(const MonitorRuntimeSnapshot *snapshot, MonitorViewHudData *data)
 {
     SmallDriverEscStatus esc_status;
+    const char *auto_land_text;
 
     if(snapshot == NULL || data == NULL)
     {
@@ -470,13 +499,16 @@ static void ui_monitor_fill_view_hud(const MonitorRuntimeSnapshot *snapshot, Mon
     data->esc_status_stale = esc_status.stale;
     data->esc_active_fault = small_driver_esc_has_active_fault();
     data->esc_report_text = Flight_Safety_GetEscReportText();
+    FlightAutoLand_GetDiag(&data->auto_land_diag);
+    auto_land_text = ui_monitor_auto_land_text(&data->auto_land_diag);
 
     data->mode_text = ui_monitor_mode_text(snapshot->control_mode);
     data->hint_top_text = ui_monitor_hint_top_text(snapshot->armed,
                                                    snapshot->rearm_inhibit_active,
                                                    snapshot->takeoff_state,
                                                    snapshot->imu_fault_mask,
-                                                   data->esc_report_text);
+                                                   data->esc_report_text,
+                                                   auto_land_text);
     data->hint_bottom_text = ui_monitor_hint_bottom_text(snapshot->armed,
                                                          snapshot->rearm_inhibit_active,
                                                          snapshot->imu_fault_mask,
@@ -485,7 +517,8 @@ static void ui_monitor_fill_view_hud(const MonitorRuntimeSnapshot *snapshot, Mon
                                              snapshot->rearm_inhibit_active,
                                              snapshot->imu_fault_mask,
                                              data->esc_report_text,
-                                             data->esc_active_fault);
+                                             data->esc_active_fault,
+                                             &data->auto_land_diag);
     data->armed = snapshot->armed;
     data->low_voltage = snapshot->low_voltage;
     data->has_nearest = snapshot->has_nearest;

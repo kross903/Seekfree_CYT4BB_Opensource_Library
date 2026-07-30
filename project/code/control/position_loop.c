@@ -61,6 +61,7 @@ static uint8 g_reacquire_count = 0U;
 static float g_reacquire_x_earth_cm = 0.0f;
 static float g_reacquire_y_earth_cm = 0.0f;
 static float g_vision_innovation_cm = 0.0f;
+static volatile uint8 g_frozen_hold_active = 0U;
 
 static float position_loop_limit_float(float value, float minimum, float maximum)
 {
@@ -301,6 +302,7 @@ static void position_loop_reset_runtime(uint8 reason)
     g_last_pose_seq = g_vehicle_marker_pose_update_seq;
     g_observation_state = POSITION_LOOP_OBSERVATION_INVALID;
     g_vision_innovation_cm = 0.0f;
+    g_frozen_hold_active = 0U;
     g_diag = empty_diag;
     g_diag.enabled = g_enabled;
     g_diag.car_ff_gain_x = g_car_ff_gain_x;
@@ -429,6 +431,29 @@ static uint8 position_loop_predict_hold(float measured_vx_earth,
     return 1U;
 }
 
+static uint8 position_loop_update_frozen_hold(float measured_vx_earth,
+                                               float measured_vy_earth,
+                                               float dt_s,
+                                               float *position_x,
+                                               float *position_y)
+{
+    if(!g_frozen_hold_active || !g_last_pose_valid ||
+       !isfinite(measured_vx_earth) || !isfinite(measured_vy_earth) ||
+       !isfinite(dt_s) || !(dt_s > 0.0f) ||
+       (position_x == NULL) || (position_y == NULL))
+    {
+        return 0U;
+    }
+
+    g_last_x_earth_cm -= measured_vx_earth * dt_s;
+    g_last_y_earth_cm -= measured_vy_earth * dt_s;
+    *position_x = g_last_x_earth_cm;
+    *position_y = g_last_y_earth_cm;
+    g_hold_elapsed_ms = 0U;
+    g_observation_state = POSITION_LOOP_OBSERVATION_HOLD;
+    return 1U;
+}
+
 static float position_loop_correction_speed(float distance,
                                             const PositionLoopTrajectoryConfig_t *config)
 {
@@ -543,6 +568,53 @@ void Position_Loop_Set_Enabled(uint8 enabled)
 uint8 Position_Loop_Is_Enabled(void)
 {
     return g_enabled;
+}
+
+uint8 Position_Loop_Begin_Frozen_Hold(void)
+{
+    uint8 accepted = 0U;
+    uint32 irq_state = __get_PRIMASK();
+
+    __disable_irq();
+    if(g_enabled && g_last_pose_valid &&
+       ((g_observation_state == POSITION_LOOP_OBSERVATION_LIVE) ||
+        (g_observation_state == POSITION_LOOP_OBSERVATION_HOLD)))
+    {
+        g_frozen_hold_active = 1U;
+        position_loop_reset_predict_hold();
+        position_loop_reset_reacquisition();
+        g_observation_state = POSITION_LOOP_OBSERVATION_HOLD;
+        accepted = 1U;
+    }
+    if(irq_state == 0U)
+    {
+        __enable_irq();
+    }
+    return accepted;
+}
+
+void Position_Loop_End_Frozen_Hold(void)
+{
+    uint32 irq_state = __get_PRIMASK();
+
+    __disable_irq();
+    if(g_frozen_hold_active)
+    {
+        g_frozen_hold_active = 0U;
+        g_last_pose_valid = 0U;
+        g_observation_state = POSITION_LOOP_OBSERVATION_INVALID;
+        position_loop_reset_predict_hold();
+        position_loop_reset_reacquisition();
+    }
+    if(irq_state == 0U)
+    {
+        __enable_irq();
+    }
+}
+
+uint8 Position_Loop_Is_Frozen_Hold_Active(void)
+{
+    return g_frozen_hold_active ? 1U : 0U;
 }
 
 uint8 Position_Loop_Set_Car_Velocity_Feedforward_Gain(uint8 axis, float gain)
@@ -714,7 +786,7 @@ void Position_Loop_Update_Velocity_Target(uint8 velocity_ready,
     brake_jerk_limit = config.jerk_max_cms3;
     position_loop_body_to_earth(measured_vx_body_cms, measured_vy_body_cms,
                                 yaw_deg, &measured_vx_earth, &measured_vy_earth);
-    if((feedforward != NULL) && feedforward->valid &&
+    if(!g_frozen_hold_active && (feedforward != NULL) && feedforward->valid &&
        isfinite(feedforward->vx_uav_cms) && isfinite(feedforward->vy_uav_cms))
     {
         float gained_body_x;
@@ -733,10 +805,19 @@ void Position_Loop_Update_Velocity_Target(uint8 velocity_ready,
         flags |= POSITION_LOOP_STATUS_CAR_FF_VALID;
     }
 
-    raw_visual_valid = position_loop_raw_visual_valid();
+    raw_visual_valid = (uint8)(!g_frozen_hold_active &&
+                               position_loop_raw_visual_valid());
     new_visual_pose = (uint8)(raw_visual_valid &&
                               (g_vehicle_marker_pose_update_seq != g_last_pose_seq));
-    if(new_visual_pose)
+    if(g_frozen_hold_active)
+    {
+        position_valid = position_loop_update_frozen_hold(measured_vx_earth,
+                                                          measured_vy_earth,
+                                                          dt_s,
+                                                          &position_x,
+                                                          &position_y);
+    }
+    else if(new_visual_pose)
     {
         float pose_x_body;
         float pose_y_body;
@@ -769,7 +850,7 @@ void Position_Loop_Update_Velocity_Target(uint8 velocity_ready,
             position_loop_reset_predict_hold();
         }
     }
-    if(!position_valid)
+    if(!position_valid && !g_frozen_hold_active)
     {
         position_valid = position_loop_predict_hold(measured_vx_earth,
                                                     measured_vy_earth,
@@ -962,6 +1043,7 @@ void Position_Loop_Update_Velocity_Target(uint8 velocity_ready,
     g_diag.trajectory_reset_reason = g_trajectory_reset_reason;
     g_diag.trajectory_reset_count = g_trajectory_reset_count;
     g_diag.stop_prediction_flags = stop_prediction_flags;
+    g_diag.frozen_hold_active = g_frozen_hold_active;
 }
 
 void Position_Loop_Get_Diag(PositionLoopDiag_t *diag)

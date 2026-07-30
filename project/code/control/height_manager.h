@@ -119,6 +119,11 @@ void HeightManager_PrepareSoftTakeoff(void);
 void HeightManager_BeginSoftTakeoff(void);
 void HeightManager_SetOutputBlend(float blend);
 void HeightManager_AbortSoftTakeoff(void);
+uint8 HeightManager_BeginAutoLanding(void);
+void HeightManager_EndAutoLanding(void);
+uint8 HeightManager_IsAutoLandingActive(void);
+uint8 HeightManager_AutoLandingTouchdownConfirmed(void);
+float HeightManager_GetAutoLandingTarget(void);
 float HeightManager_GetCenterHeightFromTofCm(float tof_los_cm, float roll_deg, float pitch_deg);
 float HeightManager_GetFlowHeightFromTofCm(float tof_los_cm, float roll_deg, float pitch_deg);
 
