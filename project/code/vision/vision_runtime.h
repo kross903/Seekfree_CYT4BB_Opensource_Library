@@ -272,5 +272,10 @@ const uint8 *VisionRuntime_GetBinaryImage(void);
 const uint8 *VisionRuntime_GetBinaryDisplayImage(void);
 const uint8 *VisionRuntime_GetUndistortedImage(void);
 uint32 VisionRuntime_GetFineRleOverflowCount(void);
+#if defined(VISION_RUNTIME_PC_DIAGNOSTICS)
+/* PC仿真诊断专用：不进入无人机正式固件。 */
+void VisionRuntime_SetVehicleFallbackEnabled(uint8 enabled);
+const uint8 *VisionRuntime_GetVehicleBinaryImage(void);
+#endif
 
 #endif /* VISION_RUNTIME_H_ */

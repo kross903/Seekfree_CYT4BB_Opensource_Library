@@ -53,6 +53,7 @@ ROI_OUTPUT_DIR = APP_ROOT / "capture" / "区域提取"
 ROI_DISPLAY_SCALE = 3
 RUNTIME_THRESHOLD_MACROS = (
     "VISION_BINARY_THRESHOLD_VEHICLE",
+    "VISION_BINARY_THRESHOLD_VEHICLE_FALLBACK",
     "VISION_BINARY_THRESHOLD_BEACON",
     "VISION_RUNTIME_COARSE_THRESHOLD_CENTER",
     "VISION_RUNTIME_COARSE_THRESHOLD_NEAR",
@@ -146,6 +147,7 @@ class Simulator:
             "-Wno-unused-parameter",
             "-DCY_CORE_CM7_1=1",
             "-DCY_CORE_CM7_0=0",
+            "-DVISION_RUNTIME_PC_DIAGNOSTICS=1",
             f"-DVISION_RUNTIME_PIPELINE_MODE={self.pipeline_mode}",
             "-I",
             str(SIM_ROOT / "include"),
@@ -196,6 +198,7 @@ class Simulator:
         coarse_threshold: int = COARSE_THRESHOLD,
         binary_mode: str = "gray",
         coarse_thresholds: tuple[int, int, int, int, int] | None = None,
+        disable_vehicle_fallback: bool = False,
     ) -> tuple[bool, str, Path | None, Path | None, Path | None, Path | None, Path | None, Path | None, Path | None]:
         self.pipeline_mode = 1 if binary_mode == "post_transform" else 0
         executable = self.output_path()
@@ -206,6 +209,7 @@ class Simulator:
         output_dir.mkdir(parents=True, exist_ok=True)
         result_path = output_dir / "result.json"
         binary_path = output_dir / "binary.pgm"
+        vehicle_binary_path = output_dir / "vehicle_binary.pgm"
         undistorted_path = output_dir / "undistorted.pgm"
         undistorted_mask_path = output_dir / "undistorted_mask.pgm"
         undistorted_binary_name = {
@@ -226,6 +230,7 @@ class Simulator:
             "--input", str(raw_path),
             "--output", str(result_path),
             "--binary", str(binary_path),
+            "--vehicle-binary", str(vehicle_binary_path),
             "--roll", str(roll),
             "--pitch", str(pitch),
             "--height", str(height),
@@ -239,6 +244,8 @@ class Simulator:
             "--coarse-edge-threshold", str(zone_thresholds[4]),
             "--binary-mode", binary_mode,
         ]
+        if disable_vehicle_fallback:
+            command.append("--disable-vehicle-fallback")
         if undistort:
             command.extend(("--undistorted", str(undistorted_path)))
             command.extend(("--undistorted-mask", str(undistorted_mask_path)))
@@ -281,6 +288,7 @@ class VisionToolApp:
         self.yaw_var = tk.StringVar(value="0")
         self.height_var = tk.StringVar(value="100")
         self.vehicle_threshold_var = tk.StringVar(value="145")
+        self.vehicle_fallback_threshold_var = tk.StringVar(value="50")
         self.beacon_threshold_var = tk.StringVar(value="50")
         self.coarse_threshold_vars = [
             tk.StringVar(value=str(value)) for value in COARSE_THRESHOLDS
@@ -309,7 +317,10 @@ class VisionToolApp:
         self.candidate_photos: list[ImageTk.PhotoImage] = []
         self.current_candidate_source: Image.Image | None = None
         self.current_candidate_binary: Image.Image | None = None
+        self.current_candidate_vehicle_binary: Image.Image | None = None
         self.current_candidate_coarse_binary: Image.Image | None = None
+        self.current_candidate_diagnostics: list[dict] = []
+        self.candidate_diagnostic_frame: Path | None = None
         self.current_frame: Path | None = None
         self.current_result: dict | None = None
         self.roi_window: tk.Toplevel | None = None
@@ -332,6 +343,7 @@ class VisionToolApp:
         self.capture_stop_event = threading.Event()
         self.capture_running = False
         self.batch_running = False
+        self.candidate_diagnostic_running = False
         self.capture_out_var = tk.StringVar(value=str(APP_ROOT / "capture"))
         self.capture_port_var = tk.StringVar()
         self.capture_baud_var = tk.StringVar(value="115200")
@@ -463,15 +475,23 @@ class VisionToolApp:
         ttk.Button(action_bar, text="打开连通域候选区", command=self.open_current_candidate_window).grid(
             row=2, column=0, columnspan=2, sticky="ew", pady=(6, 0)
         )
-        ttk.Button(action_bar, text="提取单张区域", command=self.open_roi_window).grid(
+        self.candidate_diagnostic_button = ttk.Button(
+            action_bar,
+            text="运行候选双阈值诊断",
+            command=self.start_candidate_diagnostics,
+        )
+        self.candidate_diagnostic_button.grid(
             row=3, column=0, columnspan=2, sticky="ew", pady=(6, 0)
+        )
+        ttk.Button(action_bar, text="提取单张区域", command=self.open_roi_window).grid(
+            row=4, column=0, columnspan=2, sticky="ew", pady=(6, 0)
         )
         self.batch_button = ttk.Button(
             action_bar,
             text="批量验证分类目录",
             command=self.start_classified_batch,
         )
-        self.batch_button.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(6, 0))
+        self.batch_button.grid(row=5, column=0, columnspan=2, sticky="ew", pady=(6, 0))
 
         capture_tab.columnconfigure(0, weight=1)
         capture_tab.rowconfigure(2, weight=1)
@@ -568,15 +588,22 @@ class VisionToolApp:
         ttk.Entry(processing, textvariable=self.vehicle_threshold_var, width=8).grid(
             row=8, column=1, sticky="ew", padx=(8, 0), pady=(8, 0)
         )
-        ttk.Label(processing, text="信标精筛阈值").grid(row=9, column=0, sticky="w", pady=(4, 0))
+        ttk.Label(processing, text="箭头回退阈值（源码）").grid(row=9, column=0, sticky="w", pady=(4, 0))
+        ttk.Entry(
+            processing,
+            textvariable=self.vehicle_fallback_threshold_var,
+            width=8,
+            state="readonly",
+        ).grid(row=9, column=1, sticky="ew", padx=(8, 0), pady=(4, 0))
+        ttk.Label(processing, text="信标精筛阈值").grid(row=10, column=0, sticky="w", pady=(4, 0))
         ttk.Entry(processing, textvariable=self.beacon_threshold_var, width=8).grid(
-            row=9, column=1, sticky="ew", padx=(8, 0), pady=(4, 0)
+            row=10, column=1, sticky="ew", padx=(8, 0), pady=(4, 0)
         )
         for offset, (label, variable) in enumerate(zip(
             ("粗筛中心圈", "粗筛近圈", "粗筛中圈", "粗筛远圈", "粗筛边缘圈"),
             self.coarse_threshold_vars,
         )):
-            row = 10 + offset
+            row = 11 + offset
             ttk.Label(processing, text=label).grid(row=row, column=0, sticky="w", pady=(4, 0))
             ttk.Entry(processing, textvariable=variable, width=8).grid(
                 row=row, column=1, sticky="ew", padx=(8, 0), pady=(4, 0)
@@ -735,7 +762,7 @@ class VisionToolApp:
         self.sync_thresholds_from_source(source_dir)
 
     @staticmethod
-    def parse_runtime_thresholds(source_text: str) -> tuple[int, int, int, int, int, int, int]:
+    def parse_runtime_thresholds(source_text: str) -> tuple[int, int, int, int, int, int, int, int]:
         values: list[int] = []
         for macro in RUNTIME_THRESHOLD_MACROS:
             match = re.search(
@@ -751,7 +778,7 @@ class VisionToolApp:
             values.append(value)
         return (
             values[0], values[1], values[2], values[3],
-            values[4], values[5], values[6],
+            values[4], values[5], values[6], values[7],
         )
 
     def sync_thresholds_from_source(self, source_dir: Path | None = None) -> bool:
@@ -764,13 +791,14 @@ class VisionToolApp:
             return False
 
         self.vehicle_threshold_var.set(str(values[0]))
-        self.beacon_threshold_var.set(str(values[1]))
-        for variable, value in zip(self.coarse_threshold_vars, values[2:]):
+        self.vehicle_fallback_threshold_var.set(str(values[1]))
+        self.beacon_threshold_var.set(str(values[2]))
+        for variable, value in zip(self.coarse_threshold_vars, values[3:]):
             variable.set(str(value))
         self.log(
             "已从 vision_runtime.h 同步阈值: "
-            f"箭头/信标={values[0]}/{values[1]}, "
-            f"粗筛={'/'.join(str(value) for value in values[2:])}"
+            f"箭头首轮/回退/信标={values[0]}/{values[1]}/{values[2]}, "
+            f"粗筛={'/'.join(str(value) for value in values[3:])}"
         )
         return True
 
@@ -808,7 +836,10 @@ class VisionToolApp:
         self.current_birdview_mask = None
         self.current_candidate_source = image.copy()
         self.current_candidate_binary = None
+        self.current_candidate_vehicle_binary = None
         self.current_candidate_coarse_binary = None
+        self.current_candidate_diagnostics = []
+        self.current_result = None
         self.apply_frame_metadata(path)
         self.frame_info_var.set(f"{path.name}  {image.width}×{image.height}")
         self.refresh_preview()
@@ -1138,7 +1169,154 @@ class VisionToolApp:
             self.current_result,
             candidates,
             self.current_candidate_coarse_binary,
+            self.current_candidate_vehicle_binary,
+            self.current_candidate_diagnostics,
         )
+
+    def start_candidate_diagnostics(self) -> None:
+        if self.candidate_diagnostic_running:
+            return
+        if self.current_result is None or self.current_candidate_source is None:
+            messagebox.showinfo("双阈值诊断", "请先运行当前帧仿真")
+            return
+        runtime_candidates = self.current_result.get("coarse_candidates")
+        if not isinstance(runtime_candidates, list) or not runtime_candidates:
+            messagebox.showinfo("双阈值诊断", "当前帧没有粗筛候选")
+            return
+        try:
+            primary_threshold = int(self.vehicle_threshold_var.get())
+            fallback_threshold = int(self.vehicle_fallback_threshold_var.get())
+            beacon_threshold = int(self.beacon_threshold_var.get())
+            coarse_thresholds = tuple(
+                int(variable.get()) for variable in self.coarse_threshold_vars
+            )
+            roll = float(self.roll_var.get())
+            pitch = float(self.pitch_var.get())
+            height = float(self.height_var.get())
+            if any(
+                value < 1 or value > 255
+                for value in (
+                    primary_threshold,
+                    fallback_threshold,
+                    beacon_threshold,
+                    *coarse_thresholds,
+                )
+            ):
+                raise ValueError
+        except ValueError:
+            messagebox.showerror("双阈值诊断", "阈值必须是1~255，姿态和高度必须为数值")
+            return
+
+        self.candidate_diagnostic_running = True
+        self.candidate_diagnostic_frame = self.current_frame
+        self.current_candidate_diagnostics = []
+        self.candidate_diagnostic_button.config(state=tk.DISABLED)
+        self.status_var.set(f"候选双阈值诊断中 0/{len(runtime_candidates)}")
+        threading.Thread(
+            target=self.candidate_diagnostic_worker,
+            args=(
+                Path(self.source_var.get()),
+                self.current_candidate_source.copy(),
+                [dict(item) for item in runtime_candidates],
+                roll,
+                pitch,
+                height,
+                primary_threshold,
+                fallback_threshold,
+                beacon_threshold,
+                coarse_thresholds,
+            ),
+            daemon=True,
+        ).start()
+
+    @staticmethod
+    def load_vehicle_diagnostic_result(
+        simulator_result: tuple,
+        output_dir: Path,
+    ) -> tuple[dict, Image.Image]:
+        ok, log, result_path = simulator_result[0], simulator_result[1], simulator_result[2]
+        if not ok or result_path is None:
+            raise RuntimeError(log)
+        result = json.loads(result_path.read_text(encoding="utf-8"))
+        vehicle_binary_path = output_dir / "vehicle_binary.pgm"
+        if not vehicle_binary_path.exists():
+            raise RuntimeError(f"未生成箭头位图: {vehicle_binary_path}")
+        with Image.open(vehicle_binary_path) as opened:
+            vehicle_binary = opened.convert("RGB").copy()
+        return result, vehicle_binary
+
+    def candidate_diagnostic_worker(
+        self,
+        source: Path,
+        image: Image.Image,
+        candidates: list[dict],
+        roll: float,
+        pitch: float,
+        height: float,
+        primary_threshold: int,
+        fallback_threshold: int,
+        beacon_threshold: int,
+        coarse_thresholds: tuple[int, int, int, int, int],
+    ) -> None:
+        run_dir = RUN_ROOT / datetime.now().strftime("candidate_diag_%Y%m%d_%H%M%S_%f")
+        diagnostics: list[dict] = []
+        try:
+            simulator = Simulator(source)
+            for index, candidate in enumerate(candidates, start=1):
+                raw_min_col = max(0, int(candidate.get("raw_min_col", 0)) - 2)
+                raw_max_col = min(WIDTH - 1, int(candidate.get("raw_max_col", WIDTH - 1)) + 2)
+                raw_min_row = max(0, int(candidate.get("raw_min_row", 0)) - 2)
+                raw_max_row = min(HEIGHT - 1, int(candidate.get("raw_max_row", HEIGHT - 1)) + 2)
+                masked = self.build_roi_image(
+                    image,
+                    (raw_min_col, raw_min_row, raw_max_col + 1, raw_max_row + 1),
+                )
+                candidate_dir = run_dir / f"candidate_{index:02d}"
+                input_path = candidate_dir / "input.raw"
+                candidate_dir.mkdir(parents=True, exist_ok=True)
+                input_path.write_bytes(masked.tobytes())
+
+                results: dict[str, dict] = {}
+                binaries: dict[str, Image.Image] = {}
+                for mode_name, threshold, disable_fallback in (
+                    ("primary", primary_threshold, True),
+                    ("fallback", fallback_threshold, True),
+                    ("official", primary_threshold, False),
+                ):
+                    mode_dir = candidate_dir / mode_name
+                    simulation = simulator.run(
+                        input_path,
+                        mode_dir,
+                        roll,
+                        pitch,
+                        height,
+                        False,
+                        False,
+                        threshold,
+                        beacon_threshold,
+                        coarse_thresholds[2],
+                        "gray",
+                        coarse_thresholds,
+                        disable_vehicle_fallback=disable_fallback,
+                    )
+                    results[mode_name], binaries[mode_name] = (
+                        self.load_vehicle_diagnostic_result(simulation, mode_dir)
+                    )
+                diagnostics.append({
+                    "candidate_index": index - 1,
+                    "primary_threshold": primary_threshold,
+                    "fallback_threshold": fallback_threshold,
+                    "primary": results["primary"],
+                    "fallback": results["fallback"],
+                    "official": results["official"],
+                    "primary_binary": binaries["primary"],
+                    "fallback_binary": binaries["fallback"],
+                    "official_binary": binaries["official"],
+                })
+                self.ui_queue.put(("candidate_diag_progress", (index, len(candidates))))
+            self.ui_queue.put(("candidate_diag_done", (diagnostics, str(run_dir))))
+        except Exception as exc:
+            self.ui_queue.put(("candidate_diag_error", str(exc)))
 
     @staticmethod
     def result_coarse_thresholds(result: dict) -> tuple[int, int, int, int, int]:
@@ -1293,6 +1471,101 @@ class VisionToolApp:
                 reasons.append("箭头几何及信标形状条件未通过")
         return f"未通过（{'；'.join(reasons)}）"
 
+    @staticmethod
+    def chevron_reject_text(reason: int) -> str:
+        return {
+            0: "通过",
+            1: "无物理候选",
+            2: "图像几何失败",
+            3: "物理投影失败",
+            4: "物理几何不符",
+            5: "open-V结构不足",
+        }.get(reason, f"未知({reason})")
+
+    @staticmethod
+    def chevron_physical_failures(physical: dict) -> list[str]:
+        failures: list[str] = []
+
+        def outside(name: str, value: float, minimum: float, maximum: float, unit: str = "") -> None:
+            if value < minimum or value > maximum:
+                failures.append(
+                    f"{name}{value:.2f}{unit}不在{minimum:g}~{maximum:g}{unit}"
+                )
+
+        left_arm = float(physical.get("left_arm_cm", 0.0))
+        right_arm = float(physical.get("right_arm_cm", 0.0))
+        angle = float(physical.get("arm_angle_deg", 0.0))
+        base = float(physical.get("base_cm", 0.0))
+        triangle_height = float(physical.get("triangle_height_cm", 0.0))
+        outside("左臂", left_arm, 10.5, 42.0, "cm")
+        outside("右臂", right_arm, 10.5, 42.0, "cm")
+        if right_arm > 0.0:
+            arm_ratio = left_arm / right_arm
+            outside("臂长比", arm_ratio, 0.55, 2.90)
+        outside("夹角", angle, 30.0, 90.0, "°")
+        outside("底边", base, 15.0, 46.0, "cm")
+        outside("三角高", triangle_height, 8.0, 24.0, "cm")
+        return failures
+
+    @classmethod
+    def format_threshold_diagnostic(cls, label: str, result: dict) -> str:
+        chevron = result.get("chevron", {}) if isinstance(result, dict) else {}
+        physical = chevron.get("physical", {}) if isinstance(chevron, dict) else {}
+        open_v = chevron.get("open_v", {}) if isinstance(chevron, dict) else {}
+        valid = bool(result.get("vehicle", {}).get("valid")) if isinstance(result, dict) else False
+        reason = int(chevron.get("reject_reason", 0)) if isinstance(chevron, dict) else 0
+        status = "通过" if valid else cls.chevron_reject_text(reason)
+        details = cls.chevron_physical_failures(physical) if reason == 4 else []
+        detail_text = f"[{'；'.join(details)}]" if details else ""
+        return (
+            f"{label}: {status}{detail_text}，open-V={float(open_v.get('score', 0.0)):.3f}，"
+            f"夹角={float(physical.get('arm_angle_deg', 0.0)):.1f}°，"
+            f"臂={float(physical.get('left_arm_cm', 0.0)):.1f}/"
+            f"{float(physical.get('right_arm_cm', 0.0)):.1f}cm，"
+            f"底/高={float(physical.get('base_cm', 0.0)):.1f}/"
+            f"{float(physical.get('triangle_height_cm', 0.0)):.1f}cm"
+        )
+
+    @classmethod
+    def format_candidate_diagnostic(cls, diagnostic: dict | None) -> str:
+        if not diagnostic:
+            return "双阈值诊断：未运行"
+        primary = diagnostic["primary"]
+        fallback = diagnostic["fallback"]
+        official = diagnostic["official"]
+        primary_valid = bool(primary.get("vehicle", {}).get("valid"))
+        fallback_valid = bool(fallback.get("vehicle", {}).get("valid"))
+        official_valid = bool(official.get("vehicle", {}).get("valid"))
+        if official_valid and primary_valid:
+            route = "正式路径：首轮直接通过"
+        elif official_valid:
+            route = "正式路径：首轮失败，回退通过"
+        elif fallback_valid:
+            route = (
+                f"正式路径：未通过；{diagnostic['fallback_threshold']}单独可过"
+                "但被首轮open-V门控否决"
+            )
+        else:
+            route = "正式路径：首轮和回退均未通过"
+        return "\n".join((
+            cls.format_threshold_diagnostic(
+                f"首轮{diagnostic['primary_threshold']}", primary
+            ),
+            cls.format_threshold_diagnostic(
+                f"回退{diagnostic['fallback_threshold']}", fallback
+            ),
+            route,
+        ))
+
+    @staticmethod
+    def pose_warning_text(roll: float, pitch: float) -> str:
+        if abs(roll) <= 7.0 and abs(pitch) <= 7.0:
+            return ""
+        return (
+            f"姿态警告：Roll={roll:.1f}°、Pitch={pitch:.1f}°，"
+            "超过无人机常用±7°范围，请确认图片遥测是否可信。"
+        )
+
     def open_candidate_window(
         self,
         image: Image.Image,
@@ -1300,6 +1573,8 @@ class VisionToolApp:
         result: dict,
         candidates: list[dict] | None = None,
         coarse_binary: Image.Image | None = None,
+        vehicle_binary: Image.Image | None = None,
+        diagnostics: list[dict] | None = None,
     ) -> None:
         self.close_candidate_window()
         window = tk.Toplevel(self.root)
@@ -1323,6 +1598,11 @@ class VisionToolApp:
         source = image.convert("RGB")
         fine_binary = binary.convert("RGB")
         coarse_frame = coarse_binary.convert("RGB") if coarse_binary is not None else None
+        vehicle_frame = vehicle_binary.convert("RGB") if vehicle_binary is not None else None
+        diagnostic_by_index = {
+            int(item.get("candidate_index", -1)): item
+            for item in (diagnostics or [])
+        }
         for index, candidate in enumerate(candidates, start=1):
             min_col = max(0, int(candidate.get("fine_min_col", candidate.get("min_col", 0))))
             max_col = min(FINE_WIDTH - 1, int(candidate.get("fine_max_col", candidate.get("max_col", 0))))
@@ -1341,11 +1621,17 @@ class VisionToolApp:
             bottom = min(HEIGHT, raw_max_row + 1)
             original_crop = source.crop((left, top, max(right, left + 1), max(bottom, top + 1)))
             binary_crop = fine_binary.crop((min_col, min_row, max_col + 1, max_row + 1))
+            vehicle_crop = (
+                vehicle_frame.crop((min_col, min_row, max_col + 1, max_row + 1))
+                if vehicle_frame is not None else None
+            )
+            diagnostic = diagnostic_by_index.get(index - 1)
             tab = ttk.Frame(notebook, padding=8)
             tab.columnconfigure(0, weight=1)
             tab.columnconfigure(1, weight=1)
             tab.columnconfigure(2, weight=1)
             tab.rowconfigure(1, weight=1)
+            tab.rowconfigure(2, weight=1)
             candidate_type = self.candidate_type_text(candidate)
             if result.get("physical_grid_enabled", 1):
                 area_text = f"物理面积: {candidate.get('area_cm2', 0):.2f} cm²"
@@ -1379,23 +1665,45 @@ class VisionToolApp:
                     f"阈值稳定性评分 T: {candidate.get('confidence_stability', 0):.2f}  "
                     f"边缘评分 E: {candidate.get('confidence_edge', 0):.2f}  "
                     f"姿态放宽量: {candidate.get('adaptive_relaxation', 0):.2f}  "
-                    f"动态圆度门槛: {candidate.get('adaptive_min_circularity', 0.15):.3f}"
+                    f"动态圆度门槛: {candidate.get('adaptive_min_circularity', 0.15):.3f}\n"
+                    f"{self.format_candidate_diagnostic(diagnostic)}"
                 ),
+                justify=tk.LEFT,
+                wraplength=920,
             ).grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 6))
-            left_label = ttk.Label(tab, text="原图候选区", anchor="center")
-            right_label = ttk.Label(tab, text="376×240 二值候选区", anchor="center")
-            left_label.grid(row=1, column=0, sticky="nsew", padx=(0, 4))
-            right_label.grid(row=1, column=1, sticky="nsew", padx=(4, 0))
-            coarse_label = ttk.Label(tab, text="188×120 粗筛二值图（本帧全图）", anchor="center")
-            coarse_label.grid(row=1, column=2, sticky="nsew", padx=(4, 0))
-            tab._vision_candidate_view = (
-                left_label,
-                right_label,
-                coarse_label,
-                original_crop,
-                binary_crop,
-                coarse_frame,
-            )
+            views: list[tuple[ttk.Label, Image.Image | None]] = []
+            view_specs: list[tuple[str, Image.Image | None]] = [
+                ("原图候选区", original_crop),
+                ("188×120粗筛全图", coarse_frame),
+                ("当前帧箭头最终位图", vehicle_crop),
+            ]
+            if diagnostic:
+                for title, key in (
+                    (f"首轮{diagnostic['primary_threshold']}箭头位图", "primary_binary"),
+                    (f"回退{diagnostic['fallback_threshold']}箭头位图", "fallback_binary"),
+                    ("正式首轮→回退箭头位图", "official_binary"),
+                ):
+                    diagnostic_image = diagnostic.get(key)
+                    diagnostic_crop = (
+                        diagnostic_image.crop((min_col, min_row, max_col + 1, max_row + 1))
+                        if isinstance(diagnostic_image, Image.Image) else None
+                    )
+                    view_specs.append((title, diagnostic_crop))
+            else:
+                view_specs.append(("信标精筛位图", binary_crop))
+            for view_index, (title, view_image) in enumerate(view_specs):
+                frame = ttk.LabelFrame(tab, text=title, padding=2)
+                frame.grid(
+                    row=1 + view_index // 3,
+                    column=view_index % 3,
+                    sticky="nsew",
+                    padx=3,
+                    pady=3,
+                )
+                label = ttk.Label(frame, text="未生成", anchor="center")
+                label.pack(fill=tk.BOTH, expand=True)
+                views.append((label, view_image))
+            tab._vision_candidate_view = views
             tab._vision_candidate_size = None
             notebook.add(tab, text=f"候选 {index}")
         notebook.bind("<Configure>", self._schedule_candidate_refresh)
@@ -1426,50 +1734,30 @@ class VisionToolApp:
         view = getattr(tab, "_vision_candidate_view", None)
         if view is None:
             return
-        width = max(160, (tab.winfo_width() - 32) // 3)
-        height = max(120, tab.winfo_height() - 48)
+        width = max(160, (tab.winfo_width() - 40) // 3)
+        view_rows = (max(1, len(view)) + 2) // 3
+        height = max(100, (tab.winfo_height() - 150) // view_rows)
         size = (width, height)
         if getattr(tab, "_vision_candidate_size", None) == size:
             return
         tab._vision_candidate_size = size
-        left_label, right_label, coarse_label, original, binary, coarse_binary = view
-        self._refresh_candidate_tab(
-            left_label,
-            right_label,
-            coarse_label,
-            original,
-            binary,
-            coarse_binary,
-            width,
-            height,
-        )
+        self._refresh_candidate_tab(view, width, height)
 
     def _refresh_candidate_tab(
         self,
-        left_label: ttk.Label,
-        right_label: ttk.Label,
-        coarse_label: ttk.Label,
-        original: Image.Image,
-        binary: Image.Image,
-        coarse_binary: Image.Image | None,
+        views: list[tuple[ttk.Label, Image.Image | None]],
         width: int,
         height: int,
     ) -> None:
-        left_photo = ImageTk.PhotoImage(self.fit_image(original, width, height))
-        right_photo = ImageTk.PhotoImage(self.fit_image(binary, width, height))
-        left_label.configure(image=left_photo, text="")
-        right_label.configure(image=right_photo, text="")
-        # Keep only the current pair per label; repeated resize events must not
-        # retain every historical PhotoImage.
-        left_label._vision_photo = left_photo
-        right_label._vision_photo = right_photo
-        if coarse_binary is not None:
-            coarse_photo = ImageTk.PhotoImage(self.fit_image(coarse_binary, width, height))
-            coarse_label.configure(image=coarse_photo, text="")
-            coarse_label._vision_photo = coarse_photo
-        else:
-            coarse_label.configure(image="", text="未生成粗筛二值图")
-            coarse_label._vision_photo = None
+        for label, view_image in views:
+            if view_image is None:
+                label.configure(image="", text="未生成")
+                label._vision_photo = None
+                continue
+            photo = ImageTk.PhotoImage(self.fit_image(view_image, width, height))
+            label.configure(image=photo, text="")
+            # 每个Label只保留当前图，缩放时不持续累积PhotoImage。
+            label._vision_photo = photo
 
     def refresh_processed_preview(self) -> None:
         if self.processed_label is None or self.processed_window is None or not self.processed_window.winfo_exists():
@@ -1720,11 +2008,30 @@ class VisionToolApp:
                     if int(item.get("detection_confidence", 0)) >= MAP_CREATE_CONFIDENCE
                     and int(item.get("position_sigma_cm", 255)) <= MAP_CREATE_SIGMA_CM
                 )
+                chevron = payload.get("chevron", {})
+                open_v = chevron.get("open_v", {}) if isinstance(chevron, dict) else {}
+                arrow_valid = bool(payload.get("vehicle", {}).get("valid"))
+                gate_from_primary = bool(open_v.get("gate_from_primary", 0))
+                if arrow_valid:
+                    arrow_route = "fallback" if gate_from_primary else "primary"
+                else:
+                    arrow_route = "rejected"
                 rows.append({
                     "frame": str(raw_path.relative_to(root)),
                     "set_type": set_type,
                     "expected_arrow": expected_arrow,
-                    "arrow_valid": bool(payload.get("vehicle", {}).get("valid")),
+                    "arrow_valid": arrow_valid,
+                    "arrow_route": arrow_route,
+                    "arrow_reject_reason": int(chevron.get("reject_reason", 0)),
+                    "arrow_reject_text": self.chevron_reject_text(
+                        int(chevron.get("reject_reason", 0))
+                    ),
+                    "open_v_score": float(open_v.get("score", 0.0)),
+                    "open_v_gate_score": float(
+                        open_v.get("gate_score", open_v.get("score", 0.0))
+                    ),
+                    "pose_warning": self.pose_warning_text(roll, pitch),
+                    "actual_thresholds": payload.get("recognition_thresholds", {}),
                     "beacon_count": beacon_count,
                     "map_ready_count": map_ready,
                     "expected_beacon_count": expected_beacon_count,
@@ -1747,6 +2054,30 @@ class VisionToolApp:
             false_arrows = sum(1 for item in no_arrow_rows if item["arrow_valid"])
             true_negatives = len(no_arrow_rows) - false_arrows
             false_negatives = len(expected_arrow_rows) - arrow_hits
+            false_positive_rows = [
+                item for item in no_arrow_rows if item["arrow_valid"]
+            ]
+            false_negative_rows = [
+                item for item in expected_arrow_rows if not item["arrow_valid"]
+            ]
+            failure_reason_counts: dict[str, int] = {}
+            for item in false_negative_rows:
+                reason = item["arrow_reject_text"]
+                failure_reason_counts[reason] = failure_reason_counts.get(reason, 0) + 1
+            failure_reason_text = "、".join(
+                f"{reason}:{count}"
+                for reason, count in sorted(failure_reason_counts.items())
+            ) or "无"
+            failure_files = [
+                f"FP {item['frame']}" for item in false_positive_rows
+            ] + [
+                f"FN {item['frame']}（{item['arrow_reject_text']}）"
+                for item in false_negative_rows
+            ]
+            failure_file_text = (
+                "\n误判/漏判文件:\n" + "\n".join(failure_files[:20])
+                if failure_files else "\n误判/漏判文件: 无"
+            )
             arrow_correct = arrow_hits + true_negatives
             arrow_total = len(expected_arrow_rows) + len(no_arrow_rows)
             arrow_accuracy = 100.0 * arrow_correct / max(1, arrow_total)
@@ -1773,6 +2104,8 @@ class VisionToolApp:
                 f"({arrow_accuracy:.2f}%)\n"
                 f"TP/TN/FP/FN: {arrow_hits}/{true_negatives}/"
                 f"{false_arrows}/{false_negatives}\n"
+                f"箭头漏检原因: {failure_reason_text}"
+                f"{failure_file_text}\n"
                 f"准集样本: {len(precise_rows)}\n"
                 f"准集信标数量正确: {precise_correct}/{len(precise_rows)}\n"
                 f"准集识别/应有信标: {precise_detected}/{precise_expected}\n"
@@ -1881,6 +2214,26 @@ class VisionToolApp:
                 self.status_var.set("批量验证失败")
                 self.log("classified batch error: " + str(payload))
                 messagebox.showerror("批量验证失败", str(payload))
+            elif event == "candidate_diag_progress":
+                current, total = payload
+                self.status_var.set(f"候选双阈值诊断中 {current}/{total}")
+            elif event == "candidate_diag_done":
+                diagnostics, run_dir = payload
+                self.candidate_diagnostic_running = False
+                self.candidate_diagnostic_button.config(state=tk.NORMAL)
+                self.log(f"candidate dual-threshold result: {run_dir}")
+                if self.current_frame != self.candidate_diagnostic_frame:
+                    self.status_var.set("候选双阈值诊断完成（已切换帧，结果未显示）")
+                else:
+                    self.current_candidate_diagnostics = diagnostics
+                    self.status_var.set("候选双阈值诊断完成")
+                    self.open_current_candidate_window()
+            elif event == "candidate_diag_error":
+                self.candidate_diagnostic_running = False
+                self.candidate_diagnostic_button.config(state=tk.NORMAL)
+                self.status_var.set("候选双阈值诊断失败")
+                self.log("candidate dual-threshold error: " + str(payload))
+                messagebox.showerror("双阈值诊断失败", str(payload))
             elif event == "run":
                 ok, log, result, run_dir, image, undistorted_image, birdview_image, undistorted_mask, birdview_mask = payload
                 self.log(log)
@@ -1909,9 +2262,23 @@ class VisionToolApp:
         birdview_mask: Image.Image | None = None,
     ) -> None:
         original = image.convert("RGB").resize((FINE_WIDTH, FINE_HEIGHT), Image.Resampling.NEAREST)
-        binary = Image.open(binary_path).convert("RGB") if binary_path.exists() else original.copy()
+        if binary_path.exists():
+            with Image.open(binary_path) as opened:
+                binary = opened.convert("RGB").copy()
+        else:
+            binary = original.copy()
         if binary.size != (FINE_WIDTH, FINE_HEIGHT):
             binary = binary.resize((FINE_WIDTH, FINE_HEIGHT), Image.Resampling.NEAREST)
+        vehicle_binary_path = binary_path.parent / "vehicle_binary.pgm"
+        if vehicle_binary_path.exists():
+            with Image.open(vehicle_binary_path) as opened:
+                vehicle_binary = opened.convert("RGB").copy()
+            if vehicle_binary.size != (FINE_WIDTH, FINE_HEIGHT):
+                vehicle_binary = vehicle_binary.resize(
+                    (FINE_WIDTH, FINE_HEIGHT), Image.Resampling.NEAREST
+                )
+        else:
+            vehicle_binary = None
         draw_original = ImageDraw.Draw(original)
         draw_binary = ImageDraw.Draw(binary)
         for beacon in result.get("beacons", []):
@@ -1977,10 +2344,12 @@ class VisionToolApp:
         self.current_source_image = original
         self.current_candidate_source = image.copy()
         self.current_candidate_binary = binary.copy()
+        self.current_candidate_vehicle_binary = vehicle_binary
         self.current_candidate_coarse_binary = self.build_coarse_binary_image(
             image,
             self.result_coarse_thresholds(result),
         )
+        self.current_candidate_diagnostics = []
         self.current_undistorted_image = undistorted_image.convert("RGB") if undistorted_image is not None else None
         self.current_birdview_image = birdview_image.convert("RGB") if birdview_image is not None else None
         self.current_undistorted_mask = undistorted_mask.convert("L") if undistorted_mask is not None else None
@@ -2018,18 +2387,28 @@ class VisionToolApp:
         }.get(str(result.get("binary_mode", "gray")), "未知")
         chevron = result.get("chevron", {})
         physical = chevron.get("physical", {}) if isinstance(chevron, dict) else {}
+        open_v = chevron.get("open_v", {}) if isinstance(chevron, dict) else {}
         reject_reason = int(chevron.get("reject_reason", 0)) if isinstance(chevron, dict) else 0
-        reject_text = {
-            0: "通过",
-            1: "无物理候选",
-            2: "图像几何失败",
-            3: "物理投影失败",
-            4: "物理几何不符",
-        }.get(reject_reason, f"未知({reject_reason})")
+        reject_text = self.chevron_reject_text(reject_reason)
+        physical_failures = (
+            self.chevron_physical_failures(physical) if reject_reason == 4 else []
+        )
+        physical_failure_text = (
+            f"（{'；'.join(physical_failures)}）" if physical_failures else ""
+        )
+        recognition_thresholds = result.get("recognition_thresholds", {})
+        primary_threshold = recognition_thresholds.get("vehicle", "?")
         chevron_info = (
-            f"\n小车候选: {chevron.get('candidate_count', 0)}，拒绝: {reject_text}"
+            f"\n小车候选: {chevron.get('candidate_count', 0)}，拒绝: "
+            f"{reject_text}{physical_failure_text}"
             f"\n物理面积: {physical.get('area_cm2', 0):.2f} cm²，圆度: {physical.get('circularity', 0):.3f}"
             f"\n两臂: {physical.get('left_arm_cm', 0):.2f}/{physical.get('right_arm_cm', 0):.2f} cm"
+            f"\nV形拟合: {open_v.get('score', 0):.3f}，顶点假设: {open_v.get('hypothesis_score', 0):.3f}/"
+            f"{open_v.get('hypothesis_second_score', 0):.3f}，差值: {open_v.get('hypothesis_margin', 0):.3f}"
+            f"，臂连续度: {open_v.get('arm_continuity', 0):.3f}"
+            f"，门控: {open_v.get('gate_score', open_v.get('score', 0)):.3f}"
+            f"/空隙{open_v.get('gate_center_gap', open_v.get('center_gap', 0)):.3f}"
+            f"（{f'{primary_threshold}首轮' if open_v.get('gate_from_primary', 0) else '当前位图'}）"
             f"，夹角: {physical.get('arm_angle_deg', 0):.2f}°"
             f"\n底边/高: {physical.get('base_cm', 0):.2f}/{physical.get('triangle_height_cm', 0):.2f} cm"
         )
@@ -2046,6 +2425,12 @@ class VisionToolApp:
         beacon_detail = "\n信标详情:\n" + "\n".join(beacon_lines) if beacon_lines else ""
         coarse_text = "/".join(str(value) for value in self.result_coarse_thresholds(result))
         small_box_gate = result.get("vehicle_small_box_gate", {})
+        pose_warning = self.pose_warning_text(
+            float(result.get("roll_deg", 0.0)),
+            float(result.get("pitch_deg", 0.0)),
+        )
+        pose_warning_line = f"{pose_warning}\n" if pose_warning else ""
+        fallback_enabled = recognition_thresholds.get("vehicle_fallback_enabled", 1)
         self.set_result_info(
             f"连通域: {result.get('blob_count', 0)}\n"
             f"信标: {result.get('beacon_count', 0)}\n"
@@ -2053,7 +2438,9 @@ class VisionToolApp:
             f"{result.get('recognition_thresholds', {}).get('vehicle', '?')}"
             f"({result.get('recognition_thresholds', {}).get('vehicle_fallback', '?')})/"
             f"{result.get('recognition_thresholds', {}).get('beacon', '?')}\n"
+            f"回退状态: {'启用' if fallback_enabled else '禁用'}\n"
             f"粗筛五圈阈值（中心→边缘）: {coarse_text}\n"
+            f"{pose_warning_line}"
             f"箭头分流面积阈值: 常规≥{result.get('vehicle_min_raw_box_area', '?')}；"
             f"小框≥{small_box_gate.get('min_area', '?')}且粗占空比≤"
             f"{small_box_gate.get('max_fill_percent', '?')}%\n"
@@ -2083,6 +2470,8 @@ class VisionToolApp:
             result,
             candidates,
             self.current_candidate_coarse_binary,
+            self.current_candidate_vehicle_binary,
+            self.current_candidate_diagnostics,
         )
 
     def editor_modified(self, _event: object = None) -> None:
@@ -2127,10 +2516,13 @@ def self_test() -> int:
     assert Simulator(DEFAULT_SOURCE).source_files()
     macro_sample = "\n".join(
         f"#define {macro} ({value}U) /* test */"
-        for macro, value in zip(RUNTIME_THRESHOLD_MACROS, (150, 10, 150, 60, 50, 50, 50))
+        for macro, value in zip(
+            RUNTIME_THRESHOLD_MACROS,
+            (145, 50, 50, 150, 60, 50, 50, 40),
+        )
     )
     assert VisionToolApp.parse_runtime_thresholds(macro_sample) == (
-        150, 10, 150, 60, 50, 50, 50,
+        145, 50, 50, 150, 60, 50, 50, 40,
     )
     coarse_test = VisionToolApp.build_coarse_binary_image(
         Image.new("L", (WIDTH, HEIGHT), 50),
@@ -2189,6 +2581,18 @@ def self_test() -> int:
         "confidence_box_size": 0.2,
         "confidence_box_size_min": 0.3,
     })
+    assert "左臂9.00cm" in "；".join(VisionToolApp.chevron_physical_failures({
+        "area_cm2": 500.0,
+        "occupancy": 0.5,
+        "circularity": 0.3,
+        "left_arm_cm": 9.0,
+        "right_arm_cm": 18.0,
+        "arm_angle_deg": 70.0,
+        "base_cm": 28.0,
+        "triangle_height_cm": 14.0,
+    }))
+    assert VisionToolApp.pose_warning_text(6.0, -7.0) == ""
+    assert "姿态警告" in VisionToolApp.pose_warning_text(8.0, 0.0)
     category_root = Path("分类")
     assert VisionToolApp.classification_set_type(
         category_root / "准集" / "1信标" / "有箭头" / "frame.raw",

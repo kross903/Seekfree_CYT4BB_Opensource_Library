@@ -14,6 +14,9 @@ static uint8 s_vision_vehicle_threshold =
     (uint8)VISION_BINARY_THRESHOLD_VEHICLE;
 static uint8 s_vision_beacon_threshold =
     (uint8)VISION_BINARY_THRESHOLD_BEACON;
+#if defined(VISION_RUNTIME_PC_DIAGNOSTICS)
+static uint8 s_vision_vehicle_fallback_enabled = 1U;
+#endif
 static uint8 s_vision_coarse_zone_thresholds[VISION_RUNTIME_COARSE_ZONE_COUNT] =
 {
     (uint8)VISION_RUNTIME_COARSE_THRESHOLD_CENTER,
@@ -2390,6 +2393,9 @@ static void VisionRuntime_ProcessBlobs(
                 }
             }
             if(!frame_vehicle_confirmed && !vehicle_confirmed && !skip_vehicle &&
+#if defined(VISION_RUNTIME_PC_DIAGNOSTICS)
+               s_vision_vehicle_fallback_enabled &&
+#endif
                s_vision_vehicle_threshold >
                    (uint8)VISION_BINARY_THRESHOLD_VEHICLE_FALLBACK)
             {
@@ -2579,6 +2585,18 @@ uint32 VisionRuntime_GetFineRleOverflowCount(void)
 {
     return s_vision_rle_overflow_count;
 }
+
+#if defined(VISION_RUNTIME_PC_DIAGNOSTICS)
+void VisionRuntime_SetVehicleFallbackEnabled(uint8 enabled)
+{
+    s_vision_vehicle_fallback_enabled = (enabled != 0U) ? 1U : 0U;
+}
+
+const uint8 *VisionRuntime_GetVehicleBinaryImage(void)
+{
+    return s_vision_vehicle_binary;
+}
+#endif
 
 void VisionRuntime_GetDiag(VisionRuntimeDiag_t *diag)
 {
