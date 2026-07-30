@@ -2,9 +2,9 @@
 #include "vision/vehicle_marker_localization.h"
 #include <math.h>
 
-#define POSITION_LOOP_CAR_FF_GAIN_DEFAULT          (0.00f)   // M1/M2：小车X/Y速度前馈增益上电默认值
+#define POSITION_LOOP_CAR_FF_GAIN_DEFAULT          (0.15f)   // M1/M2：小车X/Y速度前馈增益上电默认值
 #define POSITION_LOOP_CAR_FF_GAIN_MAX              (1.2f)    // M1/M2：小车X/Y速度前馈增益允许上限
-#define POSITION_LOOP_POSITION_KP_DEFAULT          (0.20f)    // M3：二维位置P增益默认值，单位s^-1
+#define POSITION_LOOP_POSITION_KP_DEFAULT          (0.15f)    // M3：二维位置P增益默认值，单位s^-1
 #define POSITION_LOOP_CORRECTION_MAX_DEFAULT_CMS   (40.0f)   // M4：位置修正速度模长上限，单位cm/s
 #define POSITION_LOOP_TARGET_MAX_DEFAULT_CMS       (80.0f)  // M5：合成后目标速度模长上限，单位cm/s
 #define POSITION_LOOP_ACCEL_MAX_DEFAULT_CMS2       (120.0f)   // M6：轨迹加速度模长上限，单位cm/s^2

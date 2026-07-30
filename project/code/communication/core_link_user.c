@@ -410,6 +410,7 @@ static void core_link_user_build_beacon_observations(
     packet->sequence = ++s_core_link_user_beacon_sequence;
     VisionRuntime_GetBeaconSlots(slots, VISION_RUNTIME_BEACON_SLOT_COUNT);
     core_link_user_update_beacon_tracks(slots, slot_track_id);
+    VehicleMarkerLocalization_GetLossDebug(&loss_debug);
 
     car_visible = (uint8)(g_vehicle_marker_pose.valid &&
                           !g_vehicle_marker_position_lost_flag);
@@ -423,6 +424,10 @@ static void core_link_user_build_beacon_observations(
     {
         packet->car_visible = 1U;
         packet->frame_flags |= CORE_LINK_BEACON_FRAME_FLAG_CAR_POSITION_VALID;
+        if(loss_debug.raw_detect_valid)
+        {
+            packet->frame_flags |= CORE_LINK_BEACON_FRAME_FLAG_CAR_RAW_DETECTED;
+        }
         packet->car_x_mm = core_link_user_cm_to_mm_i16(g_vehicle_marker_pose.x);
         packet->car_y_mm = core_link_user_cm_to_mm_i16(g_vehicle_marker_pose.y);
         if(uav_yaw_valid &&
@@ -476,7 +481,6 @@ static void core_link_user_build_beacon_observations(
         packet->count++;
     }
 
-    VehicleMarkerLocalization_GetLossDebug(&loss_debug);
     BeaconSearch_OnObservationFrame(packet, loss_debug.process_count);
     packet->frame_flags |= BeaconSearch_GetFrameFlags();
 }
