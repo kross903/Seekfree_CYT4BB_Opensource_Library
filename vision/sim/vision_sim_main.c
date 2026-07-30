@@ -587,13 +587,16 @@ static int write_result(const char *path, const char *binary_path,
     fprintf(file,
             "\"open_v\":{\"arm_support\":%.6f,\"center_gap\":%.6f,\"score\":%.6f,"
             "\"hypothesis_score\":%.6f,\"hypothesis_second_score\":%.6f,"
-            "\"hypothesis_margin\":%.6f,\"apex_index\":%u},",
+            "\"hypothesis_margin\":%.6f,\"gate_score\":%.6f,"
+            "\"gate_from_primary\":%u,\"apex_index\":%u},",
             chevron.open_v_arm_support,
             chevron.open_v_center_gap,
             chevron.open_v_score,
             chevron.open_v_hypothesis_score,
             chevron.open_v_hypothesis_second_score,
             chevron.open_v_hypothesis_margin,
+            chevron.open_v_gate_score,
+            (unsigned)chevron.open_v_gate_from_primary,
             (unsigned)chevron.open_v_apex_index);
     fprintf(file,
             "\"candidate_count\":%u,\"geometry_reject_count\":%u,\"reject_reason\":%u}\n",

@@ -22,6 +22,10 @@ extern "C" {
 #define VEHICLE_MARKER_CHEVRON_REJECT_IMAGE_GEOMETRY    (2U)
 #define VEHICLE_MARKER_CHEVRON_REJECT_WORLD_PROJECTION  (3U)
 #define VEHICLE_MARKER_CHEVRON_REJECT_PHYSICAL_GEOMETRY (4U)
+#define VEHICLE_MARKER_CHEVRON_REJECT_OPEN_V             (5U)
+
+/* 145精筛位图的V形结构门槛：现有50张真箭头最小0.046，保守取0.02。 */
+#define VEHICLE_MARKER_CHEVRON_MIN_OPEN_V_SCORE          (0.02f)
 
 typedef struct
 {
@@ -81,7 +85,9 @@ typedef struct
     float open_v_hypothesis_score;
     float open_v_hypothesis_second_score;
     float open_v_hypothesis_margin;
+    float open_v_gate_score;
     uint8 open_v_apex_index;
+    uint8 open_v_gate_from_primary;
     uint8 candidate_count;
     uint8 geometry_reject_count;
     uint8 reject_reason;
@@ -131,7 +137,8 @@ uint8 VehicleMarkerLocalization_AppendBlob(const VisionBlob_t *blob, const Visio
  * committing a pose. A true result is safe for candidate short-circuiting. */
 uint8 VehicleMarkerLocalization_AppendAndValidateBlob(
     const VisionBlob_t *blob, const VisionContour_t *contour,
-    const VehicleMarkerBinaryView_t *binary_view);
+    const VehicleMarkerBinaryView_t *binary_view,
+    const float *open_v_gate_score, float *measured_open_v_score);
 uint8 VehicleMarkerLocalization_EndBlobFrame(VehicleMarkerPose_t *out_pose);
 
 extern VehicleMarkerPose_t g_vehicle_marker_pose;

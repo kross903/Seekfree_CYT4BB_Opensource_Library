@@ -1288,7 +1288,8 @@ static uint8 vehicle_marker_chevron_extract_image_geometry(
 static uint8 vehicle_marker_chevron_process_candidate(
     const VehicleMarkerChevronCandidate_t *candidate,
     VehicleMarkerPose_t *out_pose, uint8 commit_pose,
-    const VehicleMarkerBinaryView_t *binary_view)
+    const VehicleMarkerBinaryView_t *binary_view,
+    const float *open_v_gate_score)
 {
     VehicleMarkerPoint2D_t apex_img = {0};
     VehicleMarkerPoint2D_t left_tip_img = {0};
@@ -1317,6 +1318,7 @@ static uint8 vehicle_marker_chevron_process_candidate(
     float base_dy = 0.0f;
     float base_cm = 0.0f;
     float triangle_height_cm = 0.0f;
+    float effective_open_v_score = 0.0f;
 
     if(candidate == NULL)
     {
@@ -1353,6 +1355,20 @@ static uint8 vehicle_marker_chevron_process_candidate(
         s_vehicle_marker_chevron_debug.open_v_center_gap =
             fitted_open_v.center_gap;
         s_vehicle_marker_chevron_debug.open_v_score = fitted_open_v.score;
+        effective_open_v_score = (open_v_gate_score != NULL) ?
+                                 *open_v_gate_score : fitted_open_v.score;
+        s_vehicle_marker_chevron_debug.open_v_gate_score =
+            effective_open_v_score;
+        s_vehicle_marker_chevron_debug.open_v_gate_from_primary =
+            (open_v_gate_score != NULL) ? 1U : 0U;
+        if((binary_view != NULL || open_v_gate_score != NULL) &&
+           effective_open_v_score <
+               VEHICLE_MARKER_CHEVRON_MIN_OPEN_V_SCORE)
+        {
+            s_vehicle_marker_chevron_debug.reject_reason =
+                VEHICLE_MARKER_CHEVRON_REJECT_OPEN_V;
+            return 0U;
+        }
     }
 
     if(!IPM_FullRectifiedImage2PlaneF(
@@ -1484,11 +1500,16 @@ static uint8 vehicle_marker_chevron_process_candidate(
 
 uint8 VehicleMarkerLocalization_AppendAndValidateBlob(
     const VisionBlob_t *blob, const VisionContour_t *contour,
-    const VehicleMarkerBinaryView_t *binary_view)
+    const VehicleMarkerBinaryView_t *binary_view,
+    const float *open_v_gate_score, float *measured_open_v_score)
 {
     VehicleMarkerChevronCandidate_t candidate;
     uint8 valid;
 
+    if(measured_open_v_score != NULL)
+    {
+        *measured_open_v_score = 0.0f;
+    }
     if(!VehicleMarkerLocalization_AppendBlob(blob, contour))
     {
         return 0U;
@@ -1498,7 +1519,11 @@ uint8 VehicleMarkerLocalization_AppendAndValidateBlob(
     candidate.contour = *contour;
     candidate.valid = 1U;
     valid = vehicle_marker_chevron_process_candidate(
-        &candidate, NULL, 1U, binary_view);
+        &candidate, NULL, 1U, binary_view, open_v_gate_score);
+    if(measured_open_v_score != NULL)
+    {
+        *measured_open_v_score = s_vehicle_marker_chevron_debug.open_v_score;
+    }
     if(s_vehicle_marker_chevron_last_candidate_stored)
     {
         VehicleMarkerChevronCandidate_t *stored =
@@ -1580,7 +1605,7 @@ uint8 VehicleMarkerLocalization_EndBlobFrame(VehicleMarkerPose_t *out_pose)
         tried[best_index] = 1U;
         if(vehicle_marker_chevron_process_candidate(
                &s_vehicle_marker_chevron_candidates[best_index], out_pose, 1U,
-               NULL))
+               NULL, NULL))
         {
             s_vehicle_marker_debug_raw_detect_valid = 1U;
             s_vehicle_marker_debug_process_success_count++;

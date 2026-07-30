@@ -2026,6 +2026,7 @@ class VisionToolApp:
             2: "图像几何失败",
             3: "物理投影失败",
             4: "物理几何不符",
+            5: "open-V结构不足",
         }.get(reject_reason, f"未知({reject_reason})")
         chevron_info = (
             f"\n小车候选: {chevron.get('candidate_count', 0)}，拒绝: {reject_text}"
@@ -2033,6 +2034,8 @@ class VisionToolApp:
             f"\n两臂: {physical.get('left_arm_cm', 0):.2f}/{physical.get('right_arm_cm', 0):.2f} cm"
             f"\nV形拟合: {open_v.get('score', 0):.3f}，顶点假设: {open_v.get('hypothesis_score', 0):.3f}/"
             f"{open_v.get('hypothesis_second_score', 0):.3f}，差值: {open_v.get('hypothesis_margin', 0):.3f}"
+            f"，门控: {open_v.get('gate_score', open_v.get('score', 0)):.3f}"
+            f"（{'145首轮' if open_v.get('gate_from_primary', 0) else '当前位图'}）"
             f"，夹角: {physical.get('arm_angle_deg', 0):.2f}°"
             f"\n底边/高: {physical.get('base_cm', 0):.2f}/{physical.get('triangle_height_cm', 0):.2f} cm"
         )
