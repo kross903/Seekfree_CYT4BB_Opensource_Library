@@ -22,6 +22,12 @@ extern "C" {
 #define VEHICLE_MARKER_CHEVRON_REJECT_IMAGE_GEOMETRY    (2U)
 #define VEHICLE_MARKER_CHEVRON_REJECT_WORLD_PROJECTION  (3U)
 #define VEHICLE_MARKER_CHEVRON_REJECT_PHYSICAL_GEOMETRY (4U)
+#define VEHICLE_MARKER_CHEVRON_REJECT_OPEN_V             (5U)
+
+/* 完整走廊综合得分辅助门槛，保守保留低对比度真箭头。 */
+#define VEHICLE_MARKER_CHEVRON_MIN_OPEN_V_SCORE          (0.02f)
+/* 完整走廊空隙率：真箭头最小0.157，纯信标样本最大0.055，取中间值。 */
+#define VEHICLE_MARKER_CHEVRON_MIN_OPEN_V_CENTER_GAP     (0.10f)
 
 typedef struct
 {
@@ -56,6 +62,14 @@ typedef struct
 
 typedef struct
 {
+    float score;
+    float center_gap;
+    float arm_support;
+    float arm_continuity;
+} VehicleMarkerOpenVGate_t;
+
+typedef struct
+{
     uint8 valid;
     uint8 left_valid;
     uint8 right_valid;
@@ -75,10 +89,29 @@ typedef struct
     float arm_angle_deg;
     float base_cm;
     float triangle_height_cm;
+    float open_v_arm_support;
+    float open_v_center_gap;
+    float open_v_arm_continuity;
+    float open_v_score;
+    float open_v_hypothesis_score;
+    float open_v_hypothesis_second_score;
+    float open_v_hypothesis_margin;
+    float open_v_gate_score;
+    float open_v_gate_center_gap;
+    uint8 open_v_apex_index;
+    uint8 open_v_gate_from_primary;
     uint8 candidate_count;
     uint8 geometry_reject_count;
     uint8 reject_reason;
 } VehicleMarkerChevronDebug_t;
+
+typedef struct
+{
+    const uint8 *data;
+    uint16 width;
+    uint16 height;
+    uint16 stride;
+} VehicleMarkerBinaryView_t;
 
 typedef struct
 {
@@ -115,7 +148,10 @@ uint8 VehicleMarkerLocalization_AppendBlob(const VisionBlob_t *blob, const Visio
 /* Appends the blob and performs the full chevron geometry check without
  * committing a pose. A true result is safe for candidate short-circuiting. */
 uint8 VehicleMarkerLocalization_AppendAndValidateBlob(
-    const VisionBlob_t *blob, const VisionContour_t *contour);
+    const VisionBlob_t *blob, const VisionContour_t *contour,
+    const VehicleMarkerBinaryView_t *binary_view,
+    const VehicleMarkerOpenVGate_t *open_v_gate,
+    VehicleMarkerOpenVGate_t *measured_open_v);
 uint8 VehicleMarkerLocalization_EndBlobFrame(VehicleMarkerPose_t *out_pose);
 
 extern VehicleMarkerPose_t g_vehicle_marker_pose;
