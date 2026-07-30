@@ -7,8 +7,8 @@
 #define POSITION_LOOP_POSITION_KP_DEFAULT          (0.30f)    // M3：二维位置P增益默认值，单位s^-1
 #define POSITION_LOOP_CORRECTION_MAX_DEFAULT_CMS   (70.0f)   // M4：位置修正速度模长上限，单位cm/s
 #define POSITION_LOOP_TARGET_MAX_DEFAULT_CMS       (150.0f)  // M5：合成后目标速度模长上限，单位cm/s
-#define POSITION_LOOP_ACCEL_MAX_DEFAULT_CMS2       (180.0f)   // M6：轨迹加速度模长上限，单位cm/s^2
-#define POSITION_LOOP_JERK_MAX_DEFAULT_CMS3        (200.0f)  // M7：轨迹Jerk模长上限，单位cm/s^3
+#define POSITION_LOOP_ACCEL_MAX_DEFAULT_CMS2       (200.0f)   // M6：轨迹加速度模长上限，单位cm/s^2
+#define POSITION_LOOP_JERK_MAX_DEFAULT_CMS3        (250.0f)  // M7：轨迹Jerk模长上限，单位cm/s^3
 #define POSITION_LOOP_VISION_HOLD_MS               (150U)    // 视觉断帧后相对位置预测保持时间，单位ms
 #define POSITION_LOOP_VISION_INNOVATION_GATE_CM    (20.0f)   // 新视觉位置相对可信轨迹的创新门限，单位cm
 #define POSITION_LOOP_VISION_REACQUIRE_GATE_CM     (10.0f)   // 视觉重捕获候选位置的一致性门限，单位cm
@@ -18,7 +18,7 @@
 #define POSITION_LOOP_BRAKE_SPEED_START_CMS         (30.0f)   // 径向接近速度达到该值后开始提高制动能力，单位cm/s
 #define POSITION_LOOP_BRAKE_SPEED_FULL_CMS          (80.0f)  // 径向接近速度达到该值后使用全部高速制动能力，单位cm/s
 #define POSITION_LOOP_BRAKE_ACCEL_HIGH_CMS2         (250.0f)  // 高速制动时允许的二维目标加速度上限，单位cm/s^2
-#define POSITION_LOOP_BRAKE_JERK_HIGH_CMS3          (280.0f)  // 高速制动时允许的二维Jerk上限，单位cm/s^3
+#define POSITION_LOOP_BRAKE_JERK_HIGH_CMS3          (300.0f)  // 高速制动时允许的二维Jerk上限，单位cm/s^3
 #define POSITION_LOOP_CLOSING_SPEED_LPF_HZ          (3.0f)    // 径向接近速度调度低通截止频率，单位Hz
 #define POSITION_LOOP_TWO_PI                        (6.28318530718f) // 一阶低通系数计算使用的2π常量
 

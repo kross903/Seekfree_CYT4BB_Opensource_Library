@@ -3,13 +3,13 @@
 #include <math.h>
 #include <string.h>
 
-#define BEACON_SEARCH_LOSS_DELAY_MS             (600U)
+#define BEACON_SEARCH_LOSS_DELAY_MS             (300U)
 #define BEACON_SEARCH_VERIFY_TIMEOUT_MS         (300U)
 #define BEACON_SEARCH_CONFIRM_FRAMES              (3U)
 #define BEACON_SEARCH_MIN_CONFIDENCE              (96U)
 #define BEACON_SEARCH_MIN_SIGMA_CM                 (5U)
 #define BEACON_SEARCH_MAX_SIGMA_CM                (15U)
-#define BEACON_SEARCH_YAW_RATE_DPS              (30.0f)
+#define BEACON_SEARCH_YAW_RATE_DPS              (90.0f)
 #define BEACON_SEARCH_TIMEOUT_MARGIN_MS          (6000U)
 #define BEACON_SEARCH_TIMEOUT_LIMIT_MS          (60000U)
 #define BEACON_SEARCH_MAX_YAW_STEP_DEG           (10.0f)
@@ -254,8 +254,7 @@ static void beacon_search_update_stability(
 
     s_start_gate_ready = (uint8)(
         input->position_loop_enabled &&
-        (s_position_window_count >= BEACON_SEARCH_POSITION_WINDOW_FRAMES) &&
-        (s_position_qualified_count >= BEACON_SEARCH_POSITION_REQUIRED_FRAMES) &&
+        s_fused_velocity_valid &&
         (s_vision_frame_age_ms <= BEACON_SEARCH_VISION_FRAME_MAX_AGE_MS) &&
         (s_speed_stable_ms >= BEACON_SEARCH_SPEED_STABLE_MS));
 }
