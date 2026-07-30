@@ -1210,11 +1210,38 @@ static void VisionRuntime_ClearFineCandidateBuffer(
     }
 }
 
+static uint8 VisionRuntime_FineBoundsWithinCostLimit(
+    int min_x, int max_x, int min_y, int max_y)
+{
+    uint32 width;
+    uint32 height;
+
+    if(min_x > max_x || min_y > max_y) return 0U;
+    width = (uint32)(max_x - min_x + 1);
+    height = (uint32)(max_y - min_y + 1);
+    return (uint8)(
+        width <= VISION_RUNTIME_FINE_CANDIDATE_MAX_WIDTH &&
+        height <= VISION_RUNTIME_FINE_CANDIDATE_MAX_HEIGHT &&
+        width * height <= VISION_RUNTIME_FINE_CANDIDATE_MAX_PIXELS);
+}
+
 static uint8 VisionRuntime_BuildFineCandidateBinaries(
     const uint8 image[MT9V03X_H][MT9V03X_W],
     const VisionRuntimeCandidate_t *candidate, uint8 candidate_index)
 {
+    int min_x;
+    int max_x;
+    int min_y;
+    int max_y;
+
     if(candidate == NULL) return 0U;
+    VisionRuntime_GetFineCandidateBounds(candidate, &min_x, &max_x,
+                                         &min_y, &max_y);
+    if(!VisionRuntime_FineBoundsWithinCostLimit(
+           min_x, max_x, min_y, max_y))
+    {
+        return 0U;
+    }
     VisionRuntime_ClearFineCandidateBuffer(s_vision_vehicle_binary, candidate);
     VisionRuntime_ClearFineCandidateBuffer(s_vision_binary, candidate);
     if(candidate_index < VISION_RUNTIME_MAX_CANDIDATES)
@@ -2296,6 +2323,7 @@ static void VisionRuntime_ProcessBlobs(
     const uint8 image[MT9V03X_H][MT9V03X_W])
 {
     uint8 i;
+    uint8 frame_vehicle_confirmed = 0U;
 
     VisionRuntime_Binarize(image);
     for(i = 0U; i < s_vision_candidate_count; ++i)
@@ -2323,7 +2351,7 @@ static void VisionRuntime_ProcessBlobs(
         if(VisionRuntime_BuildFineCandidateBinaries(
                image, &s_vision_candidates[i], i))
         {
-            if(!skip_vehicle &&
+            if(!frame_vehicle_confirmed && !skip_vehicle &&
                s_vision_candidate_vehicle_area[i] >=
                    VISION_RUNTIME_FINE_MIN_FOREGROUND_PIXELS)
             {
@@ -2336,7 +2364,7 @@ static void VisionRuntime_ProcessBlobs(
                     s_vision_candidate_annotations[i].vehicle_valid = 1U;
                 }
             }
-            if(!vehicle_confirmed && !skip_vehicle &&
+            if(!frame_vehicle_confirmed && !vehicle_confirmed && !skip_vehicle &&
                s_vision_vehicle_threshold >
                    (uint8)VISION_BINARY_THRESHOLD_VEHICLE_FALLBACK)
             {
@@ -2362,6 +2390,10 @@ static void VisionRuntime_ProcessBlobs(
                         s_vision_candidate_annotations[i].vehicle_valid = 1U;
                     }
                 }
+            }
+            if(vehicle_confirmed)
+            {
+                frame_vehicle_confirmed = 1U;
             }
             if(!vehicle_confirmed &&
                s_vision_candidate_beacon_area[i] >=
@@ -2606,6 +2638,9 @@ uint8 VisionRuntime_GetCandidateBoxes(VisionRuntimeCandidateBox_t *boxes, uint8 
         boxes[i].vehicle_valid = s_vision_candidate_annotations[i].vehicle_valid;
         boxes[i].vehicle_skipped_small_box =
             s_vision_candidate_annotations[i].vehicle_skipped_small_box;
+        boxes[i].fine_roi_oversize = (uint8)
+            !VisionRuntime_FineBoundsWithinCostLimit(
+                min_x, max_x, min_y, max_y);
         boxes[i].beacon_valid = s_vision_candidate_annotations[i].beacon_valid;
         boxes[i].detection_confidence =
             s_vision_candidate_annotations[i].detection_confidence;
