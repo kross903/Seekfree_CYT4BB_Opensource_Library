@@ -477,6 +477,23 @@ void BeaconSearch_Tick(uint16 elapsed_ms,
         return;
     }
 
+    if(BEACON_SEARCH_WAIT_FIRST == s_state)
+    {
+        s_loss_age_ms = beacon_search_add_ms(s_loss_age_ms, elapsed_ms);
+        if(s_loss_age_ms >= BEACON_SEARCH_LOSS_DELAY_MS)
+        {
+            if(car_link_valid && s_start_gate_ready)
+            {
+                beacon_search_begin();
+            }
+            else if(!car_link_valid)
+            {
+                beacon_search_fail(BEACON_SEARCH_FAILURE_CAR_LINK);
+            }
+        }
+        return;
+    }
+
     if((BEACON_SEARCH_TRACKING == s_state) ||
        (BEACON_SEARCH_LOSS_WAIT == s_state))
     {
