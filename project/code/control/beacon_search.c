@@ -3,16 +3,16 @@
 #include <math.h>
 #include <string.h>
 
-#define BEACON_SEARCH_LOSS_DELAY_MS             (300U)
-#define BEACON_SEARCH_VERIFY_TIMEOUT_MS         (300U)
-#define BEACON_SEARCH_CONFIRM_FRAMES              (3U)
+#define BEACON_SEARCH_LOSS_DELAY_MS              (300U)
+#define BEACON_SEARCH_VERIFY_TIMEOUT_MS          (300U)
+#define BEACON_SEARCH_CONFIRM_FRAMES               (3U)
 #define BEACON_SEARCH_MIN_CONFIDENCE              (96U)
 #define BEACON_SEARCH_MIN_SIGMA_CM                 (5U)
 #define BEACON_SEARCH_MAX_SIGMA_CM                (15U)
-#define BEACON_SEARCH_YAW_RATE_DPS              (90.0f)
-#define BEACON_SEARCH_TIMEOUT_MARGIN_MS          (6000U)
-#define BEACON_SEARCH_TIMEOUT_LIMIT_MS          (60000U)
-#define BEACON_SEARCH_MAX_YAW_STEP_DEG           (10.0f)
+#define BEACON_SEARCH_YAW_RATE_DPS              (60.0f)
+#define BEACON_SEARCH_TIMEOUT_MARGIN_MS         (6000U)
+#define BEACON_SEARCH_TIMEOUT_LIMIT_MS         (60000U)
+#define BEACON_SEARCH_MAX_YAW_STEP_DEG          (10.0f)
 
 typedef enum
 {

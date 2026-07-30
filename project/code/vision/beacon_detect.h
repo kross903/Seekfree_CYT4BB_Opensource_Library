@@ -30,7 +30,7 @@
 #define BEACON_PHYSICAL_AREA_MIN_CM2      (480.0f)  /* 最小可接受面积 */
 #define BEACON_PHYSICAL_AREA_IDEAL_CM2    (700.0f)  /* 面积评分 A=1 的理想面积 */
 #define BEACON_PHYSICAL_AREA_MAX_CM2      (1500.0f) /* 最大可接受面积 */
-#define BEACON_UNDISTORTED_AREA_MIN_PX    (80.0f)
+#define BEACON_UNDISTORTED_AREA_MIN_PX    (20.0f)
 #define BEACON_UNDISTORTED_AREA_IDEAL_PX  (180.0f)
 #define BEACON_UNDISTORTED_AREA_MAX_PX    (500.0f)
 /* 检测置信度组成：B=候选框大小，T=多阈值稳定性，A=面积，E=边缘完整性。 */
@@ -43,7 +43,7 @@
 #define BEACON_BOX_SIZE_MIN_CENTER         (0.50f) /* 图像中心最低 B 门槛 */
 /* 仅用于畸变较大的外圈：普通信标门限失败后执行轻量救援，不增加图像变换。 */
 #define BEACON_EDGE_RESCUE_MIN_RADIUS_SQ       (0.35f) /* 归一化半径平方下限 */
-#define BEACON_EDGE_RESCUE_MIN_AREA_PX        (65.0f) /* 去畸变后的最小归一化面积 */
+#define BEACON_EDGE_RESCUE_MIN_AREA_PX        (20.0f) /* 去畸变后的最小归一化面积 */
 #define BEACON_EDGE_RESCUE_MIN_CIRCULARITY     (0.65f) /* 排除箭头碎片和细长噪声 */
 #define BEACON_EDGE_RESCUE_MIN_STABILITY       (0.45f) /* 多阈值质心与面积稳定性 */
 #define BEACON_EDGE_RESCUE_BOX_MIN_SCALE       (0.70f) /* B 至少达到原动态门槛的70% */

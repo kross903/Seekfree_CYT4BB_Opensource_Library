@@ -6,7 +6,7 @@
 /* 候选区完整分辨率精筛阈值：箭头较亮，信标允许保留较暗像素。 */
 #define VISION_BINARY_THRESHOLD_VEHICLE          (145U) /* 箭头首轮精筛阈值 */
 #define VISION_BINARY_THRESHOLD_VEHICLE_FALLBACK (50U)  /* 首轮失败后的箭头回退阈值 */
-#define VISION_BINARY_THRESHOLD_BEACON           (10U)  /* 信标精筛二值化阈值 */
+#define VISION_BINARY_THRESHOLD_BEACON           (50U)  /* 信标精筛二值化阈值 */
 #if VISION_BINARY_THRESHOLD_VEHICLE_FALLBACK == 0U || \
     VISION_BINARY_THRESHOLD_VEHICLE_FALLBACK >= VISION_BINARY_THRESHOLD_VEHICLE
 #error "Vehicle fallback threshold must be lower than the primary threshold"
@@ -56,6 +56,15 @@
 #error "Invalid vehicle small-box gate"
 #endif
 #define VISION_RUNTIME_FINE_MIN_FOREGROUND_PIXELS (8U)
+/* 防止鱼眼极边缘的小候选在去畸变后膨胀为大面积精筛区域。 */
+#define VISION_RUNTIME_FINE_CANDIDATE_MAX_WIDTH   (96U)
+#define VISION_RUNTIME_FINE_CANDIDATE_MAX_HEIGHT  (96U)
+#define VISION_RUNTIME_FINE_CANDIDATE_MAX_PIXELS  (4096U)
+#if VISION_RUNTIME_FINE_CANDIDATE_MAX_PIXELS > \
+        VISION_RUNTIME_FINE_CANDIDATE_MAX_WIDTH * \
+        VISION_RUNTIME_FINE_CANDIDATE_MAX_HEIGHT
+#error "Fine candidate pixel limit exceeds its bounding dimensions"
+#endif
 #ifndef VISION_RUNTIME_PHYSICAL_GRID_ENABLE
 #define VISION_RUNTIME_PHYSICAL_GRID_ENABLE (0U)
 #endif
@@ -215,6 +224,7 @@ typedef struct
     int beacon_area_pixels;
     uint8 vehicle_valid;
     uint8 vehicle_skipped_small_box;
+    uint8 fine_roi_oversize;
     uint8 beacon_valid;
     uint8 detection_confidence;
     uint8 position_sigma_cm;
