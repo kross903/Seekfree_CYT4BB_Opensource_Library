@@ -2191,8 +2191,15 @@ static uint8 VisionRuntime_DispatchFineComponent(
     {
         if(target == VISION_RUNTIME_FINE_TARGET_VEHICLE)
         {
+            VehicleMarkerBinaryView_t binary_view;
+
+            binary_view.data = s_vision_active_binary;
+            binary_view.width = VISION_RUNTIME_FINE_WIDTH;
+            binary_view.height = VISION_RUNTIME_FINE_HEIGHT;
+            binary_view.stride = VISION_RUNTIME_FINE_STRIDE;
             ++s_vision_runtime_diag.ir_split_count;
-            if(VehicleMarkerLocalization_AppendAndValidateBlob(&blob, &contour))
+            if(VehicleMarkerLocalization_AppendAndValidateBlob(
+                   &blob, &contour, &binary_view))
             {
                 ++s_vision_runtime_diag.ir_blob_count;
                 return 1U;

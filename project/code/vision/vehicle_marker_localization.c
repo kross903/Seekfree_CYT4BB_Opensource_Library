@@ -287,6 +287,9 @@ void VehicleMarkerLocalization_ServiceLostProtection(void)
 #define VEHICLE_MARKER_CHEVRON_MIN_CONTOUR_POINTS          (8U)
 #define VEHICLE_MARKER_CHEVRON_POINT_EPS                   (1e-4f)
 #define VEHICLE_MARKER_CHEVRON_SEED_SAMPLE_POINTS          (64U)
+#define VEHICLE_MARKER_CHEVRON_OPEN_V_SAMPLE_COUNT         (4U)
+#define VEHICLE_MARKER_CHEVRON_OPEN_V_WINDOW_RADIUS        (1)
+#define VEHICLE_MARKER_CHEVRON_OPEN_V_ANGLE_MARGIN_RAD     (0.15f)
 #define VEHICLE_MARKER_CHEVRON_GROUP_MAX_POINTS            (VISION_RUNTIME_CONTOUR_MAX_POINTS + 1U)
 #define VEHICLE_MARKER_CHEVRON_MAX_FRAME_CANDIDATES        (4U)
 
@@ -324,6 +327,13 @@ typedef struct
     uint8 geometry_checked;
     uint8 geometry_valid;
 } VehicleMarkerChevronCandidate_t;
+
+typedef struct
+{
+    float arm_support;
+    float center_gap;
+    float score;
+} VehicleMarkerOpenVMetrics_t;
 
 #pragma location = 0x20000000
 __no_init static VehicleMarkerChevronCandidate_t
@@ -1130,13 +1140,194 @@ static void vehicle_marker_chevron_project_image_line(
     projected->intensity = 0.0f;
 }
 
+static uint8 vehicle_marker_chevron_binary_get(
+    const VehicleMarkerBinaryView_t *view, int x, int y)
+{
+    uint32 byte_index;
+    uint8 mask;
+
+    if(view == NULL || view->data == NULL || view->stride == 0U ||
+       x < 0 || y < 0 || x >= (int)view->width || y >= (int)view->height)
+    {
+        return 0U;
+    }
+    byte_index = (uint32)y * (uint32)view->stride + (uint32)(x >> 3);
+    mask = (uint8)(0x80U >> (x & 7));
+    return (view->data[byte_index] & mask) ? 1U : 0U;
+}
+
+static float vehicle_marker_chevron_sample_foreground(
+    const VehicleMarkerBinaryView_t *view, float u, float v)
+{
+    int center_x = (int)(u + 0.5f);
+    int center_y = (int)(v + 0.5f);
+    int foreground = 0;
+    int valid = 0;
+    int dy;
+    int dx;
+
+    for(dy = -VEHICLE_MARKER_CHEVRON_OPEN_V_WINDOW_RADIUS;
+        dy <= VEHICLE_MARKER_CHEVRON_OPEN_V_WINDOW_RADIUS; ++dy)
+    {
+        for(dx = -VEHICLE_MARKER_CHEVRON_OPEN_V_WINDOW_RADIUS;
+            dx <= VEHICLE_MARKER_CHEVRON_OPEN_V_WINDOW_RADIUS; ++dx)
+        {
+            int x = center_x + dx;
+            int y = center_y + dy;
+            if(x < 0 || y < 0 || x >= (int)view->width || y >= (int)view->height)
+            {
+                continue;
+            }
+            foreground += vehicle_marker_chevron_binary_get(view, x, y);
+            ++valid;
+        }
+    }
+    return (valid > 0) ? (float)foreground / (float)valid : 0.0f;
+}
+
+static void vehicle_marker_chevron_measure_open_v(
+    const VehicleMarkerPoint2D_t *apex,
+    const VehicleMarkerPoint2D_t *left_tip,
+    const VehicleMarkerPoint2D_t *right_tip,
+    const VehicleMarkerBinaryView_t *view,
+    VehicleMarkerOpenVMetrics_t *metrics)
+{
+    static const float sample_t[VEHICLE_MARKER_CHEVRON_OPEN_V_SAMPLE_COUNT] = {
+        0.40f, 0.55f, 0.70f, 0.85f
+    };
+    float arm_support_sum = 0.0f;
+    float center_gap_sum = 0.0f;
+    float score_sum = 0.0f;
+    uint8 i;
+
+    if(metrics == NULL)
+    {
+        return;
+    }
+    memset(metrics, 0, sizeof(*metrics));
+    if(apex == NULL || left_tip == NULL || right_tip == NULL ||
+       view == NULL || view->data == NULL)
+    {
+        return;
+    }
+
+    for(i = 0U; i < VEHICLE_MARKER_CHEVRON_OPEN_V_SAMPLE_COUNT; ++i)
+    {
+        float t = sample_t[i];
+        float left_u = apex->u + t * (left_tip->u - apex->u);
+        float left_v = apex->v + t * (left_tip->v - apex->v);
+        float right_u = apex->u + t * (right_tip->u - apex->u);
+        float right_v = apex->v + t * (right_tip->v - apex->v);
+        float center_u = 0.5f * (left_u + right_u);
+        float center_v = 0.5f * (left_v + right_v);
+        float left_support = vehicle_marker_chevron_sample_foreground(
+            view, left_u, left_v);
+        float right_support = vehicle_marker_chevron_sample_foreground(
+            view, right_u, right_v);
+        float arm_support = (left_support < right_support) ?
+                            left_support : right_support;
+        float center_gap = 1.0f - vehicle_marker_chevron_sample_foreground(
+            view, center_u, center_v);
+
+        arm_support_sum += arm_support;
+        center_gap_sum += center_gap;
+        score_sum += arm_support * center_gap;
+    }
+
+    metrics->arm_support =
+        arm_support_sum / (float)VEHICLE_MARKER_CHEVRON_OPEN_V_SAMPLE_COUNT;
+    metrics->center_gap =
+        center_gap_sum / (float)VEHICLE_MARKER_CHEVRON_OPEN_V_SAMPLE_COUNT;
+    metrics->score =
+        score_sum / (float)VEHICLE_MARKER_CHEVRON_OPEN_V_SAMPLE_COUNT;
+}
+
+static uint8 vehicle_marker_chevron_image_shape_projects_valid(
+    const VehicleMarkerPoint2D_t *apex_img,
+    const VehicleMarkerPoint2D_t *left_tip_img,
+    const VehicleMarkerPoint2D_t *right_tip_img)
+{
+    VehicleMarkerWorldPoint_t apex;
+    VehicleMarkerWorldPoint_t left_tip;
+    VehicleMarkerWorldPoint_t right_tip;
+    float left_dx;
+    float left_dy;
+    float right_dx;
+    float right_dy;
+    float base_dx;
+    float base_dy;
+    float left_span;
+    float right_span;
+    float arm_ratio;
+    float arm_angle;
+    float base;
+    float triangle_height;
+
+    if(apex_img == NULL || left_tip_img == NULL || right_tip_img == NULL)
+    {
+        return 0U;
+    }
+    if(!IPM_FullRectifiedImage2PlaneF(
+           apex_img->u, apex_img->v, VEHICLE_MARKER_CHEVRON_PLANE_HEIGHT_CM,
+           &apex.x, &apex.y) ||
+       !IPM_FullRectifiedImage2PlaneF(
+           left_tip_img->u, left_tip_img->v,
+           VEHICLE_MARKER_CHEVRON_PLANE_HEIGHT_CM,
+           &left_tip.x, &left_tip.y) ||
+       !IPM_FullRectifiedImage2PlaneF(
+           right_tip_img->u, right_tip_img->v,
+           VEHICLE_MARKER_CHEVRON_PLANE_HEIGHT_CM,
+           &right_tip.x, &right_tip.y))
+    {
+        return 0U;
+    }
+
+    left_dx = left_tip.x - apex.x;
+    left_dy = left_tip.y - apex.y;
+    right_dx = right_tip.x - apex.x;
+    right_dy = right_tip.y - apex.y;
+    base_dx = right_tip.x - left_tip.x;
+    base_dy = right_tip.y - left_tip.y;
+    left_span = sqrtf(left_dx * left_dx + left_dy * left_dy);
+    right_span = sqrtf(right_dx * right_dx + right_dy * right_dy);
+    base = sqrtf(base_dx * base_dx + base_dy * base_dy);
+    if(left_span <= VEHICLE_MARKER_CHEVRON_POINT_EPS ||
+       right_span <= VEHICLE_MARKER_CHEVRON_POINT_EPS ||
+       base <= VEHICLE_MARKER_CHEVRON_POINT_EPS)
+    {
+        return 0U;
+    }
+    arm_ratio = left_span / right_span;
+    arm_angle = acosf(vehicle_marker_chevron_clamp_float(
+        (left_dx * right_dx + left_dy * right_dy) /
+        (left_span * right_span), -1.0f, 1.0f)) *
+        (180.0f / 3.14159265f);
+    triangle_height = fabsf(base_dx * (apex.y - left_tip.y) -
+                            base_dy * (apex.x - left_tip.x)) / base;
+
+    return (uint8)(
+        left_span >= VEHICLE_MARKER_CHEVRON_MIN_ARM_CM &&
+        left_span <= VEHICLE_MARKER_CHEVRON_MAX_ARM_CM &&
+        right_span >= VEHICLE_MARKER_CHEVRON_MIN_ARM_CM &&
+        right_span <= VEHICLE_MARKER_CHEVRON_MAX_ARM_CM &&
+        arm_ratio >= VEHICLE_MARKER_CHEVRON_MIN_ARM_RATIO &&
+        arm_ratio <= VEHICLE_MARKER_CHEVRON_MAX_ARM_RATIO &&
+        arm_angle >= VEHICLE_MARKER_CHEVRON_MIN_ANGLE_DEG &&
+        arm_angle <= VEHICLE_MARKER_CHEVRON_MAX_ANGLE_DEG &&
+        base >= VEHICLE_MARKER_CHEVRON_MIN_BASE_CM &&
+        base <= VEHICLE_MARKER_CHEVRON_MAX_BASE_CM &&
+        triangle_height >= VEHICLE_MARKER_CHEVRON_MIN_TRIANGLE_HEIGHT_CM &&
+        triangle_height <= VEHICLE_MARKER_CHEVRON_MAX_TRIANGLE_HEIGHT_CM);
+}
+
 /* The extreme triangle only initializes the arm assignment. Every contour
  * point then contributes to one of the two total-least-squares arm fits. */
 static uint8 vehicle_marker_chevron_extract_image_geometry(
     const VehicleMarkerChevronCandidate_t *candidate,
     VehicleMarkerPoint2D_t *apex,
     VehicleMarkerPoint2D_t *left_tip,
-    VehicleMarkerPoint2D_t *right_tip)
+    VehicleMarkerPoint2D_t *right_tip,
+    const VehicleMarkerBinaryView_t *binary_view)
 {
     const VisionContour_t *contour;
     VehicleMarkerPoint2D_t triangle[3] = {{0}};
@@ -1153,9 +1344,12 @@ static uint8 vehicle_marker_chevron_extract_image_geometry(
     uint16 i;
     uint16 j;
     int best_apex = 0;
+    int angle_best_apex = 0;
     float best_pair_dist_sq = -1.0f;
     float best_third_dist_sq = -1.0f;
     float best_angle_error = 1e30f;
+    float angle_error[3] = {1e30f, 1e30f, 1e30f};
+    VehicleMarkerOpenVMetrics_t open_v[3] = {{0}};
     float cross_lines;
     float intersection_t;
     float refined_apex_x;
@@ -1245,12 +1439,39 @@ static uint8 vehicle_marker_chevron_extract_image_geometry(
             -1.0f, 1.0f);
         error = fabsf(angle_cos - VEHICLE_MARKER_CHEVRON_EXPECTED_ANGLE_COS) *
                 VEHICLE_MARKER_CHEVRON_COS_ERROR_TO_RAD;
+        angle_error[i] = error;
+        vehicle_marker_chevron_measure_open_v(
+            &triangle[i], &triangle[a], &triangle[b], binary_view,
+            &open_v[i]);
         if(error < best_angle_error)
         {
             best_angle_error = error;
-            best_apex = (int)i;
+            angle_best_apex = (int)i;
         }
     }
+    best_apex = angle_best_apex;
+    if(binary_view != NULL && binary_view->data != NULL)
+    {
+        float best_open_v_score = open_v[best_apex].score;
+
+        for(i = 0U; i < 3U; ++i)
+        {
+            if(angle_error[i] > best_angle_error +
+                                  VEHICLE_MARKER_CHEVRON_OPEN_V_ANGLE_MARGIN_RAD)
+            {
+                continue;
+            }
+            if(open_v[i].score > best_open_v_score)
+            {
+                best_open_v_score = open_v[i].score;
+                best_apex = (int)i;
+            }
+        }
+    }
+
+fit_selected_apex:
+    memset(&line_a, 0, sizeof(line_a));
+    memset(&line_b, 0, sizeof(line_b));
     seed_apex = triangle[best_apex];
     seed_tip_a = triangle[(best_apex + 1) % 3];
     seed_tip_b = triangle[(best_apex + 2) % 3];
@@ -1334,13 +1555,45 @@ static uint8 vehicle_marker_chevron_extract_image_geometry(
         *left_tip = *right_tip;
         *right_tip = temp;
     }
+    if(best_apex != angle_best_apex &&
+       !vehicle_marker_chevron_image_shape_projects_valid(
+           apex, left_tip, right_tip))
+    {
+        best_apex = angle_best_apex;
+        goto fit_selected_apex;
+    }
+    {
+        float selected_score = open_v[best_apex].score;
+        float second_score = 0.0f;
+        for(i = 0U; i < 3U; ++i)
+        {
+            if((int)i == best_apex ||
+               angle_error[i] > best_angle_error +
+                                  VEHICLE_MARKER_CHEVRON_OPEN_V_ANGLE_MARGIN_RAD)
+            {
+                continue;
+            }
+            if(open_v[i].score > second_score)
+            {
+                second_score = open_v[i].score;
+            }
+        }
+        s_vehicle_marker_chevron_debug.open_v_hypothesis_score =
+            selected_score;
+        s_vehicle_marker_chevron_debug.open_v_hypothesis_second_score =
+            second_score;
+        s_vehicle_marker_chevron_debug.open_v_hypothesis_margin =
+            selected_score - second_score;
+        s_vehicle_marker_chevron_debug.open_v_apex_index = (uint8)best_apex;
+    }
     return vehicle_marker_chevron_image_distance_sq(apex, left_tip) > 1.0f &&
            vehicle_marker_chevron_image_distance_sq(apex, right_tip) > 1.0f;
 }
 
 static uint8 vehicle_marker_chevron_process_candidate(
     const VehicleMarkerChevronCandidate_t *candidate,
-    VehicleMarkerPose_t *out_pose, uint8 commit_pose)
+    VehicleMarkerPose_t *out_pose, uint8 commit_pose,
+    const VehicleMarkerBinaryView_t *binary_view)
 {
     VehicleMarkerPoint2D_t apex_img = {0};
     VehicleMarkerPoint2D_t left_tip_img = {0};
@@ -1386,13 +1639,26 @@ static uint8 vehicle_marker_chevron_process_candidate(
     if(!vehicle_marker_chevron_extract_image_geometry(candidate,
                                                       &apex_img,
                                                       &left_tip_img,
-                                                      &right_tip_img))
+                                                      &right_tip_img,
+                                                      binary_view))
     {
         return 0U;
     }
     s_vehicle_marker_chevron_debug.apex_img = apex_img;
     s_vehicle_marker_chevron_debug.left_tip_img = left_tip_img;
     s_vehicle_marker_chevron_debug.right_tip_img = right_tip_img;
+
+    {
+        VehicleMarkerOpenVMetrics_t fitted_open_v;
+        vehicle_marker_chevron_measure_open_v(
+            &apex_img, &left_tip_img, &right_tip_img, binary_view,
+            &fitted_open_v);
+        s_vehicle_marker_chevron_debug.open_v_arm_support =
+            fitted_open_v.arm_support;
+        s_vehicle_marker_chevron_debug.open_v_center_gap =
+            fitted_open_v.center_gap;
+        s_vehicle_marker_chevron_debug.open_v_score = fitted_open_v.score;
+    }
 
     if(!IPM_FullRectifiedImage2PlaneF(
            apex_img.u, apex_img.v, VEHICLE_MARKER_CHEVRON_PLANE_HEIGHT_CM,
@@ -1749,7 +2015,8 @@ static uint8 vehicle_marker_chevron_process_candidate_legacy(VehicleMarkerPose_t
 }
 
 uint8 VehicleMarkerLocalization_AppendAndValidateBlob(
-    const VisionBlob_t *blob, const VisionContour_t *contour)
+    const VisionBlob_t *blob, const VisionContour_t *contour,
+    const VehicleMarkerBinaryView_t *binary_view)
 {
     VehicleMarkerChevronCandidate_t candidate;
     uint8 valid;
@@ -1762,7 +2029,8 @@ uint8 VehicleMarkerLocalization_AppendAndValidateBlob(
     candidate.blob = *blob;
     candidate.contour = *contour;
     candidate.valid = 1U;
-    valid = vehicle_marker_chevron_process_candidate(&candidate, NULL, 1U);
+    valid = vehicle_marker_chevron_process_candidate(
+        &candidate, NULL, 1U, binary_view);
     if(s_vehicle_marker_chevron_last_candidate_stored)
     {
         VehicleMarkerChevronCandidate_t *stored =
@@ -1843,7 +2111,8 @@ uint8 VehicleMarkerLocalization_EndBlobFrame(VehicleMarkerPose_t *out_pose)
         }
         tried[best_index] = 1U;
         if(vehicle_marker_chevron_process_candidate(
-               &s_vehicle_marker_chevron_candidates[best_index], out_pose, 1U))
+               &s_vehicle_marker_chevron_candidates[best_index], out_pose, 1U,
+               NULL))
         {
             s_vehicle_marker_debug_raw_detect_valid = 1U;
             s_vehicle_marker_debug_process_success_count++;

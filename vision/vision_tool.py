@@ -2018,6 +2018,7 @@ class VisionToolApp:
         }.get(str(result.get("binary_mode", "gray")), "未知")
         chevron = result.get("chevron", {})
         physical = chevron.get("physical", {}) if isinstance(chevron, dict) else {}
+        open_v = chevron.get("open_v", {}) if isinstance(chevron, dict) else {}
         reject_reason = int(chevron.get("reject_reason", 0)) if isinstance(chevron, dict) else 0
         reject_text = {
             0: "通过",
@@ -2030,6 +2031,8 @@ class VisionToolApp:
             f"\n小车候选: {chevron.get('candidate_count', 0)}，拒绝: {reject_text}"
             f"\n物理面积: {physical.get('area_cm2', 0):.2f} cm²，圆度: {physical.get('circularity', 0):.3f}"
             f"\n两臂: {physical.get('left_arm_cm', 0):.2f}/{physical.get('right_arm_cm', 0):.2f} cm"
+            f"\nV形拟合: {open_v.get('score', 0):.3f}，顶点假设: {open_v.get('hypothesis_score', 0):.3f}/"
+            f"{open_v.get('hypothesis_second_score', 0):.3f}，差值: {open_v.get('hypothesis_margin', 0):.3f}"
             f"，夹角: {physical.get('arm_angle_deg', 0):.2f}°"
             f"\n底边/高: {physical.get('base_cm', 0):.2f}/{physical.get('triangle_height_cm', 0):.2f} cm"
         )

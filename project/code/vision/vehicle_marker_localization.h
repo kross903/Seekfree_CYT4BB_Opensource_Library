@@ -75,10 +75,25 @@ typedef struct
     float arm_angle_deg;
     float base_cm;
     float triangle_height_cm;
+    float open_v_arm_support;
+    float open_v_center_gap;
+    float open_v_score;
+    float open_v_hypothesis_score;
+    float open_v_hypothesis_second_score;
+    float open_v_hypothesis_margin;
+    uint8 open_v_apex_index;
     uint8 candidate_count;
     uint8 geometry_reject_count;
     uint8 reject_reason;
 } VehicleMarkerChevronDebug_t;
+
+typedef struct
+{
+    const uint8 *data;
+    uint16 width;
+    uint16 height;
+    uint16 stride;
+} VehicleMarkerBinaryView_t;
 
 typedef struct
 {
@@ -115,7 +130,8 @@ uint8 VehicleMarkerLocalization_AppendBlob(const VisionBlob_t *blob, const Visio
 /* Appends the blob and performs the full chevron geometry check without
  * committing a pose. A true result is safe for candidate short-circuiting. */
 uint8 VehicleMarkerLocalization_AppendAndValidateBlob(
-    const VisionBlob_t *blob, const VisionContour_t *contour);
+    const VisionBlob_t *blob, const VisionContour_t *contour,
+    const VehicleMarkerBinaryView_t *binary_view);
 uint8 VehicleMarkerLocalization_EndBlobFrame(VehicleMarkerPose_t *out_pose);
 
 extern VehicleMarkerPose_t g_vehicle_marker_pose;
