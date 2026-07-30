@@ -3,16 +3,16 @@
 #include <math.h>
 #include <string.h>
 
-#define BEACON_SEARCH_LOSS_DELAY_MS              (300U)
-#define BEACON_SEARCH_VERIFY_TIMEOUT_MS          (300U)
-#define BEACON_SEARCH_CONFIRM_FRAMES               (3U)
+#define BEACON_SEARCH_LOSS_DELAY_MS             (600U)
+#define BEACON_SEARCH_VERIFY_TIMEOUT_MS         (300U)
+#define BEACON_SEARCH_CONFIRM_FRAMES              (3U)
 #define BEACON_SEARCH_MIN_CONFIDENCE              (96U)
 #define BEACON_SEARCH_MIN_SIGMA_CM                 (5U)
 #define BEACON_SEARCH_MAX_SIGMA_CM                (15U)
-#define BEACON_SEARCH_YAW_RATE_DPS              (60.0f)
-#define BEACON_SEARCH_TIMEOUT_MARGIN_MS         (6000U)
-#define BEACON_SEARCH_TIMEOUT_LIMIT_MS         (60000U)
-#define BEACON_SEARCH_MAX_YAW_STEP_DEG          (10.0f)
+#define BEACON_SEARCH_YAW_RATE_DPS              (30.0f)
+#define BEACON_SEARCH_TIMEOUT_MARGIN_MS          (6000U)
+#define BEACON_SEARCH_TIMEOUT_LIMIT_MS          (60000U)
+#define BEACON_SEARCH_MAX_YAW_STEP_DEG           (10.0f)
 
 typedef enum
 {
@@ -254,7 +254,8 @@ static void beacon_search_update_stability(
 
     s_start_gate_ready = (uint8)(
         input->position_loop_enabled &&
-        s_fused_velocity_valid &&
+        (s_position_window_count >= BEACON_SEARCH_POSITION_WINDOW_FRAMES) &&
+        (s_position_qualified_count >= BEACON_SEARCH_POSITION_REQUIRED_FRAMES) &&
         (s_vision_frame_age_ms <= BEACON_SEARCH_VISION_FRAME_MAX_AGE_MS) &&
         (s_speed_stable_ms >= BEACON_SEARCH_SPEED_STABLE_MS));
 }
@@ -472,23 +473,6 @@ void BeaconSearch_Tick(uint16 elapsed_ms,
                 s_state = BEACON_SEARCH_SPINNING;
                 s_control = BEACON_SEARCH_CONTROL_SPIN;
                 beacon_search_clear_candidate();
-            }
-        }
-        return;
-    }
-
-    if(BEACON_SEARCH_WAIT_FIRST == s_state)
-    {
-        s_loss_age_ms = beacon_search_add_ms(s_loss_age_ms, elapsed_ms);
-        if(s_loss_age_ms >= BEACON_SEARCH_LOSS_DELAY_MS)
-        {
-            if(car_link_valid && s_start_gate_ready)
-            {
-                beacon_search_begin();
-            }
-            else if(!car_link_valid)
-            {
-                beacon_search_fail(BEACON_SEARCH_FAILURE_CAR_LINK);
             }
         }
         return;

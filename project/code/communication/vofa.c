@@ -1341,6 +1341,8 @@ void USART_PID_Adjust(void)
                 case 'q': send_back_flag = 39; break;
                 case 'R':
                 case 'r': send_back_flag = 40; break;
+                case 'S':
+                case 's': send_back_flag = 41; break;
                 case 'U':
                 case 'u': send_back_flag = 29; break;
                 case 'V':
@@ -1950,6 +1952,29 @@ void send_date_back(void)
                               pos_diag.target_accel_y_cms2,
                               pos_diag.position_error_distance_cm,
                               (float)pos_diag.stop_prediction_flags);
+            break;
+        }
+
+        case 41:
+        {
+            static uint32 last_sent_recognition_frame_seq = 0U;
+            VisionRuntimeDiag_t vision_diag = {0};
+
+            VisionRuntime_GetDiag(&vision_diag);
+            if(vision_diag.recognition_frame_seq == last_sent_recognition_frame_seq)
+            {
+                break;
+            }
+            last_sent_recognition_frame_seq = vision_diag.recognition_frame_seq;
+            /* FS!: I0=视觉帧序号，I1=该帧完整识别耗时(us)。 */
+            send_four_date((float)vision_diag.recognition_frame_seq,
+                           vision_diag.recognition_time_us,
+                           0.0f,
+                           0.0f,
+                           0.0f,
+                           0.0f,
+                           0.0f,
+                           0.0f);
             break;
         }
 

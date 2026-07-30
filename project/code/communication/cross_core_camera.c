@@ -666,6 +666,7 @@ void CrossCoreCamera_CameraCoreInit(void)
 void CrossCoreCamera_CameraCoreTask(void)
 {
 #if CY_CORE_CM7_1
+    static uint32 recognition_frame_seq = 0U;
     // 本帧输入快照：由 0 核发布的姿态与高度信息。
     SharedVisionInput_t input_snapshot;
     // 本帧视觉诊断信息：用于屏幕显示和跨核回传。
@@ -675,6 +676,9 @@ void CrossCoreCamera_CameraCoreTask(void)
     VisionRuntimeBeaconSlot_t beacon_slots[VISION_RUNTIME_BEACON_SLOT_COUNT] = {0};
     // 小车定位丢失调试信息。
     VehicleMarkerLossDebug_t loss_debug;
+    uint32 recognition_start_cycle = 0U;
+    uint32 recognition_elapsed_cycle = 0U;
+    uint8 recognition_timer_valid = 0U;
 
     if(!CrossCoreCamera_CameraCoreAcquireFrame())
     {
@@ -711,11 +715,30 @@ void CrossCoreCamera_CameraCoreTask(void)
         input_snapshot.binary_thresholds[VISION_BINARY_ZONE_INNER],
         input_snapshot.binary_thresholds[VISION_BINARY_ZONE_MIDDLE],
         input_snapshot.binary_thresholds[VISION_BINARY_ZONE_OUTER]);
+    recognition_timer_valid = (uint8)(CrossCoreCamera_DwtInit() &&
+                                      (SystemCoreClock != 0U));
+    if(recognition_timer_valid)
+    {
+        recognition_start_cycle = DWT->CYCCNT;
+    }
     VisionRuntime_ProcessFrameWithPose(input_snapshot.roll_deg,
                                        input_snapshot.pitch_deg,
                                        input_snapshot.tof_height_cm);
+    if(recognition_timer_valid)
+    {
+        recognition_elapsed_cycle = DWT->CYCCNT - recognition_start_cycle;
+    }
     // 读取本帧诊断、小车丢失调试信息和信标槽位结果。
     VisionRuntime_GetDiag(&diag_snapshot);
+    recognition_frame_seq++;
+    if(recognition_frame_seq >= 1000000U)
+    {
+        recognition_frame_seq = 0U;
+    }
+    diag_snapshot.recognition_frame_seq = recognition_frame_seq;
+    diag_snapshot.recognition_time_us = recognition_timer_valid ?
+        ((float)recognition_elapsed_cycle * 1000000.0f) / (float)SystemCoreClock :
+        0.0f;
     VisionRuntime_GetBeaconSlots(beacon_slots, VISION_RUNTIME_BEACON_SLOT_COUNT);
     VehicleMarkerLocalization_GetLossDebug(&loss_debug);
     CrossCoreCamera_CameraCorePublishAssistantSnapshot(&input_snapshot);

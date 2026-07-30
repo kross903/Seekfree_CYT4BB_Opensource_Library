@@ -179,6 +179,9 @@ typedef struct
     float beacon_nearest_occupancy;
     float beacon_nearest_aspect;
     uint8 beacon_nearest_confidence;
+    /* CM7_1 单帧完整视觉识别耗时，供 CM7_0 的 VOFA FS! 波形回传。 */
+    float recognition_time_us;
+    uint32 recognition_frame_seq;
 } VisionRuntimeDiag_t;
 
 typedef struct
