@@ -738,20 +738,28 @@ void Position_Loop_Update_Velocity_Target(uint8 velocity_ready,
                               (g_vehicle_marker_pose_update_seq != g_last_pose_seq));
     if(new_visual_pose)
     {
+        float pose_x_body;
+        float pose_y_body;
+        float raw_x_body;
+        float raw_y_body;
         float pose_x_earth;
         float pose_y_earth;
         float raw_x_earth;
         float raw_y_earth;
         g_last_pose_seq = g_vehicle_marker_pose_update_seq;
-        position_loop_body_to_earth(g_vehicle_marker_pose.x,
-                                    g_vehicle_marker_pose.y,
-                                    yaw_deg, &pose_x_earth, &pose_y_earth);
-        position_loop_body_to_earth(g_vehicle_marker_pose.raw_x,
-                                    g_vehicle_marker_pose.raw_y,
-                                    yaw_deg, &raw_x_earth, &raw_y_earth);
-        position_valid = position_loop_accept_visual(pose_x_earth, pose_y_earth,
-                                                     raw_x_earth, raw_y_earth,
-                                                     &position_x, &position_y);
+        if(VehicleMarkerLocalization_GetFollowPoint(&g_vehicle_marker_pose,
+                                                    &pose_x_body, &pose_y_body,
+                                                    &raw_x_body, &raw_y_body))
+        {
+            position_loop_body_to_earth(pose_x_body, pose_y_body,
+                                        yaw_deg, &pose_x_earth, &pose_y_earth);
+            position_loop_body_to_earth(raw_x_body, raw_y_body,
+                                        yaw_deg, &raw_x_earth, &raw_y_earth);
+            position_valid = position_loop_accept_visual(
+                pose_x_earth, pose_y_earth,
+                raw_x_earth, raw_y_earth,
+                &position_x, &position_y);
+        }
         if(position_valid)
         {
             g_last_pose_valid = 1U;

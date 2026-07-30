@@ -586,6 +586,9 @@ void core_link_user_tick (uint16 elapsed_ms)
     BeaconSearchStabilityInput_t search_stability = {0};
     PMWFlowState_t flow_state = {0};
     VehicleMarkerLossDebug_t marker_loss = {0};
+    float follow_x_cm = 0.0f;
+    float follow_y_cm = 0.0f;
+    uint8 follow_valid;
 
     if(s_core_link_user_beacon_tx_elapsed_ms <= (uint16)(60000U - elapsed_ms))
     {
@@ -625,14 +628,19 @@ void core_link_user_tick (uint16 elapsed_ms)
 
     PMW_Flow_GetState(&flow_state);
     VehicleMarkerLocalization_GetLossDebug(&marker_loss);
+    follow_valid = VehicleMarkerLocalization_GetFollowPoint(
+        &g_vehicle_marker_pose,
+        &follow_x_cm, &follow_y_cm,
+        NULL, NULL);
     search_stability.vision_process_count = marker_loss.process_count;
     search_stability.position_loop_enabled = Position_Loop_Is_Enabled();
     search_stability.position_valid = (uint8)(marker_loss.raw_detect_valid &&
                                                marker_loss.pose_valid &&
-                                               !marker_loss.lost_flag);
+                                               !marker_loss.lost_flag &&
+                                               follow_valid);
     search_stability.fused_velocity_valid = flow_state.fused_velocity_valid;
-    search_stability.position_error_x_cm = g_vehicle_marker_pose.x;
-    search_stability.position_error_y_cm = g_vehicle_marker_pose.y;
+    search_stability.position_error_x_cm = follow_x_cm;
+    search_stability.position_error_y_cm = follow_y_cm;
     search_stability.fused_velocity_x_cms = flow_state.velocity_x_fused_cms;
     search_stability.fused_velocity_y_cms = flow_state.velocity_y_fused_cms;
 

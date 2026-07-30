@@ -15,6 +15,7 @@ extern "C" {
 #define VEHICLE_MARKER_POSITION_LOST_HOLD_MS   (150U)
 #define VEHICLE_MARKER_TASK_PERIOD_MS          (5U)
 #define VEHICLE_MARKER_CHEVRON_PLANE_HEIGHT_CM (17.0f)
+#define VEHICLE_MARKER_FOLLOW_REAR_OFFSET_CM   (20.0f) /* 无人机跟随点位于箭头中心后方。 */
 
 #define VEHICLE_MARKER_CHEVRON_REJECT_NONE              (0U)
 #define VEHICLE_MARKER_CHEVRON_REJECT_NO_CANDIDATE      (1U)
@@ -37,10 +38,10 @@ typedef struct
 
 typedef struct
 {
-    float x;
-    float y;
-    float raw_x;
-    float raw_y;
+    float x;       /* 滤波后的小车中心X：箭头三顶点几何重心。 */
+    float y;       /* 滤波后的小车中心Y：箭头三顶点几何重心。 */
+    float raw_x;   /* 未滤波的小车中心X。 */
+    float raw_y;   /* 未滤波的小车中心Y。 */
     float z;
     /* 视觉箭头几何角，仅用于识别/诊断；噪声较大，禁止替代车机两端
      * IMU/Mahony 计算的 car_yaw_rel_uav。 */
@@ -100,6 +101,10 @@ void VehicleMarkerLocalization_ServiceLostProtection(void);
 void VehicleMarkerLocalization_GetLossDebug(VehicleMarkerLossDebug_t *debug);
 void VehicleMarkerLocalization_SetLossDebug(const VehicleMarkerLossDebug_t *debug);
 void VehicleMarkerLocalization_GetChevronDebug(VehicleMarkerChevronDebug_t *debug);
+uint8 VehicleMarkerLocalization_GetFollowPoint(
+    const VehicleMarkerPose_t *pose,
+    float *filtered_x, float *filtered_y,
+    float *raw_x, float *raw_y); /* raw_x/raw_y可同时传NULL。 */
 void VehicleMarkerLocalization_GetBlobRejectDebug(int *area_low_count,
                                                   int *area_high_count,
                                                   int *size_count,

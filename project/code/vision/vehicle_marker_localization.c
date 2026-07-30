@@ -284,7 +284,6 @@ void VehicleMarkerLocalization_ServiceLostProtection(void)
 #define VEHICLE_MARKER_CHEVRON_MAX_BASE_CM                 (46.0f)
 #define VEHICLE_MARKER_CHEVRON_MIN_TRIANGLE_HEIGHT_CM      (8.0f)
 #define VEHICLE_MARKER_CHEVRON_MAX_TRIANGLE_HEIGHT_CM      (24.0f)
-#define VEHICLE_MARKER_POSITION_REAR_OFFSET_CM              (20.0f)
 #define VEHICLE_MARKER_CHEVRON_MIN_CONTOUR_POINTS          (8U)
 #define VEHICLE_MARKER_CHEVRON_POINT_EPS                   (1e-4f)
 #define VEHICLE_MARKER_CHEVRON_SEED_SAMPLE_POINTS          (64U)
@@ -795,9 +794,6 @@ static uint8 vehicle_marker_chevron_store_pose(const VehicleMarkerWorldPoint_t *
 {
     float center_x = 0.0f;
     float center_y = 0.0f;
-    float rear_direction_x = 0.0f;
-    float rear_direction_y = 0.0f;
-    float rear_direction_length = 0.0f;
     float filtered_center_x = 0.0f;
     float filtered_center_y = 0.0f;
     VehicleMarkerPoint2D_t apex_img = {0};
@@ -832,19 +828,9 @@ static uint8 vehicle_marker_chevron_store_pose(const VehicleMarkerWorldPoint_t *
         right_tip_img = *right_line_end_img;
     }
 
-    /* 小车位置取箭头顶点沿两翼中点方向向后偏移20 cm。 */
-    rear_direction_x = 0.5f * (left_tip->x + right_tip->x) - apex->x;
-    rear_direction_y = 0.5f * (left_tip->y + right_tip->y) - apex->y;
-    rear_direction_length = sqrtf(rear_direction_x * rear_direction_x +
-                                  rear_direction_y * rear_direction_y);
-    if(rear_direction_length <= VEHICLE_MARKER_CHEVRON_POINT_EPS)
-    {
-        return 0U;
-    }
-    center_x = apex->x + VEHICLE_MARKER_POSITION_REAR_OFFSET_CM *
-                           rear_direction_x / rear_direction_length;
-    center_y = apex->y + VEHICLE_MARKER_POSITION_REAR_OFFSET_CM *
-                           rear_direction_y / rear_direction_length;
+    /* 小车中心使用箭头三顶点的几何重心；无人机跟随偏移由位置环单独计算。 */
+    center_x = (apex->x + left_tip->x + right_tip->x) / 3.0f;
+    center_y = (apex->y + left_tip->y + right_tip->y) / 3.0f;
     vehicle_marker_center_kalman_update(center_x, center_y,
                                         &filtered_center_x, &filtered_center_y);
 
@@ -894,6 +880,51 @@ static uint8 vehicle_marker_chevron_store_pose(const VehicleMarkerWorldPoint_t *
     }
 
     return 1U;
+}
+
+uint8 VehicleMarkerLocalization_GetFollowPoint(
+    const VehicleMarkerPose_t *pose,
+    float *filtered_x, float *filtered_y,
+    float *raw_x, float *raw_y)
+{
+    float rear_x;
+    float rear_y;
+    float rear_length;
+    float offset_x;
+    float offset_y;
+
+    if((pose == NULL) || (filtered_x == NULL) || (filtered_y == NULL) ||
+       ((raw_x == NULL) != (raw_y == NULL)) ||
+       (pose->detected_point_count < 3U))
+    {
+        return 0U;
+    }
+
+    rear_x = 0.5f * (pose->world_pts[1].x + pose->world_pts[2].x) -
+             pose->world_pts[0].x;
+    rear_y = 0.5f * (pose->world_pts[1].y + pose->world_pts[2].y) -
+             pose->world_pts[0].y;
+    rear_length = sqrtf(rear_x * rear_x + rear_y * rear_y);
+    if(!isfinite(rear_length) ||
+       (rear_length <= VEHICLE_MARKER_CHEVRON_POINT_EPS))
+    {
+        return 0U;
+    }
+
+    offset_x = VEHICLE_MARKER_FOLLOW_REAR_OFFSET_CM * rear_x / rear_length;
+    offset_y = VEHICLE_MARKER_FOLLOW_REAR_OFFSET_CM * rear_y / rear_length;
+    *filtered_x = pose->x + offset_x;
+    *filtered_y = pose->y + offset_y;
+    if(raw_x != NULL)
+    {
+        *raw_x = pose->raw_x + offset_x;
+        *raw_y = pose->raw_y + offset_y;
+        if(!isfinite(*raw_x) || !isfinite(*raw_y))
+        {
+            return 0U;
+        }
+    }
+    return (uint8)(isfinite(*filtered_x) && isfinite(*filtered_y));
 }
 
 void VehicleMarkerLocalization_BeginBlobFrame(void)
