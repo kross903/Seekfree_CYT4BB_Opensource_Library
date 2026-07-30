@@ -44,7 +44,7 @@ COARSE_ZONE_VALUES, COARSE_ZONE_CUTOFFS, COARSE_ZONE_COUNTS = build_zones(
 COARSE_ZONE_MAP = bytes(COARSE_ZONE_VALUES)
 # 与固件五圈粗筛宏一致，顺序为中心、近圈、中圈、远圈、边缘圈。
 COARSE_ZONE_NAMES = ("center", "near", "middle", "far", "edge")
-COARSE_THRESHOLDS = (150, 60, 50, 50, 50)
+COARSE_THRESHOLDS = (150, 60, 50, 50, 40)
 COARSE_THRESHOLD = COARSE_THRESHOLDS[2]
 COARSE_MIN_AREA = 10
 MAP_CREATE_CONFIDENCE = 210
@@ -192,7 +192,7 @@ class Simulator:
         undistort: bool = False,
         birdview: bool = False,
         vehicle_threshold: int = 145,
-        beacon_threshold: int = 10,
+        beacon_threshold: int = 50,
         coarse_threshold: int = COARSE_THRESHOLD,
         binary_mode: str = "gray",
         coarse_thresholds: tuple[int, int, int, int, int] | None = None,
@@ -281,7 +281,7 @@ class VisionToolApp:
         self.yaw_var = tk.StringVar(value="0")
         self.height_var = tk.StringVar(value="100")
         self.vehicle_threshold_var = tk.StringVar(value="145")
-        self.beacon_threshold_var = tk.StringVar(value="10")
+        self.beacon_threshold_var = tk.StringVar(value="50")
         self.coarse_threshold_vars = [
             tk.StringVar(value=str(value)) for value in COARSE_THRESHOLDS
         ]
@@ -1234,6 +1234,14 @@ class VisionToolApp:
             return "小车"
         if candidate.get("beacon_valid"):
             return "信标"
+        if candidate.get("fine_roi_oversize"):
+            width = int(candidate.get("fine_max_col", 0)) - int(
+                candidate.get("fine_min_col", 0)
+            ) + 1
+            height = int(candidate.get("fine_max_row", 0)) - int(
+                candidate.get("fine_min_row", 0)
+            ) + 1
+            return f"未通过（去畸变区域过大：{width}×{height}）"
 
         area_cm2 = float(candidate.get("area_cm2", 0.0))
         pixel_area = int(candidate.get("beacon_area_pixels", 0))
@@ -1347,11 +1355,12 @@ class VisionToolApp:
                     f"{int(candidate.get('beacon_area_pixels', 0))} px，"
                     f"归一化: {candidate.get('adaptive_normalized_area_px', 0):.1f} px"
                 )
-            vehicle_route = (
-                "跳过箭头，直接识别信标"
-                if candidate.get("vehicle_skipped_small_box")
-                else "箭头优先"
-            )
+            if candidate.get("fine_roi_oversize"):
+                vehicle_route = "跳过精筛：去畸变区域过大"
+            elif candidate.get("vehicle_skipped_small_box"):
+                vehicle_route = "跳过箭头，直接识别信标"
+            else:
+                vehicle_route = "箭头优先"
             ttk.Label(
                 tab,
                 text=(
