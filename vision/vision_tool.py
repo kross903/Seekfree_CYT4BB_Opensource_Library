@@ -237,7 +237,7 @@ class Simulator:
             "--height", str(height),
             "--threshold", str(beacon_threshold),
             "--vehicle-threshold", str(vehicle_threshold),
-            "--vehicle-fallback-threshold", str(vehicle_fallback_threshold),
+            "--vehicle-adaptive-min", str(vehicle_fallback_threshold),
             "--beacon-threshold", str(beacon_threshold),
             "--coarse-center-threshold", str(zone_thresholds[0]),
             "--coarse-near-threshold", str(zone_thresholds[1]),
@@ -247,7 +247,7 @@ class Simulator:
             "--binary-mode", binary_mode,
         ]
         if disable_vehicle_fallback:
-            command.append("--disable-vehicle-fallback")
+            command.append("--disable-vehicle-adaptive")
         if undistort:
             command.extend(("--undistorted", str(undistorted_path)))
             command.extend(("--undistorted-mask", str(undistorted_mask_path)))
@@ -479,7 +479,7 @@ class VisionToolApp:
         )
         self.candidate_diagnostic_button = ttk.Button(
             action_bar,
-            text="运行候选双阈值诊断",
+            text="运行候选自适应阈值诊断",
             command=self.start_candidate_diagnostics,
         )
         self.candidate_diagnostic_button.grid(
@@ -576,7 +576,7 @@ class VisionToolApp:
         for row, (text, value) in enumerate((
             ("灰度处理", "gray"),
             ("先二值化，再去畸变/逆透视", "pre_transform"),
-            ("无人机实际：候选去畸变、双阈值短路识别", "undistort_binary_ipm"),
+            ("无人机实际：候选去畸变、箭头自适应识别", "undistort_binary_ipm"),
             ("先去畸变/逆透视，再二值化", "post_transform"),
         ), start=4):
             ttk.Radiobutton(
@@ -586,11 +586,11 @@ class VisionToolApp:
                 variable=self.binary_mode_var,
                 command=self.refresh_processed_preview,
             ).grid(row=row, column=0, columnspan=2, sticky="w", pady=(2, 0))
-        ttk.Label(processing, text="箭头精筛阈值").grid(row=8, column=0, sticky="w", pady=(8, 0))
+        ttk.Label(processing, text="箭头自适应上限").grid(row=8, column=0, sticky="w", pady=(8, 0))
         ttk.Entry(processing, textvariable=self.vehicle_threshold_var, width=8).grid(
             row=8, column=1, sticky="ew", padx=(8, 0), pady=(8, 0)
         )
-        ttk.Label(processing, text="箭头回退阈值").grid(row=9, column=0, sticky="w", pady=(4, 0))
+        ttk.Label(processing, text="箭头自适应下限").grid(row=9, column=0, sticky="w", pady=(4, 0))
         ttk.Entry(
             processing,
             textvariable=self.vehicle_fallback_threshold_var,
@@ -717,7 +717,7 @@ class VisionToolApp:
             if any(value < 1 or value > 255 for value in (*thresholds, *coarse_thresholds)):
                 raise ValueError
             if thresholds[1] >= thresholds[0]:
-                raise ValueError("箭头回退阈值必须低于箭头精筛阈值")
+                raise ValueError("箭头自适应下限必须低于上限")
         except ValueError as exc:
             message = str(exc) or "仿真参数无效"
             self.ui_queue.put(("run", (False, message, None, APP_ROOT, None, None, None, None, None)))
@@ -803,7 +803,7 @@ class VisionToolApp:
             variable.set(str(value))
         self.log(
             "已从 vision_runtime.h 同步阈值: "
-            f"箭头首轮/回退/信标={values[0]}/{values[1]}/{values[2]}, "
+            f"箭头自适应上限/下限/信标={values[0]}/{values[1]}/{values[2]}, "
             f"粗筛={'/'.join(str(value) for value in values[3:])}"
         )
         return True
@@ -1183,11 +1183,11 @@ class VisionToolApp:
         if self.candidate_diagnostic_running:
             return
         if self.current_result is None or self.current_candidate_source is None:
-            messagebox.showinfo("双阈值诊断", "请先运行当前帧仿真")
+            messagebox.showinfo("自适应阈值诊断", "请先运行当前帧仿真")
             return
         runtime_candidates = self.current_result.get("coarse_candidates")
         if not isinstance(runtime_candidates, list) or not runtime_candidates:
-            messagebox.showinfo("双阈值诊断", "当前帧没有粗筛候选")
+            messagebox.showinfo("自适应阈值诊断", "当前帧没有粗筛候选")
             return
         try:
             primary_threshold = int(self.vehicle_threshold_var.get())
@@ -1210,10 +1210,10 @@ class VisionToolApp:
             ):
                 raise ValueError
             if fallback_threshold >= primary_threshold:
-                raise ValueError("箭头回退阈值必须低于箭头精筛阈值")
+                raise ValueError("箭头自适应下限必须低于上限")
         except ValueError as exc:
             messagebox.showerror(
-                "双阈值诊断",
+                "自适应阈值诊断",
                 str(exc) or "阈值必须是1~255，姿态和高度必须为数值",
             )
             return
@@ -1222,7 +1222,7 @@ class VisionToolApp:
         self.candidate_diagnostic_frame = self.current_frame
         self.current_candidate_diagnostics = []
         self.candidate_diagnostic_button.config(state=tk.DISABLED)
-        self.status_var.set(f"候选双阈值诊断中 0/{len(runtime_candidates)}")
+        self.status_var.set(f"候选自适应阈值诊断中 0/{len(runtime_candidates)}")
         threading.Thread(
             target=self.candidate_diagnostic_worker,
             args=(
@@ -1314,10 +1314,16 @@ class VisionToolApp:
                     results[mode_name], binaries[mode_name] = (
                         self.load_vehicle_diagnostic_result(simulation, mode_dir)
                     )
+                official_candidates = results["official"].get("coarse_candidates", [])
+                official_candidate = (
+                    max(official_candidates, key=lambda item: int(item.get("area", 0)))
+                    if official_candidates else {}
+                )
                 diagnostics.append({
                     "candidate_index": index - 1,
                     "primary_threshold": primary_threshold,
                     "fallback_threshold": fallback_threshold,
+                    "adaptive_threshold": official_candidate.get("vehicle_threshold", 0),
                     "primary": results["primary"],
                     "fallback": results["fallback"],
                     "official": results["official"],
@@ -1541,30 +1547,31 @@ class VisionToolApp:
     @classmethod
     def format_candidate_diagnostic(cls, diagnostic: dict | None) -> str:
         if not diagnostic:
-            return "双阈值诊断：未运行"
+            return "自适应阈值诊断：未运行"
         primary = diagnostic["primary"]
         fallback = diagnostic["fallback"]
         official = diagnostic["official"]
         primary_valid = bool(primary.get("vehicle", {}).get("valid"))
         fallback_valid = bool(fallback.get("vehicle", {}).get("valid"))
         official_valid = bool(official.get("vehicle", {}).get("valid"))
-        if official_valid and primary_valid:
-            route = "正式路径：首轮直接通过"
-        elif official_valid:
-            route = "正式路径：首轮失败，回退通过"
+        adaptive_threshold = diagnostic.get("adaptive_threshold", "?")
+        if official_valid:
+            route = f"正式路径：自适应阈值{adaptive_threshold}通过"
         elif fallback_valid:
             route = (
-                f"正式路径：未通过；{diagnostic['fallback_threshold']}单独可过"
-                "但被首轮open-V门控否决"
+                f"正式路径：自适应未通过；固定下限"
+                f"{diagnostic['fallback_threshold']}可通过"
             )
+        elif primary_valid:
+            route = "正式路径：自适应未通过；固定上限可通过"
         else:
-            route = "正式路径：首轮和回退均未通过"
+            route = "正式路径：自适应、固定上限和固定下限均未通过"
         return "\n".join((
             cls.format_threshold_diagnostic(
-                f"首轮{diagnostic['primary_threshold']}", primary
+                f"固定上限{diagnostic['primary_threshold']}", primary
             ),
             cls.format_threshold_diagnostic(
-                f"回退{diagnostic['fallback_threshold']}", fallback
+                f"固定下限{diagnostic['fallback_threshold']}", fallback
             ),
             route,
         ))
@@ -1665,6 +1672,7 @@ class VisionToolApp:
                     f"候选 {index}  框: ({min_col},{min_row})-({max_col},{max_row})  "
                     f"类型: {candidate_type}  "
                     f"候选框面积: {int(candidate.get('raw_box_area_pixels', 0))} 像素  "
+                    f"箭头自适应阈值: {int(candidate.get('vehicle_threshold', 0))}  "
                     f"分流: {vehicle_route}  "
                     f"{area_text}  "
                     f"圆度: {candidate.get('circularity', 0):.3f}  "
@@ -1691,9 +1699,9 @@ class VisionToolApp:
             ]
             if diagnostic:
                 for title, key in (
-                    (f"首轮{diagnostic['primary_threshold']}箭头位图", "primary_binary"),
-                    (f"回退{diagnostic['fallback_threshold']}箭头位图", "fallback_binary"),
-                    ("正式首轮→回退箭头位图", "official_binary"),
+                    (f"固定上限{diagnostic['primary_threshold']}箭头位图", "primary_binary"),
+                    (f"固定下限{diagnostic['fallback_threshold']}箭头位图", "fallback_binary"),
+                    (f"自适应{diagnostic.get('adaptive_threshold', '?')}箭头位图", "official_binary"),
                 ):
                     diagnostic_image = diagnostic.get(key)
                     diagnostic_crop = (
@@ -1881,7 +1889,7 @@ class VisionToolApp:
             if any(value < 1 or value > 255 for value in (*thresholds, *coarse_thresholds)):
                 raise ValueError
             if thresholds[1] >= thresholds[0]:
-                raise ValueError("箭头回退阈值必须低于箭头精筛阈值")
+                raise ValueError("箭头自适应下限必须低于上限")
         except ValueError as exc:
             messagebox.showerror(
                 "参数错误",
@@ -1950,7 +1958,7 @@ class VisionToolApp:
                    for value in (*recognition_thresholds, *coarse_thresholds)):
                 raise ValueError
             if recognition_thresholds[1] >= recognition_thresholds[0]:
-                raise ValueError("箭头回退阈值必须低于箭头精筛阈值")
+                raise ValueError("箭头自适应下限必须低于上限")
         except ValueError as exc:
             messagebox.showerror(
                 "参数错误",
@@ -2036,9 +2044,8 @@ class VisionToolApp:
                 chevron = payload.get("chevron", {})
                 open_v = chevron.get("open_v", {}) if isinstance(chevron, dict) else {}
                 arrow_valid = bool(payload.get("vehicle", {}).get("valid"))
-                gate_from_primary = bool(open_v.get("gate_from_primary", 0))
                 if arrow_valid:
-                    arrow_route = "fallback" if gate_from_primary else "primary"
+                    arrow_route = "adaptive"
                 else:
                     arrow_route = "rejected"
                 rows.append({
@@ -2242,24 +2249,24 @@ class VisionToolApp:
                 messagebox.showerror("批量验证失败", str(payload))
             elif event == "candidate_diag_progress":
                 current, total = payload
-                self.status_var.set(f"候选双阈值诊断中 {current}/{total}")
+                self.status_var.set(f"候选自适应阈值诊断中 {current}/{total}")
             elif event == "candidate_diag_done":
                 diagnostics, run_dir = payload
                 self.candidate_diagnostic_running = False
                 self.candidate_diagnostic_button.config(state=tk.NORMAL)
-                self.log(f"candidate dual-threshold result: {run_dir}")
+                self.log(f"candidate adaptive-threshold result: {run_dir}")
                 if self.current_frame != self.candidate_diagnostic_frame:
-                    self.status_var.set("候选双阈值诊断完成（已切换帧，结果未显示）")
+                    self.status_var.set("候选自适应阈值诊断完成（已切换帧，结果未显示）")
                 else:
                     self.current_candidate_diagnostics = diagnostics
-                    self.status_var.set("候选双阈值诊断完成")
+                    self.status_var.set("候选自适应阈值诊断完成")
                     self.open_current_candidate_window()
             elif event == "candidate_diag_error":
                 self.candidate_diagnostic_running = False
                 self.candidate_diagnostic_button.config(state=tk.NORMAL)
-                self.status_var.set("候选双阈值诊断失败")
-                self.log("candidate dual-threshold error: " + str(payload))
-                messagebox.showerror("双阈值诊断失败", str(payload))
+                self.status_var.set("候选自适应阈值诊断失败")
+                self.log("candidate adaptive-threshold error: " + str(payload))
+                messagebox.showerror("候选自适应阈值诊断失败", str(payload))
             elif event == "run":
                 ok, log, result, run_dir, image, undistorted_image, birdview_image, undistorted_mask, birdview_mask = payload
                 self.log(log)
@@ -2423,7 +2430,24 @@ class VisionToolApp:
             f"（{'；'.join(physical_failures)}）" if physical_failures else ""
         )
         recognition_thresholds = result.get("recognition_thresholds", {})
-        primary_threshold = recognition_thresholds.get("vehicle", "?")
+        adaptive_max = recognition_thresholds.get(
+            "vehicle_adaptive_max", recognition_thresholds.get("vehicle", "?")
+        )
+        adaptive_min = recognition_thresholds.get(
+            "vehicle_adaptive_min", recognition_thresholds.get("vehicle_fallback", "?")
+        )
+        adaptive_enabled = recognition_thresholds.get(
+            "vehicle_adaptive_enabled",
+            recognition_thresholds.get("vehicle_fallback_enabled", 1),
+        )
+        vehicle_candidate = next(
+            (item for item in result.get("coarse_candidates", []) if item.get("vehicle_valid")),
+            None,
+        )
+        vehicle_candidate_threshold = (
+            vehicle_candidate.get("vehicle_threshold", "?")
+            if isinstance(vehicle_candidate, dict) else "?"
+        )
         chevron_info = (
             f"\n小车候选: {chevron.get('candidate_count', 0)}，拒绝: "
             f"{reject_text}{physical_failure_text}"
@@ -2434,7 +2458,7 @@ class VisionToolApp:
             f"，臂连续度: {open_v.get('arm_continuity', 0):.3f}"
             f"，门控: {open_v.get('gate_score', open_v.get('score', 0)):.3f}"
             f"/空隙{open_v.get('gate_center_gap', open_v.get('center_gap', 0)):.3f}"
-            f"（{f'{primary_threshold}首轮' if open_v.get('gate_from_primary', 0) else '当前位图'}）"
+            f"（候选阈值{vehicle_candidate_threshold}）"
             f"，夹角: {physical.get('arm_angle_deg', 0):.2f}°"
             f"\n底边/高: {physical.get('base_cm', 0):.2f}/{physical.get('triangle_height_cm', 0):.2f} cm"
         )
@@ -2456,15 +2480,13 @@ class VisionToolApp:
             float(result.get("pitch_deg", 0.0)),
         )
         pose_warning_line = f"{pose_warning}\n" if pose_warning else ""
-        fallback_enabled = recognition_thresholds.get("vehicle_fallback_enabled", 1)
         self.set_result_info(
             f"连通域: {result.get('blob_count', 0)}\n"
             f"信标: {result.get('beacon_count', 0)}\n"
-            f"箭头首轮(回退)/信标精筛阈值: "
-            f"{result.get('recognition_thresholds', {}).get('vehicle', '?')}"
-            f"({result.get('recognition_thresholds', {}).get('vehicle_fallback', '?')})/"
+            f"箭头自适应上限/下限/信标精筛阈值: "
+            f"{adaptive_max}/{adaptive_min}/"
             f"{result.get('recognition_thresholds', {}).get('beacon', '?')}\n"
-            f"回退状态: {'启用' if fallback_enabled else '禁用'}\n"
+            f"箭头自适应: {'启用' if adaptive_enabled else '禁用'}\n"
             f"粗筛五圈阈值（中心→边缘）: {coarse_text}\n"
             f"{pose_warning_line}"
             f"箭头分流面积阈值: 常规≥{result.get('vehicle_min_raw_box_area', '?')}；"

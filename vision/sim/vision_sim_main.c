@@ -406,7 +406,12 @@ static int write_result(const char *path, const char *binary_path,
     fprintf(file,
             "  \"recognition_thresholds\":{\"vehicle\":%u,"
             "\"vehicle_fallback\":%u,\"vehicle_fallback_enabled\":%u,"
+            "\"vehicle_adaptive_max\":%u,\"vehicle_adaptive_min\":%u,"
+            "\"vehicle_adaptive_enabled\":%u,"
             "\"beacon\":%u},\n",
+            (unsigned)vehicle_threshold,
+            (unsigned)vehicle_fallback_threshold,
+            (unsigned)vehicle_fallback_enabled,
             (unsigned)vehicle_threshold,
             (unsigned)vehicle_fallback_threshold,
             (unsigned)vehicle_fallback_enabled,
@@ -414,7 +419,7 @@ static int write_result(const char *path, const char *binary_path,
     fprintf(file,
             "  \"recognition_pipeline\":\"%s\",\n",
             vehicle_fallback_enabled ?
-                "vehicle_first_fallback_threshold_short_circuit" :
+                "vehicle_first_candidate_adaptive_threshold_short_circuit" :
                 "vehicle_first_single_threshold_short_circuit");
     fprintf(file, "  \"physical_grid_enabled\":%u,\n",
             (unsigned)VISION_RUNTIME_PHYSICAL_GRID_ENABLE);
@@ -512,6 +517,7 @@ static int write_result(const char *path, const char *binary_path,
                 "\"vehicle_valid\":%u,\"vehicle_skipped_small_box\":%u,"
                 "\"fine_roi_oversize\":%u,\"beacon_valid\":%u,"
                 "\"raw_box_area_pixels\":%d,\"beacon_area_pixels\":%d,"
+                "\"vehicle_threshold\":%u,"
                 "\"detection_confidence\":%u,\"position_sigma_cm\":%u,"
                 "\"x_cm\":%.6f,\"y_cm\":%.6f,"
                 "\"area_cm2\":%.6f,\"circularity\":%.6f,"
@@ -533,6 +539,7 @@ static int write_result(const char *path, const char *binary_path,
                 (unsigned)candidates[i].beacon_valid,
                 candidates[i].raw_box_area_pixels,
                 candidates[i].beacon_area_pixels,
+                (unsigned)candidates[i].vehicle_threshold,
                 (unsigned)candidates[i].detection_confidence,
                 (unsigned)candidates[i].position_sigma_cm,
                 candidates[i].beacon_x_cm,
@@ -594,6 +601,24 @@ static int write_result(const char *path, const char *binary_path,
     fprintf(file, "\"right_line_end_raw_img\":{\"u\":%.3f,\"v\":%.3f},",
             right_line_end_raw_u, right_line_end_raw_v);
     fprintf(file,
+            "\"open_v\":{\"arm_support\":%.6f,\"center_gap\":%.6f,"
+            "\"arm_continuity\":%.6f,\"score\":%.6f,"
+            "\"hypothesis_score\":%.6f,\"hypothesis_second_score\":%.6f,"
+            "\"hypothesis_margin\":%.6f,\"gate_score\":%.6f,"
+            "\"gate_center_gap\":%.6f,\"apex_index\":%u,"
+            "\"gate_from_primary\":%u},",
+            chevron.open_v_arm_support,
+            chevron.open_v_center_gap,
+            chevron.open_v_arm_continuity,
+            chevron.open_v_score,
+            chevron.open_v_hypothesis_score,
+            chevron.open_v_hypothesis_second_score,
+            chevron.open_v_hypothesis_margin,
+            chevron.open_v_gate_score,
+            chevron.open_v_gate_center_gap,
+            (unsigned)chevron.open_v_apex_index,
+            (unsigned)chevron.open_v_gate_from_primary);
+    fprintf(file,
             "\"physical\":{\"area_cm2\":%.6f,\"occupancy\":%.6f,\"circularity\":%.6f,"
             "\"left_arm_cm\":%.6f,\"right_arm_cm\":%.6f,\"arm_angle_deg\":%.6f,"
             "\"base_cm\":%.6f,\"triangle_height_cm\":%.6f},",
@@ -638,8 +663,9 @@ int main(int argc, char **argv)
         parse_int(get_option(argc, argv, "--threshold-inner"),
                   (int)VISION_BINARY_THRESHOLD_VEHICLE));
     int vehicle_fallback_threshold_value = parse_int(
-        get_option(argc, argv, "--vehicle-fallback-threshold"),
-        (int)VISION_BINARY_THRESHOLD_VEHICLE_FALLBACK);
+        get_option(argc, argv, "--vehicle-adaptive-min"),
+        parse_int(get_option(argc, argv, "--vehicle-fallback-threshold"),
+                  (int)VISION_BINARY_THRESHOLD_VEHICLE_FALLBACK));
     int beacon_threshold_value = parse_int(
         get_option(argc, argv, "--beacon-threshold"),
         parse_int(get_option(argc, argv, "--threshold-middle"),
@@ -671,7 +697,8 @@ int main(int argc, char **argv)
     uint8 beacon_threshold;
     int binary_mode = BINARY_MODE_GRAY;
     uint8 vehicle_fallback_enabled =
-        has_option(argc, argv, "--disable-vehicle-fallback") ? 0U : 1U;
+        (has_option(argc, argv, "--disable-vehicle-adaptive") ||
+         has_option(argc, argv, "--disable-vehicle-fallback")) ? 0U : 1U;
     VisionRuntimeDiag_t diag = {0};
     uint8 *undistorted_image = NULL;
     uint8 *undistorted_mask = NULL;
@@ -689,7 +716,7 @@ int main(int argc, char **argv)
 
     if(input_path == NULL || output_path == NULL || !read_raw(input_path))
     {
-        fprintf(stderr, "usage: vision_sim --input frame.raw --output result.json [--binary binary.pgm] [--vehicle-binary vehicle_binary.pgm] [--disable-vehicle-fallback] [--vehicle-threshold 145] [--vehicle-fallback-threshold 50] [--beacon-threshold 50] [--coarse-center-threshold 150] [--coarse-near-threshold 60] [--coarse-middle-threshold 50] [--coarse-far-threshold 50] [--coarse-edge-threshold 40] [--binary-mode gray|pre_transform|undistort_binary_ipm|post_transform]\n");
+        fprintf(stderr, "usage: vision_sim --input frame.raw --output result.json [--binary binary.pgm] [--vehicle-binary vehicle_binary.pgm] [--disable-vehicle-adaptive] [--vehicle-threshold 145] [--vehicle-adaptive-min 50] [--beacon-threshold 50] [--coarse-center-threshold 150] [--coarse-near-threshold 60] [--coarse-middle-threshold 50] [--coarse-far-threshold 50] [--coarse-edge-threshold 40] [--binary-mode gray|pre_transform|undistort_binary_ipm|post_transform]\n");
         return 2;
     }
 
@@ -703,7 +730,7 @@ int main(int argc, char **argv)
         vehicle_fallback_threshold_value >= vehicle_threshold_value))
     {
         fprintf(stderr,
-                "vehicle fallback threshold must be 1..255 and lower than the primary threshold\n");
+                "vehicle adaptive minimum must be 1..255 and lower than the maximum\n");
         return 2;
     }
     if(beacon_threshold_value < 1) beacon_threshold_value = 1;

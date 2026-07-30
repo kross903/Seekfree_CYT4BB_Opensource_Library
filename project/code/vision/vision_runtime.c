@@ -740,6 +740,9 @@ static VisionRuntimeCandidateAnnotation_t
     s_vision_candidate_annotations[VISION_RUNTIME_MAX_CANDIDATES];
 static uint32 s_vision_candidate_beacon_area[VISION_RUNTIME_MAX_CANDIDATES];
 static uint32 s_vision_candidate_vehicle_area[VISION_RUNTIME_MAX_CANDIDATES];
+static uint8 s_vision_candidate_vehicle_threshold[VISION_RUNTIME_MAX_CANDIDATES];
+static uint16 s_vision_vehicle_adaptive_histogram[
+    VISION_RUNTIME_VEHICLE_ADAPTIVE_HISTOGRAM_BINS];
 static uint32 s_vision_candidate_beacon_brightness_sum[VISION_RUNTIME_MAX_CANDIDATES];
 static VisionRuntimeThresholdStats_t
     s_vision_candidate_threshold_stats[VISION_RUNTIME_MAX_CANDIDATES];
@@ -919,6 +922,8 @@ static uint8 VisionRuntime_FindCoarseCandidates(void)
            sizeof(s_vision_candidate_annotations));
     memset(s_vision_candidate_beacon_area, 0,
            sizeof(s_vision_candidate_beacon_area));
+    memset(s_vision_candidate_vehicle_threshold, 0,
+           sizeof(s_vision_candidate_vehicle_threshold));
     memset(s_vision_candidate_beacon_brightness_sum, 0,
            sizeof(s_vision_candidate_beacon_brightness_sum));
     memset(s_vision_candidate_threshold_stats, 0,
@@ -1178,10 +1183,12 @@ static void VisionRuntime_RefineCandidateIPM(
 
 static void VisionRuntime_FillFineCandidateUndistortedDual(
     const uint8 image[MT9V03X_H][MT9V03X_W],
-    const VisionRuntimeCandidate_t *candidate, uint8 candidate_index);
+    const VisionRuntimeCandidate_t *candidate, uint8 candidate_index,
+    uint8 vehicle_enabled, uint8 vehicle_threshold);
 static uint8 VisionRuntime_BuildFineCandidateIPMDualBinary(
     const uint8 image[MT9V03X_H][MT9V03X_W],
-    const VisionRuntimeCandidate_t *candidate, uint8 candidate_index);
+    const VisionRuntimeCandidate_t *candidate, uint8 candidate_index,
+    uint8 vehicle_enabled, uint8 vehicle_threshold);
 
 static void VisionRuntime_Binarize(const uint8 image[MT9V03X_H][MT9V03X_W])
 {
@@ -1233,14 +1240,140 @@ static uint8 VisionRuntime_FineBoundsWithinCostLimit(
         width * height <= VISION_RUNTIME_FINE_CANDIDATE_MAX_PIXELS);
 }
 
+static uint8 VisionRuntime_GetVehicleAdaptiveThreshold(
+    const uint8 image[MT9V03X_H][MT9V03X_W],
+    const VisionRuntimeCandidate_t *candidate)
+{
+    uint32 total = 0U;
+    uint32 total_sum = 0U;
+    uint32 background_weight = 0U;
+    uint32 background_sum = 0U;
+    uint64 best_score = 0ULL;
+    uint8 best_bin = 0U;
+    uint8 split_found = 0U;
+    int min_row;
+    int max_row;
+    int min_col;
+    int max_col;
+    int row;
+    int col;
+    uint8 bin;
+
+#if defined(VISION_RUNTIME_PC_DIAGNOSTICS)
+    if(!s_vision_vehicle_fallback_enabled)
+    {
+        return s_vision_vehicle_threshold;
+    }
+#endif
+    if(candidate == NULL)
+    {
+        return s_vision_vehicle_threshold;
+    }
+    min_row = candidate->min_row - VISION_RUNTIME_CANDIDATE_MARGIN;
+    max_row = candidate->max_row + VISION_RUNTIME_CANDIDATE_MARGIN;
+    min_col = candidate->min_col - VISION_RUNTIME_CANDIDATE_MARGIN;
+    max_col = candidate->max_col + VISION_RUNTIME_CANDIDATE_MARGIN;
+    if(min_row < 0) min_row = 0;
+    if(max_row >= MT9V03X_H) max_row = MT9V03X_H - 1;
+    if(min_col < 0) min_col = 0;
+    if(max_col >= MT9V03X_W) max_col = MT9V03X_W - 1;
+
+    memset(s_vision_vehicle_adaptive_histogram, 0,
+           sizeof(s_vision_vehicle_adaptive_histogram));
+    for(row = min_row; row <= max_row; ++row)
+    {
+        for(col = min_col; col <= max_col; ++col)
+        {
+            uint8 gray = image[row][col];
+            uint8 histogram_bin =
+                (uint8)(gray >> VISION_RUNTIME_VEHICLE_ADAPTIVE_BIN_SHIFT);
+            ++s_vision_vehicle_adaptive_histogram[histogram_bin];
+            ++total;
+            total_sum += (uint32)histogram_bin;
+        }
+    }
+    for(bin = 0U;
+        bin + 1U < VISION_RUNTIME_VEHICLE_ADAPTIVE_HISTOGRAM_BINS;
+        ++bin)
+    {
+        uint32 foreground_weight;
+        uint32 background_mean_q8;
+        uint32 foreground_mean_q8;
+        uint32 mean_difference_q8;
+        uint64 score;
+
+        background_weight += s_vision_vehicle_adaptive_histogram[bin];
+        background_sum +=
+            (uint32)bin * s_vision_vehicle_adaptive_histogram[bin];
+        foreground_weight = total - background_weight;
+        if(background_weight == 0U || foreground_weight == 0U) continue;
+        background_mean_q8 = (background_sum << 8) / background_weight;
+        foreground_mean_q8 =
+            ((total_sum - background_sum) << 8) / foreground_weight;
+        mean_difference_q8 =
+            (foreground_mean_q8 >= background_mean_q8) ?
+            foreground_mean_q8 - background_mean_q8 :
+            background_mean_q8 - foreground_mean_q8;
+        score = (uint64)background_weight * (uint64)foreground_weight *
+                (uint64)mean_difference_q8 * (uint64)mean_difference_q8;
+        if(!split_found || score > best_score)
+        {
+            best_score = score;
+            best_bin = bin;
+            split_found = 1U;
+        }
+    }
+    if(split_found)
+    {
+        uint32 foreground_weight = 0U;
+        uint32 foreground_sum = 0U;
+        int threshold =
+            ((int)best_bin + 1) << VISION_RUNTIME_VEHICLE_ADAPTIVE_BIN_SHIFT;
+
+        for(bin = (uint8)(best_bin + 1U);
+            bin < VISION_RUNTIME_VEHICLE_ADAPTIVE_HISTOGRAM_BINS;
+            ++bin)
+        {
+            uint32 bin_center =
+                ((uint32)bin << VISION_RUNTIME_VEHICLE_ADAPTIVE_BIN_SHIFT) +
+                (1U << (VISION_RUNTIME_VEHICLE_ADAPTIVE_BIN_SHIFT - 1U));
+            foreground_weight += s_vision_vehicle_adaptive_histogram[bin];
+            foreground_sum += bin_center *
+                s_vision_vehicle_adaptive_histogram[bin];
+        }
+        if(foreground_weight > 0U)
+        {
+            int foreground_threshold =
+                (int)(foreground_sum / foreground_weight) -
+                (int)VISION_RUNTIME_VEHICLE_ADAPTIVE_FOREGROUND_MARGIN;
+            if(foreground_threshold > threshold)
+            {
+                threshold = foreground_threshold;
+            }
+        }
+        if(threshold < (int)s_vision_vehicle_fallback_threshold)
+        {
+            threshold = (int)s_vision_vehicle_fallback_threshold;
+        }
+        if(threshold > (int)s_vision_vehicle_threshold)
+        {
+            threshold = (int)s_vision_vehicle_threshold;
+        }
+        return (uint8)threshold;
+    }
+    return s_vision_vehicle_threshold;
+}
+
 static uint8 VisionRuntime_BuildFineCandidateBinaries(
     const uint8 image[MT9V03X_H][MT9V03X_W],
-    const VisionRuntimeCandidate_t *candidate, uint8 candidate_index)
+    const VisionRuntimeCandidate_t *candidate, uint8 candidate_index,
+    uint8 vehicle_enabled)
 {
     int min_x;
     int max_x;
     int min_y;
     int max_y;
+    uint8 vehicle_threshold;
 
     if(candidate == NULL) return 0U;
     VisionRuntime_GetFineCandidateBounds(candidate, &min_x, &max_x,
@@ -1250,6 +1383,8 @@ static uint8 VisionRuntime_BuildFineCandidateBinaries(
     {
         return 0U;
     }
+    vehicle_threshold = vehicle_enabled ?
+        VisionRuntime_GetVehicleAdaptiveThreshold(image, candidate) : 0U;
     VisionRuntime_ClearFineCandidateBuffer(s_vision_vehicle_binary, candidate);
     VisionRuntime_ClearFineCandidateBuffer(s_vision_binary, candidate);
     if(candidate_index < VISION_RUNTIME_MAX_CANDIDATES)
@@ -1257,22 +1392,27 @@ static uint8 VisionRuntime_BuildFineCandidateBinaries(
         s_vision_candidate_vehicle_area[candidate_index] = 0U;
         s_vision_candidate_beacon_area[candidate_index] = 0U;
         s_vision_candidate_beacon_brightness_sum[candidate_index] = 0U;
+        s_vision_candidate_vehicle_threshold[candidate_index] =
+            vehicle_threshold;
         memset(&s_vision_candidate_threshold_stats[candidate_index], 0,
                sizeof(s_vision_candidate_threshold_stats[candidate_index]));
     }
 #if VISION_RUNTIME_PIPELINE_MODE == VISION_RUNTIME_PIPELINE_IPM_THEN_BINARY
     return VisionRuntime_BuildFineCandidateIPMDualBinary(
-        image, candidate, candidate_index);
+        image, candidate, candidate_index, vehicle_enabled,
+        vehicle_threshold);
 #else
     VisionRuntime_FillFineCandidateUndistortedDual(
-        image, candidate, candidate_index);
+        image, candidate, candidate_index, vehicle_enabled,
+        vehicle_threshold);
     return 1U;
 #endif
 }
 
 static void VisionRuntime_FillFineCandidateUndistortedDual(
     const uint8 image[MT9V03X_H][MT9V03X_W],
-    const VisionRuntimeCandidate_t *candidate, uint8 candidate_index)
+    const VisionRuntimeCandidate_t *candidate, uint8 candidate_index,
+    uint8 vehicle_enabled, uint8 vehicle_threshold)
 {
     int min_x;
     int max_x;
@@ -1297,7 +1437,7 @@ static void VisionRuntime_FillFineCandidateUndistortedDual(
             {
                 continue;
             }
-            if(sample >= s_vision_vehicle_threshold)
+            if(vehicle_enabled && sample >= vehicle_threshold)
             {
                 VISION_RUNTIME_FINE_BIT_SET(s_vision_vehicle_binary, x, y);
                 if(candidate_index < VISION_RUNTIME_MAX_CANDIDATES)
@@ -1344,7 +1484,8 @@ static void VisionRuntime_FillFineCandidateUndistortedDual(
 
 static uint8 VisionRuntime_BuildFineCandidateIPMDualBinary(
     const uint8 image[MT9V03X_H][MT9V03X_W],
-    const VisionRuntimeCandidate_t *candidate, uint8 candidate_index)
+    const VisionRuntimeCandidate_t *candidate, uint8 candidate_index,
+    uint8 vehicle_enabled, uint8 vehicle_threshold)
 {
     const float scale = VISION_RUNTIME_LOCAL_BIRDVIEW_SCALE_CM_PER_PIXEL;
     float min_world_x = 0.0f;
@@ -1431,7 +1572,7 @@ static uint8 VisionRuntime_BuildFineCandidateIPMDualBinary(
             }
             {
                 uint8 sample = image[source_y][source_x];
-                if(sample >= s_vision_vehicle_threshold)
+                if(vehicle_enabled && sample >= vehicle_threshold)
                 {
                     VISION_RUNTIME_FINE_BIT_SET(s_vision_vehicle_binary,
                                                 full_x, full_y);
@@ -2361,7 +2502,6 @@ static void VisionRuntime_ProcessBlobs(
     {
         uint8 vehicle_confirmed = 0U;
         uint8 allow_small_vehicle;
-        VehicleMarkerOpenVGate_t primary_open_v = {0};
         int raw_box_area =
             (s_vision_candidates[i].max_col - s_vision_candidates[i].min_col + 1) *
             (s_vision_candidates[i].max_row - s_vision_candidates[i].min_row + 1);
@@ -2381,7 +2521,8 @@ static void VisionRuntime_ProcessBlobs(
         s_vision_candidate_annotations[i].vehicle_skipped_small_box = skip_vehicle;
 
         if(VisionRuntime_BuildFineCandidateBinaries(
-               image, &s_vision_candidates[i], i))
+               image, &s_vision_candidates[i], i,
+               (uint8)!skip_vehicle))
         {
             if(!frame_vehicle_confirmed && !skip_vehicle &&
                s_vision_candidate_vehicle_area[i] >=
@@ -2390,42 +2531,10 @@ static void VisionRuntime_ProcessBlobs(
                 vehicle_confirmed = VisionRuntime_ProcessFineROI(
                     &s_vision_candidates[i],
                     VISION_RUNTIME_FINE_TARGET_VEHICLE, i,
-                    s_vision_vehicle_binary, NULL,
-                    &primary_open_v);
+                    s_vision_vehicle_binary, NULL, NULL);
                 if(vehicle_confirmed)
                 {
                     s_vision_candidate_annotations[i].vehicle_valid = 1U;
-                }
-            }
-            if(!frame_vehicle_confirmed && !vehicle_confirmed && !skip_vehicle &&
-#if defined(VISION_RUNTIME_PC_DIAGNOSTICS)
-               s_vision_vehicle_fallback_enabled &&
-#endif
-               s_vision_vehicle_threshold >
-                   s_vision_vehicle_fallback_threshold)
-            {
-                uint8 primary_vehicle_threshold = s_vision_vehicle_threshold;
-                uint8 fallback_binary_valid;
-
-                /* 复用箭头位图，仅对首轮失败候选进行低阈值重采样。 */
-                s_vision_vehicle_threshold =
-                    s_vision_vehicle_fallback_threshold;
-                fallback_binary_valid = VisionRuntime_BuildFineCandidateBinaries(
-                    image, &s_vision_candidates[i], i);
-                s_vision_vehicle_threshold = primary_vehicle_threshold;
-                if(fallback_binary_valid &&
-                   s_vision_candidate_vehicle_area[i] >=
-                       VISION_RUNTIME_FINE_MIN_FOREGROUND_PIXELS)
-                {
-                    vehicle_confirmed = VisionRuntime_ProcessFineROI(
-                        &s_vision_candidates[i],
-                        VISION_RUNTIME_FINE_TARGET_VEHICLE, i,
-                        s_vision_vehicle_binary, &primary_open_v,
-                        NULL);
-                    if(vehicle_confirmed)
-                    {
-                        s_vision_candidate_annotations[i].vehicle_valid = 1U;
-                    }
                 }
             }
             if(vehicle_confirmed)
@@ -2694,6 +2803,8 @@ uint8 VisionRuntime_GetCandidateBoxes(VisionRuntimeCandidateBox_t *boxes, uint8 
             (s_vision_candidates[i].max_row - s_vision_candidates[i].min_row + 1);
         boxes[i].beacon_area_pixels =
             s_vision_candidate_annotations[i].beacon_area_pixels;
+        boxes[i].vehicle_threshold =
+            s_vision_candidate_vehicle_threshold[i];
         boxes[i].vehicle_valid = s_vision_candidate_annotations[i].vehicle_valid;
         boxes[i].vehicle_skipped_small_box =
             s_vision_candidate_annotations[i].vehicle_skipped_small_box;

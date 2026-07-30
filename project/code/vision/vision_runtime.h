@@ -4,13 +4,16 @@
 #include "zf_common_headfile.h"
 
 /* 候选区完整分辨率精筛阈值：箭头较亮，信标允许保留较暗像素。 */
-#define VISION_BINARY_THRESHOLD_VEHICLE          (145U) /* 箭头首轮精筛阈值 */
-#define VISION_BINARY_THRESHOLD_VEHICLE_FALLBACK (50U)  /* 首轮失败后的箭头回退阈值 */
+#define VISION_BINARY_THRESHOLD_VEHICLE          (145U) /* 箭头候选自适应阈值上限 */
+#define VISION_BINARY_THRESHOLD_VEHICLE_FALLBACK (50U)  /* 箭头候选自适应阈值下限 */
 #define VISION_BINARY_THRESHOLD_BEACON           (50U)  /* 信标精筛二值化阈值 */
 #if VISION_BINARY_THRESHOLD_VEHICLE_FALLBACK == 0U || \
     VISION_BINARY_THRESHOLD_VEHICLE_FALLBACK >= VISION_BINARY_THRESHOLD_VEHICLE
-#error "Vehicle fallback threshold must be lower than the primary threshold"
+#error "Vehicle adaptive minimum must be lower than the maximum"
 #endif
+#define VISION_RUNTIME_VEHICLE_ADAPTIVE_HISTOGRAM_BINS (64U)
+#define VISION_RUNTIME_VEHICLE_ADAPTIVE_BIN_SHIFT      (2U)
+#define VISION_RUNTIME_VEHICLE_ADAPTIVE_FOREGROUND_MARGIN (8U)
 /* Legacy names keep the shared-memory interface source compatible. */
 #define VISION_BINARY_THRESHOLD_INNER  VISION_BINARY_THRESHOLD_VEHICLE
 #define VISION_BINARY_THRESHOLD_MIDDLE VISION_BINARY_THRESHOLD_BEACON
@@ -225,6 +228,7 @@ typedef struct
     int area;
     int raw_box_area_pixels;
     int beacon_area_pixels;
+    uint8 vehicle_threshold;
     uint8 vehicle_valid;
     uint8 vehicle_skipped_small_box;
     uint8 fine_roi_oversize;
