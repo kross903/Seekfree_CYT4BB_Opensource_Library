@@ -275,6 +275,8 @@ uint32 VisionRuntime_GetFineRleOverflowCount(void);
 #if defined(VISION_RUNTIME_PC_DIAGNOSTICS)
 /* PC仿真诊断专用：不进入无人机正式固件。 */
 void VisionRuntime_SetVehicleFallbackEnabled(uint8 enabled);
+void VisionRuntime_SetVehicleFallbackThreshold(uint8 threshold);
+uint8 VisionRuntime_GetVehicleFallbackThreshold(void);
 const uint8 *VisionRuntime_GetVehicleBinaryImage(void);
 #endif
 

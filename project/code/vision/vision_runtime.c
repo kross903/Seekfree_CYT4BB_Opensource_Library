@@ -16,6 +16,11 @@ static uint8 s_vision_beacon_threshold =
     (uint8)VISION_BINARY_THRESHOLD_BEACON;
 #if defined(VISION_RUNTIME_PC_DIAGNOSTICS)
 static uint8 s_vision_vehicle_fallback_enabled = 1U;
+static uint8 s_vision_vehicle_fallback_threshold =
+    (uint8)VISION_BINARY_THRESHOLD_VEHICLE_FALLBACK;
+#else
+#define s_vision_vehicle_fallback_threshold \
+    ((uint8)VISION_BINARY_THRESHOLD_VEHICLE_FALLBACK)
 #endif
 static uint8 s_vision_coarse_zone_thresholds[VISION_RUNTIME_COARSE_ZONE_COUNT] =
 {
@@ -2397,14 +2402,14 @@ static void VisionRuntime_ProcessBlobs(
                s_vision_vehicle_fallback_enabled &&
 #endif
                s_vision_vehicle_threshold >
-                   (uint8)VISION_BINARY_THRESHOLD_VEHICLE_FALLBACK)
+                   s_vision_vehicle_fallback_threshold)
             {
                 uint8 primary_vehicle_threshold = s_vision_vehicle_threshold;
                 uint8 fallback_binary_valid;
 
                 /* 复用箭头位图，仅对首轮失败候选进行低阈值重采样。 */
                 s_vision_vehicle_threshold =
-                    (uint8)VISION_BINARY_THRESHOLD_VEHICLE_FALLBACK;
+                    s_vision_vehicle_fallback_threshold;
                 fallback_binary_valid = VisionRuntime_BuildFineCandidateBinaries(
                     image, &s_vision_candidates[i], i);
                 s_vision_vehicle_threshold = primary_vehicle_threshold;
@@ -2590,6 +2595,16 @@ uint32 VisionRuntime_GetFineRleOverflowCount(void)
 void VisionRuntime_SetVehicleFallbackEnabled(uint8 enabled)
 {
     s_vision_vehicle_fallback_enabled = (enabled != 0U) ? 1U : 0U;
+}
+
+void VisionRuntime_SetVehicleFallbackThreshold(uint8 threshold)
+{
+    s_vision_vehicle_fallback_threshold = threshold;
+}
+
+uint8 VisionRuntime_GetVehicleFallbackThreshold(void)
+{
+    return s_vision_vehicle_fallback_threshold;
 }
 
 const uint8 *VisionRuntime_GetVehicleBinaryImage(void)

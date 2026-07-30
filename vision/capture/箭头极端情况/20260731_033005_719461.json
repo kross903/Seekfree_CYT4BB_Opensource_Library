@@ -1,0 +1,18 @@
+{
+  "captured_at": "2026-07-31T03:30:05.719461+08:00",
+  "image_type": 2,
+  "width": 188,
+  "height": 120,
+  "payload_size": 22560,
+  "boundary_num": 0,
+  "telemetry": {
+    "version": 1,
+    "image_seq": 10,
+    "input_seq": 37950,
+    "roll_deg": 2.7062370777130127,
+    "pitch_deg": 8.811273574829102,
+    "yaw_deg": 2.8206093311309814,
+    "tof_height_cm": 80.00765991210938,
+    "fused_height_cm": 80.00765991210938
+  }
+}

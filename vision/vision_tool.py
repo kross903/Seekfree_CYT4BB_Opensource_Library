@@ -194,6 +194,7 @@ class Simulator:
         undistort: bool = False,
         birdview: bool = False,
         vehicle_threshold: int = 145,
+        vehicle_fallback_threshold: int = 50,
         beacon_threshold: int = 50,
         coarse_threshold: int = COARSE_THRESHOLD,
         binary_mode: str = "gray",
@@ -236,6 +237,7 @@ class Simulator:
             "--height", str(height),
             "--threshold", str(beacon_threshold),
             "--vehicle-threshold", str(vehicle_threshold),
+            "--vehicle-fallback-threshold", str(vehicle_fallback_threshold),
             "--beacon-threshold", str(beacon_threshold),
             "--coarse-center-threshold", str(zone_thresholds[0]),
             "--coarse-near-threshold", str(zone_thresholds[1]),
@@ -588,12 +590,11 @@ class VisionToolApp:
         ttk.Entry(processing, textvariable=self.vehicle_threshold_var, width=8).grid(
             row=8, column=1, sticky="ew", padx=(8, 0), pady=(8, 0)
         )
-        ttk.Label(processing, text="箭头回退阈值（源码）").grid(row=9, column=0, sticky="w", pady=(4, 0))
+        ttk.Label(processing, text="箭头回退阈值").grid(row=9, column=0, sticky="w", pady=(4, 0))
         ttk.Entry(
             processing,
             textvariable=self.vehicle_fallback_threshold_var,
             width=8,
-            state="readonly",
         ).grid(row=9, column=1, sticky="ew", padx=(8, 0), pady=(4, 0))
         ttk.Label(processing, text="信标精筛阈值").grid(row=10, column=0, sticky="w", pady=(4, 0))
         ttk.Entry(processing, textvariable=self.beacon_threshold_var, width=8).grid(
@@ -709,13 +710,17 @@ class VisionToolApp:
             height = float(self.height_var.get())
             thresholds = (
                 int(self.vehicle_threshold_var.get()),
+                int(self.vehicle_fallback_threshold_var.get()),
                 int(self.beacon_threshold_var.get()),
             )
             coarse_thresholds = tuple(int(variable.get()) for variable in self.coarse_threshold_vars)
             if any(value < 1 or value > 255 for value in (*thresholds, *coarse_thresholds)):
                 raise ValueError
-        except ValueError:
-            self.ui_queue.put(("run", (False, "simulation parameters are invalid", None, APP_ROOT, None, None, None, None, None)))
+            if thresholds[1] >= thresholds[0]:
+                raise ValueError("箭头回退阈值必须低于箭头精筛阈值")
+        except ValueError as exc:
+            message = str(exc) or "仿真参数无效"
+            self.ui_queue.put(("run", (False, message, None, APP_ROOT, None, None, None, None, None)))
             return
         self.simulation_queue.put((
             frame_path,
@@ -732,11 +737,12 @@ class VisionToolApp:
     def simulation_worker(self) -> None:
         while True:
             (frame_path, roll, pitch, height, undistort, birdview,
-             vehicle_threshold, beacon_threshold,
+             vehicle_threshold, vehicle_fallback_threshold, beacon_threshold,
              coarse_thresholds, binary_mode) = self.simulation_queue.get()
             try:
                 self.run_worker(frame_path, roll, pitch, height, undistort, birdview,
-                                vehicle_threshold, beacon_threshold,
+                                vehicle_threshold, vehicle_fallback_threshold,
+                                beacon_threshold,
                                 coarse_thresholds, binary_mode)
             except Exception as exc:
                 self.ui_queue.put(("run", (False, str(exc), None, APP_ROOT, None, None, None, None, None)))
@@ -1203,8 +1209,13 @@ class VisionToolApp:
                 )
             ):
                 raise ValueError
-        except ValueError:
-            messagebox.showerror("双阈值诊断", "阈值必须是1~255，姿态和高度必须为数值")
+            if fallback_threshold >= primary_threshold:
+                raise ValueError("箭头回退阈值必须低于箭头精筛阈值")
+        except ValueError as exc:
+            messagebox.showerror(
+                "双阈值诊断",
+                str(exc) or "阈值必须是1~255，姿态和高度必须为数值",
+            )
             return
 
         self.candidate_diagnostic_running = True
@@ -1293,6 +1304,7 @@ class VisionToolApp:
                         False,
                         False,
                         threshold,
+                        fallback_threshold,
                         beacon_threshold,
                         coarse_thresholds[2],
                         "gray",
@@ -1862,13 +1874,19 @@ class VisionToolApp:
             height = float(self.height_var.get())
             thresholds = (
                 int(self.vehicle_threshold_var.get()),
+                int(self.vehicle_fallback_threshold_var.get()),
                 int(self.beacon_threshold_var.get()),
             )
             coarse_thresholds = tuple(int(variable.get()) for variable in self.coarse_threshold_vars)
             if any(value < 1 or value > 255 for value in (*thresholds, *coarse_thresholds)):
                 raise ValueError
-        except ValueError:
-            messagebox.showerror("参数错误", "Roll、Pitch、高度必须是数字，阈值必须为 1 到 255。")
+            if thresholds[1] >= thresholds[0]:
+                raise ValueError("箭头回退阈值必须低于箭头精筛阈值")
+        except ValueError as exc:
+            messagebox.showerror(
+                "参数错误",
+                str(exc) or "Roll、Pitch、高度必须是数字，阈值必须为 1 到 255。",
+            )
             return
         self.status_var.set("运行中")
         undistort = bool(self.undistort_var.get())
@@ -1924,14 +1942,20 @@ class VisionToolApp:
             )
             recognition_thresholds = (
                 int(self.vehicle_threshold_var.get()),
+                int(self.vehicle_fallback_threshold_var.get()),
                 int(self.beacon_threshold_var.get()),
             )
             coarse_thresholds = tuple(int(variable.get()) for variable in self.coarse_threshold_vars)
             if any(value < 1 or value > 255
                    for value in (*recognition_thresholds, *coarse_thresholds)):
                 raise ValueError
-        except ValueError:
-            messagebox.showerror("参数错误", "姿态、高度必须是数字，阈值必须为 1 到 255。")
+            if recognition_thresholds[1] >= recognition_thresholds[0]:
+                raise ValueError("箭头回退阈值必须低于箭头精筛阈值")
+        except ValueError as exc:
+            messagebox.showerror(
+                "参数错误",
+                str(exc) or "姿态、高度必须是数字，阈值必须为 1 到 255。",
+            )
             return
 
         self.batch_running = True
@@ -1951,7 +1975,7 @@ class VisionToolApp:
         root: Path,
         raw_files: list[Path],
         fallback_pose: tuple[float, float, float],
-        recognition_thresholds: tuple[int, int],
+        recognition_thresholds: tuple[int, int, int],
         coarse_thresholds: tuple[int, int, int, int, int],
         binary_mode: str,
     ) -> None:
@@ -1980,6 +2004,7 @@ class VisionToolApp:
                     False,
                     recognition_thresholds[0],
                     recognition_thresholds[1],
+                    recognition_thresholds[2],
                     coarse_thresholds[2],
                     binary_mode,
                     coarse_thresholds,
@@ -2131,6 +2156,7 @@ class VisionToolApp:
         undistort: bool,
         birdview: bool,
         vehicle_threshold: int,
+        vehicle_fallback_threshold: int,
         beacon_threshold: int,
         coarse_thresholds: tuple[int, int, int, int, int],
         binary_mode: str,
@@ -2145,7 +2171,7 @@ class VisionToolApp:
             simulator = Simulator(source)
             ok, log, result_path, undistorted_path, birdview_path, undistorted_mask_path, birdview_mask_path, undistorted_binary_path, birdview_binary_path = simulator.run(
                 raw_path, run_dir, roll, pitch, height, undistort, birdview,
-                vehicle_threshold, beacon_threshold,
+                vehicle_threshold, vehicle_fallback_threshold, beacon_threshold,
                 coarse_thresholds[2], binary_mode, coarse_thresholds
             )
             payload = json.loads(result_path.read_text(encoding="utf-8")) if result_path else None
