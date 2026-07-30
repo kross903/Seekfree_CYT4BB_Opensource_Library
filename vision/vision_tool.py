@@ -1234,6 +1234,14 @@ class VisionToolApp:
             return "小车"
         if candidate.get("beacon_valid"):
             return "信标"
+        if candidate.get("fine_roi_oversize"):
+            width = int(candidate.get("fine_max_col", 0)) - int(
+                candidate.get("fine_min_col", 0)
+            ) + 1
+            height = int(candidate.get("fine_max_row", 0)) - int(
+                candidate.get("fine_min_row", 0)
+            ) + 1
+            return f"未通过（去畸变区域过大：{width}×{height}）"
 
         area_cm2 = float(candidate.get("area_cm2", 0.0))
         pixel_area = int(candidate.get("beacon_area_pixels", 0))
@@ -1347,11 +1355,12 @@ class VisionToolApp:
                     f"{int(candidate.get('beacon_area_pixels', 0))} px，"
                     f"归一化: {candidate.get('adaptive_normalized_area_px', 0):.1f} px"
                 )
-            vehicle_route = (
-                "跳过箭头，直接识别信标"
-                if candidate.get("vehicle_skipped_small_box")
-                else "箭头优先"
-            )
+            if candidate.get("fine_roi_oversize"):
+                vehicle_route = "跳过精筛：去畸变区域过大"
+            elif candidate.get("vehicle_skipped_small_box"):
+                vehicle_route = "跳过箭头，直接识别信标"
+            else:
+                vehicle_route = "箭头优先"
             ttk.Label(
                 tab,
                 text=(

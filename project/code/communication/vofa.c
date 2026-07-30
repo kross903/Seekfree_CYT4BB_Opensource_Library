@@ -34,7 +34,7 @@ static void send_sixteen_date(float date_1, float date_2, float date_3, float da
                               float date_9, float date_10, float date_11, float date_12,
                               float date_13, float date_14, float date_15, float date_16);
 
-/* 保留的回传模式：F1/F2/F3/F4/F5/F6/F7/F8/F9/FA/FC/FD/FE/FG/FI/FK/FL/FM/FN/FO/FP/FQ/FU/FV/FW/FY/FZ。 */
+/* 保留的回传模式：F1/F2/F3/F4/F5/F6/F7/F8/F9/FA/FC/FD/FE/FG/FI/FK/FL/FM/FN/FO/FP/FU/FV/FW/FY/FZ。 */
 static int send_back_flag = 0;
 static uint8 send_back_command = 'R';
 
@@ -1337,10 +1337,6 @@ void USART_PID_Adjust(void)
                 case 'o': send_back_flag = 22; break;
                 case 'P':
                 case 'p': send_back_flag = 38; break;
-                case 'Q':
-                case 'q': send_back_flag = 39; break;
-                case 'R':
-                case 'r': send_back_flag = 40; break;
                 case 'U':
                 case 'u': send_back_flag = 29; break;
                 case 'V':
@@ -1900,56 +1896,6 @@ void send_date_back(void)
                               pos_diag.target_accel_y_cms2,
                               pos_diag.trajectory_dt_s * 1000.0f,
                               (float)pos_diag.trajectory_reset_reason);
-            break;
-        }
-
-        case 39:
-        {
-            PositionLoopDiag_t pos_diag = {0};
-
-            Position_Loop_Get_Diag(&pos_diag);
-            send_sixteen_date(pos_diag.error_x_cm,
-                              pos_diag.error_y_cm,
-                              pos_diag.relative_velocity_x_cms,
-                              pos_diag.relative_velocity_y_cms,
-                              pos_diag.relative_speed_cms,
-                              pos_diag.stopping_distance_cm,
-                              pos_diag.stop_offset_x_cm,
-                              pos_diag.stop_offset_y_cm,
-                              pos_diag.predicted_error_x_cm,
-                              pos_diag.predicted_error_y_cm,
-                              pos_diag.predicted_error_distance_cm,
-                              (float)pos_diag.stop_prediction_flags,
-                              pos_diag.correction_vx_cms,
-                              pos_diag.correction_vy_cms,
-                              pos_diag.desired_vx_cms,
-                              pos_diag.desired_vy_cms);
-            break;
-        }
-
-        case 40:
-        {
-            PositionLoopDiag_t pos_diag = {0};
-            PositionLoopTrajectoryConfig_t trajectory = {0};
-
-            Position_Loop_Get_Diag(&pos_diag);
-            Position_Loop_Get_Trajectory_Config(&trajectory);
-            send_sixteen_date(pos_diag.relative_closing_speed_cms,
-                              pos_diag.filtered_closing_speed_cms,
-                              pos_diag.brake_schedule_ratio,
-                              (float)pos_diag.brake_schedule_active,
-                              trajectory.acceleration_max_cms2,
-                              pos_diag.brake_accel_limit_cms2,
-                              trajectory.jerk_max_cms3,
-                              pos_diag.brake_jerk_limit_cms3,
-                              pos_diag.relative_velocity_x_cms,
-                              pos_diag.relative_velocity_y_cms,
-                              pos_diag.desired_vx_cms,
-                              pos_diag.desired_vy_cms,
-                              pos_diag.target_accel_x_cms2,
-                              pos_diag.target_accel_y_cms2,
-                              pos_diag.position_error_distance_cm,
-                              (float)pos_diag.stop_prediction_flags);
             break;
         }
 

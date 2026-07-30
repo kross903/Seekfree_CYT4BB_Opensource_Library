@@ -56,6 +56,15 @@
 #error "Invalid vehicle small-box gate"
 #endif
 #define VISION_RUNTIME_FINE_MIN_FOREGROUND_PIXELS (8U)
+/* 防止鱼眼极边缘的小候选在去畸变后膨胀为大面积精筛区域。 */
+#define VISION_RUNTIME_FINE_CANDIDATE_MAX_WIDTH   (96U)
+#define VISION_RUNTIME_FINE_CANDIDATE_MAX_HEIGHT  (96U)
+#define VISION_RUNTIME_FINE_CANDIDATE_MAX_PIXELS  (4096U)
+#if VISION_RUNTIME_FINE_CANDIDATE_MAX_PIXELS > \
+        VISION_RUNTIME_FINE_CANDIDATE_MAX_WIDTH * \
+        VISION_RUNTIME_FINE_CANDIDATE_MAX_HEIGHT
+#error "Fine candidate pixel limit exceeds its bounding dimensions"
+#endif
 #ifndef VISION_RUNTIME_PHYSICAL_GRID_ENABLE
 #define VISION_RUNTIME_PHYSICAL_GRID_ENABLE (0U)
 #endif
@@ -215,6 +224,7 @@ typedef struct
     int beacon_area_pixels;
     uint8 vehicle_valid;
     uint8 vehicle_skipped_small_box;
+    uint8 fine_roi_oversize;
     uint8 beacon_valid;
     uint8 detection_confidence;
     uint8 position_sigma_cm;

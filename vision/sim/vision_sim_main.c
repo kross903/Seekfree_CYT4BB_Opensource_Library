@@ -473,7 +473,8 @@ static int write_result(const char *path, const char *binary_path,
                 "\"raw_min_col\":%d,\"raw_max_col\":%d,"
                 "\"fine_min_row\":%d,\"fine_max_row\":%d,"
                 "\"fine_min_col\":%d,\"fine_max_col\":%d,"
-                "\"vehicle_valid\":%u,\"vehicle_skipped_small_box\":%u,\"beacon_valid\":%u,"
+                "\"vehicle_valid\":%u,\"vehicle_skipped_small_box\":%u,"
+                "\"fine_roi_oversize\":%u,\"beacon_valid\":%u,"
                 "\"raw_box_area_pixels\":%d,\"beacon_area_pixels\":%d,"
                 "\"detection_confidence\":%u,\"position_sigma_cm\":%u,"
                 "\"x_cm\":%.6f,\"y_cm\":%.6f,"
@@ -492,6 +493,7 @@ static int write_result(const char *path, const char *binary_path,
                 candidates[i].fine_min_col, candidates[i].fine_max_col,
                 (unsigned)candidates[i].vehicle_valid,
                 (unsigned)candidates[i].vehicle_skipped_small_box,
+                (unsigned)candidates[i].fine_roi_oversize,
                 (unsigned)candidates[i].beacon_valid,
                 candidates[i].raw_box_area_pixels,
                 candidates[i].beacon_area_pixels,
