@@ -6,7 +6,7 @@
 #include <math.h>
 
 BeaconConfig_t g_beacon_config = {
-    .binary_threshold = 10,
+    .binary_threshold = 50,
     .area_threshold   = 1,
     .min_aspect       = 0.15f,
     .max_aspect       = 3.0f,

@@ -192,7 +192,7 @@ class Simulator:
         undistort: bool = False,
         birdview: bool = False,
         vehicle_threshold: int = 145,
-        beacon_threshold: int = 10,
+        beacon_threshold: int = 50,
         coarse_threshold: int = COARSE_THRESHOLD,
         binary_mode: str = "gray",
         coarse_thresholds: tuple[int, int, int, int, int] | None = None,
@@ -281,7 +281,7 @@ class VisionToolApp:
         self.yaw_var = tk.StringVar(value="0")
         self.height_var = tk.StringVar(value="100")
         self.vehicle_threshold_var = tk.StringVar(value="145")
-        self.beacon_threshold_var = tk.StringVar(value="10")
+        self.beacon_threshold_var = tk.StringVar(value="50")
         self.coarse_threshold_vars = [
             tk.StringVar(value=str(value)) for value in COARSE_THRESHOLDS
         ]

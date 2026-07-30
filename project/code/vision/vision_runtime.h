@@ -6,7 +6,7 @@
 /* 候选区完整分辨率精筛阈值：箭头较亮，信标允许保留较暗像素。 */
 #define VISION_BINARY_THRESHOLD_VEHICLE          (145U) /* 箭头首轮精筛阈值 */
 #define VISION_BINARY_THRESHOLD_VEHICLE_FALLBACK (50U)  /* 首轮失败后的箭头回退阈值 */
-#define VISION_BINARY_THRESHOLD_BEACON           (10U)  /* 信标精筛二值化阈值 */
+#define VISION_BINARY_THRESHOLD_BEACON           (50U)  /* 信标精筛二值化阈值 */
 #if VISION_BINARY_THRESHOLD_VEHICLE_FALLBACK == 0U || \
     VISION_BINARY_THRESHOLD_VEHICLE_FALLBACK >= VISION_BINARY_THRESHOLD_VEHICLE
 #error "Vehicle fallback threshold must be lower than the primary threshold"
