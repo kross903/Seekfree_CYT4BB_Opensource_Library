@@ -1233,6 +1233,185 @@ static uint8 VisionRuntime_FineBoundsWithinCostLimit(
         width * height <= VISION_RUNTIME_FINE_CANDIDATE_MAX_PIXELS);
 }
 
+#if VISION_RUNTIME_VEHICLE_GAP_BRIDGE_ENABLE
+static uint8 VisionRuntime_FineBridgePhysicalGapValid(
+    int start_x, int start_y, int end_x, int end_y)
+{
+    float start_world_x;
+    float start_world_y;
+    float end_world_x;
+    float end_world_y;
+    float delta_x;
+    float delta_y;
+    const float max_gap_cm = VISION_RUNTIME_VEHICLE_GAP_BRIDGE_MAX_CM;
+
+    if(!IPM_FullRectifiedImage2PlaneF(
+           (float)start_x, (float)start_y,
+           VEHICLE_MARKER_CHEVRON_PLANE_HEIGHT_CM,
+           &start_world_x, &start_world_y) ||
+       !IPM_FullRectifiedImage2PlaneF(
+           (float)end_x, (float)end_y,
+           VEHICLE_MARKER_CHEVRON_PLANE_HEIGHT_CM,
+           &end_world_x, &end_world_y))
+    {
+        return 0U;
+    }
+    delta_x = end_world_x - start_world_x;
+    delta_y = end_world_y - start_world_y;
+    return (uint8)(delta_x * delta_x + delta_y * delta_y <=
+                   max_gap_cm * max_gap_cm);
+}
+
+static uint8 VisionRuntime_FineBridgeGrayGapValid(
+    const uint8 image[MT9V03X_H][MT9V03X_W],
+    int start_x, int start_y, int direction_x, int direction_y,
+    int endpoint_distance)
+{
+    int step;
+
+    for(step = 1; step < endpoint_distance; ++step)
+    {
+        uint16 source_x_q8;
+        uint16 source_y_q8;
+        uint8 sample;
+
+        if(!IPM_SampleFullUndistortedGrayQ8(
+               image,
+               start_x + step * direction_x,
+               start_y + step * direction_y,
+               &source_x_q8, &source_y_q8, &sample) ||
+           sample < s_vision_vehicle_fallback_threshold)
+        {
+            return 0U;
+        }
+    }
+    return 1U;
+}
+
+static void VisionRuntime_BridgeFineVehicleGaps(
+    const uint8 image[MT9V03X_H][MT9V03X_W],
+    const VisionRuntimeCandidate_t *candidate, uint8 candidate_index)
+{
+    static const int direction_x[4] = {1, 0, 1, 1};
+    static const int direction_y[4] = {0, 1, 1, -1};
+    int min_x;
+    int max_x;
+    int min_y;
+    int max_y;
+    int x;
+    int y;
+    int direction;
+    uint32 added_pixels = 0U;
+
+    if(image == NULL || candidate == NULL ||
+       s_vision_vehicle_threshold <= s_vision_vehicle_fallback_threshold)
+    {
+        return;
+    }
+    VisionRuntime_GetFineCandidateBounds(candidate, &min_x, &max_x,
+                                         &min_y, &max_y);
+    VisionRuntime_ClearFineCandidateBuffer(
+        s_vision_fine_component_mask, candidate);
+
+    for(y = min_y; y <= max_y; ++y)
+    {
+        for(x = min_x; x <= max_x; ++x)
+        {
+            if(!VISION_RUNTIME_FINE_BIT_GET(
+                   s_vision_vehicle_binary, x, y))
+            {
+                continue;
+            }
+            for(direction = 0; direction < 4; ++direction)
+            {
+                int dx = direction_x[direction];
+                int dy = direction_y[direction];
+                int support_x = x - dx;
+                int support_y = y - dy;
+                int distance;
+
+                if(support_x < min_x || support_x > max_x ||
+                   support_y < min_y || support_y > max_y ||
+                   !VISION_RUNTIME_FINE_BIT_GET(
+                       s_vision_vehicle_binary, support_x, support_y) ||
+                   x + dx < min_x || x + dx > max_x ||
+                   y + dy < min_y || y + dy > max_y ||
+                   VISION_RUNTIME_FINE_BIT_GET(
+                       s_vision_vehicle_binary, x + dx, y + dy))
+                {
+                    continue;
+                }
+
+                for(distance = 2;
+                    distance <=
+                        (int)VISION_RUNTIME_VEHICLE_GAP_BRIDGE_MAX_SEARCH_PIXELS + 1;
+                    ++distance)
+                {
+                    int end_x = x + distance * dx;
+                    int end_y = y + distance * dy;
+                    int end_support_x = end_x + dx;
+                    int end_support_y = end_y + dy;
+                    int step;
+
+                    if(end_x < min_x || end_x > max_x ||
+                       end_y < min_y || end_y > max_y)
+                    {
+                        break;
+                    }
+                    if(!VISION_RUNTIME_FINE_BIT_GET(
+                           s_vision_vehicle_binary, end_x, end_y))
+                    {
+                        continue;
+                    }
+                    if(end_support_x >= min_x && end_support_x <= max_x &&
+                       end_support_y >= min_y && end_support_y <= max_y &&
+                       VISION_RUNTIME_FINE_BIT_GET(
+                           s_vision_vehicle_binary,
+                           end_support_x, end_support_y) &&
+                       VisionRuntime_FineBridgePhysicalGapValid(
+                           x, y, end_x, end_y) &&
+                       VisionRuntime_FineBridgeGrayGapValid(
+                           image, x, y, dx, dy, distance))
+                    {
+                        for(step = 1; step < distance; ++step)
+                        {
+                            VISION_RUNTIME_FINE_BIT_SET(
+                                s_vision_fine_component_mask,
+                                x + step * dx, y + step * dy);
+                        }
+                    }
+                    break;
+                }
+            }
+        }
+    }
+
+    for(y = min_y; y <= max_y; ++y)
+    {
+        for(x = min_x; x <= max_x; ++x)
+        {
+            if(VISION_RUNTIME_FINE_BIT_GET(
+                   s_vision_fine_component_mask, x, y))
+            {
+                VISION_RUNTIME_FINE_BIT_CLEAR(
+                    s_vision_fine_component_mask, x, y);
+                if(!VISION_RUNTIME_FINE_BIT_GET(
+                       s_vision_vehicle_binary, x, y))
+                {
+                    VISION_RUNTIME_FINE_BIT_SET(
+                        s_vision_vehicle_binary, x, y);
+                    ++added_pixels;
+                }
+            }
+        }
+    }
+    if(candidate_index < VISION_RUNTIME_MAX_CANDIDATES)
+    {
+        s_vision_candidate_vehicle_area[candidate_index] += added_pixels;
+    }
+}
+#endif
+
 static uint8 VisionRuntime_BuildFineCandidateBinaries(
     const uint8 image[MT9V03X_H][MT9V03X_W],
     const VisionRuntimeCandidate_t *candidate, uint8 candidate_index)
@@ -1241,6 +1420,7 @@ static uint8 VisionRuntime_BuildFineCandidateBinaries(
     int max_x;
     int min_y;
     int max_y;
+    uint8 binary_valid;
 
     if(candidate == NULL) return 0U;
     VisionRuntime_GetFineCandidateBounds(candidate, &min_x, &max_x,
@@ -1261,13 +1441,21 @@ static uint8 VisionRuntime_BuildFineCandidateBinaries(
                sizeof(s_vision_candidate_threshold_stats[candidate_index]));
     }
 #if VISION_RUNTIME_PIPELINE_MODE == VISION_RUNTIME_PIPELINE_IPM_THEN_BINARY
-    return VisionRuntime_BuildFineCandidateIPMDualBinary(
+    binary_valid = VisionRuntime_BuildFineCandidateIPMDualBinary(
         image, candidate, candidate_index);
 #else
     VisionRuntime_FillFineCandidateUndistortedDual(
         image, candidate, candidate_index);
-    return 1U;
+    binary_valid = 1U;
 #endif
+#if VISION_RUNTIME_VEHICLE_GAP_BRIDGE_ENABLE
+    if(binary_valid)
+    {
+        VisionRuntime_BridgeFineVehicleGaps(
+            image, candidate, candidate_index);
+    }
+#endif
+    return binary_valid;
 }
 
 static void VisionRuntime_FillFineCandidateUndistortedDual(
