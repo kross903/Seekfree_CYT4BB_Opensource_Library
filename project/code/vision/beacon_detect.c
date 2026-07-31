@@ -82,6 +82,34 @@ static float BeaconDetect_GetBoxSizeMinimum(const VisionBlob_t *blob)
     return strictness;
 }
 
+#if !VISION_RUNTIME_PHYSICAL_GRID_ENABLE
+static float BeaconDetect_GetBoxCircularityMinimum(const VisionBlob_t *blob)
+{
+    float box_area;
+    float ratio;
+
+    if(blob == NULL)
+    {
+        return 0.0f;
+    }
+    box_area = (float)blob->raw_box_area_pixels;
+    if(box_area <= BEACON_BOX_CIRCULARITY_RAMP_START_PX)
+    {
+        return 0.0f;
+    }
+    if(box_area >= BEACON_BOX_CIRCULARITY_RAMP_END_PX)
+    {
+        return BEACON_BOX_CIRCULARITY_RAMP_MAX;
+    }
+    ratio = (box_area - BEACON_BOX_CIRCULARITY_RAMP_START_PX) /
+            (BEACON_BOX_CIRCULARITY_RAMP_END_PX -
+             BEACON_BOX_CIRCULARITY_RAMP_START_PX);
+    return BEACON_BOX_CIRCULARITY_RAMP_MIN +
+           ratio * (BEACON_BOX_CIRCULARITY_RAMP_MAX -
+                    BEACON_BOX_CIRCULARITY_RAMP_MIN);
+}
+#endif
+
 static void BeaconDetect_UpdateConfidence(VisionBlob_t *blob)
 {
     float score;
@@ -243,7 +271,7 @@ void BeaconDetect_BeginBlobFrame(BeaconResult_t *results, int max_results)
     BeaconAdaptiveThreshold_UpdateFrame(roll_deg, pitch_deg, height_cm);
 }
 
-uint8 BeaconDetect_AppendBlob(VisionBlob_t *blob)
+uint8 BeaconDetect_EvaluateBlob(VisionBlob_t *blob)
 {
     float aspect_ratio;
     float occupancy_ratio;
@@ -251,10 +279,11 @@ uint8 BeaconDetect_AppendBlob(VisionBlob_t *blob)
 #if !VISION_RUNTIME_PHYSICAL_GRID_ENABLE
     BeaconAdaptiveBaseGate_t base_gate;
     BeaconAdaptiveGate_t adaptive_gate;
+    float box_circularity_minimum;
     uint8 normal_area_valid;
 #endif
 
-    if(blob == NULL || s_beacon_frame_results == NULL || s_beacon_frame_max_results <= 0)
+    if(blob == NULL)
     {
         return 0U;
     }
@@ -297,6 +326,12 @@ uint8 BeaconDetect_AppendBlob(VisionBlob_t *blob)
     blob->adaptive_relaxation = adaptive_gate.relaxation;
     blob->adaptive_min_area_px = adaptive_gate.min_area_px;
     blob->adaptive_max_area_px = adaptive_gate.max_area_px;
+    box_circularity_minimum =
+        BeaconDetect_GetBoxCircularityMinimum(blob);
+    if(adaptive_gate.min_circularity < box_circularity_minimum)
+    {
+        adaptive_gate.min_circularity = box_circularity_minimum;
+    }
     blob->adaptive_min_circularity = adaptive_gate.min_circularity;
 
     normal_area_valid = (uint8)(
@@ -359,7 +394,14 @@ uint8 BeaconDetect_AppendBlob(VisionBlob_t *blob)
         return 0U;
     }
 #endif
-    if(s_beacon_frame_count >= s_beacon_frame_max_results)
+    return 1U;
+}
+
+uint8 BeaconDetect_AppendEvaluatedBlob(const VisionBlob_t *blob)
+{
+    if(blob == NULL || s_beacon_frame_results == NULL ||
+       s_beacon_frame_max_results <= 0 ||
+       s_beacon_frame_count >= s_beacon_frame_max_results)
     {
         return 0U;
     }
@@ -367,6 +409,15 @@ uint8 BeaconDetect_AppendBlob(VisionBlob_t *blob)
     BeaconDetect_FillResultFromBlob(blob, &s_beacon_frame_results[s_beacon_frame_count]);
     s_beacon_frame_count++;
     return 1U;
+}
+
+uint8 BeaconDetect_AppendBlob(VisionBlob_t *blob)
+{
+    if(!BeaconDetect_EvaluateBlob(blob))
+    {
+        return 0U;
+    }
+    return BeaconDetect_AppendEvaluatedBlob(blob);
 }
 
 int BeaconDetect_EndBlobFrame(void)

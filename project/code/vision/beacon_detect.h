@@ -33,6 +33,12 @@
 #define BEACON_UNDISTORTED_AREA_MIN_PX    (20.0f)
 #define BEACON_UNDISTORTED_AREA_IDEAL_PX  (180.0f)
 #define BEACON_UNDISTORTED_AREA_MAX_PX    (500.0f)
+/* 原图候选框越大，形状信息越充分，信标最低圆度要求越高。
+ * 小框完全沿用姿态自适应门槛，避免降低远处和边缘信标召回率。 */
+#define BEACON_BOX_CIRCULARITY_RAMP_START_PX  (80.0f)
+#define BEACON_BOX_CIRCULARITY_RAMP_END_PX    (500.0f)
+#define BEACON_BOX_CIRCULARITY_RAMP_MIN       (0.35f)
+#define BEACON_BOX_CIRCULARITY_RAMP_MAX       (0.65f)
 /* 检测置信度组成：B=候选框大小，T=多阈值稳定性，A=面积，E=边缘完整性。 */
 #define BEACON_CONFIDENCE_BOX_SIZE_WEIGHT (0.45f) /* B 权重 */
 #define BEACON_CONFIDENCE_STABILITY_WEIGHT (0.60f) /* T 权重 */
@@ -126,6 +132,8 @@ void BeaconDetect_Init(void);
  * @note 调用前需要先通过 IPM_Interface_UpdateFromIMU() 更新姿态与高度
  */
 void BeaconDetect_BeginBlobFrame(BeaconResult_t *results, int max_results);
+uint8 BeaconDetect_EvaluateBlob(VisionBlob_t *blob);
+uint8 BeaconDetect_AppendEvaluatedBlob(const VisionBlob_t *blob);
 uint8 BeaconDetect_AppendBlob(VisionBlob_t *blob);
 int BeaconDetect_EndBlobFrame(void);
 

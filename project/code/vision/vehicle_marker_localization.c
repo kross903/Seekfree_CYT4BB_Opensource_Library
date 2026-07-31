@@ -270,20 +270,35 @@ void VehicleMarkerLocalization_ServiceLostProtection(void)
 #define VEHICLE_MARKER_CHEVRON_PHYSICAL_EXPECTED_OCCUPANCY (0.78f)
 #define VEHICLE_MARKER_CHEVRON_PHYSICAL_MAX_CIRCULARITY    (0.55f)
 #define VEHICLE_MARKER_CHEVRON_PHYSICAL_EXPECTED_CIRCULARITY (0.30f)
-#define VEHICLE_MARKER_CHEVRON_MIN_ARM_CM                  (10.5f)
-#define VEHICLE_MARKER_CHEVRON_MAX_ARM_CM                  (42.0f)
+/* 临时调试：1=几乎关闭最终物理几何门控，0=恢复正常箭头尺寸范围。 */
+#define VEHICLE_MARKER_CHEVRON_RELAX_GEOMETRY_GATE         (1U)
+#if VEHICLE_MARKER_CHEVRON_RELAX_GEOMETRY_GATE
+#define VEHICLE_MARKER_CHEVRON_MIN_ARM_CM                  (0.5f)
+#define VEHICLE_MARKER_CHEVRON_MAX_ARM_CM                  (300.0f)
+#define VEHICLE_MARKER_CHEVRON_MIN_ARM_RATIO               (0.01f)
+#define VEHICLE_MARKER_CHEVRON_MAX_ARM_RATIO               (100.0f)
+#define VEHICLE_MARKER_CHEVRON_MIN_ANGLE_DEG               (1.0f)
+#define VEHICLE_MARKER_CHEVRON_MAX_ANGLE_DEG               (179.0f)
+#define VEHICLE_MARKER_CHEVRON_MIN_BASE_CM                 (0.5f)
+#define VEHICLE_MARKER_CHEVRON_MAX_BASE_CM                 (300.0f)
+#define VEHICLE_MARKER_CHEVRON_MIN_TRIANGLE_HEIGHT_CM      (0.1f)
+#define VEHICLE_MARKER_CHEVRON_MAX_TRIANGLE_HEIGHT_CM      (200.0f)
+#else
+#define VEHICLE_MARKER_CHEVRON_MIN_ARM_CM                  (8.0f)
+#define VEHICLE_MARKER_CHEVRON_MAX_ARM_CM                  (48.0f)
 #define VEHICLE_MARKER_CHEVRON_MIN_ARM_RATIO               (0.55f)
 #define VEHICLE_MARKER_CHEVRON_MAX_ARM_RATIO               (2.90f)
-#define VEHICLE_MARKER_CHEVRON_EXPECTED_ANGLE_DEG          (70.0f)
-#define VEHICLE_MARKER_CHEVRON_EXPECTED_ANGLE_COS          (0.34202014f)
-/* 1/sin(70 deg)，将目标附近的余弦差近似换算为弧度误差。 */
-#define VEHICLE_MARKER_CHEVRON_COS_ERROR_TO_RAD            (1.06417777f)
-#define VEHICLE_MARKER_CHEVRON_MIN_ANGLE_DEG               (30.0f)
-#define VEHICLE_MARKER_CHEVRON_MAX_ANGLE_DEG               (90.0f)
+#define VEHICLE_MARKER_CHEVRON_MIN_ANGLE_DEG               (20.0f)
+#define VEHICLE_MARKER_CHEVRON_MAX_ANGLE_DEG               (110.0f)
 #define VEHICLE_MARKER_CHEVRON_MIN_BASE_CM                 (15.0f)
 #define VEHICLE_MARKER_CHEVRON_MAX_BASE_CM                 (46.0f)
 #define VEHICLE_MARKER_CHEVRON_MIN_TRIANGLE_HEIGHT_CM      (8.0f)
 #define VEHICLE_MARKER_CHEVRON_MAX_TRIANGLE_HEIGHT_CM      (24.0f)
+#endif
+#define VEHICLE_MARKER_CHEVRON_EXPECTED_ANGLE_DEG          (70.0f)
+#define VEHICLE_MARKER_CHEVRON_EXPECTED_ANGLE_COS          (0.34202014f)
+/* 1/sin(70 deg)，将目标附近的余弦差近似换算为弧度误差。 */
+#define VEHICLE_MARKER_CHEVRON_COS_ERROR_TO_RAD            (1.06417777f)
 #define VEHICLE_MARKER_CHEVRON_MIN_CONTOUR_POINTS          (8U)
 #define VEHICLE_MARKER_CHEVRON_POINT_EPS                   (1e-4f)
 #define VEHICLE_MARKER_CHEVRON_SEED_SAMPLE_POINTS          (64U)
@@ -293,12 +308,15 @@ void VehicleMarkerLocalization_ServiceLostProtection(void)
 #define VEHICLE_MARKER_CHEVRON_OPEN_V_ARM_PRESENT_RATIO    (0.20f)
 #define VEHICLE_MARKER_CHEVRON_OPEN_V_INTERIOR_MARGIN      \
     (VEHICLE_MARKER_CHEVRON_OPEN_V_WINDOW_RADIUS + 1)
-#define VEHICLE_MARKER_CHEVRON_OPEN_V_ANGLE_MARGIN_RAD     (0.15f)
 #define VEHICLE_MARKER_CHEVRON_MAX_FRAME_CANDIDATES        (4U)
 
 #if VEHICLE_MARKER_CHEVRON_SEED_SAMPLE_POINTS < 3U || \
     VEHICLE_MARKER_CHEVRON_SEED_SAMPLE_POINTS > VISION_RUNTIME_CONTOUR_MAX_POINTS
 #error "Invalid chevron seed contour sample count"
+#endif
+#if VEHICLE_MARKER_CHEVRON_RELAX_GEOMETRY_GATE != 0U && \
+    VEHICLE_MARKER_CHEVRON_RELAX_GEOMETRY_GATE != 1U
+#error "VEHICLE_MARKER_CHEVRON_RELAX_GEOMETRY_GATE must be 0 or 1"
 #endif
 
 typedef struct
@@ -1167,9 +1185,9 @@ static uint8 vehicle_marker_chevron_image_shape_projects_valid(
         triangle_height <= VEHICLE_MARKER_CHEVRON_MAX_TRIANGLE_HEIGHT_CM);
 }
 
-/* Build an extreme triangle, score all three apex hypotheses directly on the
- * packed binary image, then keep the best physically valid open-V geometry.
- * No contour-line fitting is performed. */
+/* Build an extreme triangle and use two-arm evidence only to select its apex.
+ * Physical geometry remains a preference, while Open-V metrics never reject
+ * the candidate here. No contour-line fitting is performed. */
 static uint8 vehicle_marker_chevron_extract_image_geometry(
     const VehicleMarkerChevronCandidate_t *candidate,
     VehicleMarkerPoint2D_t *apex,
@@ -1192,13 +1210,14 @@ static uint8 vehicle_marker_chevron_extract_image_geometry(
     uint16 third_i = 0U;
     uint16 i;
     uint16 j;
-    int best_apex = 0;
-    int angle_best_apex = -1;
-    uint8 physical_valid[3] = {0U, 0U, 0U};
+    int best_apex = -1;
     float best_pair_dist_sq = -1.0f;
     float best_third_dist_sq = -1.0f;
-    float best_angle_error = 1e30f;
+    float best_apex_score = -1.0f;
+    float second_apex_score = 0.0f;
+    float best_apex_angle_error = 1e30f;
     float angle_error[3] = {1e30f, 1e30f, 1e30f};
+    float apex_score[3] = {0.0f, 0.0f, 0.0f};
     VehicleMarkerOpenVMetrics_t open_v[3] = {{0}};
     float cross;
 
@@ -1285,48 +1304,36 @@ static uint8 vehicle_marker_chevron_extract_image_geometry(
         vehicle_marker_chevron_measure_open_v(
             &triangle[i], &triangle[a], &triangle[b], binary_view,
             &open_v[i]);
-        physical_valid[i] = vehicle_marker_chevron_image_shape_projects_valid(
-            &triangle[i], &triangle[a], &triangle[b]);
-        if(physical_valid[i] && error < best_angle_error)
-        {
-            best_angle_error = error;
-            angle_best_apex = (int)i;
-        }
+        apex_score[i] = open_v[i].arm_support * open_v[i].arm_continuity;
     }
-    if(angle_best_apex < 0)
+    for(i = 0U; i < 3U; ++i)
     {
-        for(i = 0U; i < 3U; ++i)
+        if(angle_error[i] >= 1e29f)
         {
-            if(angle_error[i] < best_angle_error)
+            continue;
+        }
+        if(best_apex < 0 ||
+           apex_score[i] > best_apex_score + VEHICLE_MARKER_CHEVRON_POINT_EPS ||
+           (fabsf(apex_score[i] - best_apex_score) <=
+                VEHICLE_MARKER_CHEVRON_POINT_EPS &&
+            angle_error[i] < best_apex_angle_error))
+        {
+            if(best_apex >= 0)
             {
-                best_angle_error = angle_error[i];
-                angle_best_apex = (int)i;
+                second_apex_score = best_apex_score;
             }
+            best_apex = (int)i;
+            best_apex_score = apex_score[i];
+            best_apex_angle_error = angle_error[i];
+        }
+        else if(apex_score[i] > second_apex_score)
+        {
+            second_apex_score = apex_score[i];
         }
     }
-    if(angle_best_apex < 0)
+    if(best_apex < 0)
     {
         return 0U;
-    }
-    best_apex = angle_best_apex;
-    if(binary_view != NULL && binary_view->data != NULL)
-    {
-        float best_open_v_score = open_v[best_apex].score;
-
-        for(i = 0U; i < 3U; ++i)
-        {
-            if(!physical_valid[i] ||
-               angle_error[i] > best_angle_error +
-                                  VEHICLE_MARKER_CHEVRON_OPEN_V_ANGLE_MARGIN_RAD)
-            {
-                continue;
-            }
-            if(open_v[i].score > best_open_v_score)
-            {
-                best_open_v_score = open_v[i].score;
-                best_apex = (int)i;
-            }
-        }
     }
 
     raw_apex = triangle[best_apex];
@@ -1361,27 +1368,12 @@ static uint8 vehicle_marker_chevron_extract_image_geometry(
         *right_tip = temp;
     }
     {
-        float selected_score = open_v[best_apex].score;
-        float second_score = 0.0f;
-        for(i = 0U; i < 3U; ++i)
-        {
-            if((int)i == best_apex || !physical_valid[i] ||
-               angle_error[i] > best_angle_error +
-                                  VEHICLE_MARKER_CHEVRON_OPEN_V_ANGLE_MARGIN_RAD)
-            {
-                continue;
-            }
-            if(open_v[i].score > second_score)
-            {
-                second_score = open_v[i].score;
-            }
-        }
         s_vehicle_marker_chevron_debug.open_v_hypothesis_score =
-            selected_score;
+            best_apex_score;
         s_vehicle_marker_chevron_debug.open_v_hypothesis_second_score =
-            second_score;
+            second_apex_score;
         s_vehicle_marker_chevron_debug.open_v_hypothesis_margin =
-            selected_score - second_score;
+            best_apex_score - second_apex_score;
         s_vehicle_marker_chevron_debug.open_v_apex_index = (uint8)best_apex;
     }
     return vehicle_marker_chevron_image_distance_sq(apex, left_tip) > 1.0f &&
@@ -1466,22 +1458,18 @@ static uint8 vehicle_marker_chevron_process_candidate(
         effective_open_v_center_gap = (open_v_gate != NULL) ?
                                       open_v_gate->center_gap :
                                       fitted_open_v.center_gap;
+        if(open_v_gate != NULL &&
+           fitted_open_v.center_gap > effective_open_v_center_gap)
+        {
+            effective_open_v_score = fitted_open_v.score;
+            effective_open_v_center_gap = fitted_open_v.center_gap;
+        }
         s_vehicle_marker_chevron_debug.open_v_gate_score =
             effective_open_v_score;
         s_vehicle_marker_chevron_debug.open_v_gate_center_gap =
             effective_open_v_center_gap;
         s_vehicle_marker_chevron_debug.open_v_gate_from_primary =
             (open_v_gate != NULL) ? 1U : 0U;
-        if((binary_view != NULL || open_v_gate != NULL) &&
-           (effective_open_v_score <
-                VEHICLE_MARKER_CHEVRON_MIN_OPEN_V_SCORE ||
-            effective_open_v_center_gap <
-                VEHICLE_MARKER_CHEVRON_MIN_OPEN_V_CENTER_GAP))
-        {
-            s_vehicle_marker_chevron_debug.reject_reason =
-                VEHICLE_MARKER_CHEVRON_REJECT_OPEN_V;
-            return 0U;
-        }
     }
 
     if(!IPM_FullRectifiedImage2PlaneF(

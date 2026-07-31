@@ -22,12 +22,7 @@ extern "C" {
 #define VEHICLE_MARKER_CHEVRON_REJECT_IMAGE_GEOMETRY    (2U)
 #define VEHICLE_MARKER_CHEVRON_REJECT_WORLD_PROJECTION  (3U)
 #define VEHICLE_MARKER_CHEVRON_REJECT_PHYSICAL_GEOMETRY (4U)
-#define VEHICLE_MARKER_CHEVRON_REJECT_OPEN_V             (5U)
-
-/* 完整走廊综合得分辅助门槛，保守保留低对比度真箭头。 */
-#define VEHICLE_MARKER_CHEVRON_MIN_OPEN_V_SCORE          (0.02f)
-/* 完整走廊空隙率：真箭头最小0.157，纯信标样本最大0.055，取中间值。 */
-#define VEHICLE_MARKER_CHEVRON_MIN_OPEN_V_CENTER_GAP     (0.10f)
+#define VEHICLE_MARKER_CHEVRON_REJECT_OPEN_V             (5U) /* 兼容旧诊断结果，当前不再产生。 */
 
 typedef struct
 {

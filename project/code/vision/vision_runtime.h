@@ -5,7 +5,7 @@
 
 /* 候选区完整分辨率精筛阈值：箭头较亮，信标允许保留较暗像素。 */
 #define VISION_BINARY_THRESHOLD_VEHICLE          (145U) /* 箭头首轮精筛阈值 */
-#define VISION_BINARY_THRESHOLD_VEHICLE_FALLBACK (50U)  /* 首轮失败后的箭头回退阈值 */
+#define VISION_BINARY_THRESHOLD_VEHICLE_FALLBACK (60U)  /* 首轮失败后的箭头回退阈值 */
 #define VISION_BINARY_THRESHOLD_BEACON           (50U)  /* 信标精筛二值化阈值 */
 #if VISION_BINARY_THRESHOLD_VEHICLE_FALLBACK == 0U || \
     VISION_BINARY_THRESHOLD_VEHICLE_FALLBACK >= VISION_BINARY_THRESHOLD_VEHICLE
@@ -59,11 +59,23 @@
 /* 防止鱼眼极边缘的小候选在去畸变后膨胀为大面积精筛区域。 */
 #define VISION_RUNTIME_FINE_CANDIDATE_MAX_WIDTH   (96U)
 #define VISION_RUNTIME_FINE_CANDIDATE_MAX_HEIGHT  (96U)
-#define VISION_RUNTIME_FINE_CANDIDATE_MAX_PIXELS  (4096U)
+#define VISION_RUNTIME_FINE_CANDIDATE_MAX_PIXELS  (5000U)
+/* 箭头精筛断臂桥接：仅连接同向、弱灰度连续且物理间距不超过4cm的碎片。 */
+#define VISION_RUNTIME_VEHICLE_GAP_BRIDGE_ENABLE            (1U)
+#define VISION_RUNTIME_VEHICLE_GAP_BRIDGE_MAX_CM             (4.0f)
+#define VISION_RUNTIME_VEHICLE_GAP_BRIDGE_MAX_SEARCH_PIXELS (12U)
 #if VISION_RUNTIME_FINE_CANDIDATE_MAX_PIXELS > \
         VISION_RUNTIME_FINE_CANDIDATE_MAX_WIDTH * \
         VISION_RUNTIME_FINE_CANDIDATE_MAX_HEIGHT
 #error "Fine candidate pixel limit exceeds its bounding dimensions"
+#endif
+#if VISION_RUNTIME_VEHICLE_GAP_BRIDGE_ENABLE != 0U && \
+    VISION_RUNTIME_VEHICLE_GAP_BRIDGE_ENABLE != 1U
+#error "VISION_RUNTIME_VEHICLE_GAP_BRIDGE_ENABLE must be 0 or 1"
+#endif
+#if VISION_RUNTIME_VEHICLE_GAP_BRIDGE_MAX_SEARCH_PIXELS < 1U || \
+    VISION_RUNTIME_VEHICLE_GAP_BRIDGE_MAX_SEARCH_PIXELS > 16U
+#error "Invalid vehicle gap bridge search limit"
 #endif
 #ifndef VISION_RUNTIME_PHYSICAL_GRID_ENABLE
 #define VISION_RUNTIME_PHYSICAL_GRID_ENABLE (0U)
@@ -275,6 +287,8 @@ uint32 VisionRuntime_GetFineRleOverflowCount(void);
 #if defined(VISION_RUNTIME_PC_DIAGNOSTICS)
 /* PC仿真诊断专用：不进入无人机正式固件。 */
 void VisionRuntime_SetVehicleFallbackEnabled(uint8 enabled);
+void VisionRuntime_SetVehicleFallbackThreshold(uint8 threshold);
+uint8 VisionRuntime_GetVehicleFallbackThreshold(void);
 const uint8 *VisionRuntime_GetVehicleBinaryImage(void);
 #endif
 
