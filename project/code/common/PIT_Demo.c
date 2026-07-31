@@ -1017,6 +1017,7 @@ static void control_task_update_angle_loop(void)
                       current_roll,
                       current_pitch,
                       current_yaw);
+    target_yaw_rate = BeaconSearch_LimitYawRate(target_yaw_rate);
 }
 
 static void control_task_update_rate_and_mixer(void)

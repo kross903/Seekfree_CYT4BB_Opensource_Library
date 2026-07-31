@@ -4,7 +4,7 @@
 #include "zf_common_headfile.h"
 #include "communication/core_link.h"
 
-#define BEACON_SEARCH_SWEEP_ANGLE_DEG            (360.0f)
+#define BEACON_SEARCH_SWEEP_ANGLE_DEG            (180.0f)
 #define BEACON_SEARCH_POSITION_GATE_CM            (50.0f)
 #define BEACON_SEARCH_POSITION_WINDOW_FRAMES      (10U)
 #define BEACON_SEARCH_POSITION_REQUIRED_FRAMES    (5U)
@@ -85,6 +85,7 @@ void BeaconSearch_OnObservationFrame(
 void BeaconSearch_ControlStep(float dt_s,
                               float current_yaw_deg,
                               volatile float *target_yaw_deg);
+float BeaconSearch_LimitYawRate(float yaw_rate_dps);
 uint8 BeaconSearch_GetFrameFlags(void);
 void BeaconSearch_GetDiag(BeaconSearchDiag_t *diag);
 
