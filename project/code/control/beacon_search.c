@@ -3,22 +3,21 @@
 #include <math.h>
 #include <string.h>
 
-#define BEACON_SEARCH_LOSS_DELAY_MS             (300U)
-#define BEACON_SEARCH_VERIFY_TIMEOUT_MS         (300U)
-#define BEACON_SEARCH_CONFIRM_FRAMES              (3U)
-#define BEACON_SEARCH_MIN_CONFIDENCE              (96U)
-#define BEACON_SEARCH_MIN_SIGMA_CM                 (5U)
-#define BEACON_SEARCH_MAX_SIGMA_CM                (15U)
-#define BEACON_SEARCH_YAW_RATE_DPS              (90.0f)
-#define BEACON_SEARCH_ALIGN_MAX_ANGLE_DEG       (180.0f)
-#define BEACON_SEARCH_ENDPOINT_HOLD_MS           (200U)
-#define BEACON_SEARCH_ENDPOINT_TOLERANCE_DEG       (2.0f)
-#define BEACON_SEARCH_TIMEOUT_MARGIN_MS          (6000U)
-#define BEACON_SEARCH_TIMEOUT_LIMIT_MS          (60000U)
-#define BEACON_SEARCH_MAX_YAW_STEP_DEG           (10.0f)
-#define BEACON_SEARCH_STARTUP_WAIT_MS             (2000U)
-#define BEACON_SEARCH_STARTUP_SCAN_ANGLE_DEG      (360.0f)
-#define BEACON_SEARCH_STARTUP_SETTLE_MS           (3000U)
+#define BEACON_SEARCH_LOSS_DELAY_MS             (300U)   /* 视觉丢失后等待进入自搜索的延时 */
+#define BEACON_SEARCH_VERIFY_TIMEOUT_MS         (300U)   /* 搜索中看到信标后，连续确认的最长等待时间 */
+#define BEACON_SEARCH_CONFIRM_FRAMES              (3U)   /* 判定可信信标所需的连续确认帧数 */
+#define BEACON_SEARCH_MIN_CONFIDENCE              (96U)  /* 信标可信判断的最低识别置信度 */
+#define BEACON_SEARCH_MIN_SIGMA_CM                 (5U)  /* 信标位置sigma下限，过滤异常过小估计 */
+#define BEACON_SEARCH_MAX_SIGMA_CM                (15U)  /* 信标位置sigma上限，过滤定位发散目标 */
+#define BEACON_SEARCH_ALIGN_MAX_ANGLE_DEG       (180.0f) /* 搜索前对齐0度时估算的最大转角 */
+#define BEACON_SEARCH_ENDPOINT_HOLD_MS           (200U)  /* 到达搜索端点后的短暂停留时间 */
+#define BEACON_SEARCH_ENDPOINT_TOLERANCE_DEG       (2.0f)/* 判定到达目标Yaw端点的角度容差 */
+#define BEACON_SEARCH_TIMEOUT_MARGIN_MS          (6000U) /* 搜索超时保护的额外余量 */
+#define BEACON_SEARCH_TIMEOUT_LIMIT_MS          (60000U) /* 搜索超时保护的最大上限 */
+#define BEACON_SEARCH_MAX_YAW_STEP_DEG           (10.0f) /* 单周期Yaw跳变过滤阈值，避免IMU突变误计 */
+#define BEACON_SEARCH_STARTUP_WAIT_MS             (2000U)/* 缓启动完成后的预扫描前等待时间 */
+#define BEACON_SEARCH_STARTUP_SCAN_ANGLE_DEG      (360.0f)/* 起飞后预扫描整圈角度 */
+#define BEACON_SEARCH_STARTUP_SETTLE_MS           (3000U)/* 预扫描完成后的视觉稳定等待时间 */
 
 typedef enum
 {
@@ -42,9 +41,13 @@ typedef enum
 {
     BEACON_SEARCH_SWEEP_ALIGN_ZERO = 0,
     BEACON_SEARCH_SWEEP_HOLD_ZERO_START,
-    BEACON_SEARCH_SWEEP_TO_NINETY,
-    BEACON_SEARCH_SWEEP_HOLD_NINETY,
-    BEACON_SEARCH_SWEEP_TO_ZERO,
+    BEACON_SEARCH_SWEEP_TO_RIGHT,
+    BEACON_SEARCH_SWEEP_HOLD_RIGHT,
+    BEACON_SEARCH_SWEEP_TO_ZERO_MIDDLE,
+    BEACON_SEARCH_SWEEP_HOLD_ZERO_MIDDLE,
+    BEACON_SEARCH_SWEEP_TO_LEFT,
+    BEACON_SEARCH_SWEEP_HOLD_LEFT,
+    BEACON_SEARCH_SWEEP_TO_ZERO_COMPLETE,
     BEACON_SEARCH_SWEEP_HOLD_ZERO_COMPLETE
 } BeaconSearchSweepPhase_t;
 
@@ -56,6 +59,9 @@ static volatile uint8 s_startup_turn_complete_event = 0U;
 static volatile float s_current_yaw_deg = 0.0f;
 static volatile float s_target_yaw_deg = 0.0f;
 static volatile float s_turn_progress_deg = 0.0f;
+static volatile float s_yaw_rate_dps = BEACON_SEARCH_YAW_RATE_DEFAULT_DPS;
+static volatile float s_sweep_half_angle_deg =
+    BEACON_SEARCH_SWEEP_HALF_ANGLE_DEFAULT_DEG;
 static BeaconSearchSweepPhase_t s_sweep_phase =
     BEACON_SEARCH_SWEEP_ALIGN_ZERO;
 static float s_endpoint_hold_elapsed_s = 0.0f;
@@ -107,10 +113,11 @@ static uint16 beacon_search_add_ms(uint16 value, uint16 elapsed_ms)
 
 static uint16 beacon_search_get_max_duration_ms(void)
 {
+    float yaw_rate_dps = BeaconSearch_GetYawRateDps();
     float duration_ms = ((BEACON_SEARCH_ALIGN_MAX_ANGLE_DEG +
-                          BEACON_SEARCH_SWEEP_ANGLE_DEG) /
-                         BEACON_SEARCH_YAW_RATE_DPS) * 1000.0f +
-                        3.0f * (float)BEACON_SEARCH_ENDPOINT_HOLD_MS +
+                          BeaconSearch_GetSweepAngleDeg()) /
+                         yaw_rate_dps) * 1000.0f +
+                        4.0f * (float)BEACON_SEARCH_ENDPOINT_HOLD_MS +
                         (float)BEACON_SEARCH_TIMEOUT_MARGIN_MS;
 
     if(!isfinite(duration_ms) || duration_ms >= (float)BEACON_SEARCH_TIMEOUT_LIMIT_MS)
@@ -158,7 +165,7 @@ static uint8 beacon_search_step_target(float dt_s,
     }
 
     error_deg = beacon_search_wrap_deg(endpoint_yaw_deg - *target_yaw_deg);
-    max_step_deg = BEACON_SEARCH_YAW_RATE_DPS * dt_s;
+    max_step_deg = BeaconSearch_GetYawRateDps() * dt_s;
     if(fabsf(error_deg) <= max_step_deg)
     {
         *target_yaw_deg = endpoint_yaw_deg;
@@ -846,7 +853,7 @@ void BeaconSearch_ControlStep(float dt_s,
                                                      previous_yaw_deg);
         float remaining_deg = BEACON_SEARCH_STARTUP_SCAN_ANGLE_DEG -
                               s_startup_command_progress_deg;
-        float target_step_deg = BEACON_SEARCH_YAW_RATE_DPS * dt_s;
+        float target_step_deg = BeaconSearch_GetYawRateDps() * dt_s;
 
         previous_yaw_deg = current_yaw_deg;
         if(fabsf(yaw_delta_deg) <= BEACON_SEARCH_MAX_YAW_STEP_DEG)
@@ -908,8 +915,10 @@ void BeaconSearch_ControlStep(float dt_s,
                                                 previous_yaw_deg);
         previous_yaw_deg = current_yaw_deg;
         if((fabsf(yaw_delta_deg) <= BEACON_SEARCH_MAX_YAW_STEP_DEG) &&
-           ((BEACON_SEARCH_SWEEP_TO_NINETY == s_sweep_phase) ||
-            (BEACON_SEARCH_SWEEP_TO_ZERO == s_sweep_phase)))
+           ((BEACON_SEARCH_SWEEP_TO_LEFT == s_sweep_phase) ||
+            (BEACON_SEARCH_SWEEP_TO_RIGHT == s_sweep_phase) ||
+            (BEACON_SEARCH_SWEEP_TO_ZERO_MIDDLE == s_sweep_phase) ||
+            (BEACON_SEARCH_SWEEP_TO_ZERO_COMPLETE == s_sweep_phase)))
         {
             s_turn_progress_deg += fabsf(yaw_delta_deg);
         }
@@ -931,30 +940,84 @@ void BeaconSearch_ControlStep(float dt_s,
             if(beacon_search_hold_endpoint(dt_s, current_yaw_deg, 0.0f,
                                            target_yaw_deg))
             {
-                s_sweep_phase = BEACON_SEARCH_SWEEP_TO_NINETY;
+                s_sweep_phase = BEACON_SEARCH_SWEEP_TO_RIGHT;
             }
             break;
 
-        case BEACON_SEARCH_SWEEP_TO_NINETY:
-            target_at_endpoint = beacon_search_step_target(dt_s, 90.0f,
+        case BEACON_SEARCH_SWEEP_TO_RIGHT:
+        {
+            float right_yaw_deg = BeaconSearch_GetSweepHalfAngleDeg();
+
+            target_at_endpoint = beacon_search_step_target(dt_s, right_yaw_deg,
                                                             target_yaw_deg);
             if(target_at_endpoint &&
-               beacon_search_yaw_at_endpoint(current_yaw_deg, 90.0f))
+               beacon_search_yaw_at_endpoint(current_yaw_deg, right_yaw_deg))
             {
-                s_sweep_phase = BEACON_SEARCH_SWEEP_HOLD_NINETY;
+                s_sweep_phase = BEACON_SEARCH_SWEEP_HOLD_RIGHT;
+                s_endpoint_hold_elapsed_s = 0.0f;
+            }
+            break;
+        }
+
+        case BEACON_SEARCH_SWEEP_HOLD_RIGHT:
+        {
+            float right_yaw_deg = BeaconSearch_GetSweepHalfAngleDeg();
+
+            if(beacon_search_hold_endpoint(dt_s, current_yaw_deg, right_yaw_deg,
+                                           target_yaw_deg))
+            {
+                s_sweep_phase = BEACON_SEARCH_SWEEP_TO_ZERO_MIDDLE;
+            }
+            break;
+        }
+
+        case BEACON_SEARCH_SWEEP_TO_ZERO_MIDDLE:
+            target_at_endpoint = beacon_search_step_target(dt_s, 0.0f,
+                                                            target_yaw_deg);
+            if(target_at_endpoint &&
+               beacon_search_yaw_at_endpoint(current_yaw_deg, 0.0f))
+            {
+                s_sweep_phase = BEACON_SEARCH_SWEEP_HOLD_ZERO_MIDDLE;
                 s_endpoint_hold_elapsed_s = 0.0f;
             }
             break;
 
-        case BEACON_SEARCH_SWEEP_HOLD_NINETY:
-            if(beacon_search_hold_endpoint(dt_s, current_yaw_deg, 90.0f,
+        case BEACON_SEARCH_SWEEP_HOLD_ZERO_MIDDLE:
+            if(beacon_search_hold_endpoint(dt_s, current_yaw_deg, 0.0f,
                                            target_yaw_deg))
             {
-                s_sweep_phase = BEACON_SEARCH_SWEEP_TO_ZERO;
+                s_sweep_phase = BEACON_SEARCH_SWEEP_TO_LEFT;
             }
             break;
 
-        case BEACON_SEARCH_SWEEP_TO_ZERO:
+        case BEACON_SEARCH_SWEEP_TO_LEFT:
+        {
+            float left_yaw_deg = -BeaconSearch_GetSweepHalfAngleDeg();
+
+            target_at_endpoint = beacon_search_step_target(dt_s, left_yaw_deg,
+                                                            target_yaw_deg);
+            if(target_at_endpoint &&
+               beacon_search_yaw_at_endpoint(current_yaw_deg, left_yaw_deg))
+            {
+                s_sweep_phase = BEACON_SEARCH_SWEEP_HOLD_LEFT;
+                s_endpoint_hold_elapsed_s = 0.0f;
+            }
+            break;
+        }
+
+        case BEACON_SEARCH_SWEEP_HOLD_LEFT:
+        {
+            float left_yaw_deg = -BeaconSearch_GetSweepHalfAngleDeg();
+
+            if(beacon_search_hold_endpoint(dt_s, current_yaw_deg, left_yaw_deg,
+                                           target_yaw_deg))
+            {
+                s_sweep_phase = BEACON_SEARCH_SWEEP_TO_ZERO_COMPLETE;
+            }
+            break;
+        }
+
+        case BEACON_SEARCH_SWEEP_TO_ZERO_COMPLETE:
             target_at_endpoint = beacon_search_step_target(dt_s, 0.0f,
                                                             target_yaw_deg);
             if(target_at_endpoint &&
@@ -982,8 +1045,83 @@ void BeaconSearch_ControlStep(float dt_s,
     s_target_yaw_deg = *target_yaw_deg;
 }
 
+uint8 BeaconSearch_SetYawRateDps(float yaw_rate_dps)
+{
+    uint32 irq_state;
+
+    if(!isfinite(yaw_rate_dps) ||
+       yaw_rate_dps < BEACON_SEARCH_YAW_RATE_MIN_DPS ||
+       yaw_rate_dps > BEACON_SEARCH_YAW_RATE_MAX_DPS)
+    {
+        return 0U;
+    }
+
+    irq_state = __get_PRIMASK();
+    __disable_irq();
+    s_yaw_rate_dps = yaw_rate_dps;
+    if(0U == irq_state)
+    {
+        __enable_irq();
+    }
+    return 1U;
+}
+
+float BeaconSearch_GetYawRateDps(void)
+{
+    float yaw_rate_dps = s_yaw_rate_dps;
+
+    if(!isfinite(yaw_rate_dps) ||
+       yaw_rate_dps < BEACON_SEARCH_YAW_RATE_MIN_DPS ||
+       yaw_rate_dps > BEACON_SEARCH_YAW_RATE_MAX_DPS)
+    {
+        return BEACON_SEARCH_YAW_RATE_DEFAULT_DPS;
+    }
+    return yaw_rate_dps;
+}
+
+uint8 BeaconSearch_SetSweepHalfAngleDeg(float half_angle_deg)
+{
+    uint32 irq_state;
+
+    if(!isfinite(half_angle_deg) ||
+       half_angle_deg < BEACON_SEARCH_SWEEP_HALF_ANGLE_MIN_DEG ||
+       half_angle_deg > BEACON_SEARCH_SWEEP_HALF_ANGLE_MAX_DEG)
+    {
+        return 0U;
+    }
+
+    irq_state = __get_PRIMASK();
+    __disable_irq();
+    s_sweep_half_angle_deg = half_angle_deg;
+    if(0U == irq_state)
+    {
+        __enable_irq();
+    }
+    return 1U;
+}
+
+float BeaconSearch_GetSweepHalfAngleDeg(void)
+{
+    float half_angle_deg = s_sweep_half_angle_deg;
+
+    if(!isfinite(half_angle_deg) ||
+       half_angle_deg < BEACON_SEARCH_SWEEP_HALF_ANGLE_MIN_DEG ||
+       half_angle_deg > BEACON_SEARCH_SWEEP_HALF_ANGLE_MAX_DEG)
+    {
+        return BEACON_SEARCH_SWEEP_HALF_ANGLE_DEFAULT_DEG;
+    }
+    return half_angle_deg;
+}
+
+float BeaconSearch_GetSweepAngleDeg(void)
+{
+    return 4.0f * BeaconSearch_GetSweepHalfAngleDeg();
+}
+
 float BeaconSearch_LimitYawRate(float yaw_rate_dps)
 {
+    float search_yaw_rate_dps = BeaconSearch_GetYawRateDps();
+
     if(!isfinite(yaw_rate_dps))
     {
         return 0.0f;
@@ -992,13 +1130,13 @@ float BeaconSearch_LimitYawRate(float yaw_rate_dps)
     {
         return yaw_rate_dps;
     }
-    if(yaw_rate_dps > BEACON_SEARCH_YAW_RATE_DPS)
+    if(yaw_rate_dps > search_yaw_rate_dps)
     {
-        return BEACON_SEARCH_YAW_RATE_DPS;
+        return search_yaw_rate_dps;
     }
-    if(yaw_rate_dps < -BEACON_SEARCH_YAW_RATE_DPS)
+    if(yaw_rate_dps < -search_yaw_rate_dps)
     {
-        return -BEACON_SEARCH_YAW_RATE_DPS;
+        return -search_yaw_rate_dps;
     }
     return yaw_rate_dps;
 }
@@ -1048,7 +1186,9 @@ void BeaconSearch_GetDiag(BeaconSearchDiag_t *diag)
     diag->current_yaw_deg = s_current_yaw_deg;
     diag->target_yaw_deg = s_target_yaw_deg;
     diag->turn_progress_deg = s_turn_progress_deg;
-    diag->sweep_angle_deg = BEACON_SEARCH_SWEEP_ANGLE_DEG;
+    diag->sweep_angle_deg = BeaconSearch_GetSweepAngleDeg();
+    diag->yaw_rate_dps = BeaconSearch_GetYawRateDps();
+    diag->sweep_half_angle_deg = BeaconSearch_GetSweepHalfAngleDeg();
     diag->position_distance_cm = s_position_distance_cm;
     diag->horizontal_speed_cms = s_horizontal_speed_cms;
     diag->speed_stable_ms = s_speed_stable_ms;

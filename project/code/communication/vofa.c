@@ -446,6 +446,19 @@ static uint8 set_pmw_flow_gyro_gain_value(uint8 item, float value)
     }
 }
 
+static uint8 set_beacon_search_value(uint8 item, float value)
+{
+    switch(item)
+    {
+        case '1':
+            return BeaconSearch_SetYawRateDps(value);
+        case '2':
+            return BeaconSearch_SetSweepHalfAngleDeg(value);
+        default:
+            return 0U;
+    }
+}
+
 static void send_pid_data_back(uint8 command)
 {
     float value_1 = 0.0f;
@@ -594,6 +607,22 @@ static void send_pid_data_back(uint8 command)
             float gy_now = 0.0f;
             PMW_Flow_GetGyroCompGain(&gx_now, &gy_now);
             send_four_date(gx_now, gy_now, 0, 0, 0, 0, 0, 0);
+            return;
+        }
+
+        case 'Q':
+        {
+            float yaw_rate_dps = BeaconSearch_GetYawRateDps();
+            float half_angle_deg = BeaconSearch_GetSweepHalfAngleDeg();
+
+            send_four_date(yaw_rate_dps,
+                           half_angle_deg,
+                           -half_angle_deg,
+                           half_angle_deg,
+                           BeaconSearch_GetSweepAngleDeg(),
+                           BEACON_SEARCH_YAW_RATE_MIN_DPS,
+                           BEACON_SEARCH_YAW_RATE_MAX_DPS,
+                           BEACON_SEARCH_SWEEP_HALF_ANGLE_MAX_DEG);
             return;
         }
 
@@ -1390,6 +1419,15 @@ void USART_PID_Adjust(void)
             }
             send_back_command = 'G';
             reply_command = 'G';
+            break;
+
+        case 'Q':
+            if(has_value)
+            {
+                write_success = set_beacon_search_value(item, data_get);
+            }
+            send_back_command = 'Q';
+            reply_command = 'Q';
             break;
 
         default:

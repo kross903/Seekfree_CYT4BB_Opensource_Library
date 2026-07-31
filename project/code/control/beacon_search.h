@@ -4,13 +4,20 @@
 #include "zf_common_headfile.h"
 #include "communication/core_link.h"
 
-#define BEACON_SEARCH_SWEEP_ANGLE_DEG            (180.0f)
-#define BEACON_SEARCH_POSITION_GATE_CM            (50.0f)
-#define BEACON_SEARCH_POSITION_WINDOW_FRAMES      (10U)
-#define BEACON_SEARCH_POSITION_REQUIRED_FRAMES    (5U)
-#define BEACON_SEARCH_SPEED_GATE_CMS              (25.0f)
-#define BEACON_SEARCH_SPEED_STABLE_MS              (300U)
-#define BEACON_SEARCH_VISION_FRAME_MAX_AGE_MS      (150U)
+#define BEACON_SEARCH_YAW_RATE_DEFAULT_DPS        (90.0f) /* 自搜索Yaw速度默认值，单位deg/s */
+#define BEACON_SEARCH_YAW_RATE_MIN_DPS            (30.0f) /* VOFA允许设置的最小自搜索Yaw速度 */
+#define BEACON_SEARCH_YAW_RATE_MAX_DPS           (120.0f) /* VOFA允许设置的最大自搜索Yaw速度 */
+#define BEACON_SEARCH_SWEEP_HALF_ANGLE_DEFAULT_DEG (45.0f)/* 普通自搜索默认半角，范围为-半角到+半角 */
+#define BEACON_SEARCH_SWEEP_HALF_ANGLE_MIN_DEG     (5.0f) /* VOFA允许设置的最小自搜索半角 */
+#define BEACON_SEARCH_SWEEP_HALF_ANGLE_MAX_DEG    (90.0f) /* VOFA允许设置的最大自搜索半角 */
+#define BEACON_SEARCH_SWEEP_ANGLE_DEG \
+    (4.0f * BEACON_SEARCH_SWEEP_HALF_ANGLE_DEFAULT_DEG)   /* 默认完整摆扫角度：0→+半角→0→-半角→0 */
+#define BEACON_SEARCH_POSITION_GATE_CM            (50.0f) /* 启动自搜索前，小车相对位置误差允许范围 */
+#define BEACON_SEARCH_POSITION_WINDOW_FRAMES      (10U)   /* 位置稳定判定滑动窗口帧数 */
+#define BEACON_SEARCH_POSITION_REQUIRED_FRAMES    (5U)    /* 滑动窗口内至少需要合格的位置帧数 */
+#define BEACON_SEARCH_SPEED_GATE_CMS              (25.0f) /* 启动自搜索前，无人机水平速度稳定阈值 */
+#define BEACON_SEARCH_SPEED_STABLE_MS              (300U) /* 水平速度连续稳定达到该时长后允许搜索 */
+#define BEACON_SEARCH_VISION_FRAME_MAX_AGE_MS      (150U) /* 视觉帧最大有效年龄，超时认为视觉信息过旧 */
 
 typedef enum
 {
@@ -59,6 +66,8 @@ typedef struct
     float target_yaw_deg;
     float turn_progress_deg;
     float sweep_angle_deg;
+    float yaw_rate_dps;
+    float sweep_half_angle_deg;
     float position_distance_cm;
     float horizontal_speed_cms;
     uint16 speed_stable_ms;
@@ -85,6 +94,11 @@ void BeaconSearch_OnObservationFrame(
 void BeaconSearch_ControlStep(float dt_s,
                               float current_yaw_deg,
                               volatile float *target_yaw_deg);
+uint8 BeaconSearch_SetYawRateDps(float yaw_rate_dps);
+float BeaconSearch_GetYawRateDps(void);
+uint8 BeaconSearch_SetSweepHalfAngleDeg(float half_angle_deg);
+float BeaconSearch_GetSweepHalfAngleDeg(void);
+float BeaconSearch_GetSweepAngleDeg(void);
 float BeaconSearch_LimitYawRate(float yaw_rate_dps);
 uint8 BeaconSearch_GetFrameFlags(void);
 void BeaconSearch_GetDiag(BeaconSearchDiag_t *diag);

@@ -3,45 +3,45 @@
 #include "control/motor_mixer.h"
 #include <math.h>
 
-#define VELOCITY_LOOP_GRAVITY_CMS2        (981.0f)
-#define VELOCITY_LOOP_MAX_TILT_DEG        (15.0f)
-#define VELOCITY_LOOP_RATE_FF_LPF_HZ      (15.0f)
-#define VELOCITY_LOOP_RATE_FF_GAIN_DEFAULT (0.2f)
-#define VELOCITY_LOOP_RATE_FF_GAIN_MAX    (2.0f)
-#define VELOCITY_LOOP_RATE_FF_LIMIT_DEFAULT (60.0f)
-#define VELOCITY_LOOP_RATE_FF_LIMIT_MAX   (350.0f)
-#define VELOCITY_LOOP_TWO_PI              (6.28318530718f)
-#define VELOCITY_LOOP_DEG2RAD             (0.01745329252f)
-#define VELOCITY_LOOP_RAD2DEG             (57.295779513f)
+#define VELOCITY_LOOP_GRAVITY_CMS2        (981.0f) /* 重力加速度，单位cm/s2 */
+#define VELOCITY_LOOP_MAX_TILT_DEG        (15.0f)  /* 速度环允许叠加的最大倾角 */
+#define VELOCITY_LOOP_RATE_FF_LPF_HZ      (15.0f)  /* 目标角速度前馈低通截止频率 */
+#define VELOCITY_LOOP_RATE_FF_GAIN_DEFAULT (0.2f)  /* 目标角速度前馈默认增益 */
+#define VELOCITY_LOOP_RATE_FF_GAIN_MAX    (2.0f)   /* VOFA允许设置的最大前馈增益 */
+#define VELOCITY_LOOP_RATE_FF_LIMIT_DEFAULT (60.0f)/* 目标角速度前馈默认限幅，单位deg/s */
+#define VELOCITY_LOOP_RATE_FF_LIMIT_MAX   (350.0f) /* VOFA允许设置的最大前馈限幅 */
+#define VELOCITY_LOOP_TWO_PI              (6.28318530718f) /* 低通滤波指数形式使用的2π */
+#define VELOCITY_LOOP_DEG2RAD             (0.01745329252f) /* 角度转弧度系数 */
+#define VELOCITY_LOOP_RAD2DEG             (57.295779513f)  /* 弧度转角度系数 */
 
 typedef struct
 {
-    float previous_velocity_cms;
-    float filtered_negative_accel_cms2;
-    volatile float cutoff_hz;
-    uint8 initialized;
+    float previous_velocity_cms;          /* 上一帧速度反馈，用于计算测量加速度 */
+    float filtered_negative_accel_cms2;   /* 低通后的负测量加速度，作为D项输入 */
+    volatile float cutoff_hz;             /* D支路低通截止频率，可由VOFA调整 */
+    uint8 initialized;                    /* 首帧只初始化，不产生D项 */
 } VelocityLoopDState_t;
 
 PID_Controller vel_pid_x;
 PID_Controller vel_pid_y;
 
-static volatile uint8 g_enabled = 0U;
-static volatile float g_target_vx_earth_cms = 0.0f;
-static volatile float g_target_vy_earth_cms = 0.0f;
-static volatile float g_target_ax_earth_cms2 = 0.0f;
-static volatile float g_target_ay_earth_cms2 = 0.0f;
-static volatile float g_pitch_corr_deg = 0.0f;
-static volatile float g_roll_corr_deg = 0.0f;
-static volatile float g_fb_vx_earth_cms = 0.0f;
-static volatile float g_fb_vy_earth_cms = 0.0f;
-static volatile uint8 g_active = 0U;
-static volatile float g_pitch_ff_gain = VELOCITY_LOOP_RATE_FF_GAIN_DEFAULT;
-static volatile float g_roll_ff_gain = VELOCITY_LOOP_RATE_FF_GAIN_DEFAULT;
-static volatile float g_pitch_ff_limit_dps = VELOCITY_LOOP_RATE_FF_LIMIT_DEFAULT;
-static volatile float g_roll_ff_limit_dps = VELOCITY_LOOP_RATE_FF_LIMIT_DEFAULT;
-static float g_prev_pitch_corr_deg = 0.0f;
-static float g_prev_roll_corr_deg = 0.0f;
-static uint8 g_rate_ff_initialized = 0U;
+static volatile uint8 g_enabled = 0U;                    /* 速度环总使能 */
+static volatile float g_target_vx_earth_cms = 0.0f;      /* 惯性系X目标速度 */
+static volatile float g_target_vy_earth_cms = 0.0f;      /* 惯性系Y目标速度 */
+static volatile float g_target_ax_earth_cms2 = 0.0f;     /* 惯性系X加速度前馈 */
+static volatile float g_target_ay_earth_cms2 = 0.0f;     /* 惯性系Y加速度前馈 */
+static volatile float g_pitch_corr_deg = 0.0f;           /* X向加速度换算出的Pitch修正角 */
+static volatile float g_roll_corr_deg = 0.0f;            /* Y向加速度换算出的Roll修正角 */
+static volatile float g_fb_vx_earth_cms = 0.0f;          /* 惯性系X速度反馈缓存 */
+static volatile float g_fb_vy_earth_cms = 0.0f;          /* 惯性系Y速度反馈缓存 */
+static volatile uint8 g_active = 0U;                     /* 最近一次速度环是否有效工作 */
+static volatile float g_pitch_ff_gain = VELOCITY_LOOP_RATE_FF_GAIN_DEFAULT; /* X轴对应Pitch角速度前馈增益 */
+static volatile float g_roll_ff_gain = VELOCITY_LOOP_RATE_FF_GAIN_DEFAULT;  /* Y轴对应Roll角速度前馈增益 */
+static volatile float g_pitch_ff_limit_dps = VELOCITY_LOOP_RATE_FF_LIMIT_DEFAULT; /* Pitch角速度前馈限幅 */
+static volatile float g_roll_ff_limit_dps = VELOCITY_LOOP_RATE_FF_LIMIT_DEFAULT;  /* Roll角速度前馈限幅 */
+static float g_prev_pitch_corr_deg = 0.0f;               /* 上一帧Pitch修正角，用于估算目标角速度 */
+static float g_prev_roll_corr_deg = 0.0f;                /* 上一帧Roll修正角，用于估算目标角速度 */
+static uint8 g_rate_ff_initialized = 0U;                 /* 角速度前馈首帧初始化标志 */
 static VelocityLoopRateFeedforwardDiag_t g_rate_ff_diag;
 static volatile VelocityLoopAxisDiag_t g_axis_diag[2];
 static volatile VelocityLoopHorizontalDiag_t g_horizontal_diag;
@@ -50,6 +50,7 @@ static VelocityLoopDState_t g_d_state[2] = {
     {0.0f, 0.0f, VELOCITY_LOOP_D_FILTER_DEFAULT_HZ, 0U}
 };
 
+/* 标量限幅，保证PID输出和调参值不会超过允许范围。 */
 static float velocity_loop_limit_float(float value, float minimum, float maximum)
 {
     if(value > maximum) return maximum;
@@ -57,6 +58,7 @@ static float velocity_loop_limit_float(float value, float minimum, float maximum
     return value;
 }
 
+/* 二维向量限幅，保持方向不变，只压缩幅值。 */
 static uint8 velocity_loop_limit_vector(float *x, float *y, float limit)
 {
     float length;
@@ -71,6 +73,7 @@ static uint8 velocity_loop_limit_vector(float *x, float *y, float limit)
     return 1U;
 }
 
+/* 机体系速度转惯性系速度，Yaw为IMU绝对偏航角。 */
 static void velocity_loop_body_to_earth(float body_x,
                                         float body_y,
                                         float yaw_deg,
@@ -85,6 +88,7 @@ static void velocity_loop_body_to_earth(float body_x,
     *earth_y = sine * body_x + cosine * body_y;
 }
 
+/* 惯性系加速度转机体系加速度，供后续换算Roll/Pitch目标角。 */
 static void velocity_loop_earth_to_body(float earth_x,
                                         float earth_y,
                                         float yaw_deg,
@@ -99,6 +103,7 @@ static void velocity_loop_earth_to_body(float earth_x,
     *body_y = -sine * earth_x + cosine * earth_y;
 }
 
+/* 清空单轴D支路历史速度和滤波状态。 */
 static void velocity_loop_reset_d_axis(VelocityLoopDState_t *state)
 {
     state->previous_velocity_cms = 0.0f;
@@ -112,6 +117,7 @@ static void velocity_loop_reset_d_state(void)
     velocity_loop_reset_d_axis(&g_d_state[VELOCITY_LOOP_AXIS_Y]);
 }
 
+/* D项使用测量速度变化率，带低通滤波，降低光流噪声放大。 */
 static float velocity_loop_update_d(uint8 axis,
                                     float measured_velocity_cms,
                                     float dt_s)
@@ -136,6 +142,7 @@ static float velocity_loop_update_d(uint8 axis,
     return state->filtered_negative_accel_cms2;
 }
 
+/* 清空速度环给角度环提供的角速度前馈。 */
 static void velocity_loop_reset_rate_feedforward(void)
 {
     VelocityLoopRateFeedforwardDiag_t empty = {0};
@@ -147,6 +154,7 @@ static void velocity_loop_reset_rate_feedforward(void)
     Angle_Loop_Set_Rate_Feedforward(0.0f, 0.0f);
 }
 
+/* 将目标Roll/Pitch修正角变化率转换为角速度前馈，减小角度环滞后。 */
 static void velocity_loop_update_rate_feedforward(float roll_corr_deg,
                                                   float pitch_corr_deg,
                                                   float dt_s)
@@ -186,6 +194,7 @@ static void velocity_loop_update_rate_feedforward(float roll_corr_deg,
                                     g_rate_ff_diag.pitch_rate_ff_dps);
 }
 
+/* 清空VOFA和菜单使用的速度环诊断缓存。 */
 static void velocity_loop_reset_diag(void)
 {
     VelocityLoopAxisDiag_t empty_axis = {0};
@@ -379,6 +388,7 @@ void Velocity_Loop_Update_Attitude_Target(uint8 velocity_ready,
     uint8 accel_limited;
 
     if((target_roll == NULL) || (target_pitch == NULL)) return;
+    /* 速度反馈或控制周期无效时，回到起飞捕获角，防止脏数据进入姿态环。 */
     if(!g_enabled || !velocity_ready || !isfinite(yaw_deg) ||
        !isfinite(dt_s) || (dt_s < 0.002f) || (dt_s > 0.008f) ||
        !isfinite(measured_vx_body_cms) || !isfinite(measured_vy_body_cms))
@@ -391,6 +401,7 @@ void Velocity_Loop_Update_Attitude_Target(uint8 velocity_ready,
 
     velocity_loop_body_to_earth(measured_vx_body_cms, measured_vy_body_cms,
                                 yaw_deg, &measured_vx_earth, &measured_vy_earth);
+    /* 速度环统一在惯性系计算，避免Yaw变化时目标方向跟着机头漂移。 */
     error_x = g_target_vx_earth_cms - measured_vx_earth;
     error_y = g_target_vy_earth_cms - measured_vy_earth;
     d_measure_x = velocity_loop_update_d(VELOCITY_LOOP_AXIS_X,
@@ -410,6 +421,7 @@ void Velocity_Loop_Update_Attitude_Target(uint8 velocity_ready,
     motor_limited = (uint8)(mixer_saturation.high || mixer_saturation.low);
     if(motor_limited) status |= VELOCITY_LOOP_STATUS_MOTOR_LIMITED;
 
+    /* 电机饱和时只允许I项向减小饱和的方向恢复，避免继续顶死。 */
     candidate_i_x = previous_i_x;
     candidate_i_y = previous_i_y;
     if((!motor_limited || (error_x * previous_i_x < 0.0f)) && (vel_pid_x.Ki > 0.0f))
@@ -441,6 +453,7 @@ void Velocity_Loop_Update_Attitude_Target(uint8 velocity_ready,
     acceleration_y = g_target_ay_earth_cms2 + correction_y;
     acceleration_limit = VELOCITY_LOOP_GRAVITY_CMS2 *
                          tanf(VELOCITY_LOOP_MAX_TILT_DEG * VELOCITY_LOOP_DEG2RAD);
+    /* 最终加速度限幅同时受最大倾角和各轴PID输出限幅约束。 */
     if((vel_pid_x.output_limit > 0.0f) &&
        (vel_pid_x.output_limit < acceleration_limit))
     {
@@ -459,6 +472,7 @@ void Velocity_Loop_Update_Attitude_Target(uint8 velocity_ready,
         float integral_delta_x = candidate_i_x - previous_i_x;
         float integral_delta_y = candidate_i_y - previous_i_y;
         status |= VELOCITY_LOOP_STATUS_ACCEL_LIMITED;
+        /* 若新增I项会把限幅后的加速度继续往外推，则撤销本周期I项增长。 */
         if((integral_delta_x * acceleration_x + integral_delta_y * acceleration_y) > 0.0f)
         {
             candidate_i_x = previous_i_x;
@@ -482,6 +496,7 @@ void Velocity_Loop_Update_Attitude_Target(uint8 velocity_ready,
 
     velocity_loop_earth_to_body(acceleration_x, acceleration_y, yaw_deg,
                                 &acceleration_body_x, &acceleration_body_y);
+    /* 小角度近似的反向形式：期望水平加速度换算为Pitch/Roll修正角。 */
     g_pitch_corr_deg = atan2f(acceleration_body_x,
                               VELOCITY_LOOP_GRAVITY_CMS2) * VELOCITY_LOOP_RAD2DEG;
     g_roll_corr_deg = -atan2f(acceleration_body_y,
