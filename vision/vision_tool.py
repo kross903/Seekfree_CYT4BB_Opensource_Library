@@ -494,6 +494,14 @@ class VisionToolApp:
             command=self.start_classified_batch,
         )
         self.batch_button.grid(row=5, column=0, columnspan=2, sticky="ew", pady=(6, 0))
+        self.folder_check_button = ttk.Button(
+            action_bar,
+            text="一键检查文件夹",
+            command=self.start_folder_check,
+        )
+        self.folder_check_button.grid(
+            row=6, column=0, columnspan=2, sticky="ew", pady=(6, 0)
+        )
 
         capture_tab.columnconfigure(0, weight=1)
         capture_tab.rowconfigure(2, weight=1)
@@ -1678,7 +1686,7 @@ class VisionToolApp:
                     f"阈值稳定性评分 T: {candidate.get('confidence_stability', 0):.2f}  "
                     f"边缘评分 E: {candidate.get('confidence_edge', 0):.2f}  "
                     f"姿态放宽量: {candidate.get('adaptive_relaxation', 0):.2f}  "
-                    f"动态圆度门槛: {candidate.get('adaptive_min_circularity', 0.15):.3f}\n"
+                    f"实际圆度门槛: {candidate.get('adaptive_min_circularity', 0.15):.3f}\n"
                     f"{self.format_candidate_diagnostic(diagnostic)}"
                 ),
                 justify=tk.LEFT,
@@ -1961,6 +1969,7 @@ class VisionToolApp:
 
         self.batch_running = True
         self.batch_button.config(state=tk.DISABLED)
+        self.folder_check_button.config(state=tk.DISABLED)
         self.status_var.set(f"批量验证中 0/{len(raw_files)}")
         threading.Thread(
             target=self.classified_batch_worker,
@@ -2148,6 +2157,273 @@ class VisionToolApp:
         except Exception as exc:
             self.ui_queue.put(("batch_error", str(exc)))
 
+    def start_folder_check(self) -> None:
+        if self.batch_running:
+            return
+        selected = filedialog.askdirectory(
+            title="选择需要一键检查的图片文件夹",
+            initialdir=self.frames_var.get() or str(DEFAULT_FRAMES),
+        )
+        if not selected:
+            return
+        root = Path(selected)
+        image_files = self.discover_folder_images(root)
+        if not image_files:
+            messagebox.showerror(
+                "无法检查文件夹",
+                "指定文件夹及其子文件夹中没有 RAW、PNG 或 PGM 图片。",
+            )
+            return
+        try:
+            fallback_pose = (
+                float(self.roll_var.get()),
+                float(self.pitch_var.get()),
+                float(self.height_var.get()),
+            )
+            recognition_thresholds = (
+                int(self.vehicle_threshold_var.get()),
+                int(self.vehicle_fallback_threshold_var.get()),
+                int(self.beacon_threshold_var.get()),
+            )
+            coarse_thresholds = tuple(
+                int(variable.get()) for variable in self.coarse_threshold_vars
+            )
+            if any(value < 1 or value > 255
+                   for value in (*recognition_thresholds, *coarse_thresholds)):
+                raise ValueError
+            if recognition_thresholds[1] >= recognition_thresholds[0]:
+                raise ValueError("箭头回退阈值必须低于箭头精筛阈值")
+        except ValueError as exc:
+            messagebox.showerror(
+                "参数错误",
+                str(exc) or "姿态、高度必须是数字，阈值必须为 1 到 255。",
+            )
+            return
+
+        self.batch_running = True
+        self.batch_button.config(state=tk.DISABLED)
+        self.folder_check_button.config(state=tk.DISABLED)
+        self.status_var.set(f"文件夹检查中 0/{len(image_files)}")
+        threading.Thread(
+            target=self.folder_check_worker,
+            args=(
+                Path(self.source_var.get()),
+                root,
+                image_files,
+                fallback_pose,
+                recognition_thresholds,
+                coarse_thresholds,
+                self.binary_mode_var.get(),
+            ),
+            daemon=True,
+        ).start()
+
+    @staticmethod
+    def discover_folder_images(root: Path) -> list[Path]:
+        discovered_files = sorted(
+            path for path in root.rglob("*")
+            if path.is_file()
+            and path.suffix.lower() in {".raw", ".png", ".pgm"}
+        )
+        # 抓图会同时保存同名 RAW/PNG；优先使用无损的原始 RAW，避免重复统计。
+        extension_priority = {".raw": 0, ".png": 1, ".pgm": 2}
+        image_by_stem: dict[str, Path] = {}
+        for path in discovered_files:
+            stem_key = str(path.relative_to(root).with_suffix("")).casefold()
+            previous = image_by_stem.get(stem_key)
+            if (
+                previous is None
+                or extension_priority[path.suffix.lower()]
+                < extension_priority[previous.suffix.lower()]
+            ):
+                image_by_stem[stem_key] = path
+        return sorted(image_by_stem.values())
+
+    def folder_check_worker(
+        self,
+        source: Path,
+        root: Path,
+        image_files: list[Path],
+        fallback_pose: tuple[float, float, float],
+        recognition_thresholds: tuple[int, int, int],
+        coarse_thresholds: tuple[int, int, int, int, int],
+        binary_mode: str,
+    ) -> None:
+        run_dir = RUN_ROOT / datetime.now().strftime("folder_check_%Y%m%d_%H%M%S_%f")
+        rows: list[dict] = []
+        try:
+            simulator = Simulator(source)
+            for index, image_path in enumerate(image_files, start=1):
+                relative_path = str(image_path.relative_to(root))
+                frame_dir = run_dir / f"{index:04d}"
+                try:
+                    image = self.load_image(image_path)
+                    frame_dir.mkdir(parents=True, exist_ok=True)
+                    input_path = frame_dir / "input.raw"
+                    input_path.write_bytes(image.tobytes())
+
+                    roll, pitch, height = fallback_pose
+                    metadata_path = image_path.with_suffix(".json")
+                    pose_source = "界面参数"
+                    if metadata_path.exists():
+                        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+                        telemetry = metadata.get("telemetry", {})
+                        roll = float(telemetry.get("roll_deg", roll))
+                        pitch = float(telemetry.get("pitch_deg", pitch))
+                        height = float(telemetry.get("tof_height_cm", height))
+                        pose_source = "同名JSON"
+
+                    result = simulator.run(
+                        input_path,
+                        frame_dir,
+                        roll,
+                        pitch,
+                        height,
+                        False,
+                        False,
+                        recognition_thresholds[0],
+                        recognition_thresholds[1],
+                        recognition_thresholds[2],
+                        coarse_thresholds[2],
+                        binary_mode,
+                        coarse_thresholds,
+                    )
+                    ok, log, result_path = result[0], result[1], result[2]
+                    if not ok or result_path is None:
+                        raise RuntimeError(log.rstrip() or "仿真未生成结果")
+                    payload = json.loads(result_path.read_text(encoding="utf-8"))
+                    valid_beacons = [
+                        item for item in payload.get("beacons", []) if item.get("valid")
+                    ]
+                    candidates = payload.get("coarse_candidates", [])
+                    chevron = payload.get("chevron", {})
+                    arrow_valid = bool(payload.get("vehicle", {}).get("valid"))
+                    rows.append({
+                        "frame": relative_path,
+                        "status": "ok",
+                        "pose_source": pose_source,
+                        "roll_deg": roll,
+                        "pitch_deg": pitch,
+                        "height_cm": height,
+                        "arrow_valid": arrow_valid,
+                        "arrow_reject_reason": int(chevron.get("reject_reason", 0)),
+                        "arrow_reject_text": self.chevron_reject_text(
+                            int(chevron.get("reject_reason", 0))
+                        ),
+                        "beacon_count": len(valid_beacons),
+                        "beacons": [
+                            {
+                                "confidence": int(item.get("detection_confidence", 0)),
+                                "position_sigma_cm": int(item.get("position_sigma_cm", 255)),
+                                "x_cm": float(item.get("x_cm", 0.0)),
+                                "y_cm": float(item.get("y_cm", 0.0)),
+                                "area_cm2": float(item.get("area_cm2", 0.0)),
+                                "map_ready": (
+                                    int(item.get("detection_confidence", 0))
+                                    >= MAP_CREATE_CONFIDENCE
+                                    and int(item.get("position_sigma_cm", 255))
+                                    <= MAP_CREATE_SIGMA_CM
+                                ),
+                            }
+                            for item in valid_beacons
+                        ],
+                        "candidate_count": len(candidates),
+                        "candidates": [
+                            {
+                                "index": candidate_index,
+                                "result": self.candidate_type_text(candidate),
+                                "confidence": int(
+                                    candidate.get("detection_confidence", 0)
+                                ),
+                                "raw_box_area_pixels": int(
+                                    candidate.get("raw_box_area_pixels", 0)
+                                ),
+                                "circularity": float(
+                                    candidate.get("circularity", 0.0)
+                                ),
+                                "circularity_minimum": float(
+                                    candidate.get("adaptive_min_circularity", 0.0)
+                                ),
+                                "raw_box": [
+                                    int(candidate.get("raw_min_col", 0)),
+                                    int(candidate.get("raw_min_row", 0)),
+                                    int(candidate.get("raw_max_col", 0)),
+                                    int(candidate.get("raw_max_row", 0)),
+                                ],
+                            }
+                            for candidate_index, candidate in enumerate(
+                                candidates, start=1
+                            )
+                        ],
+                    })
+                except Exception as exc:
+                    rows.append({
+                        "frame": relative_path,
+                        "status": "error",
+                        "error": str(exc),
+                    })
+                self.ui_queue.put(("folder_check_progress", (index, len(image_files))))
+
+            run_dir.mkdir(parents=True, exist_ok=True)
+            summary_path = run_dir / "folder_check_summary.json"
+            summary_path.write_text(
+                json.dumps(rows, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            successful_rows = [item for item in rows if item["status"] == "ok"]
+            failed_rows = [item for item in rows if item["status"] == "error"]
+            arrow_count = sum(1 for item in successful_rows if item["arrow_valid"])
+            beacon_count = sum(item["beacon_count"] for item in successful_rows)
+            map_ready_count = sum(
+                1
+                for item in successful_rows
+                for beacon in item["beacons"]
+                if beacon["map_ready"]
+            )
+            failed_text = ""
+            if failed_rows:
+                failed_text = "\n失败文件:\n" + "\n".join(
+                    f"{item['frame']}：{item['error']}" for item in failed_rows[:20]
+                )
+                if len(failed_rows) > 20:
+                    failed_text += f"\n……另有 {len(failed_rows) - 20} 张，详见结果文件"
+            detail_lines: list[str] = []
+            for item in rows[:200]:
+                if item["status"] == "error":
+                    detail_lines.append(f"[失败] {item['frame']}：{item['error']}")
+                    continue
+                arrow_text = (
+                    "通过" if item["arrow_valid"]
+                    else f"未通过({item['arrow_reject_text']})"
+                )
+                confidence_text = "/".join(
+                    str(beacon["confidence"]) for beacon in item["beacons"]
+                ) or "-"
+                detail_lines.append(
+                    f"{item['frame']}：箭头={arrow_text}，"
+                    f"信标={item['beacon_count']}，置信度={confidence_text}"
+                )
+            if len(rows) > 200:
+                detail_lines.append(
+                    f"……另有 {len(rows) - 200} 张，完整明细见结果文件"
+                )
+            detail_text = "\n逐图结果:\n" + "\n".join(detail_lines)
+            text = (
+                "文件夹检查完成\n"
+                f"目录: {root}\n"
+                f"图片总数: {len(rows)}\n"
+                f"成功/失败: {len(successful_rows)}/{len(failed_rows)}\n"
+                f"识别到箭头的图片: {arrow_count}\n"
+                f"识别到的信标总数: {beacon_count}\n"
+                f"制图质量合格信标: {map_ready_count}\n"
+                f"结果: {summary_path}"
+                f"{failed_text}"
+                f"{detail_text}"
+            )
+            self.ui_queue.put(("folder_check_done", (text, str(run_dir))))
+        except Exception as exc:
+            self.ui_queue.put(("folder_check_error", str(exc)))
+
     def run_worker(
         self,
         frame_path: Path,
@@ -2232,15 +2508,35 @@ class VisionToolApp:
                 text, run_dir = payload
                 self.batch_running = False
                 self.batch_button.config(state=tk.NORMAL)
+                self.folder_check_button.config(state=tk.NORMAL)
                 self.status_var.set("批量验证完成")
                 self.set_result_info(text)
                 self.log(f"classified batch result: {run_dir}")
             elif event == "batch_error":
                 self.batch_running = False
                 self.batch_button.config(state=tk.NORMAL)
+                self.folder_check_button.config(state=tk.NORMAL)
                 self.status_var.set("批量验证失败")
                 self.log("classified batch error: " + str(payload))
                 messagebox.showerror("批量验证失败", str(payload))
+            elif event == "folder_check_progress":
+                current, total = payload
+                self.status_var.set(f"文件夹检查中 {current}/{total}")
+            elif event == "folder_check_done":
+                text, run_dir = payload
+                self.batch_running = False
+                self.batch_button.config(state=tk.NORMAL)
+                self.folder_check_button.config(state=tk.NORMAL)
+                self.status_var.set("文件夹检查完成")
+                self.set_result_info(text)
+                self.log(f"folder check result: {run_dir}")
+            elif event == "folder_check_error":
+                self.batch_running = False
+                self.batch_button.config(state=tk.NORMAL)
+                self.folder_check_button.config(state=tk.NORMAL)
+                self.status_var.set("文件夹检查失败")
+                self.log("folder check error: " + str(payload))
+                messagebox.showerror("文件夹检查失败", str(payload))
             elif event == "candidate_diag_progress":
                 current, total = payload
                 self.status_var.set(f"候选双阈值诊断中 {current}/{total}")
@@ -2575,6 +2871,16 @@ def self_test() -> int:
     ]
     with tempfile.TemporaryDirectory() as temp_dir_text:
         temp_dir = Path(temp_dir_text)
+        (temp_dir / "same.png").touch()
+        (temp_dir / "same.raw").touch()
+        (temp_dir / "nested").mkdir()
+        (temp_dir / "nested" / "other.pgm").touch()
+        (temp_dir / "ignored.txt").touch()
+        discovered = VisionToolApp.discover_folder_images(temp_dir)
+        assert [path.relative_to(temp_dir) for path in discovered] == [
+            Path("nested/other.pgm"),
+            Path("same.raw"),
+        ]
         source_path = temp_dir / "source.raw"
         source_path.with_suffix(".json").write_text(
             json.dumps({
@@ -2602,6 +2908,16 @@ def self_test() -> int:
     assert "未生成有效精连通域" in VisionToolApp.candidate_type_text({})
     assert "物理面积479.0<480cm²" in VisionToolApp.candidate_type_text({"area_cm2": 479.0})
     assert "圆度0.10<0.15" in VisionToolApp.candidate_type_text({"area_cm2": 700.0, "circularity": 0.1})
+    assert "圆度0.35<0.65" in VisionToolApp.candidate_type_text({
+        "beacon_area_pixels": 1035,
+        "adaptive_normalized_area_px": 172.5,
+        "adaptive_min_area_px": 20.0,
+        "adaptive_max_area_px": 500.0,
+        "circularity": 0.345579,
+        "adaptive_min_circularity": 0.65,
+        "confidence_box_size": 1.0,
+        "confidence_box_size_min": 0.14,
+    })
     assert "B评分0.20≤门槛0.30" in VisionToolApp.candidate_type_text({
         "area_cm2": 700.0,
         "circularity": 0.5,
