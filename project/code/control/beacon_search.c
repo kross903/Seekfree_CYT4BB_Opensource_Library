@@ -16,13 +16,27 @@
 #define BEACON_SEARCH_TIMEOUT_MARGIN_MS          (6000U)
 #define BEACON_SEARCH_TIMEOUT_LIMIT_MS          (60000U)
 #define BEACON_SEARCH_MAX_YAW_STEP_DEG           (10.0f)
+#define BEACON_SEARCH_STARTUP_WAIT_MS             (2000U)
+#define BEACON_SEARCH_STARTUP_SCAN_ANGLE_DEG      (360.0f)
+#define BEACON_SEARCH_STARTUP_SETTLE_MS           (3000U)
 
 typedef enum
 {
     BEACON_SEARCH_CONTROL_NONE = 0,
     BEACON_SEARCH_CONTROL_SPIN,
-    BEACON_SEARCH_CONTROL_HOLD
+    BEACON_SEARCH_CONTROL_HOLD,
+    BEACON_SEARCH_CONTROL_STARTUP_SPIN,
+    BEACON_SEARCH_CONTROL_STARTUP_HOLD
 } BeaconSearchControl_t;
+
+typedef enum
+{
+    BEACON_SEARCH_STARTUP_WAIT_READY = 0,
+    BEACON_SEARCH_STARTUP_HOLD_BEFORE,
+    BEACON_SEARCH_STARTUP_SPIN,
+    BEACON_SEARCH_STARTUP_HOLD_AFTER,
+    BEACON_SEARCH_STARTUP_COMPLETE
+} BeaconSearchStartupPhase_t;
 
 typedef enum
 {
@@ -38,12 +52,22 @@ static volatile BeaconSearchState_t s_state = BEACON_SEARCH_DISABLED;
 static volatile BeaconSearchControl_t s_control = BEACON_SEARCH_CONTROL_NONE;
 static volatile uint8 s_turn_complete_event = 0U;
 static volatile uint8 s_search_generation = 0U;
+static volatile uint8 s_startup_turn_complete_event = 0U;
 static volatile float s_current_yaw_deg = 0.0f;
 static volatile float s_target_yaw_deg = 0.0f;
 static volatile float s_turn_progress_deg = 0.0f;
 static BeaconSearchSweepPhase_t s_sweep_phase =
     BEACON_SEARCH_SWEEP_ALIGN_ZERO;
 static float s_endpoint_hold_elapsed_s = 0.0f;
+static volatile BeaconSearchStartupPhase_t s_startup_phase =
+    BEACON_SEARCH_STARTUP_WAIT_READY;
+static uint16 s_startup_elapsed_ms = 0U;
+static uint16 s_startup_vision_age_ms = 60000U;
+static uint8 s_startup_trusted_beacon_visible = 0U;
+static float s_startup_scan_start_yaw_deg = 0.0f;
+static float s_startup_command_progress_deg = 0.0f;
+static float s_startup_turn_progress_deg = 0.0f;
+static uint8 s_takeoff_seen_active = 0U;
 
 static uint8 s_was_armed = 0U;
 static uint8 s_eligible = 0U;
@@ -197,6 +221,18 @@ static void beacon_search_reset_stability(void)
     s_vision_frame_age_ms = 60000U;
     s_position_distance_cm = 0.0f;
     s_horizontal_speed_cms = 0.0f;
+}
+
+static void beacon_search_reset_startup_scan(void)
+{
+    s_startup_phase = BEACON_SEARCH_STARTUP_WAIT_READY;
+    s_startup_turn_complete_event = 0U;
+    s_startup_elapsed_ms = 0U;
+    s_startup_vision_age_ms = 60000U;
+    s_startup_trusted_beacon_visible = 0U;
+    s_startup_scan_start_yaw_deg = 0.0f;
+    s_startup_command_progress_deg = 0.0f;
+    s_startup_turn_progress_deg = 0.0f;
 }
 
 static void beacon_search_push_position_result(uint8 qualified)
@@ -369,6 +405,80 @@ static void beacon_search_fail(BeaconSearchFailure_t reason)
     beacon_search_clear_candidate();
 }
 
+/* 缓启动完成后只执行一次：等待、正向扫描一整圈，再等待视觉稳定。 */
+static void beacon_search_tick_startup_scan(uint16 elapsed_ms)
+{
+    s_startup_vision_age_ms = beacon_search_add_ms(s_startup_vision_age_ms,
+                                                   elapsed_ms);
+    if(s_startup_vision_age_ms > BEACON_SEARCH_VISION_FRAME_MAX_AGE_MS)
+    {
+        s_startup_trusted_beacon_visible = 0U;
+        beacon_search_clear_candidate();
+    }
+
+    switch(s_startup_phase)
+    {
+    case BEACON_SEARCH_STARTUP_WAIT_READY:
+        s_state = BEACON_SEARCH_DISABLED;
+        s_control = BEACON_SEARCH_CONTROL_STARTUP_HOLD;
+        s_startup_elapsed_ms = 0U;
+        s_startup_phase = BEACON_SEARCH_STARTUP_HOLD_BEFORE;
+        beacon_search_clear_candidate();
+        break;
+
+    case BEACON_SEARCH_STARTUP_HOLD_BEFORE:
+        s_startup_elapsed_ms = beacon_search_add_ms(s_startup_elapsed_ms,
+                                                    elapsed_ms);
+        if(s_startup_elapsed_ms >= BEACON_SEARCH_STARTUP_WAIT_MS)
+        {
+            s_startup_elapsed_ms = 0U;
+            s_startup_turn_complete_event = 0U;
+            s_control = BEACON_SEARCH_CONTROL_STARTUP_SPIN;
+            s_startup_phase = BEACON_SEARCH_STARTUP_SPIN;
+        }
+        break;
+
+    case BEACON_SEARCH_STARTUP_SPIN:
+        if(s_startup_turn_complete_event)
+        {
+            s_startup_turn_complete_event = 0U;
+            s_startup_elapsed_ms = 0U;
+            s_control = BEACON_SEARCH_CONTROL_STARTUP_HOLD;
+            s_startup_phase = BEACON_SEARCH_STARTUP_HOLD_AFTER;
+        }
+        break;
+
+    case BEACON_SEARCH_STARTUP_HOLD_AFTER:
+        s_startup_elapsed_ms = beacon_search_add_ms(s_startup_elapsed_ms,
+                                                    elapsed_ms);
+        if(s_startup_elapsed_ms >= BEACON_SEARCH_STARTUP_SETTLE_MS)
+        {
+            s_startup_phase = BEACON_SEARCH_STARTUP_COMPLETE;
+            if(s_startup_trusted_beacon_visible &&
+               (s_startup_vision_age_ms <=
+                BEACON_SEARCH_VISION_FRAME_MAX_AGE_MS))
+            {
+                s_ever_seen = 1U;
+                s_state = BEACON_SEARCH_TRACKING;
+                s_control = BEACON_SEARCH_CONTROL_NONE;
+                s_loss_age_ms = 0U;
+                s_search_elapsed_ms = 0U;
+                s_failure_reason = BEACON_SEARCH_FAILURE_NONE;
+                beacon_search_clear_candidate();
+            }
+            else
+            {
+                beacon_search_begin();
+            }
+        }
+        break;
+
+    case BEACON_SEARCH_STARTUP_COMPLETE:
+    default:
+        break;
+    }
+}
+
 static uint8 beacon_search_observation_is_trusted(
     const BeaconObservation *observation)
 {
@@ -445,6 +555,7 @@ static uint8 beacon_search_confirm_candidate(uint8 track_id)
 void BeaconSearch_Init(void)
 {
     s_was_armed = 0U;
+    s_takeoff_seen_active = 0U;
     s_car_link_age_ms = 60000U;
     s_current_yaw_deg = 0.0f;
     s_target_yaw_deg = 0.0f;
@@ -452,6 +563,7 @@ void BeaconSearch_Init(void)
     s_sweep_phase = BEACON_SEARCH_SWEEP_ALIGN_ZERO;
     s_endpoint_hold_elapsed_s = 0.0f;
     s_search_generation = 0U;
+    beacon_search_reset_startup_scan();
     beacon_search_reset_session();
 }
 
@@ -470,14 +582,22 @@ void BeaconSearch_Tick(uint16 elapsed_ms,
     if(!armed_state)
     {
         s_was_armed = 0U;
+        s_takeoff_seen_active = 0U;
+        beacon_search_reset_startup_scan();
         beacon_search_reset_session();
         return;
     }
 
     if(!s_was_armed)
     {
+        s_takeoff_seen_active = 0U;
+        beacon_search_reset_startup_scan();
         beacon_search_reset_session();
         s_was_armed = 1U;
+    }
+    if(!flight_ready)
+    {
+        s_takeoff_seen_active = 1U;
     }
 
     eligible = (uint8)(angle_mode && flight_ready && velocity_loop_enabled &&
@@ -493,10 +613,25 @@ void BeaconSearch_Tick(uint16 elapsed_ms,
         s_failure_reason = BEACON_SEARCH_FAILURE_NONE;
         beacon_search_clear_candidate();
         beacon_search_reset_stability();
+        if(BEACON_SEARCH_STARTUP_COMPLETE != s_startup_phase)
+        {
+            beacon_search_reset_startup_scan();
+        }
         return;
     }
 
     beacon_search_update_stability(elapsed_ms, stability_input);
+
+    if((BEACON_SEARCH_STARTUP_COMPLETE != s_startup_phase) &&
+       s_takeoff_seen_active)
+    {
+        beacon_search_tick_startup_scan(elapsed_ms);
+        return;
+    }
+    if(BEACON_SEARCH_STARTUP_COMPLETE != s_startup_phase)
+    {
+        s_startup_phase = BEACON_SEARCH_STARTUP_COMPLETE;
+    }
 
     if(BEACON_SEARCH_DISABLED == s_state)
     {
@@ -593,6 +728,14 @@ void BeaconSearch_OnObservationFrame(
     s_last_process_count = vision_process_count;
     trusted_track_id = beacon_search_select_trusted_track(packet);
 
+    if(BEACON_SEARCH_STARTUP_COMPLETE != s_startup_phase)
+    {
+        s_startup_vision_age_ms = 0U;
+        s_startup_trusted_beacon_visible =
+            beacon_search_confirm_candidate(trusted_track_id);
+        return;
+    }
+
     if(BEACON_SEARCH_WAIT_FIRST == s_state)
     {
         if(beacon_search_confirm_candidate(trusted_track_id))
@@ -676,7 +819,9 @@ void BeaconSearch_ControlStep(float dt_s,
     if(control != last_control)
     {
         if((BEACON_SEARCH_CONTROL_SPIN == control) ||
-           (BEACON_SEARCH_CONTROL_HOLD == control))
+           (BEACON_SEARCH_CONTROL_HOLD == control) ||
+           (BEACON_SEARCH_CONTROL_STARTUP_SPIN == control) ||
+           (BEACON_SEARCH_CONTROL_STARTUP_HOLD == control))
         {
             *target_yaw_deg = current_yaw_deg;
             previous_yaw_deg = current_yaw_deg;
@@ -684,8 +829,64 @@ void BeaconSearch_ControlStep(float dt_s,
             {
                 s_endpoint_hold_elapsed_s = 0.0f;
             }
+            else if(BEACON_SEARCH_CONTROL_STARTUP_SPIN == control)
+            {
+                s_startup_scan_start_yaw_deg = current_yaw_deg;
+                s_startup_command_progress_deg = 0.0f;
+                s_startup_turn_progress_deg = 0.0f;
+                s_startup_turn_complete_event = 0U;
+            }
         }
         last_control = control;
+    }
+
+    if(BEACON_SEARCH_CONTROL_STARTUP_SPIN == control)
+    {
+        float yaw_delta_deg = beacon_search_wrap_deg(current_yaw_deg -
+                                                     previous_yaw_deg);
+        float remaining_deg = BEACON_SEARCH_STARTUP_SCAN_ANGLE_DEG -
+                              s_startup_command_progress_deg;
+        float target_step_deg = BEACON_SEARCH_YAW_RATE_DPS * dt_s;
+
+        previous_yaw_deg = current_yaw_deg;
+        if(fabsf(yaw_delta_deg) <= BEACON_SEARCH_MAX_YAW_STEP_DEG)
+        {
+            s_startup_turn_progress_deg += yaw_delta_deg;
+            if(s_startup_turn_progress_deg < 0.0f)
+            {
+                s_startup_turn_progress_deg = 0.0f;
+            }
+        }
+
+        if(isfinite(target_step_deg) && (target_step_deg > 0.0f) &&
+           (remaining_deg > 0.0f))
+        {
+            if(target_step_deg > remaining_deg)
+            {
+                target_step_deg = remaining_deg;
+            }
+            *target_yaw_deg = beacon_search_wrap_deg(*target_yaw_deg +
+                                                     target_step_deg);
+            s_startup_command_progress_deg += target_step_deg;
+        }
+        else if(remaining_deg <= 0.0f)
+        {
+            *target_yaw_deg = s_startup_scan_start_yaw_deg;
+        }
+
+        if((s_startup_command_progress_deg >=
+            BEACON_SEARCH_STARTUP_SCAN_ANGLE_DEG) &&
+           (s_startup_turn_progress_deg >=
+            (BEACON_SEARCH_STARTUP_SCAN_ANGLE_DEG -
+             BEACON_SEARCH_ENDPOINT_TOLERANCE_DEG)) &&
+           beacon_search_yaw_at_endpoint(current_yaw_deg,
+                                         s_startup_scan_start_yaw_deg))
+        {
+            s_control = BEACON_SEARCH_CONTROL_STARTUP_HOLD;
+            s_startup_turn_complete_event = 1U;
+            *target_yaw_deg = s_startup_scan_start_yaw_deg;
+            last_control = BEACON_SEARCH_CONTROL_STARTUP_HOLD;
+        }
     }
 
     if(BEACON_SEARCH_CONTROL_SPIN == control)
@@ -804,6 +1005,12 @@ float BeaconSearch_LimitYawRate(float yaw_rate_dps)
 
 uint8 BeaconSearch_GetFrameFlags(void)
 {
+    if((BEACON_SEARCH_STARTUP_HOLD_BEFORE == s_startup_phase) ||
+       (BEACON_SEARCH_STARTUP_SPIN == s_startup_phase) ||
+       (BEACON_SEARCH_STARTUP_HOLD_AFTER == s_startup_phase))
+    {
+        return CORE_LINK_BEACON_FRAME_FLAG_SEARCH_ACTIVE;
+    }
     if((BEACON_SEARCH_FAILED == s_state) ||
        ((BEACON_SEARCH_VERIFYING == s_state) && s_verify_from_failed))
     {
