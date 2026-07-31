@@ -2286,11 +2286,47 @@ typedef enum
     VISION_RUNTIME_FINE_TARGET_BEACON = 1
 } VisionRuntimeFineTarget_t;
 
+static void VisionRuntime_UpdateBeaconAnnotation(
+    uint8 candidate_index, const VisionBlob_t *blob, uint8 beacon_valid)
+{
+    VisionRuntimeCandidateAnnotation_t *annotation;
+
+    if(candidate_index >= VISION_RUNTIME_MAX_CANDIDATES || blob == NULL)
+    {
+        return;
+    }
+    annotation = &s_vision_candidate_annotations[candidate_index];
+    annotation->beacon_valid = beacon_valid;
+    annotation->raw_box_area_pixels = blob->raw_box_area_pixels;
+    annotation->beacon_area_pixels = blob->area;
+    annotation->detection_confidence = blob->detection_confidence;
+    annotation->position_sigma_cm = blob->position_sigma_cm;
+    annotation->beacon_x_cm = blob->world_x;
+    annotation->beacon_y_cm = blob->world_y;
+    annotation->beacon_area_cm2 = blob->physical_area_cm2;
+#if VISION_RUNTIME_PHYSICAL_GRID_ENABLE
+    annotation->beacon_circularity = blob->physical_circularity;
+#else
+    annotation->beacon_circularity = blob->circularity;
+#endif
+    annotation->confidence_box_size = blob->confidence_box_size;
+    annotation->confidence_box_size_min = blob->confidence_box_size_min;
+    annotation->confidence_stability = blob->confidence_stability;
+    annotation->confidence_area = blob->confidence_area;
+    annotation->confidence_edge = blob->confidence_edge;
+    annotation->adaptive_normalized_area_px = blob->adaptive_normalized_area_px;
+    annotation->adaptive_relaxation = blob->adaptive_relaxation;
+    annotation->adaptive_min_area_px = blob->adaptive_min_area_px;
+    annotation->adaptive_max_area_px = blob->adaptive_max_area_px;
+    annotation->adaptive_min_circularity = blob->adaptive_min_circularity;
+}
+
 static uint8 VisionRuntime_DispatchFineComponent(
     uint16 run_count,
     VisionRuntimeFineTarget_t target, const VisionRuntimeCandidate_t *candidate,
     uint8 candidate_index, const VehicleMarkerOpenVGate_t *open_v_gate,
-    VehicleMarkerOpenVGate_t *measured_open_v)
+    VehicleMarkerOpenVGate_t *measured_open_v,
+    VisionBlob_t *evaluated_beacon_blob)
 {
     VisionBlob_t blob;
     VisionContour_t contour;
@@ -2409,56 +2445,18 @@ static uint8 VisionRuntime_DispatchFineComponent(
 
             ++s_vision_runtime_diag.beacon_split_count;
             VisionRuntime_ComputeConfidenceInputs(candidate, candidate_index, &blob);
-            beacon_accepted = BeaconDetect_AppendBlob(&blob);
-            if(candidate_index < VISION_RUNTIME_MAX_CANDIDATES &&
-               (beacon_accepted ||
-                !s_vision_candidate_annotations[candidate_index].beacon_valid))
+            beacon_accepted = BeaconDetect_EvaluateBlob(&blob);
+            if(evaluated_beacon_blob != NULL)
             {
-                s_vision_candidate_annotations[candidate_index].beacon_valid = beacon_accepted;
-                s_vision_candidate_annotations[candidate_index].raw_box_area_pixels =
-                    blob.raw_box_area_pixels;
-                s_vision_candidate_annotations[candidate_index].beacon_area_pixels =
-                    blob.area;
-                s_vision_candidate_annotations[candidate_index].detection_confidence =
-                    blob.detection_confidence;
-                s_vision_candidate_annotations[candidate_index].position_sigma_cm =
-                    blob.position_sigma_cm;
-                s_vision_candidate_annotations[candidate_index].beacon_x_cm = blob.world_x;
-                s_vision_candidate_annotations[candidate_index].beacon_y_cm = blob.world_y;
-                s_vision_candidate_annotations[candidate_index].beacon_area_cm2 =
-                    blob.physical_area_cm2;
-#if VISION_RUNTIME_PHYSICAL_GRID_ENABLE
-                s_vision_candidate_annotations[candidate_index].beacon_circularity =
-                    blob.physical_circularity;
-#else
-                s_vision_candidate_annotations[candidate_index].beacon_circularity =
-                    blob.circularity;
-#endif
-                s_vision_candidate_annotations[candidate_index].confidence_box_size =
-                    blob.confidence_box_size;
-                s_vision_candidate_annotations[candidate_index].confidence_box_size_min =
-                    blob.confidence_box_size_min;
-                s_vision_candidate_annotations[candidate_index].confidence_stability =
-                    blob.confidence_stability;
-                s_vision_candidate_annotations[candidate_index].confidence_area =
-                    blob.confidence_area;
-                s_vision_candidate_annotations[candidate_index].confidence_edge =
-                    blob.confidence_edge;
-                s_vision_candidate_annotations[candidate_index].adaptive_normalized_area_px =
-                    blob.adaptive_normalized_area_px;
-                s_vision_candidate_annotations[candidate_index].adaptive_relaxation =
-                    blob.adaptive_relaxation;
-                s_vision_candidate_annotations[candidate_index].adaptive_min_area_px =
-                    blob.adaptive_min_area_px;
-                s_vision_candidate_annotations[candidate_index].adaptive_max_area_px =
-                    blob.adaptive_max_area_px;
-                s_vision_candidate_annotations[candidate_index].adaptive_min_circularity =
-                    blob.adaptive_min_circularity;
+                *evaluated_beacon_blob = blob;
             }
-            if(beacon_accepted)
+            if(!beacon_accepted &&
+               candidate_index < VISION_RUNTIME_MAX_CANDIDATES &&
+               !s_vision_candidate_annotations[candidate_index].beacon_valid)
             {
-                ++s_vision_runtime_diag.beacon_blob_count;
+                VisionRuntime_UpdateBeaconAnnotation(candidate_index, &blob, 0U);
             }
+            return beacon_accepted;
         }
     }
     return 0U;
@@ -2476,6 +2474,8 @@ static uint8 VisionRuntime_ProcessFineROI(
     int max_row;
     int row;
     int col;
+    uint8 best_beacon_valid = 0U;
+    VisionBlob_t best_beacon_blob;
 
     if(max_measured_open_v != NULL)
     {
@@ -2483,6 +2483,7 @@ static uint8 VisionRuntime_ProcessFineROI(
     }
     if(candidate == NULL || binary == NULL) return 0U;
     s_vision_active_binary = binary;
+    memset(&best_beacon_blob, 0, sizeof(best_beacon_blob));
     VisionRuntime_GetFineCandidateBounds(candidate, &min_col, &max_col,
                                          &min_row, &max_row);
     memset(s_vision_fine_visited, 0, sizeof(s_vision_fine_visited));
@@ -2518,22 +2519,47 @@ static uint8 VisionRuntime_ProcessFineROI(
                 }
             }
             VehicleMarkerOpenVGate_t measured_open_v = {0};
+            VisionBlob_t evaluated_beacon_blob;
+            memset(&evaluated_beacon_blob, 0, sizeof(evaluated_beacon_blob));
             uint8 component_accepted = VisionRuntime_DispatchFineComponent(
                 run_count, target, candidate, candidate_index,
-                open_v_gate, &measured_open_v);
+                open_v_gate, &measured_open_v, &evaluated_beacon_blob);
+
+            if(target == VISION_RUNTIME_FINE_TARGET_BEACON &&
+               component_accepted &&
+               (!best_beacon_valid ||
+                evaluated_beacon_blob.detection_confidence >
+                    best_beacon_blob.detection_confidence))
+            {
+                best_beacon_blob = evaluated_beacon_blob;
+                best_beacon_valid = 1U;
+            }
 
             if(max_measured_open_v != NULL &&
                measured_open_v.center_gap > max_measured_open_v->center_gap)
             {
                 *max_measured_open_v = measured_open_v;
             }
-            if(component_accepted)
+            if(component_accepted && target == VISION_RUNTIME_FINE_TARGET_VEHICLE)
             {
                 VisionRuntime_ClearFineComponent(run_count);
                 return 1U;
             }
             VisionRuntime_ClearFineComponent(run_count);
         }
+    }
+    if(target == VISION_RUNTIME_FINE_TARGET_BEACON && best_beacon_valid)
+    {
+        uint8 beacon_appended =
+            BeaconDetect_AppendEvaluatedBlob(&best_beacon_blob);
+
+        VisionRuntime_UpdateBeaconAnnotation(candidate_index, &best_beacon_blob,
+                                             beacon_appended);
+        if(beacon_appended)
+        {
+            ++s_vision_runtime_diag.beacon_blob_count;
+        }
+        return beacon_appended;
     }
     return 0U;
 }
