@@ -2335,7 +2335,7 @@ static uint8 VisionRuntime_ProcessFineROI(
                 open_v_gate, &measured_open_v);
 
             if(max_measured_open_v != NULL &&
-               measured_open_v.score > max_measured_open_v->score)
+               measured_open_v.center_gap > max_measured_open_v->center_gap)
             {
                 *max_measured_open_v = measured_open_v;
             }

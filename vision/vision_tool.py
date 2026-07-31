@@ -1491,7 +1491,7 @@ class VisionToolApp:
             2: "图像几何失败",
             3: "物理投影失败",
             4: "物理几何不符",
-            5: "open-V结构不足",
+            5: "旧版Open-V门控",
         }.get(reason, f"未知({reason})")
 
     @staticmethod
@@ -1531,6 +1531,7 @@ class VisionToolApp:
         detail_text = f"[{'；'.join(details)}]" if details else ""
         return (
             f"{label}: {status}{detail_text}，open-V={float(open_v.get('score', 0.0)):.3f}，"
+            f"空隙={float(open_v.get('center_gap', 0.0)):.3f}，"
             f"夹角={float(physical.get('arm_angle_deg', 0.0)):.1f}°，"
             f"臂={float(physical.get('left_arm_cm', 0.0)):.1f}/"
             f"{float(physical.get('right_arm_cm', 0.0)):.1f}cm，"
@@ -1555,7 +1556,7 @@ class VisionToolApp:
         elif fallback_valid:
             route = (
                 f"正式路径：未通过；{diagnostic['fallback_threshold']}单独可过"
-                "但被首轮open-V门控否决"
+                "但被正式路径的其他条件否决"
             )
         else:
             route = "正式路径：首轮和回退均未通过"
@@ -2422,8 +2423,6 @@ class VisionToolApp:
         physical_failure_text = (
             f"（{'；'.join(physical_failures)}）" if physical_failures else ""
         )
-        recognition_thresholds = result.get("recognition_thresholds", {})
-        primary_threshold = recognition_thresholds.get("vehicle", "?")
         chevron_info = (
             f"\n小车候选: {chevron.get('candidate_count', 0)}，拒绝: "
             f"{reject_text}{physical_failure_text}"
@@ -2432,9 +2431,9 @@ class VisionToolApp:
             f"\nV形拟合: {open_v.get('score', 0):.3f}，顶点假设: {open_v.get('hypothesis_score', 0):.3f}/"
             f"{open_v.get('hypothesis_second_score', 0):.3f}，差值: {open_v.get('hypothesis_margin', 0):.3f}"
             f"，臂连续度: {open_v.get('arm_continuity', 0):.3f}"
-            f"，门控: {open_v.get('gate_score', open_v.get('score', 0)):.3f}"
-            f"/空隙{open_v.get('gate_center_gap', open_v.get('center_gap', 0)):.3f}"
-            f"（{f'{primary_threshold}首轮' if open_v.get('gate_from_primary', 0) else '当前位图'}）"
+            f"，记录得分: {open_v.get('gate_score', open_v.get('score', 0)):.3f}"
+            f"，中心空隙记录: {open_v.get('gate_center_gap', open_v.get('center_gap', 0)):.3f}"
+            f"（{'首轮/当前取较大' if open_v.get('gate_from_primary', 0) else '当前位图'}）"
             f"，夹角: {physical.get('arm_angle_deg', 0):.2f}°"
             f"\n底边/高: {physical.get('base_cm', 0):.2f}/{physical.get('triangle_height_cm', 0):.2f} cm"
         )
@@ -2451,6 +2450,7 @@ class VisionToolApp:
         beacon_detail = "\n信标详情:\n" + "\n".join(beacon_lines) if beacon_lines else ""
         coarse_text = "/".join(str(value) for value in self.result_coarse_thresholds(result))
         small_box_gate = result.get("vehicle_small_box_gate", {})
+        recognition_thresholds = result.get("recognition_thresholds", {})
         pose_warning = self.pose_warning_text(
             float(result.get("roll_deg", 0.0)),
             float(result.get("pitch_deg", 0.0)),
@@ -2540,6 +2540,7 @@ def self_test() -> int:
     assert FINE_WIDTH == 376 and FINE_HEIGHT == 240 and FINE_STRIDE == 47
     assert (SIM_ROOT / "vision_sim_main.c").exists()
     assert Simulator(DEFAULT_SOURCE).source_files()
+    assert "recognition_thresholds" in VisionToolApp.show_result.__code__.co_varnames
     macro_sample = "\n".join(
         f"#define {macro} ({value}U) /* test */"
         for macro, value in zip(
