@@ -369,12 +369,10 @@ static void beacon_search_update_stability(
         s_speed_stable_ms = 0U;
     }
 
+    /* 自搜索启动只保留无人机水平速度稳定门控；位置窗口和视觉帧新鲜度
+     * 不再阻塞“小车无目标后”的搜索启动。 */
     s_start_gate_ready = (uint8)(
-        input->position_loop_enabled &&
-        (s_position_window_count >= BEACON_SEARCH_POSITION_WINDOW_FRAMES) &&
-        (s_position_qualified_count >= BEACON_SEARCH_POSITION_REQUIRED_FRAMES) &&
-        (s_vision_frame_age_ms <= BEACON_SEARCH_VISION_FRAME_MAX_AGE_MS) &&
-        (s_speed_stable_ms >= BEACON_SEARCH_SPEED_STABLE_MS));
+        s_speed_stable_ms >= BEACON_SEARCH_SPEED_STABLE_MS);
 }
 
 static void beacon_search_reset_session(void)
@@ -468,7 +466,6 @@ static void beacon_search_tick_startup_scan(uint16 elapsed_ms)
                 s_ever_seen = 1U;
                 s_state = BEACON_SEARCH_TRACKING;
                 s_control = BEACON_SEARCH_CONTROL_NONE;
-                s_loss_age_ms = 0U;
                 s_search_elapsed_ms = 0U;
                 s_failure_reason = BEACON_SEARCH_FAILURE_NONE;
                 beacon_search_clear_candidate();
@@ -581,6 +578,7 @@ void BeaconSearch_Tick(uint16 elapsed_ms,
                        uint8 velocity_loop_enabled,
                        uint8 car_link_valid,
                        uint16 car_link_age_ms,
+                       uint8 car_target_visible,
                        const BeaconSearchStabilityInput_t *stability_input)
 {
     uint8 eligible;
@@ -629,6 +627,16 @@ void BeaconSearch_Tick(uint16 elapsed_ms,
 
     beacon_search_update_stability(elapsed_ms, stability_input);
 
+    /* 小车目标状态来自接收链路；链路失效时不把旧标志当作“无目标”。 */
+    if(car_link_valid && !car_target_visible)
+    {
+        s_loss_age_ms = beacon_search_add_ms(s_loss_age_ms, elapsed_ms);
+    }
+    else
+    {
+        s_loss_age_ms = 0U;
+    }
+
     if((BEACON_SEARCH_STARTUP_COMPLETE != s_startup_phase) &&
        s_takeoff_seen_active)
     {
@@ -644,7 +652,6 @@ void BeaconSearch_Tick(uint16 elapsed_ms,
     {
         s_state = s_ever_seen ? BEACON_SEARCH_TRACKING :
                                 BEACON_SEARCH_WAIT_FIRST;
-        s_loss_age_ms = 0U;
     }
 
     if(s_turn_complete_event)
@@ -700,17 +707,12 @@ void BeaconSearch_Tick(uint16 elapsed_ms,
        (BEACON_SEARCH_TRACKING == s_state) ||
        (BEACON_SEARCH_LOSS_WAIT == s_state))
     {
-        s_loss_age_ms = beacon_search_add_ms(s_loss_age_ms, elapsed_ms);
         s_state = BEACON_SEARCH_LOSS_WAIT;
         if(s_loss_age_ms >= BEACON_SEARCH_LOSS_DELAY_MS)
         {
-            if(car_link_valid && s_start_gate_ready)
+            if(s_start_gate_ready)
             {
                 beacon_search_begin();
-            }
-            else if(!car_link_valid)
-            {
-                beacon_search_fail(BEACON_SEARCH_FAILURE_CAR_LINK);
             }
         }
     }
@@ -749,7 +751,6 @@ void BeaconSearch_OnObservationFrame(
         {
             s_ever_seen = 1U;
             s_state = BEACON_SEARCH_TRACKING;
-            s_loss_age_ms = 0U;
             beacon_search_clear_candidate();
         }
         return;
@@ -761,7 +762,6 @@ void BeaconSearch_OnObservationFrame(
         if(0U != trusted_track_id)
         {
             s_state = BEACON_SEARCH_TRACKING;
-            s_loss_age_ms = 0U;
             beacon_search_clear_candidate();
         }
         return;
@@ -800,7 +800,6 @@ void BeaconSearch_OnObservationFrame(
             s_ever_seen = 1U;
             s_state = BEACON_SEARCH_TRACKING;
             s_control = BEACON_SEARCH_CONTROL_NONE;
-            s_loss_age_ms = 0U;
             s_search_elapsed_ms = 0U;
             s_failure_reason = BEACON_SEARCH_FAILURE_NONE;
             beacon_search_clear_candidate();

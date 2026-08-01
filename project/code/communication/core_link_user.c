@@ -591,9 +591,12 @@ void core_link_user_tick (uint16 elapsed_ms)
     BeaconSearchStabilityInput_t search_stability = {0};
     PMWFlowState_t flow_state = {0};
     VehicleMarkerLossDebug_t marker_loss = {0};
+    core_link_beacon_map_uplink_packet_struct uplink_snapshot = {0};
     float follow_x_cm = 0.0f;
     float follow_y_cm = 0.0f;
     uint8 follow_valid;
+    uint8 car_link_valid;
+    uint8 car_target_visible = 0U;
 
     if(s_core_link_user_beacon_tx_elapsed_ms <= (uint16)(60000U - elapsed_ms))
     {
@@ -616,6 +619,15 @@ void core_link_user_tick (uint16 elapsed_ms)
     if(s_core_link_user_beacon_uplink_age_ms > CORE_LINK_USER_BEACON_TIMEOUT_MS)
     {
         s_core_link_user_beacon_uplink_valid = 0U;
+    }
+
+    car_link_valid = (uint8)(s_core_link_user_beacon_uplink_valid &&
+                             (s_core_link_user_beacon_uplink_age_ms <=
+                              CORE_LINK_USER_BEACON_TIMEOUT_MS) &&
+                             core_link_user_get_uplink_snapshot(&uplink_snapshot));
+    if(car_link_valid)
+    {
+        car_target_visible = uplink_snapshot.car_visible ? 1U : 0U;
     }
 
     if(s_core_link_user_car_motion_age_ms <= (uint16)(60000U - elapsed_ms))
@@ -654,8 +666,9 @@ void core_link_user_tick (uint16 elapsed_ms)
                       (uint8)(control_mode == CONTROL_MODE_ANGLE),
                       (uint8)!Flight_Takeoff_Is_Active(),
                       Velocity_Loop_Is_Enabled(),
-                      s_core_link_user_beacon_uplink_valid,
+                      car_link_valid,
                       s_core_link_user_beacon_uplink_age_ms,
+                      car_target_visible,
                       &search_stability);
     FlightAutoLand_Tick(elapsed_ms);
 }
