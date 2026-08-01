@@ -144,6 +144,14 @@ void FlightAutoLand_Init(void)
 
 void FlightAutoLand_Tick(uint16 elapsed_ms)
 {
+#if !FLIGHT_AUTO_LAND_ENABLE
+    (void)elapsed_ms;
+    if(s_state != AUTO_LAND_IDLE)
+    {
+        flight_auto_land_reset_runtime();
+    }
+    return;
+#else
     BeaconSearchDiag_t search_diag = {0};
 
     if(!armed)
@@ -252,10 +260,18 @@ void FlightAutoLand_Tick(uint16 elapsed_ms)
         s_block_reason = AUTO_LAND_BLOCK_NONE;
         s_stable_elapsed_ms = AUTO_LAND_STABLE_MS;
     }
+#endif
 }
 
 void FlightAutoLand_HeightTick_10ms(void)
 {
+#if !FLIGHT_AUTO_LAND_ENABLE
+    if(s_state != AUTO_LAND_IDLE)
+    {
+        flight_auto_land_reset_runtime();
+    }
+    return;
+#else
     if(s_state == AUTO_LAND_DESCENDING)
     {
         if(HeightManager_AutoLandingTouchdownConfirmed())
@@ -295,6 +311,7 @@ void FlightAutoLand_HeightTick_10ms(void)
             s_state = AUTO_LAND_COMPLETE;
         }
     }
+#endif
 }
 
 uint8 FlightAutoLand_IsActive(void)

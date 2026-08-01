@@ -3,6 +3,8 @@
 
 #include "zf_common_typedef.h"
 
+#define FLIGHT_AUTO_LAND_ENABLE (0U)
+
 typedef enum
 {
     AUTO_LAND_IDLE = 0,
