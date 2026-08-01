@@ -68,8 +68,6 @@ static float s_endpoint_hold_elapsed_s = 0.0f;
 static volatile BeaconSearchStartupPhase_t s_startup_phase =
     BEACON_SEARCH_STARTUP_WAIT_READY;
 static uint16 s_startup_elapsed_ms = 0U;
-static uint16 s_startup_vision_age_ms = 60000U;
-static uint8 s_startup_trusted_beacon_visible = 0U;
 static float s_startup_scan_start_yaw_deg = 0.0f;
 static float s_startup_command_progress_deg = 0.0f;
 static float s_startup_turn_progress_deg = 0.0f;
@@ -235,8 +233,6 @@ static void beacon_search_reset_startup_scan(void)
     s_startup_phase = BEACON_SEARCH_STARTUP_WAIT_READY;
     s_startup_turn_complete_event = 0U;
     s_startup_elapsed_ms = 0U;
-    s_startup_vision_age_ms = 60000U;
-    s_startup_trusted_beacon_visible = 0U;
     s_startup_scan_start_yaw_deg = 0.0f;
     s_startup_command_progress_deg = 0.0f;
     s_startup_turn_progress_deg = 0.0f;
@@ -413,14 +409,6 @@ static void beacon_search_fail(BeaconSearchFailure_t reason)
 /* 缓启动完成后只执行一次：等待、正向扫描一整圈，再等待视觉稳定。 */
 static void beacon_search_tick_startup_scan(uint16 elapsed_ms)
 {
-    s_startup_vision_age_ms = beacon_search_add_ms(s_startup_vision_age_ms,
-                                                   elapsed_ms);
-    if(s_startup_vision_age_ms > BEACON_SEARCH_VISION_FRAME_MAX_AGE_MS)
-    {
-        s_startup_trusted_beacon_visible = 0U;
-        beacon_search_clear_candidate();
-    }
-
     switch(s_startup_phase)
     {
     case BEACON_SEARCH_STARTUP_WAIT_READY:
@@ -459,21 +447,12 @@ static void beacon_search_tick_startup_scan(uint16 elapsed_ms)
         if(s_startup_elapsed_ms >= BEACON_SEARCH_STARTUP_SETTLE_MS)
         {
             s_startup_phase = BEACON_SEARCH_STARTUP_COMPLETE;
-            if(s_startup_trusted_beacon_visible &&
-               (s_startup_vision_age_ms <=
-                BEACON_SEARCH_VISION_FRAME_MAX_AGE_MS))
-            {
-                s_ever_seen = 1U;
-                s_state = BEACON_SEARCH_TRACKING;
-                s_control = BEACON_SEARCH_CONTROL_NONE;
-                s_search_elapsed_ms = 0U;
-                s_failure_reason = BEACON_SEARCH_FAILURE_NONE;
-                beacon_search_clear_candidate();
-            }
-            else
-            {
-                beacon_search_begin();
-            }
+            /* 预扫描期间不确认目标；旋转和稳定等待结束后，从新帧开始识别。 */
+            s_state = BEACON_SEARCH_WAIT_FIRST;
+            s_control = BEACON_SEARCH_CONTROL_NONE;
+            s_search_elapsed_ms = 0U;
+            s_failure_reason = BEACON_SEARCH_FAILURE_NONE;
+            beacon_search_clear_candidate();
         }
         break;
 
@@ -730,6 +709,10 @@ void BeaconSearch_OnObservationFrame(
     {
         return;
     }
+    if(BEACON_SEARCH_STARTUP_COMPLETE != s_startup_phase)
+    {
+        return;
+    }
     if(s_process_count_valid &&
        (vision_process_count == s_last_process_count))
     {
@@ -738,14 +721,6 @@ void BeaconSearch_OnObservationFrame(
     s_process_count_valid = 1U;
     s_last_process_count = vision_process_count;
     trusted_track_id = beacon_search_select_trusted_track(packet);
-
-    if(BEACON_SEARCH_STARTUP_COMPLETE != s_startup_phase)
-    {
-        s_startup_vision_age_ms = 0U;
-        s_startup_trusted_beacon_visible =
-            beacon_search_confirm_candidate(trusted_track_id);
-        return;
-    }
 
     if(BEACON_SEARCH_WAIT_FIRST == s_state)
     {
