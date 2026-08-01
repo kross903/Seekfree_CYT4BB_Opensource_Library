@@ -102,6 +102,7 @@ uint8 BeaconSearch_SetSweepHalfAngleDeg(float half_angle_deg);
 float BeaconSearch_GetSweepHalfAngleDeg(void);
 float BeaconSearch_GetSweepAngleDeg(void);
 float BeaconSearch_LimitYawRate(float yaw_rate_dps);
+uint8 BeaconSearch_IsStartupRecognitionBlocked(void);
 uint8 BeaconSearch_GetFrameFlags(void);
 void BeaconSearch_GetDiag(BeaconSearchDiag_t *diag);
 

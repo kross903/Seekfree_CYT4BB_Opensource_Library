@@ -261,6 +261,7 @@ typedef struct
 
 void VisionRuntime_ProcessFrame(float height_cm);
 void VisionRuntime_ProcessFrameWithPose(float roll_deg, float pitch_deg, float height_cm);
+void VisionRuntime_SetBeaconRecognitionEnabled(uint8 enabled);
 void VisionRuntime_SetBinaryThreshold(uint8 threshold);
 void VisionRuntime_SetBinaryThresholds(uint8 inner, uint8 middle, uint8 outer);
 void VisionRuntime_GetBinaryThresholds(uint8 thresholds[VISION_BINARY_ZONE_COUNT]);

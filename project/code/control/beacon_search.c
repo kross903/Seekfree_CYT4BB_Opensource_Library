@@ -72,6 +72,7 @@ static float s_startup_scan_start_yaw_deg = 0.0f;
 static float s_startup_command_progress_deg = 0.0f;
 static float s_startup_turn_progress_deg = 0.0f;
 static uint8 s_takeoff_seen_active = 0U;
+static volatile uint8 s_startup_recognition_blocked = 0U;
 
 static uint8 s_was_armed = 0U;
 static uint8 s_eligible = 0U;
@@ -378,6 +379,7 @@ static void beacon_search_reset_session(void)
     s_turn_complete_event = 0U;
     s_eligible = 0U;
     s_ever_seen = 0U;
+    s_startup_recognition_blocked = 0U;
     s_loss_age_ms = 0U;
     s_search_elapsed_ms = 0U;
     s_failure_reason = BEACON_SEARCH_FAILURE_NONE;
@@ -447,6 +449,7 @@ static void beacon_search_tick_startup_scan(uint16 elapsed_ms)
         if(s_startup_elapsed_ms >= BEACON_SEARCH_STARTUP_SETTLE_MS)
         {
             s_startup_phase = BEACON_SEARCH_STARTUP_COMPLETE;
+            s_startup_recognition_blocked = 0U;
             /* 预扫描期间不确认目标；旋转和稳定等待结束后，从新帧开始识别。 */
             s_state = BEACON_SEARCH_WAIT_FIRST;
             s_control = BEACON_SEARCH_CONTROL_NONE;
@@ -583,6 +586,7 @@ void BeaconSearch_Tick(uint16 elapsed_ms,
     if(!flight_ready)
     {
         s_takeoff_seen_active = 1U;
+        s_startup_recognition_blocked = 1U;
     }
 
     eligible = (uint8)(angle_mode && flight_ready && velocity_loop_enabled &&
@@ -627,6 +631,7 @@ void BeaconSearch_Tick(uint16 elapsed_ms,
     if(BEACON_SEARCH_STARTUP_COMPLETE != s_startup_phase)
     {
         s_startup_phase = BEACON_SEARCH_STARTUP_COMPLETE;
+        s_startup_recognition_blocked = 0U;
     }
 
     if(BEACON_SEARCH_DISABLED == s_state)
@@ -1115,6 +1120,11 @@ float BeaconSearch_LimitYawRate(float yaw_rate_dps)
         return -search_yaw_rate_dps;
     }
     return yaw_rate_dps;
+}
+
+uint8 BeaconSearch_IsStartupRecognitionBlocked(void)
+{
+    return s_startup_recognition_blocked;
 }
 
 uint8 BeaconSearch_GetFrameFlags(void)

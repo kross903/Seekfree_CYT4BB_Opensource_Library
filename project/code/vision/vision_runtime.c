@@ -14,6 +14,7 @@ static uint8 s_vision_vehicle_threshold =
     (uint8)VISION_BINARY_THRESHOLD_VEHICLE;
 static uint8 s_vision_beacon_threshold =
     (uint8)VISION_BINARY_THRESHOLD_BEACON;
+static uint8 s_vision_beacon_recognition_enabled = 1U;
 #if defined(VISION_RUNTIME_PC_DIAGNOSTICS)
 static uint8 s_vision_vehicle_fallback_enabled = 1U;
 static uint8 s_vision_vehicle_fallback_threshold =
@@ -127,6 +128,16 @@ void VisionRuntime_GetRecognitionThresholds(uint8 *vehicle, uint8 *beacon)
 {
     if(vehicle != NULL) *vehicle = s_vision_vehicle_threshold;
     if(beacon != NULL) *beacon = s_vision_beacon_threshold;
+}
+
+void VisionRuntime_SetBeaconRecognitionEnabled(uint8 enabled)
+{
+    s_vision_beacon_recognition_enabled = enabled ? 1U : 0U;
+    if(!s_vision_beacon_recognition_enabled)
+    {
+        memset(s_vision_runtime_beacon_slots, 0,
+               sizeof(s_vision_runtime_beacon_slots));
+    }
 }
 
 #if CY_CORE_CM7_1
@@ -2646,7 +2657,8 @@ static void VisionRuntime_ProcessBlobs(
             {
                 frame_vehicle_confirmed = 1U;
             }
-            if(!vehicle_confirmed &&
+            if(s_vision_beacon_recognition_enabled &&
+               !vehicle_confirmed &&
                s_vision_candidate_beacon_area[i] >=
                    VISION_RUNTIME_FINE_MIN_FOREGROUND_PIXELS)
             {
@@ -2751,10 +2763,16 @@ static void VisionRuntime_ProcessFrameInternal(float roll_deg,
     s_vision_rle_overflow_count = 0U;
     memset(s_vision_runtime_diag.blob_area_rank, 0, sizeof(s_vision_runtime_diag.blob_area_rank));
     VehicleMarkerLocalization_BeginBlobFrame();
-    BeaconDetect_BeginBlobFrame(beacon_results, BEACON_MAX_DETECTIONS);
+    if(s_vision_beacon_recognition_enabled)
+    {
+        BeaconDetect_BeginBlobFrame(beacon_results, BEACON_MAX_DETECTIONS);
+    }
     VisionRuntime_ProcessBlobs(mt9v03x_image);
     (void)VehicleMarkerLocalization_EndBlobFrame(&g_vehicle_marker_pose);
-    beacon_count = BeaconDetect_EndBlobFrame();
+    if(s_vision_beacon_recognition_enabled)
+    {
+        beacon_count = BeaconDetect_EndBlobFrame();
+    }
     VisionRuntime_UpdateDiagFromCurrentFrame(beacon_count, beacon_results);
 }
 

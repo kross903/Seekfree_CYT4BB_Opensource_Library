@@ -409,6 +409,11 @@ static void core_link_user_build_beacon_observations(
     memset(packet, 0, sizeof(*packet));
     packet->sequence = ++s_core_link_user_beacon_sequence;
     VisionRuntime_GetBeaconSlots(slots, VISION_RUNTIME_BEACON_SLOT_COUNT);
+    if(Flight_Takeoff_Is_Active() ||
+       BeaconSearch_IsStartupRecognitionBlocked())
+    {
+        memset(slots, 0, sizeof(slots));
+    }
     core_link_user_update_beacon_tracks(slots, slot_track_id);
     VehicleMarkerLocalization_GetLossDebug(&loss_debug);
 

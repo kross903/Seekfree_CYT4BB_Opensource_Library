@@ -33,7 +33,7 @@ typedef struct
     float tof_height_cm;
     float fused_height_cm;
     uint8 binary_thresholds[VISION_BINARY_ZONE_COUNT];
-    uint8 reserved;
+    uint8 beacon_recognition_enabled;
 } SharedVisionInput_t;
 
 typedef struct
@@ -633,7 +633,7 @@ void CrossCoreCamera_CameraCoreInit(void)
         (uint8)VISION_BINARY_THRESHOLD_MIDDLE;
     g_shared_vision_input->binary_thresholds[VISION_BINARY_ZONE_OUTER] =
         (uint8)VISION_BINARY_THRESHOLD_OUTER;
-    g_shared_vision_input->reserved = 0U;
+    g_shared_vision_input->beacon_recognition_enabled = 0U;
     g_shared_vision_snapshot_metadata->magic = 0U;
     g_shared_vision_snapshot_metadata->image_seq = 0U;
     g_shared_vision_snapshot_metadata->input_seq = 0U;
@@ -708,13 +708,16 @@ void CrossCoreCamera_CameraCoreTask(void)
             (uint8)VISION_BINARY_THRESHOLD_MIDDLE;
         input_snapshot.binary_thresholds[VISION_BINARY_ZONE_OUTER] =
             (uint8)VISION_BINARY_THRESHOLD_OUTER;
+        input_snapshot.beacon_recognition_enabled = 0U;
     }
 
-    // 执行本帧完整视觉处理：信标识别 + 小车标志识别。
+    // 起飞预扫描完成前关闭信标分支，小车标志识别保持运行。
     VisionRuntime_SetBinaryThresholds(
         input_snapshot.binary_thresholds[VISION_BINARY_ZONE_INNER],
         input_snapshot.binary_thresholds[VISION_BINARY_ZONE_MIDDLE],
         input_snapshot.binary_thresholds[VISION_BINARY_ZONE_OUTER]);
+    VisionRuntime_SetBeaconRecognitionEnabled((uint8)(
+        input_valid && input_snapshot.beacon_recognition_enabled));
     recognition_timer_valid = (uint8)(CrossCoreCamera_DwtInit() &&
                                       (SystemCoreClock != 0U));
     if(recognition_timer_valid)
@@ -881,6 +884,9 @@ void CrossCoreCamera_ControlCorePublishInput(float roll_deg,
     memcpy((void *)g_shared_vision_input->binary_thresholds,
            s_control_binary_thresholds,
            sizeof(s_control_binary_thresholds));
+    g_shared_vision_input->beacon_recognition_enabled =
+        (Flight_Takeoff_Is_Active() ||
+         BeaconSearch_IsStartupRecognitionBlocked()) ? 0U : 1U;
     g_shared_vision_input->seq++;
     CrossCoreCamera_CleanInput();
 }
@@ -961,7 +967,7 @@ void CrossCoreCamera_ControlCoreAssistantInit(void)
     memcpy((void *)g_shared_vision_input->binary_thresholds,
            s_control_binary_thresholds,
            sizeof(s_control_binary_thresholds));
-    g_shared_vision_input->reserved = 0U;
+    g_shared_vision_input->beacon_recognition_enabled = 0U;
     g_shared_vision_snapshot_metadata->magic = 0U;
     g_shared_vision_snapshot_metadata->image_seq = 0U;
     g_shared_vision_snapshot_metadata->input_seq = 0U;
