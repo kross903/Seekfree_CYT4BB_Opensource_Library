@@ -78,6 +78,7 @@ typedef struct
 #define CORE_LINK_BEACON_MAP_UPLINK_PAYLOAD_LEN   (43U)
 #define CORE_LINK_CAR_MOTION_FLAG_VALID            (0x01U)
 #define CORE_LINK_CAR_MOTION_FLAG_SLIP_SUSPECT     (0x02U)
+#define CORE_LINK_CAR_MOTION_FLAG_TARGET_VALID     (0x04U)
 
 typedef struct
 {

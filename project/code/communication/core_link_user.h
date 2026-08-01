@@ -19,6 +19,7 @@ typedef struct
 {
     uint8 valid;
     uint8 flags;
+    uint8 target_valid;
     uint8 sequence;
     uint16 age_ms;
     uint16 protocol_error_count;

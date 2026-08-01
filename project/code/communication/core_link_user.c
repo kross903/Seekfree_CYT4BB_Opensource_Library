@@ -675,6 +675,7 @@ void core_link_user_get_car_motion_diag(CoreLinkCarMotionDiag_t *diag)
 {
     core_link_beacon_map_uplink_packet_struct snapshot;
     uint16 age_ms;
+    uint8 snapshot_valid;
 
     if(NULL == diag)
     {
@@ -683,10 +684,16 @@ void core_link_user_get_car_motion_diag(CoreLinkCarMotionDiag_t *diag)
 
     memset(&snapshot, 0, sizeof(snapshot));
     age_ms = s_core_link_user_car_motion_age_ms;
+    snapshot_valid = (uint8)(s_core_link_user_beacon_uplink_valid &&
+                             (s_core_link_user_beacon_uplink_age_ms <=
+                              CORE_LINK_USER_BEACON_TIMEOUT_MS) &&
+                             core_link_user_get_uplink_snapshot(&snapshot));
     diag->valid = (uint8)(s_core_link_user_car_motion_valid &&
                           (age_ms <= CORE_LINK_USER_BEACON_TIMEOUT_MS) &&
-                          core_link_user_get_uplink_snapshot(&snapshot));
+                          snapshot_valid);
     diag->flags = snapshot.motion_flags;
+    diag->target_valid = (uint8)(snapshot_valid &&
+        (snapshot.motion_flags & CORE_LINK_CAR_MOTION_FLAG_TARGET_VALID));
     diag->sequence = snapshot.motion_sequence;
     diag->age_ms = age_ms;
     diag->protocol_error_count = s_core_link_user_car_motion_protocol_error_count;
