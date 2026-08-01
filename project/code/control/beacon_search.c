@@ -17,7 +17,7 @@
 #define BEACON_SEARCH_MAX_YAW_STEP_DEG           (10.0f) /* 单周期Yaw跳变过滤阈值，避免IMU突变误计 */
 #define BEACON_SEARCH_STARTUP_WAIT_MS             (2000U)/* 缓启动完成后的预扫描前等待时间 */
 #define BEACON_SEARCH_STARTUP_SCAN_ANGLE_DEG      (360.0f)/* 起飞后预扫描整圈角度 */
-#define BEACON_SEARCH_STARTUP_SETTLE_MS           (3000U)/* 预扫描完成后的视觉稳定等待时间 */
+#define BEACON_SEARCH_STARTUP_SETTLE_MS           (1000U)/* 预扫描完成后的视觉稳定等待时间 */
 
 typedef enum
 {
