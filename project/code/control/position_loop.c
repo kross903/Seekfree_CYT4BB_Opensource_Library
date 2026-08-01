@@ -2,17 +2,14 @@
 #include "vision/vehicle_marker_localization.h"
 #include <math.h>
 
-#define POSITION_LOOP_CAR_FF_GAIN_DEFAULT          (0.15f)   // M1/M2：小车X/Y速度前馈增益上电默认值
+#define POSITION_LOOP_CAR_FF_GAIN_DEFAULT          (0.0f)   // M1/M2：小车X/Y速度前馈增益上电默认值
 #define POSITION_LOOP_CAR_FF_GAIN_MAX              (1.2f)    // M1/M2：小车X/Y速度前馈增益允许上限
-#define POSITION_LOOP_POSITION_KP_DEFAULT          (0.20f)    // M3：二维位置P增益默认值，单位s^-1
+#define POSITION_LOOP_POSITION_KP_DEFAULT          (0.25f)    // M3：二维位置P增益默认值，单位s^-1
 #define POSITION_LOOP_CORRECTION_MAX_DEFAULT_CMS   (100.0f)   // M4：位置修正速度模长上限，单位cm/s
 #define POSITION_LOOP_TARGET_MAX_DEFAULT_CMS       (200.0f)  // M5：合成后目标速度模长上限，单位cm/s
 #define POSITION_LOOP_ACCEL_MAX_DEFAULT_CMS2       (80.0f)   // M6：轨迹加速度模长上限，单位cm/s^2
 #define POSITION_LOOP_JERK_MAX_DEFAULT_CMS3        (250.0f)  // M7：轨迹Jerk模长上限，单位cm/s^3
-#define POSITION_LOOP_VISION_HOLD_MS               (120U)    // 视觉断帧后相对位置预测保持时间，单位ms
-#define POSITION_LOOP_VISION_INNOVATION_GATE_CM    (25.0f)   // 新视觉位置相对可信轨迹的创新门限，单位cm
-#define POSITION_LOOP_VISION_REACQUIRE_GATE_CM     (12.0f)   // 视觉重捕获候选位置的一致性门限，单位cm
-#define POSITION_LOOP_VISION_REACQUIRE_FRAMES      (3U)      // 视觉重捕获所需的连续一致候选帧数
+#define POSITION_LOOP_VISION_HOLD_MS               (1000U)   // 视觉断帧后相对位置预测保持时间，单位ms
 #define POSITION_LOOP_EPSILON                      (0.0001f) // 二维距离归一化时的除零保护阈值
 #define POSITION_LOOP_YAW_RESET_THRESHOLD_DEG      (30.0f)   // 单个水平控制周期内超过该变化视为Yaw参考系重置
 #define POSITION_LOOP_BRAKE_SPEED_START_CMS         (25.0f)   // 径向接近速度达到该值后开始提高制动能力，单位cm/s
@@ -79,8 +76,6 @@ static uint32 g_last_pose_seq = 0U;
 static uint16 g_hold_elapsed_ms = 0U;
 static uint8 g_observation_state = POSITION_LOOP_OBSERVATION_INVALID;
 static uint8 g_reacquire_count = 0U;
-static float g_reacquire_x_earth_cm = 0.0f;
-static float g_reacquire_y_earth_cm = 0.0f;
 static float g_vision_innovation_cm = 0.0f;
 static volatile uint8 g_frozen_hold_active = 0U;
 
@@ -240,8 +235,6 @@ static float position_loop_envelope_speed(float distance,
 static void position_loop_reset_reacquisition(void)
 {
     g_reacquire_count = 0U;
-    g_reacquire_x_earth_cm = 0.0f;
-    g_reacquire_y_earth_cm = 0.0f;
 }
 
 static void position_loop_reset_predict_hold(void)
@@ -356,50 +349,15 @@ static uint8 position_loop_accept_visual(float pose_x,
         dx = raw_x - g_last_x_earth_cm;
         dy = raw_y - g_last_y_earth_cm;
         g_vision_innovation_cm = sqrtf(dx * dx + dy * dy);
-        if(g_vision_innovation_cm <= POSITION_LOOP_VISION_INNOVATION_GATE_CM)
-        {
-            *accepted_x = pose_x;
-            *accepted_y = pose_y;
-            position_loop_reset_reacquisition();
-            return 1U;
-        }
-    }
-
-    if(g_reacquire_count == 0U)
-    {
-        g_reacquire_x_earth_cm = pose_x;
-        g_reacquire_y_earth_cm = pose_y;
-        g_reacquire_count = 1U;
     }
     else
     {
-        float candidate_delta;
-        dx = pose_x - g_reacquire_x_earth_cm;
-        dy = pose_y - g_reacquire_y_earth_cm;
-        candidate_delta = sqrtf(dx * dx + dy * dy);
-        if(candidate_delta <= POSITION_LOOP_VISION_REACQUIRE_GATE_CM)
-        {
-            g_reacquire_count++;
-            g_reacquire_x_earth_cm += dx / (float)g_reacquire_count;
-            g_reacquire_y_earth_cm += dy / (float)g_reacquire_count;
-        }
-        else
-        {
-            g_reacquire_x_earth_cm = pose_x;
-            g_reacquire_y_earth_cm = pose_y;
-            g_reacquire_count = 1U;
-        }
+        g_vision_innovation_cm = 0.0f;
     }
-
-    g_observation_state = POSITION_LOOP_OBSERVATION_REACQUIRING;
-    if(g_reacquire_count >= POSITION_LOOP_VISION_REACQUIRE_FRAMES)
-    {
-        *accepted_x = g_reacquire_x_earth_cm;
-        *accepted_y = g_reacquire_y_earth_cm;
-        position_loop_reset_reacquisition();
-        return 1U;
-    }
-    return 0U;
+    *accepted_x = pose_x;
+    *accepted_y = pose_y;
+    position_loop_reset_reacquisition();
+    return 1U;
 }
 
 static uint8 position_loop_predict_hold(float measured_vx_earth,
