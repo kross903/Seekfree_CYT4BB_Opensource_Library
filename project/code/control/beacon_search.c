@@ -18,6 +18,7 @@
 #define BEACON_SEARCH_STARTUP_WAIT_MS             (2000U)/* 缓启动完成后的预扫描前等待时间 */
 #define BEACON_SEARCH_STARTUP_SCAN_ANGLE_DEG      (360.0f)/* 起飞后预扫描整圈角度 */
 #define BEACON_SEARCH_STARTUP_SETTLE_MS           (1000U)/* 预扫描完成后的视觉稳定等待时间 */
+#define BEACON_SEARCH_MAX_SWEEP_ROUNDS            (10U)  /* 每次普通自搜索最多执行的摆扫轮数 */
 
 typedef enum
 {
@@ -55,6 +56,7 @@ static volatile BeaconSearchState_t s_state = BEACON_SEARCH_DISABLED;
 static volatile BeaconSearchControl_t s_control = BEACON_SEARCH_CONTROL_NONE;
 static volatile uint8 s_turn_complete_event = 0U;
 static volatile uint8 s_search_generation = 0U;
+static uint8 s_sweep_round_count = 0U;
 static volatile uint8 s_startup_turn_complete_event = 0U;
 static volatile float s_current_yaw_deg = 0.0f;
 static volatile float s_target_yaw_deg = 0.0f;
@@ -382,6 +384,7 @@ static void beacon_search_reset_session(void)
     s_startup_recognition_blocked = 0U;
     s_loss_age_ms = 0U;
     s_search_elapsed_ms = 0U;
+    s_sweep_round_count = 0U;
     s_failure_reason = BEACON_SEARCH_FAILURE_NONE;
     s_process_count_valid = 0U;
     s_last_process_count = 0U;
@@ -394,6 +397,7 @@ static void beacon_search_begin(void)
     s_state = BEACON_SEARCH_SPINNING;
     s_control = BEACON_SEARCH_CONTROL_SPIN;
     s_search_elapsed_ms = 0U;
+    s_sweep_round_count = 0U;
     s_failure_reason = BEACON_SEARCH_FAILURE_NONE;
     s_turn_complete_event = 0U;
     s_search_generation++;
@@ -643,7 +647,22 @@ void BeaconSearch_Tick(uint16 elapsed_ms,
     if(s_turn_complete_event)
     {
         s_turn_complete_event = 0U;
-        beacon_search_fail(BEACON_SEARCH_FAILURE_SWEEP_COMPLETE);
+        if(((uint16)s_sweep_round_count + 1U) <
+           BEACON_SEARCH_MAX_SWEEP_ROUNDS)
+        {
+            s_sweep_round_count++;
+            s_state = BEACON_SEARCH_SPINNING;
+            s_control = BEACON_SEARCH_CONTROL_SPIN;
+            s_search_elapsed_ms = 0U;
+            s_failure_reason = BEACON_SEARCH_FAILURE_NONE;
+            s_search_generation++;
+            beacon_search_clear_candidate();
+        }
+        else
+        {
+            s_sweep_round_count = BEACON_SEARCH_MAX_SWEEP_ROUNDS;
+            beacon_search_fail(BEACON_SEARCH_FAILURE_SWEEP_COMPLETE);
+        }
         return;
     }
 
