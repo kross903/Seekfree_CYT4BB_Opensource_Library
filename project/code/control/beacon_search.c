@@ -578,7 +578,8 @@ void BeaconSearch_Tick(uint16 elapsed_ms,
                        uint8 velocity_loop_enabled,
                        uint8 car_link_valid,
                        uint16 car_link_age_ms,
-                       uint8 car_target_visible,
+                       uint8 car_motion_valid,
+                       uint8 car_target_valid,
                        const BeaconSearchStabilityInput_t *stability_input)
 {
     uint8 eligible;
@@ -627,8 +628,9 @@ void BeaconSearch_Tick(uint16 elapsed_ms,
 
     beacon_search_update_stability(elapsed_ms, stability_input);
 
-    /* 小车目标状态来自接收链路；链路失效时不把旧标志当作“无目标”。 */
-    if(car_link_valid && !car_target_visible)
+    /* 只有小车运动状态有效且 TARGET_VALID=0，才累计“无目标”；
+     * 链路或运动状态失效时不把旧标志当作“无目标”。 */
+    if(car_link_valid && car_motion_valid && !car_target_valid)
     {
         s_loss_age_ms = beacon_search_add_ms(s_loss_age_ms, elapsed_ms);
     }

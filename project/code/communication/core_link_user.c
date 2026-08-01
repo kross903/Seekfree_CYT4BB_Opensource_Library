@@ -596,7 +596,8 @@ void core_link_user_tick (uint16 elapsed_ms)
     float follow_y_cm = 0.0f;
     uint8 follow_valid;
     uint8 car_link_valid;
-    uint8 car_target_visible = 0U;
+    uint8 car_motion_valid = 0U;
+    uint8 car_target_valid = 0U;
 
     if(s_core_link_user_beacon_tx_elapsed_ms <= (uint16)(60000U - elapsed_ms))
     {
@@ -627,7 +628,10 @@ void core_link_user_tick (uint16 elapsed_ms)
                              core_link_user_get_uplink_snapshot(&uplink_snapshot));
     if(car_link_valid)
     {
-        car_target_visible = uplink_snapshot.car_visible ? 1U : 0U;
+        car_motion_valid = (uplink_snapshot.motion_flags &
+                            CORE_LINK_CAR_MOTION_FLAG_VALID) ? 1U : 0U;
+        car_target_valid = (uplink_snapshot.motion_flags &
+                            CORE_LINK_CAR_MOTION_FLAG_TARGET_VALID) ? 1U : 0U;
     }
 
     if(s_core_link_user_car_motion_age_ms <= (uint16)(60000U - elapsed_ms))
@@ -668,7 +672,8 @@ void core_link_user_tick (uint16 elapsed_ms)
                       Velocity_Loop_Is_Enabled(),
                       car_link_valid,
                       s_core_link_user_beacon_uplink_age_ms,
-                      car_target_visible,
+                      car_motion_valid,
+                      car_target_valid,
                       &search_stability);
     FlightAutoLand_Tick(elapsed_ms);
 }
