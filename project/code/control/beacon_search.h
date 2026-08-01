@@ -7,7 +7,7 @@
 #define BEACON_SEARCH_YAW_RATE_DEFAULT_DPS        (90.0f) /* 自搜索Yaw速度默认值，单位deg/s */
 #define BEACON_SEARCH_YAW_RATE_MIN_DPS            (30.0f) /* VOFA允许设置的最小自搜索Yaw速度 */
 #define BEACON_SEARCH_YAW_RATE_MAX_DPS           (120.0f) /* VOFA允许设置的最大自搜索Yaw速度 */
-#define BEACON_SEARCH_SWEEP_HALF_ANGLE_DEFAULT_DEG (45.0f)/* 普通自搜索默认半角，范围为-半角到+半角 */
+#define BEACON_SEARCH_SWEEP_HALF_ANGLE_DEFAULT_DEG (60.0f)/* 普通自搜索默认半角，范围为-半角到+半角 */
 #define BEACON_SEARCH_SWEEP_HALF_ANGLE_MIN_DEG     (5.0f) /* VOFA允许设置的最小自搜索半角 */
 #define BEACON_SEARCH_SWEEP_HALF_ANGLE_MAX_DEG    (90.0f) /* VOFA允许设置的最大自搜索半角 */
 #define BEACON_SEARCH_SWEEP_ANGLE_DEG \

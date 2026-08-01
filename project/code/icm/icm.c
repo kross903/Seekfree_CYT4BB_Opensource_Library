@@ -35,6 +35,8 @@
 #define ICM_VISION_YAW_CONFIRM_FRAMES (3U)
 #define ICM_VISION_YAW_CORRECTION_ALPHA (0.02f)
 #define ICM_VISION_YAW_MAX_STEP_DEG (0.20f)
+/* Yaw陀螺比例补偿：实测正向旋转360°时融合角约为323°。 */
+#define ICM_YAW_GYRO_SCALE (1.115f)
 
 // ==================== 全局变量定义 ====================
 #define twoKpDef    (2.0f * 0.5f)   // Mahony比例增益
@@ -695,7 +697,7 @@ void get_ICM_data(void)
     // 4. 角速度数据处理
     Pitch_g = icm42688_gyro_y;
     Roll_g  = icm42688_gyro_x;
-    Yaw_g   = icm42688_gyro_z;
+    Yaw_g   = icm42688_gyro_z * ICM_YAW_GYRO_SCALE;
 
     // 二阶滤波器处理角速度
     Pitch_g_F = biquad(&Pitch_g_biquad, Pitch_g);
@@ -703,7 +705,7 @@ void get_ICM_data(void)
     Yaw_g_F   = biquad(&Yaw_g_biquad, Yaw_g);
 
     // 【修改4】Mahony姿态解算 - 传入滤波后的加速度和模值
-    MahonyAHRSupdateIMU(icm42688_gyro_x, icm42688_gyro_y, icm42688_gyro_z,
+    MahonyAHRSupdateIMU(icm42688_gyro_x, icm42688_gyro_y, Yaw_g,
                         Roll_acc_F, Pitch_acc_F, Yaw_acc_F, acc_norm_filtered);
 
     // 6. 转换为欧拉角(度)
