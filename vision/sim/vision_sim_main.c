@@ -284,6 +284,7 @@ static void full_rectified_box_to_raw(const VisionRuntimeBeaconSlot_t *slot,
 static int write_result(const char *path, const char *binary_path,
                         float roll_deg, float pitch_deg, float height_cm,
                         uint8 vehicle_threshold, uint8 beacon_threshold,
+                        uint8 vehicle_fallback_threshold,
                         uint8 vehicle_fallback_enabled,
                         int binary_mode,
                         const VisionRuntimeDiag_t *diag,
@@ -407,7 +408,7 @@ static int write_result(const char *path, const char *binary_path,
             "\"vehicle_fallback\":%u,\"vehicle_fallback_enabled\":%u,"
             "\"beacon\":%u},\n",
             (unsigned)vehicle_threshold,
-            (unsigned)VISION_BINARY_THRESHOLD_VEHICLE_FALLBACK,
+            (unsigned)vehicle_fallback_threshold,
             (unsigned)vehicle_fallback_enabled,
             (unsigned)beacon_threshold);
     fprintf(file,
@@ -636,6 +637,9 @@ int main(int argc, char **argv)
         get_option(argc, argv, "--vehicle-threshold"),
         parse_int(get_option(argc, argv, "--threshold-inner"),
                   (int)VISION_BINARY_THRESHOLD_VEHICLE));
+    int vehicle_fallback_threshold_value = parse_int(
+        get_option(argc, argv, "--vehicle-fallback-threshold"),
+        (int)VISION_BINARY_THRESHOLD_VEHICLE_FALLBACK);
     int beacon_threshold_value = parse_int(
         get_option(argc, argv, "--beacon-threshold"),
         parse_int(get_option(argc, argv, "--threshold-middle"),
@@ -663,6 +667,7 @@ int main(int argc, char **argv)
     uint8 coarse_thresholds[VISION_RUNTIME_COARSE_ZONE_COUNT];
     uint8 threshold;
     uint8 vehicle_threshold;
+    uint8 vehicle_fallback_threshold;
     uint8 beacon_threshold;
     int binary_mode = BINARY_MODE_GRAY;
     uint8 vehicle_fallback_enabled =
@@ -684,7 +689,7 @@ int main(int argc, char **argv)
 
     if(input_path == NULL || output_path == NULL || !read_raw(input_path))
     {
-        fprintf(stderr, "usage: vision_sim --input frame.raw --output result.json [--binary binary.pgm] [--vehicle-binary vehicle_binary.pgm] [--disable-vehicle-fallback] [--vehicle-threshold 145] [--beacon-threshold 50] [--coarse-center-threshold 150] [--coarse-near-threshold 60] [--coarse-middle-threshold 50] [--coarse-far-threshold 50] [--coarse-edge-threshold 40] [--binary-mode gray|pre_transform|undistort_binary_ipm|post_transform]\n");
+        fprintf(stderr, "usage: vision_sim --input frame.raw --output result.json [--binary binary.pgm] [--vehicle-binary vehicle_binary.pgm] [--disable-vehicle-fallback] [--vehicle-threshold 145] [--vehicle-fallback-threshold 50] [--beacon-threshold 50] [--coarse-center-threshold 150] [--coarse-near-threshold 60] [--coarse-middle-threshold 50] [--coarse-far-threshold 50] [--coarse-edge-threshold 40] [--binary-mode gray|pre_transform|undistort_binary_ipm|post_transform]\n");
         return 2;
     }
 
@@ -692,6 +697,15 @@ int main(int argc, char **argv)
     if(threshold_value > 255) threshold_value = 255;
     if(vehicle_threshold_value < 1) vehicle_threshold_value = 1;
     if(vehicle_threshold_value > 255) vehicle_threshold_value = 255;
+    if(vehicle_fallback_threshold_value < 1 ||
+       vehicle_fallback_threshold_value > 255 ||
+       (vehicle_fallback_enabled &&
+        vehicle_fallback_threshold_value >= vehicle_threshold_value))
+    {
+        fprintf(stderr,
+                "vehicle fallback threshold must be 1..255 and lower than the primary threshold\n");
+        return 2;
+    }
     if(beacon_threshold_value < 1) beacon_threshold_value = 1;
     if(beacon_threshold_value > 255) beacon_threshold_value = 255;
     {
@@ -704,6 +718,7 @@ int main(int argc, char **argv)
         }
     }
     vehicle_threshold = (uint8)vehicle_threshold_value;
+    vehicle_fallback_threshold = (uint8)vehicle_fallback_threshold_value;
     beacon_threshold = (uint8)beacon_threshold_value;
     threshold = beacon_threshold;
     if(binary_mode_text != NULL && strcmp(binary_mode_text, "pre_transform") == 0)
@@ -728,6 +743,7 @@ int main(int argc, char **argv)
     BeaconDetect_Init();
     VisionRuntime_SetRecognitionThresholds(vehicle_threshold,
                                            beacon_threshold);
+    VisionRuntime_SetVehicleFallbackThreshold(vehicle_fallback_threshold);
     VisionRuntime_SetVehicleFallbackEnabled(vehicle_fallback_enabled);
     VisionRuntime_SetCoarseZoneThresholds(coarse_thresholds);
     mt9v03x_finish_flag = 1U;
@@ -963,6 +979,7 @@ int main(int argc, char **argv)
     }
     if(!write_result(output_path, binary_path, roll_deg, pitch_deg, height_cm,
                      vehicle_threshold, beacon_threshold,
+                     vehicle_fallback_threshold,
                      vehicle_fallback_enabled, binary_mode, &diag,
                      undistort_canvas_ptr, birdview_bounds_ptr))
     {
