@@ -963,6 +963,14 @@ void BeaconSearch_ControlStep(float dt_s,
         {
             float right_yaw_deg = BeaconSearch_GetSweepHalfAngleDeg();
 
+            if(!s_ever_seen)
+            {
+                s_control = BEACON_SEARCH_CONTROL_HOLD;
+                *target_yaw_deg = right_yaw_deg;
+                last_control = BEACON_SEARCH_CONTROL_HOLD;
+                break;
+            }
+
             if(beacon_search_hold_endpoint(dt_s, current_yaw_deg, right_yaw_deg,
                                            target_yaw_deg))
             {
