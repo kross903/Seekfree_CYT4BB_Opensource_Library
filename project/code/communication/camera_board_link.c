@@ -1,6 +1,6 @@
 #include "common/project_headfile.h"
 
-#define CAMERA_BOARD_RX_FIFO_SIZE       (256U)
+#define CAMERA_BOARD_RX_FIFO_SIZE       (512U)
 #define CAMERA_BOARD_DWT_LAR_UNLOCK     (0xC5ACCE55UL)
 #define CAMERA_BOARD_STATE_HISTORY_SIZE (32U)
 
@@ -28,6 +28,7 @@ typedef enum
 } CameraBoardParseState_t;
 
 static volatile uint8 s_rx_fifo[CAMERA_BOARD_RX_FIFO_SIZE];
+static volatile uint32 s_rx_cycle[CAMERA_BOARD_RX_FIFO_SIZE];
 static volatile uint16 s_rx_head = 0U;
 static volatile uint16 s_rx_tail = 0U;
 
@@ -37,7 +38,7 @@ static uint16 s_parse_length = 0U;
 static uint16 s_parse_sequence = 0U;
 static uint16 s_parse_index = 0U;
 static uint16 s_parse_crc_received = 0U;
-static uint32 s_parse_start_us = 0U;
+static uint32 s_parse_last_byte_cycle = 0U;
 static uint8 s_parse_crc_data[6U + CAMERA_BOARD_PROTOCOL_MAX_PAYLOAD];
 static uint8 s_parse_payload[CAMERA_BOARD_PROTOCOL_MAX_PAYLOAD];
 
@@ -188,6 +189,22 @@ static void CameraBoardLink_ResetParser(void)
     s_parse_length = 0U;
     s_parse_index = 0U;
     s_parse_crc_received = 0U;
+    s_parse_last_byte_cycle = 0U;
+}
+
+static uint8 CameraBoardLink_ParseGapTimedOut(uint32 byte_cycle)
+{
+    uint32 timeout_cycles;
+
+    if((s_parse_state == CAMERA_BOARD_PARSE_SOF1) ||
+       (SystemCoreClock == 0U))
+    {
+        return 0U;
+    }
+    timeout_cycles = (uint32)(((uint64)SystemCoreClock *
+                               CAMERA_BOARD_PARSE_TIMEOUT_US) / 1000000ULL);
+    return ((uint32)(byte_cycle - s_parse_last_byte_cycle) > timeout_cycles) ?
+           1U : 0U;
 }
 
 static void CameraBoardLink_ResetSession(uint8 invalidate_frame)
@@ -389,12 +406,11 @@ static void CameraBoardLink_DispatchFrame(uint8 type,
     }
 }
 
-static void CameraBoardLink_ParseByte(uint8 byte, uint32 now_us)
+static void CameraBoardLink_ParseByte(uint8 byte, uint32 byte_cycle)
 {
     uint16 crc_calculated;
 
-    if((s_parse_state != CAMERA_BOARD_PARSE_SOF1) &&
-       ((uint32)(now_us - s_parse_start_us) > CAMERA_BOARD_PARSE_TIMEOUT_US))
+    if(CameraBoardLink_ParseGapTimedOut(byte_cycle))
     {
         s_diag.protocol_error_count++;
         CameraBoardLink_ResetParser();
@@ -405,7 +421,6 @@ static void CameraBoardLink_ParseByte(uint8 byte, uint32 now_us)
         case CAMERA_BOARD_PARSE_SOF1:
             if(byte == CAMERA_BOARD_PROTOCOL_SOF1)
             {
-                s_parse_start_us = now_us;
                 s_parse_state = CAMERA_BOARD_PARSE_SOF2;
             }
             break;
@@ -416,7 +431,7 @@ static void CameraBoardLink_ParseByte(uint8 byte, uint32 now_us)
             }
             else if(byte == CAMERA_BOARD_PROTOCOL_SOF1)
             {
-                s_parse_start_us = now_us;
+                s_parse_state = CAMERA_BOARD_PARSE_SOF2;
             }
             else
             {
@@ -500,6 +515,10 @@ static void CameraBoardLink_ParseByte(uint8 byte, uint32 now_us)
             CameraBoardLink_ResetParser();
             break;
     }
+    if(s_parse_state != CAMERA_BOARD_PARSE_SOF1)
+    {
+        s_parse_last_byte_cycle = byte_cycle;
+    }
 }
 
 static void CameraBoardLink_ServiceRx(void)
@@ -507,8 +526,9 @@ static void CameraBoardLink_ServiceRx(void)
     while(s_rx_tail != s_rx_head)
     {
         uint8 byte = s_rx_fifo[s_rx_tail];
+        uint32 cycle = s_rx_cycle[s_rx_tail];
         s_rx_tail = (uint16)((s_rx_tail + 1U) % CAMERA_BOARD_RX_FIFO_SIZE);
-        CameraBoardLink_ParseByte(byte, CameraBoardLink_TimeNowUs());
+        CameraBoardLink_ParseByte(byte, cycle);
     }
 }
 
@@ -647,6 +667,7 @@ void CameraBoardLink_RxIsr(void)
     uint8 byte;
     while(uart_query_byte(CAMERA_BOARD_UART_INDEX, &byte))
     {
+        uint32 cycle = DWT->CYCCNT;
         uint16 next = (uint16)((s_rx_head + 1U) % CAMERA_BOARD_RX_FIFO_SIZE);
         if(next == s_rx_tail)
         {
@@ -654,6 +675,7 @@ void CameraBoardLink_RxIsr(void)
             continue;
         }
         s_rx_fifo[s_rx_head] = byte;
+        s_rx_cycle[s_rx_head] = cycle;
         s_rx_head = next;
     }
 }

@@ -115,8 +115,9 @@ void icm_init_menu()
 #define VISION_VIEW_SNAPSHOT_WAIT_TICKS 120U
 #define VISION_VIEW_SNAPSHOT_WAIT_MS    5U
 #define TRACK_LIGHT_RELEASE_TIMEOUT_TICKS 40U
-#define REAR_BOARD_RX_REFRESH_TICKS       20U
 #define VISION_FUSION_REFRESH_US          50000U
+#define VISION_FUSION_ROW_COUNT           12U
+#define REAR_BOARD_RX_ROW_COUNT           12U
 #define MT9V03X_ADJUST_INFO_Y           128U
 #define MT9V03X_ADJUST_STEP_Y           148U
 #define MT9V03X_ADJUST_STATUS_Y         168U
@@ -147,9 +148,15 @@ static uint8 s_sensor_status_frame_rate_valid = 0U;
 static uint8 s_rear_board_rx_page_active = 0U;
 static uint8 s_rear_board_rx_view = 0U;
 static uint8 s_rear_board_rx_beacon_index = 0U;
-static uint8 s_rear_board_rx_refresh_ticks = 0U;
+static uint8 s_rear_board_rx_row_cursor = 0U;
+static uint8 s_rear_board_rx_frame_received = 0U;
+static CameraBoardLinkDiag_t s_rear_board_rx_diag_snapshot;
+static CameraBoardVisionFrame_t s_rear_board_rx_frame_snapshot;
 static uint8 s_vision_fusion_page_active = 0U;
 static uint32 s_vision_fusion_last_refresh_us = 0U;
+static uint8 s_vision_fusion_row_cursor = 0U;
+static DualCameraFusionSnapshot_t s_vision_fusion_snapshot;
+static DualCameraFusionDiag_t s_vision_fusion_diag;
 
 static void test_page_clear_line(uint16 y);
 static void test_page_show_text(uint16 y, const char *label,
@@ -169,128 +176,140 @@ static const char *vision_fusion_source_text(uint8 source)
     }
 }
 
-static void vision_fusion_draw_page(void)
+static void vision_fusion_capture_snapshot(uint32 now_us)
 {
-    DualCameraFusionSnapshot_t snapshot = {0};
-    DualCameraFusionDiag_t diag = {0};
-    uint32 now_us = CameraBoardLink_TimeNowUs();
-    uint8 i;
-    uint16 y;
-    uint16 extrinsic_color;
-
-    DualCameraFusion_ServiceInputs();
-    if((s_vision_fusion_last_refresh_us != 0U) &&
-       ((uint32)(now_us - s_vision_fusion_last_refresh_us) <
-        VISION_FUSION_REFRESH_US))
-    {
-        return;
-    }
     s_vision_fusion_last_refresh_us = now_us;
     DualCameraFusion_BuildSnapshot(now_us);
-    DualCameraFusion_GetSnapshot(&snapshot);
-    DualCameraFusion_GetDiag(&diag);
+    DualCameraFusion_GetSnapshot(&s_vision_fusion_snapshot);
+    DualCameraFusion_GetDiag(&s_vision_fusion_diag);
+}
+
+static void vision_fusion_draw_row(uint8 row)
+{
+    uint16 y = TEST_ROW_Y(row);
+    uint16 extrinsic_color;
+    uint8 target_index;
+
+    test_page_clear_line(y);
     ips200_set_font(IPS200_8X16_FONT);
     ips200_set_color(RGB565_WHITE, RGB565_BLACK);
-    ips200_show_string(TEST_PAGE_X, 20U, "Vision Fusion K4 Back");
-
-    test_page_clear_line(TEST_ROW_Y(0U));
-    ips200_set_color(RGB565_WHITE, RGB565_BLACK);
-    ips200_show_string(20U, TEST_ROW_Y(0U), "M");
-#if (VISION_FUSION_OUTPUT_MODE == VISION_FUSION_OUTPUT_LIVE)
-    ips200_set_color(RGB565_CYAN, RGB565_BLACK);
-    ips200_show_string(44U, TEST_ROW_Y(0U), "LIVE");
-    extrinsic_color = diag.extrinsic_nominal ? RGB565_RED :
-        (diag.extrinsic_valid ? RGB565_GREEN : RGB565_RED);
-#else
-    ips200_set_color(RGB565_CYAN, RGB565_BLACK);
-    ips200_show_string(44U, TEST_ROW_Y(0U), "SHD");
-    extrinsic_color = diag.extrinsic_nominal ? RGB565_YELLOW :
-        (diag.extrinsic_valid ? RGB565_GREEN : RGB565_RED);
-#endif
-    ips200_set_color(RGB565_WHITE, RGB565_BLACK);
-    ips200_show_string(100U, TEST_ROW_Y(0U), "E");
-    ips200_set_color(extrinsic_color, RGB565_BLACK);
-    ips200_show_string(124U, TEST_ROW_Y(0U),
-                       diag.extrinsic_nominal ? "NOM" :
-                       (diag.extrinsic_valid ? "VAL" : "INV"));
-
-    test_page_clear_line(TEST_ROW_Y(1U));
-    ips200_set_color(RGB565_WHITE, RGB565_BLACK);
-    ips200_show_string(20U, TEST_ROW_Y(1U), "F");
-    ips200_set_color(diag.front_healthy ? RGB565_GREEN : RGB565_RED,
-                     RGB565_BLACK);
-    ips200_show_string(44U, TEST_ROW_Y(1U), diag.front_healthy ? "OK" : "--");
-    ips200_set_color(RGB565_WHITE, RGB565_BLACK);
-    ips200_show_string(76U, TEST_ROW_Y(1U), "C");
-    ips200_show_int(92U, TEST_ROW_Y(1U), diag.front_car_valid, 1U);
-    ips200_show_string(116U, TEST_ROW_Y(1U), "N");
-    ips200_show_int(132U, TEST_ROW_Y(1U), diag.front_beacon_count, 1U);
-    ips200_show_string(156U, TEST_ROW_Y(1U), "A");
-    ips200_show_uint(172U, TEST_ROW_Y(1U),
-                    (diag.front_age_ms > 999U) ? 999U : diag.front_age_ms, 3U);
-
-    test_page_clear_line(TEST_ROW_Y(2U));
-    ips200_set_color(RGB565_WHITE, RGB565_BLACK);
-    ips200_show_string(20U, TEST_ROW_Y(2U), "R");
-    ips200_set_color(diag.rear_healthy ? RGB565_GREEN : RGB565_RED,
-                     RGB565_BLACK);
-    ips200_show_string(44U, TEST_ROW_Y(2U), diag.rear_healthy ? "OK" : "--");
-    ips200_set_color(RGB565_WHITE, RGB565_BLACK);
-    ips200_show_string(76U, TEST_ROW_Y(2U), "C");
-    ips200_show_int(92U, TEST_ROW_Y(2U), diag.rear_car_valid, 1U);
-    ips200_show_string(116U, TEST_ROW_Y(2U), "N");
-    ips200_show_int(132U, TEST_ROW_Y(2U), diag.rear_beacon_count, 1U);
-    ips200_show_string(156U, TEST_ROW_Y(2U), "A");
-    ips200_show_uint(172U, TEST_ROW_Y(2U),
-                    (diag.rear_age_ms > 999U) ? 999U : diag.rear_age_ms, 3U);
-
-    test_page_clear_line(TEST_ROW_Y(3U));
-    ips200_set_color(RGB565_WHITE, RGB565_BLACK);
-    ips200_show_string(20U, TEST_ROW_Y(3U), "P");
-    ips200_set_color(diag.pair_valid ? RGB565_GREEN : RGB565_YELLOW,
-                     RGB565_BLACK);
-    ips200_show_string(44U, TEST_ROW_Y(3U), diag.pair_valid ? "OK" : "--");
-    ips200_set_color(RGB565_WHITE, RGB565_BLACK);
-    ips200_show_string(76U, TEST_ROW_Y(3U), "DT");
-    ips200_show_int(100U, TEST_ROW_Y(3U), diag.pair_dt_ms, 4U);
-    ips200_show_string(148U, TEST_ROW_Y(3U), "Y");
-    ips200_show_float(164U, TEST_ROW_Y(3U),
-                      diag.pair_yaw_delta_deg, 4U, 1U);
-
-    test_page_clear_line(TEST_ROW_Y(4U));
-    ips200_set_color(RGB565_WHITE, RGB565_BLACK);
-    ips200_show_string(20U, TEST_ROW_Y(4U), "OUT");
-    ips200_show_int(52U, TEST_ROW_Y(4U), diag.output_count, 2U);
-    ips200_show_string(100U, TEST_ROW_Y(4U), "DUP");
-    ips200_show_int(132U, TEST_ROW_Y(4U), diag.duplicate_count, 2U);
-
-    test_page_clear_line(TEST_ROW_Y(5U));
-    ips200_set_color(RGB565_WHITE, RGB565_BLACK);
-    ips200_show_string(20U, TEST_ROW_Y(5U), "ID");
-    ips200_show_string(44U, TEST_ROW_Y(5U), "SRC");
-    ips200_show_string(76U, TEST_ROW_Y(5U), "DX");
-    ips200_show_string(124U, TEST_ROW_Y(5U), "DY");
-    ips200_show_string(176U, TEST_ROW_Y(5U), "S");
-    ips200_show_string(208U, TEST_ROW_Y(5U), "C");
-
-    for(i = 0U; i < DUAL_CAMERA_FUSION_MAX_TARGETS; i++)
+    if(row == 0U)
     {
-        y = TEST_ROW_Y((uint8)(6U + i));
-        test_page_clear_line(y);
-        if(i >= snapshot.target_count || !snapshot.target[i].valid)
-        {
-            ips200_set_color(RGB565_WHITE, RGB565_BLACK);
-            ips200_show_string(20U, y, "-- --   --    --   --  ---");
-            continue;
-        }
+        ips200_show_string(20U, y, "M");
+#if (VISION_FUSION_OUTPUT_MODE == VISION_FUSION_OUTPUT_LIVE)
+        ips200_set_color(RGB565_CYAN, RGB565_BLACK);
+        ips200_show_string(44U, y, "LIVE");
+        extrinsic_color = s_vision_fusion_diag.extrinsic_nominal ? RGB565_RED :
+            (s_vision_fusion_diag.extrinsic_valid ? RGB565_GREEN : RGB565_RED);
+#else
+        ips200_set_color(RGB565_CYAN, RGB565_BLACK);
+        ips200_show_string(44U, y, "SHD");
+        extrinsic_color = s_vision_fusion_diag.extrinsic_nominal ? RGB565_YELLOW :
+            (s_vision_fusion_diag.extrinsic_valid ? RGB565_GREEN : RGB565_RED);
+#endif
         ips200_set_color(RGB565_WHITE, RGB565_BLACK);
-        ips200_show_uint(20U, y, snapshot.target[i].track_id, 2U);
+        ips200_show_string(100U, y, "E");
+        ips200_set_color(extrinsic_color, RGB565_BLACK);
+        ips200_show_string(124U, y,
+            s_vision_fusion_diag.extrinsic_nominal ? "NOM" :
+            (s_vision_fusion_diag.extrinsic_valid ? "VAL" : "INV"));
+    }
+    else if((row == 1U) || (row == 2U))
+    {
+        uint8 front = (row == 1U) ? 1U : 0U;
+        uint8 healthy = front ? s_vision_fusion_diag.front_healthy :
+                                s_vision_fusion_diag.rear_healthy;
+        uint8 car_valid = front ? s_vision_fusion_diag.front_car_valid :
+                                  s_vision_fusion_diag.rear_car_valid;
+        uint8 beacon_count = front ? s_vision_fusion_diag.front_beacon_count :
+                                     s_vision_fusion_diag.rear_beacon_count;
+        uint16 age_ms = front ? s_vision_fusion_diag.front_age_ms :
+                                s_vision_fusion_diag.rear_age_ms;
+
+        ips200_show_string(20U, y, front ? "F" : "R");
+        ips200_set_color(healthy ? RGB565_GREEN : RGB565_RED, RGB565_BLACK);
+        ips200_show_string(44U, y, healthy ? "OK" : "--");
+        ips200_set_color(RGB565_WHITE, RGB565_BLACK);
+        ips200_show_string(76U, y, "C");
+        ips200_show_int(92U, y, car_valid, 1U);
+        ips200_show_string(116U, y, "N");
+        ips200_show_int(132U, y, beacon_count, 1U);
+        ips200_show_string(156U, y, "A");
+        ips200_show_uint(172U, y, (age_ms > 999U) ? 999U : age_ms, 3U);
+    }
+    else if(row == 3U)
+    {
+        ips200_show_string(20U, y, "P");
+        ips200_set_color(s_vision_fusion_diag.pair_valid ? RGB565_GREEN :
+                         RGB565_YELLOW, RGB565_BLACK);
         ips200_show_string(44U, y,
-                           vision_fusion_source_text(snapshot.target[i].source));
-        ips200_show_int(76U, y, (int32)snapshot.target[i].dx_cm, 5U);
-        ips200_show_int(124U, y, (int32)snapshot.target[i].dy_cm, 5U);
-        ips200_show_uint(176U, y, snapshot.target[i].position_sigma_cm, 2U);
-        ips200_show_uint(208U, y, snapshot.target[i].detection_confidence, 3U);
+                           s_vision_fusion_diag.pair_valid ? "OK" : "--");
+        ips200_set_color(RGB565_WHITE, RGB565_BLACK);
+        ips200_show_string(76U, y, "DT");
+        ips200_show_int(100U, y, s_vision_fusion_diag.pair_dt_ms, 4U);
+        ips200_show_string(148U, y, "Y");
+        ips200_show_float(164U, y,
+                          s_vision_fusion_diag.pair_yaw_delta_deg, 4U, 1U);
+    }
+    else if(row == 4U)
+    {
+        ips200_show_string(20U, y, "OUT");
+        ips200_show_int(52U, y, s_vision_fusion_diag.output_count, 2U);
+        ips200_show_string(100U, y, "DUP");
+        ips200_show_int(132U, y, s_vision_fusion_diag.duplicate_count, 2U);
+    }
+    else if(row == 5U)
+    {
+        ips200_show_string(20U, y, "ID");
+        ips200_show_string(44U, y, "SRC");
+        ips200_show_string(76U, y, "DX");
+        ips200_show_string(124U, y, "DY");
+        ips200_show_string(176U, y, "S");
+        ips200_show_string(208U, y, "C");
+    }
+    else
+    {
+        target_index = (uint8)(row - 6U);
+        if((target_index >= s_vision_fusion_snapshot.target_count) ||
+           !s_vision_fusion_snapshot.target[target_index].valid)
+        {
+            ips200_show_string(20U, y, "-- --   --    --   --  ---");
+            return;
+        }
+        ips200_show_uint(20U, y,
+                         s_vision_fusion_snapshot.target[target_index].track_id,
+                         2U);
+        ips200_show_string(44U, y,
+            vision_fusion_source_text(
+                s_vision_fusion_snapshot.target[target_index].source));
+        ips200_show_int(76U, y,
+            (int32)s_vision_fusion_snapshot.target[target_index].dx_cm, 5U);
+        ips200_show_int(124U, y,
+            (int32)s_vision_fusion_snapshot.target[target_index].dy_cm, 5U);
+        ips200_show_uint(176U, y,
+            s_vision_fusion_snapshot.target[target_index].position_sigma_cm, 2U);
+        ips200_show_uint(208U, y,
+            s_vision_fusion_snapshot.target[target_index].detection_confidence,
+            3U);
+    }
+}
+
+static void vision_fusion_draw_page(void)
+{
+    uint32 now_us = CameraBoardLink_TimeNowUs();
+
+    DualCameraFusion_ServiceInputs();
+    if((s_vision_fusion_last_refresh_us == 0U) ||
+       ((uint32)(now_us - s_vision_fusion_last_refresh_us) >=
+        VISION_FUSION_REFRESH_US))
+    {
+        vision_fusion_capture_snapshot(now_us);
+    }
+    vision_fusion_draw_row(s_vision_fusion_row_cursor);
+    s_vision_fusion_row_cursor++;
+    if(s_vision_fusion_row_cursor >= VISION_FUSION_ROW_COUNT)
+    {
+        s_vision_fusion_row_cursor = 0U;
     }
 }
 
@@ -300,13 +319,20 @@ static void vision_fusion_page(void)
     {
         s_vision_fusion_page_active = 1U;
         s_vision_fusion_last_refresh_us = 0U;
-        ips200_clear();
+        s_vision_fusion_row_cursor = 0U;
+        memset(&s_vision_fusion_snapshot, 0,
+               sizeof(s_vision_fusion_snapshot));
+        memset(&s_vision_fusion_diag, 0, sizeof(s_vision_fusion_diag));
+        ips200_set_font(IPS200_8X16_FONT);
+        ips200_set_color(RGB565_WHITE, RGB565_BLACK);
+        ips200_show_string(TEST_PAGE_X, 20U, "Vision Fusion K4 Back");
         key_flag = 0U;
     }
     if(key_flag == Button_4 || g_menu_exit_flag || menu_is_monitor_view())
     {
         s_vision_fusion_page_active = 0U;
         s_vision_fusion_last_refresh_us = 0U;
+        s_vision_fusion_row_cursor = 0U;
         return;
     }
     key_flag = 0U;
@@ -1253,110 +1279,228 @@ static void rear_board_show_pair_i32(uint8 row,
     ips200_show_int(180U, y, right_value, digits);
 }
 
-static void rear_board_draw_link(void)
+static void rear_board_capture_snapshot(void)
 {
-    CameraBoardLinkDiag_t diag = {0};
-
-    CameraBoardLink_GetDiag(&diag);
-    test_page_show_text(TEST_ROW_Y(0U), "MODE:", diag.mode_active ? "BOARD" : "OTHER",
-                        diag.mode_active ? RGB565_GREEN : RGB565_YELLOW);
-    test_page_show_text(TEST_ROW_Y(1U), "ONLINE:", diag.online ? "YES  " : "NO   ",
-                        diag.online ? RGB565_GREEN : RGB565_RED);
-    test_page_show_text(TEST_ROW_Y(2U), "CAMERA:", diag.rear_camera_ready ? "READY" : "WAIT ",
-                        diag.rear_camera_ready ? RGB565_GREEN : RGB565_RED);
-    test_page_show_text(TEST_ROW_Y(3U), "CM7_1:", diag.rear_camera_core_alive ? "RUN  " : "WAIT ",
-                        diag.rear_camera_core_alive ? RGB565_GREEN : RGB565_RED);
-    test_page_show_text(TEST_ROW_Y(4U), "SYNC:", diag.rear_time_sync_valid ? "VALID" : "BAD  ",
-                        diag.rear_time_sync_valid ? RGB565_GREEN : RGB565_RED);
-    rear_board_show_pair_i32(5U, "RES:", diag.last_result_age_ms,
-                             "STAT:", diag.last_status_age_ms, 5U);
-    rear_board_show_pair_i32(6U, "STATE:", diag.rear_state_age_ms,
-                             "SYNC:", diag.rear_sync_error_us, 5U);
-    test_page_show_uint(TEST_ROW_Y(7U), "TX FRAME:", diag.tx_frame_count, 8U);
-    test_page_show_uint(TEST_ROW_Y(8U), "RX FRAME:", diag.rx_frame_count, 8U);
-    test_page_show_uint(TEST_ROW_Y(9U), "LOCAL CRC:", diag.crc_error_count, 8U);
-    test_page_show_uint(TEST_ROW_Y(10U), "REAR CRC:", diag.rear_crc_error_count, 5U);
-    test_page_show_text(TEST_ROW_Y(11U), "KEY:", "1< 2> 3B 4X", RGB565_CYAN);
+    CameraBoardLink_GetDiag(&s_rear_board_rx_diag_snapshot);
+    memset(&s_rear_board_rx_frame_snapshot, 0,
+           sizeof(s_rear_board_rx_frame_snapshot));
+    s_rear_board_rx_frame_received = CameraBoardLink_GetLatestRearFrame(
+        &s_rear_board_rx_frame_snapshot);
 }
 
-static void rear_board_draw_result(void)
+static void rear_board_draw_link_row(uint8 row)
 {
-    CameraBoardVisionFrame_t frame = {0};
+    const CameraBoardLinkDiag_t *diag = &s_rear_board_rx_diag_snapshot;
+
+    switch(row)
+    {
+        case 0U:
+            test_page_show_text(TEST_ROW_Y(row), "MODE:",
+                diag->mode_active ? "BOARD" : "OTHER",
+                diag->mode_active ? RGB565_GREEN : RGB565_YELLOW);
+            break;
+        case 1U:
+            test_page_show_text(TEST_ROW_Y(row), "ONLINE:",
+                diag->online ? "YES  " : "NO   ",
+                diag->online ? RGB565_GREEN : RGB565_RED);
+            break;
+        case 2U:
+            test_page_show_text(TEST_ROW_Y(row), "CAMERA:",
+                diag->rear_camera_ready ? "READY" : "WAIT ",
+                diag->rear_camera_ready ? RGB565_GREEN : RGB565_RED);
+            break;
+        case 3U:
+            test_page_show_text(TEST_ROW_Y(row), "CM7_1:",
+                diag->rear_camera_core_alive ? "RUN  " : "WAIT ",
+                diag->rear_camera_core_alive ? RGB565_GREEN : RGB565_RED);
+            break;
+        case 4U:
+            test_page_show_text(TEST_ROW_Y(row), "SYNC:",
+                diag->rear_time_sync_valid ? "VALID" : "BAD  ",
+                diag->rear_time_sync_valid ? RGB565_GREEN : RGB565_RED);
+            break;
+        case 5U:
+            rear_board_show_pair_i32(row, "RES:", diag->last_result_age_ms,
+                                     "STAT:", diag->last_status_age_ms, 5U);
+            break;
+        case 6U:
+            rear_board_show_pair_i32(row, "STATE:", diag->rear_state_age_ms,
+                                     "SYNC:", diag->rear_sync_error_us, 5U);
+            break;
+        case 7U:
+            test_page_show_uint(TEST_ROW_Y(row), "TX FRAME:",
+                                diag->tx_frame_count, 8U);
+            break;
+        case 8U:
+            test_page_show_uint(TEST_ROW_Y(row), "RX FRAME:",
+                                diag->rx_frame_count, 8U);
+            break;
+        case 9U:
+            test_page_show_uint(TEST_ROW_Y(row), "LOCAL CRC:",
+                                diag->crc_error_count, 8U);
+            break;
+        case 10U:
+            test_page_show_uint(TEST_ROW_Y(row), "REAR CRC:",
+                                diag->rear_crc_error_count, 5U);
+            break;
+        default:
+            test_page_show_text(TEST_ROW_Y(row), "KEY:",
+                                "1< 2> 3B 4X", RGB565_CYAN);
+            break;
+    }
+}
+
+static void rear_board_draw_result_row(uint8 row)
+{
+    const CameraBoardVisionFrame_t *frame = &s_rear_board_rx_frame_snapshot;
     CameraBoardBeaconObservation_t observation = {0};
-    uint8 received = CameraBoardLink_GetLatestRearFrame(&frame);
-    uint8 beacon_valid = (uint8)(received &&
-        (s_rear_board_rx_beacon_index < frame.beacon_count));
+    uint8 beacon_valid = (uint8)(s_rear_board_rx_frame_received &&
+        (s_rear_board_rx_beacon_index < frame->beacon_count));
 
     if(beacon_valid)
     {
-        observation = frame.beacon[s_rear_board_rx_beacon_index];
+        observation = frame->beacon[s_rear_board_rx_beacon_index];
     }
 
-    test_page_show_text(TEST_ROW_Y(0U), "KEY:", "1< 2> 3B 4X", RGB565_CYAN);
-    test_page_show_uint(TEST_ROW_Y(1U), "FRAME:", frame.camera_frame_seq, 8U);
-    test_page_show_uint(TEST_ROW_Y(2U), "CAPTURE US:", frame.capture_time_us, 10U);
-    rear_board_show_pair_i32(3U, "SEQ:", frame.state_seq_used,
-                             "RESET:", frame.reset_generation, 5U);
-    rear_board_show_pair_i32(4U, "AGE:", frame.state_age_us,
-                             "PROC:", frame.recognition_time_us, 5U);
-    test_page_show_uint(TEST_ROW_Y(5U), "FLAGS:", frame.result_flags, 3U);
-    rear_board_show_pair_i32(6U, "CAR X:", frame.car_x_mm,
-                             "Y:", frame.car_y_mm, 6U);
-    rear_board_show_pair_i32(7U, "RAW X:", frame.car_raw_x_mm,
-                             "Y:", frame.car_raw_y_mm, 6U);
-    rear_board_show_pair_i32(8U, "COUNT:", frame.beacon_count,
-                             "SEL:", (int32)s_rear_board_rx_beacon_index + 1, 2U);
-    rear_board_show_pair_i32(9U, "B X:", observation.x_mm,
-                             "Y:", observation.y_mm, 6U);
-    rear_board_show_pair_i32(10U, "CONF:", observation.detection_confidence,
-                             "SIG:", observation.position_sigma_cm, 3U);
-    if(received)
+    switch(row)
     {
-        test_page_show_uint(TEST_ROW_Y(11U), "B FLAGS:", observation.flags, 3U);
-    }
-    else
-    {
-        test_page_show_text(TEST_ROW_Y(11U), "RESULT:", "WAIT ", RGB565_RED);
+        case 0U:
+            test_page_show_text(TEST_ROW_Y(row), "KEY:",
+                                "1< 2> 3B 4X", RGB565_CYAN);
+            break;
+        case 1U:
+            test_page_show_uint(TEST_ROW_Y(row), "FRAME:",
+                                frame->camera_frame_seq, 8U);
+            break;
+        case 2U:
+            test_page_show_uint(TEST_ROW_Y(row), "CAPTURE US:",
+                                frame->capture_time_us, 10U);
+            break;
+        case 3U:
+            rear_board_show_pair_i32(row, "SEQ:", frame->state_seq_used,
+                                     "RESET:", frame->reset_generation, 5U);
+            break;
+        case 4U:
+            rear_board_show_pair_i32(row, "AGE:", frame->state_age_us,
+                                     "PROC:", frame->recognition_time_us, 5U);
+            break;
+        case 5U:
+            test_page_show_uint(TEST_ROW_Y(row), "FLAGS:",
+                                frame->result_flags, 3U);
+            break;
+        case 6U:
+            rear_board_show_pair_i32(row, "CAR X:", frame->car_x_mm,
+                                     "Y:", frame->car_y_mm, 6U);
+            break;
+        case 7U:
+            rear_board_show_pair_i32(row, "RAW X:", frame->car_raw_x_mm,
+                                     "Y:", frame->car_raw_y_mm, 6U);
+            break;
+        case 8U:
+            rear_board_show_pair_i32(row, "COUNT:", frame->beacon_count,
+                "SEL:", (int32)s_rear_board_rx_beacon_index + 1, 2U);
+            break;
+        case 9U:
+            rear_board_show_pair_i32(row, "B X:", observation.x_mm,
+                                     "Y:", observation.y_mm, 6U);
+            break;
+        case 10U:
+            rear_board_show_pair_i32(row, "CONF:",
+                observation.detection_confidence,
+                "SIG:", observation.position_sigma_cm, 3U);
+            break;
+        default:
+            if(s_rear_board_rx_frame_received)
+            {
+                test_page_show_uint(TEST_ROW_Y(row), "B FLAGS:",
+                                    observation.flags, 3U);
+            }
+            else
+            {
+                test_page_show_text(TEST_ROW_Y(row), "RESULT:",
+                                    "WAIT ", RGB565_RED);
+            }
+            break;
     }
 }
 
-static void rear_board_draw_diag(void)
+static void rear_board_draw_diag_row(uint8 row)
 {
-    CameraBoardLinkDiag_t diag = {0};
+    const CameraBoardLinkDiag_t *diag = &s_rear_board_rx_diag_snapshot;
 
-    CameraBoardLink_GetDiag(&diag);
-    test_page_show_text(TEST_ROW_Y(0U), "KEY:", "1< 2> 3B 4X", RGB565_CYAN);
-    test_page_show_uint(TEST_ROW_Y(1U), "LOCAL PROTO:", diag.protocol_error_count, 8U);
-    test_page_show_uint(TEST_ROW_Y(2U), "LOCAL GAP:", diag.sequence_gap_count, 8U);
-    test_page_show_uint(TEST_ROW_Y(3U), "LOCAL FIFO:", diag.rx_overflow_count, 8U);
-    test_page_show_uint(TEST_ROW_Y(4U), "LOCAL TXDROP:", diag.tx_busy_drop_count, 8U);
-    test_page_show_uint(TEST_ROW_Y(5U), "REAR GAP:", diag.rear_sequence_gap_count, 5U);
-    test_page_show_uint(TEST_ROW_Y(6U), "REAR FIFO:", diag.rear_rx_overflow_count, 5U);
-    test_page_show_uint(TEST_ROW_Y(7U), "REAR TXDROP:", diag.rear_tx_busy_drop_count, 5U);
-    test_page_show_uint(TEST_ROW_Y(8U), "CAPTURE:", diag.rear_captured_frame_count, 8U);
-    test_page_show_uint(TEST_ROW_Y(9U), "PROCESS:", diag.rear_processed_frame_count, 8U);
-    test_page_show_uint(TEST_ROW_Y(10U), "DROP:", diag.rear_dropped_frame_count, 8U);
-    test_page_show_uint(TEST_ROW_Y(11U), "IPC RX:", diag.rear_ipc_result_count, 8U);
+    switch(row)
+    {
+        case 0U:
+            test_page_show_text(TEST_ROW_Y(row), "KEY:",
+                                "1< 2> 3B 4X", RGB565_CYAN);
+            break;
+        case 1U:
+            test_page_show_uint(TEST_ROW_Y(row), "LOCAL PROTO:",
+                                diag->protocol_error_count, 8U);
+            break;
+        case 2U:
+            test_page_show_uint(TEST_ROW_Y(row), "LOCAL GAP:",
+                                diag->sequence_gap_count, 8U);
+            break;
+        case 3U:
+            test_page_show_uint(TEST_ROW_Y(row), "LOCAL FIFO:",
+                                diag->rx_overflow_count, 8U);
+            break;
+        case 4U:
+            test_page_show_uint(TEST_ROW_Y(row), "LOCAL TXDROP:",
+                                diag->tx_busy_drop_count, 8U);
+            break;
+        case 5U:
+            test_page_show_uint(TEST_ROW_Y(row), "REAR GAP:",
+                                diag->rear_sequence_gap_count, 5U);
+            break;
+        case 6U:
+            test_page_show_uint(TEST_ROW_Y(row), "REAR FIFO:",
+                                diag->rear_rx_overflow_count, 5U);
+            break;
+        case 7U:
+            test_page_show_uint(TEST_ROW_Y(row), "REAR TXDROP:",
+                                diag->rear_tx_busy_drop_count, 5U);
+            break;
+        case 8U:
+            test_page_show_uint(TEST_ROW_Y(row), "CAPTURE:",
+                                diag->rear_captured_frame_count, 8U);
+            break;
+        case 9U:
+            test_page_show_uint(TEST_ROW_Y(row), "PROCESS:",
+                                diag->rear_processed_frame_count, 8U);
+            break;
+        case 10U:
+            test_page_show_uint(TEST_ROW_Y(row), "DROP:",
+                                diag->rear_dropped_frame_count, 8U);
+            break;
+        default:
+            test_page_show_uint(TEST_ROW_Y(row), "IPC RX:",
+                                diag->rear_ipc_result_count, 8U);
+            break;
+    }
 }
 
 static void rear_board_rx_page(void)
 {
-    uint8 refresh_now = 0U;
-
     if(!s_rear_board_rx_page_active)
     {
         s_rear_board_rx_page_active = 1U;
         s_rear_board_rx_view = 0U;
         s_rear_board_rx_beacon_index = 0U;
-        s_rear_board_rx_refresh_ticks = 0U;
+        s_rear_board_rx_row_cursor = 0U;
+        memset(&s_rear_board_rx_diag_snapshot, 0,
+               sizeof(s_rear_board_rx_diag_snapshot));
+        memset(&s_rear_board_rx_frame_snapshot, 0,
+               sizeof(s_rear_board_rx_frame_snapshot));
+        s_rear_board_rx_frame_received = 0U;
         key_flag = 0U;
-        refresh_now = 1U;
     }
 
     if(key_flag == Button_4 || g_menu_exit_flag || menu_is_monitor_view())
     {
         s_rear_board_rx_page_active = 0U;
-        s_rear_board_rx_refresh_ticks = 0U;
+        s_rear_board_rx_row_cursor = 0U;
         return;
     }
     if(key_flag == Button_1)
@@ -1364,13 +1508,13 @@ static void rear_board_rx_page(void)
         s_rear_board_rx_view = (s_rear_board_rx_view == 0U) ?
                                2U : (uint8)(s_rear_board_rx_view - 1U);
         key_flag = 0U;
-        refresh_now = 1U;
+        s_rear_board_rx_row_cursor = 0U;
     }
     else if(key_flag == Button_2)
     {
         s_rear_board_rx_view = (uint8)((s_rear_board_rx_view + 1U) % 3U);
         key_flag = 0U;
-        refresh_now = 1U;
+        s_rear_board_rx_row_cursor = 0U;
     }
     else if(key_flag == Button_3)
     {
@@ -1378,31 +1522,30 @@ static void rear_board_rx_page(void)
             (s_rear_board_rx_beacon_index + 1U) % CAMERA_BOARD_MAX_BEACON_COUNT);
         s_rear_board_rx_view = 1U;
         key_flag = 0U;
-        refresh_now = 1U;
+        s_rear_board_rx_row_cursor = 0U;
     }
 
-    s_rear_board_rx_refresh_ticks++;
-    if(s_rear_board_rx_refresh_ticks >= REAR_BOARD_RX_REFRESH_TICKS)
+    if(s_rear_board_rx_row_cursor == 0U)
     {
-        s_rear_board_rx_refresh_ticks = 0U;
-        refresh_now = 1U;
-    }
-    if(!refresh_now)
-    {
-        return;
+        rear_board_capture_snapshot();
     }
 
     if(s_rear_board_rx_view == 0U)
     {
-        rear_board_draw_link();
+        rear_board_draw_link_row(s_rear_board_rx_row_cursor);
     }
     else if(s_rear_board_rx_view == 1U)
     {
-        rear_board_draw_result();
+        rear_board_draw_result_row(s_rear_board_rx_row_cursor);
     }
     else
     {
-        rear_board_draw_diag();
+        rear_board_draw_diag_row(s_rear_board_rx_row_cursor);
+    }
+    s_rear_board_rx_row_cursor++;
+    if(s_rear_board_rx_row_cursor >= REAR_BOARD_RX_ROW_COUNT)
+    {
+        s_rear_board_rx_row_cursor = 0U;
     }
 }
 
