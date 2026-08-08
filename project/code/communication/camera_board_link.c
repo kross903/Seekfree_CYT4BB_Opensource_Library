@@ -2,6 +2,15 @@
 
 #define CAMERA_BOARD_RX_FIFO_SIZE       (256U)
 #define CAMERA_BOARD_DWT_LAR_UNLOCK     (0xC5ACCE55UL)
+#define CAMERA_BOARD_STATE_HISTORY_SIZE (32U)
+
+typedef struct
+{
+    uint16 sequence;
+    uint16 flags;
+    uint32 master_time_us;
+    float yaw_deg;
+} CameraBoardStateHistoryEntry_t;
 
 typedef enum
 {
@@ -53,6 +62,10 @@ static uint8 s_last_rx_sequence_valid = 0U;
 static CameraBoardVisionFrame_t s_latest_frame;
 static uint8 s_latest_frame_valid = 0U;
 static uint8 s_latest_frame_received = 0U;
+static CameraBoardStateHistoryEntry_t
+    s_state_history[CAMERA_BOARD_STATE_HISTORY_SIZE];
+static uint8 s_state_history_head = 0U;
+static uint8 s_state_history_count = 0U;
 static CameraBoardLinkDiag_t s_diag;
 
 static uint8 CameraBoardLink_DwtInit(void)
@@ -195,6 +208,8 @@ static void CameraBoardLink_ResetSession(uint8 invalidate_frame)
     s_diag.rear_camera_ready = 0U;
     s_diag.rear_camera_core_alive = 0U;
     s_diag.rear_time_sync_valid = 0U;
+    s_diag.rear_extrinsic_nominal = 0U;
+    s_diag.rear_extrinsic_valid = 0U;
     s_diag.last_result_age_ms = 0xFFFFU;
     s_diag.last_status_age_ms = 0xFFFFU;
     s_diag.rear_state_age_ms = 0xFFFFU;
@@ -326,6 +341,10 @@ static void CameraBoardLink_DecodeRearStatus(const uint8 *payload, uint16 length
         (flags & CAMERA_BOARD_STATUS_FLAG_CAMERA_CORE) ? 1U : 0U;
     s_diag.rear_time_sync_valid =
         (flags & CAMERA_BOARD_STATUS_FLAG_TIME_SYNC) ? 1U : 0U;
+    s_diag.rear_extrinsic_nominal =
+        (flags & CAMERA_BOARD_STATUS_FLAG_EXTRINSIC_NOMINAL) ? 1U : 0U;
+    s_diag.rear_extrinsic_valid =
+        (flags & CAMERA_BOARD_STATUS_FLAG_EXTRINSIC_VALID) ? 1U : 0U;
     s_diag.rear_captured_frame_count = CameraBoardLink_ReadU32(&payload[6]);
     s_diag.rear_dropped_frame_count = CameraBoardLink_ReadU32(&payload[10]);
     s_diag.rear_processed_frame_count = CameraBoardLink_ReadU32(&payload[14]);
@@ -534,6 +553,19 @@ static void CameraBoardLink_SendMainState(void)
     if(CameraBoardLink_StartFrame(CAMERA_BOARD_MSG_MAIN_STATE,
                                   payload, sizeof(payload)))
     {
+        CameraBoardStateHistoryEntry_t *entry =
+            &s_state_history[s_state_history_head];
+
+        entry->sequence = s_state_sequence;
+        entry->flags = flags;
+        entry->master_time_us = now_us;
+        entry->yaw_deg = (float)CameraBoardLink_ReadI16(&payload[12]) * 0.01f;
+        s_state_history_head = (uint8)((s_state_history_head + 1U) %
+                                      CAMERA_BOARD_STATE_HISTORY_SIZE);
+        if(s_state_history_count < CAMERA_BOARD_STATE_HISTORY_SIZE)
+        {
+            s_state_history_count++;
+        }
         s_last_state_tx_us = now_us;
     }
     else
@@ -553,6 +585,9 @@ void CameraBoardLink_MainInit(void)
     s_state_sequence = 0U;
     s_reset_generation = 0U;
     s_tx_sequence = 0U;
+    s_state_history_head = 0U;
+    s_state_history_count = 0U;
+    memset(s_state_history, 0, sizeof(s_state_history));
     CameraBoardLink_ResetSession(1U);
     (void)CameraBoardLink_TimeNowUs();
 }
@@ -642,6 +677,39 @@ uint8 CameraBoardLink_GetLatestRearFrame(CameraBoardVisionFrame_t *frame)
 
     *frame = s_latest_frame;
     return 1U;
+}
+
+uint8 CameraBoardLink_GetStateYaw(uint16 state_sequence, float *yaw_deg)
+{
+    uint8 offset;
+
+    if(yaw_deg == NULL)
+    {
+        return 0U;
+    }
+    for(offset = 0U; offset < s_state_history_count; offset++)
+    {
+        uint8 index = (uint8)((s_state_history_head +
+            CAMERA_BOARD_STATE_HISTORY_SIZE - 1U - offset) %
+            CAMERA_BOARD_STATE_HISTORY_SIZE);
+        const CameraBoardStateHistoryEntry_t *entry = &s_state_history[index];
+
+        if(entry->sequence == state_sequence)
+        {
+            if((entry->flags & CAMERA_BOARD_MAIN_FLAG_POSE_VALID) == 0U)
+            {
+                return 0U;
+            }
+            *yaw_deg = entry->yaw_deg;
+            return 1U;
+        }
+    }
+    return 0U;
+}
+
+uint16 CameraBoardLink_GetResetGeneration(void)
+{
+    return s_reset_generation;
 }
 
 void CameraBoardLink_GetDiag(CameraBoardLinkDiag_t *diag)

@@ -1385,6 +1385,12 @@
             <name>$PROJ_DIR$\..\..\code\vision\vision_runtime.h</name>
         </file>
         <file>
+            <name>$PROJ_DIR$\..\..\code\vision\dual_camera_fusion.c</name>
+        </file>
+        <file>
+            <name>$PROJ_DIR$\..\..\code\vision\dual_camera_fusion.h</name>
+        </file>
+        <file>
             <name>$PROJ_DIR$\..\..\code\communication\vofa.c</name>
         </file>
         <file>

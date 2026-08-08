@@ -11,6 +11,8 @@ typedef struct
     uint8 rear_camera_ready;
     uint8 rear_camera_core_alive;
     uint8 rear_time_sync_valid;
+    uint8 rear_extrinsic_nominal;
+    uint8 rear_extrinsic_valid;
     uint16 last_result_age_ms;
     uint16 last_status_age_ms;
     uint16 rear_state_age_ms;
@@ -39,6 +41,8 @@ uint32 CameraBoardLink_TimeNowUs(void);
 
 uint8 CameraBoardLink_GetRearFrame(CameraBoardVisionFrame_t *frame);
 uint8 CameraBoardLink_GetLatestRearFrame(CameraBoardVisionFrame_t *frame);
+uint8 CameraBoardLink_GetStateYaw(uint16 state_sequence, float *yaw_deg);
+uint16 CameraBoardLink_GetResetGeneration(void);
 void CameraBoardLink_GetDiag(CameraBoardLinkDiag_t *diag);
 uint8 CameraBoardLink_IsOnline(void);
 

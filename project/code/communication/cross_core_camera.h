@@ -2,6 +2,8 @@
 #define CROSS_CORE_CAMERA_H
 
 #include "zf_common_headfile.h"
+#include "vision/vehicle_marker_localization.h"
+#include "vision/vision_runtime.h"
 
 #define CROSS_CORE_CAMERA_VISION_DISPLAY_BINARY  0U
 #define CROSS_CORE_CAMERA_VISION_DISPLAY_RAW     1U
@@ -14,11 +16,25 @@
 #define CROSS_CORE_CAMERA_VISION_STATUS_REQUEST_FAILED       4U
 #define CROSS_CORE_CAMERA_VISION_STATUS_ASSISTANT_REQUIRED   5U
 
+typedef struct
+{
+    uint32 frame_seq;
+    uint32 capture_time_us;
+    float yaw_deg;
+    uint8 yaw_valid;
+    uint8 car_valid;
+    uint8 car_raw_valid;
+    uint8 reserved;
+    VehicleMarkerPose_t car_pose;
+    VisionRuntimeBeaconSlot_t beacon_slots[VISION_RUNTIME_BEACON_SLOT_COUNT];
+} CrossCoreCameraFrontFrame_t;
+
 void CrossCoreCamera_CameraCoreInit(void);
 void CrossCoreCamera_CameraCoreTask(void);
 uint8 CrossCoreCamera_ControlCoreFetchFrame(void);
 uint8 CrossCoreCamera_ControlCoreGetVisionYaw(float *yaw_deg);
 uint8 CrossCoreCamera_ControlCoreGetCaptureTime(uint32 *capture_time_us);
+uint8 CrossCoreCamera_ControlCoreGetFrontFrame(CrossCoreCameraFrontFrame_t *frame);
 #if CY_CORE_CM7_0
 void CrossCoreCamera_ControlCoreAssistantInit(void);
 void CrossCoreCamera_ControlCoreTask(void);

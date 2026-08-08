@@ -610,6 +610,7 @@ static volatile uint8 s_vision_ipc_result_pending = 0U;
 static float s_control_vision_yaw_deg = 0.0f;
 static uint8 s_control_vision_yaw_valid = 0U;
 static uint32 s_control_vision_capture_time_us = 0U;
+static CrossCoreCameraFrontFrame_t s_control_front_frame;
 
 static void CrossCoreCamera_ControlCoreIpcCallback(uint32 ipc_data)
 {
@@ -808,6 +809,19 @@ uint8 CrossCoreCamera_ControlCoreFetchFrame(void)
     s_control_vision_yaw_deg = result_snapshot.yaw_deg;
     s_control_vision_yaw_valid = result_snapshot.yaw_valid;
     s_control_vision_capture_time_us = result_snapshot.capture_time_us;
+    memset(&s_control_front_frame, 0, sizeof(s_control_front_frame));
+    s_control_front_frame.frame_seq = result_snapshot.seq;
+    s_control_front_frame.capture_time_us = result_snapshot.capture_time_us;
+    s_control_front_frame.yaw_deg = result_snapshot.yaw_deg;
+    s_control_front_frame.yaw_valid = result_snapshot.yaw_valid;
+    s_control_front_frame.car_pose = result_snapshot.pose;
+    s_control_front_frame.car_valid = (uint8)(result_snapshot.pose.valid &&
+        !result_snapshot.lost_flag);
+    s_control_front_frame.car_raw_valid =
+        result_snapshot.loss_debug.raw_detect_valid;
+    memcpy(s_control_front_frame.beacon_slots,
+           result_snapshot.beacon_slots,
+           sizeof(s_control_front_frame.beacon_slots));
     return 1U;
 #else
     return 0U;
@@ -842,6 +856,21 @@ uint8 CrossCoreCamera_ControlCoreGetCaptureTime(uint32 *capture_time_us)
     return 1U;
 #else
     (void)capture_time_us;
+    return 0U;
+#endif
+}
+
+uint8 CrossCoreCamera_ControlCoreGetFrontFrame(CrossCoreCameraFrontFrame_t *frame)
+{
+#if CY_CORE_CM7_0
+    if((frame == NULL) || (s_control_front_frame.frame_seq == 0U))
+    {
+        return 0U;
+    }
+    *frame = s_control_front_frame;
+    return 1U;
+#else
+    (void)frame;
     return 0U;
 #endif
 }
@@ -964,6 +993,7 @@ void CrossCoreCamera_ControlCoreAssistantInit(void)
     s_control_vision_yaw_deg = 0.0f;
     s_control_vision_yaw_valid = 0U;
     s_control_vision_capture_time_us = 0U;
+    memset(&s_control_front_frame, 0, sizeof(s_control_front_frame));
     s_cross_core_camera_capture_ready = (mt9v03x_init() == 0U) ? 1U : 0U;
     g_shared_vision_frame_ctrl->magic = SHARED_VISION_FRAME_CTRL_MAGIC;
     g_shared_vision_frame_ctrl->write_seq = 0U;

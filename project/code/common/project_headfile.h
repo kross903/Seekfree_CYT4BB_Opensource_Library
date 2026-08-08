@@ -71,5 +71,6 @@
 #include "vision/vehicle_marker_localization.h"
 #include "vision/vision_overlay.h"
 #include "vision/vision_runtime.h"
+#include "vision/dual_camera_fusion.h"
 
 #endif

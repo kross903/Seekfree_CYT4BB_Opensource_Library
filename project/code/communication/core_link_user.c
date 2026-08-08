@@ -38,6 +38,7 @@ static core_link_user_beacon_track_struct
 static uint16 s_core_link_user_beacon_sequence = 0U;
 static uint8 s_core_link_user_next_track_id = 1U;
 static uint8 s_core_link_user_tracker_reset_pending = 1U;
+static uint32 s_core_link_user_live_fusion_reset_seen = 0U;
 
 static uint8 core_link_user_queue_next_index (uint8 index)
 {
@@ -391,14 +392,20 @@ static void core_link_user_send_beacon_observations(
 static void core_link_user_build_beacon_observations(
     core_link_beacon_observation_packet_struct *packet)
 {
+#if (VISION_FUSION_OUTPUT_MODE == VISION_FUSION_OUTPUT_LIVE)
+    DualCameraFusionSnapshot_t fusion_snapshot = {0};
+#else
     VehicleMarkerLossDebug_t loss_debug = {0};
     VisionRuntimeBeaconSlot_t slots[VISION_RUNTIME_BEACON_SLOT_COUNT] = {0};
     uint8 slot_track_id[VISION_RUNTIME_BEACON_SLOT_COUNT] = {0};
+#endif
     float car_absolute_yaw_deg = 0.0f;
     float car_yaw_rel_uav_deg = 0.0f;
+#if (VISION_FUSION_OUTPUT_MODE == VISION_FUSION_OUTPUT_SHADOW)
     float uav_yaw_deg = 0.0f;
     uint8 uav_yaw_valid;
     uint8 car_visible;
+#endif
     uint8 i;
 
     if(NULL == packet)
@@ -408,6 +415,92 @@ static void core_link_user_build_beacon_observations(
 
     memset(packet, 0, sizeof(*packet));
     packet->sequence = ++s_core_link_user_beacon_sequence;
+#if (VISION_FUSION_OUTPUT_MODE == VISION_FUSION_OUTPUT_LIVE)
+    DualCameraFusion_GetSnapshot(&fusion_snapshot);
+    if(fusion_snapshot.tracker_reset_count !=
+       s_core_link_user_live_fusion_reset_seen)
+    {
+        packet->frame_flags |= CORE_LINK_BEACON_FRAME_FLAG_TRACKER_RESET;
+        s_core_link_user_live_fusion_reset_seen =
+            fusion_snapshot.tracker_reset_count;
+        s_core_link_user_tracker_reset_pending = 0U;
+    }
+    if(fusion_snapshot.valid)
+    {
+        packet->car_visible = fusion_snapshot.car_valid;
+        packet->car_x_mm = core_link_user_cm_to_mm_i16(fusion_snapshot.car_x_cm);
+        packet->car_y_mm = core_link_user_cm_to_mm_i16(fusion_snapshot.car_y_cm);
+        if(fusion_snapshot.car_valid)
+        {
+            packet->frame_flags |= CORE_LINK_BEACON_FRAME_FLAG_CAR_POSITION_VALID;
+        }
+        if(fusion_snapshot.car_raw_valid)
+        {
+            packet->frame_flags |= CORE_LINK_BEACON_FRAME_FLAG_CAR_RAW_DETECTED;
+        }
+        if(fusion_snapshot.yaw_valid)
+        {
+            packet->frame_flags |= CORE_LINK_BEACON_FRAME_FLAG_UAV_YAW_VALID;
+            packet->uav_yaw_ddeg = core_link_user_deg_to_ddeg_i16(
+                fusion_snapshot.yaw_deg);
+        }
+        if(fusion_snapshot.car_valid && fusion_snapshot.yaw_valid &&
+           core_link_user_get_uplink_car_absolute_yaw_deg(&car_absolute_yaw_deg))
+        {
+            car_yaw_rel_uav_deg = core_link_user_wrap_angle(
+                car_absolute_yaw_deg - fusion_snapshot.yaw_deg);
+            packet->frame_flags |= CORE_LINK_BEACON_FRAME_FLAG_CAR_YAW_VALID;
+            packet->car_yaw_rel_uav_ddeg =
+                core_link_user_deg_to_ddeg_i16(car_yaw_rel_uav_deg);
+        }
+        if(!Flight_Takeoff_Is_Active() &&
+           !BeaconSearch_IsStartupRecognitionBlocked())
+        {
+            for(i = 0U; (i < fusion_snapshot.target_count) &&
+                        (packet->count < CORE_LINK_BEACON_OBSERVATION_MAX_COUNT);
+                ++i)
+            {
+                BeaconObservation *observation =
+                    &packet->observation[packet->count];
+                uint8 sigma_cm = fusion_snapshot.target[i].position_sigma_cm;
+
+                if(!fusion_snapshot.target[i].valid ||
+                   (fusion_snapshot.target[i].track_id == 0U)) continue;
+                if(sigma_cm < CORE_LINK_BEACON_POSITION_SIGMA_MIN_CM)
+                    sigma_cm = CORE_LINK_BEACON_POSITION_SIGMA_MIN_CM;
+                else if(sigma_cm > CORE_LINK_BEACON_POSITION_SIGMA_MAX_CM)
+                    sigma_cm = CORE_LINK_BEACON_POSITION_SIGMA_MAX_CM;
+                observation->track_id = fusion_snapshot.target[i].track_id;
+                observation->x_mm = core_link_user_cm_to_mm_i16(
+                    fusion_snapshot.target[i].x_cm);
+                observation->y_mm = core_link_user_cm_to_mm_i16(
+                    fusion_snapshot.target[i].y_cm);
+                observation->detection_confidence =
+                    fusion_snapshot.target[i].detection_confidence;
+                observation->position_sigma_cm = sigma_cm;
+                observation->flags = CORE_LINK_BEACON_OBSERVATION_FLAG_LIT;
+                packet->count++;
+            }
+        }
+        if(s_core_link_user_tracker_reset_pending)
+        {
+            packet->frame_flags |= CORE_LINK_BEACON_FRAME_FLAG_TRACKER_RESET;
+            s_core_link_user_tracker_reset_pending = 0U;
+        }
+        BeaconSearch_OnObservationFrame(packet,
+                                        (uint32)fusion_snapshot.reference_frame_seq);
+        packet->frame_flags |= BeaconSearch_GetFrameFlags();
+        return;
+    }
+    if(s_core_link_user_tracker_reset_pending)
+    {
+        packet->frame_flags |= CORE_LINK_BEACON_FRAME_FLAG_TRACKER_RESET;
+        s_core_link_user_tracker_reset_pending = 0U;
+    }
+    BeaconSearch_OnObservationFrame(packet, 0U);
+    packet->frame_flags |= BeaconSearch_GetFrameFlags();
+    return;
+#else
     VisionRuntime_GetBeaconSlots(slots, VISION_RUNTIME_BEACON_SLOT_COUNT);
     if(Flight_Takeoff_Is_Active() ||
        BeaconSearch_IsStartupRecognitionBlocked())
@@ -488,6 +581,7 @@ static void core_link_user_build_beacon_observations(
 
     BeaconSearch_OnObservationFrame(packet, loss_debug.process_count);
     packet->frame_flags |= BeaconSearch_GetFrameFlags();
+#endif
 }
 
 static void core_link_user_send_beacon_observations_if_due(void)
@@ -500,6 +594,10 @@ static void core_link_user_send_beacon_observations_if_due(void)
     }
 
     s_core_link_user_beacon_tx_elapsed_ms -= CORE_LINK_USER_BEACON_OBSERVATION_PERIOD_MS;
+#if (VISION_FUSION_OUTPUT_MODE == VISION_FUSION_OUTPUT_SHADOW) || \
+    (VISION_FUSION_OUTPUT_MODE == VISION_FUSION_OUTPUT_LIVE)
+    DualCameraFusion_BuildSnapshot(CameraBoardLink_TimeNowUs());
+#endif
     core_link_user_build_beacon_observations(&packet);
     core_link_user_send_beacon_observations(&packet);
 }
@@ -562,6 +660,8 @@ void core_link_user_init (void)
     s_core_link_user_beacon_sequence = 0U;
     s_core_link_user_next_track_id = 1U;
     s_core_link_user_tracker_reset_pending = 1U;
+    s_core_link_user_live_fusion_reset_seen = 0U;
+    DualCameraFusion_Init();
     memset(s_core_link_user_beacon_tracks, 0,
            sizeof(s_core_link_user_beacon_tracks));
     memset((void *)&s_core_link_user_beacon_uplink, 0, sizeof(s_core_link_user_beacon_uplink));
@@ -730,6 +830,7 @@ void core_link_user_get_car_motion_diag(CoreLinkCarMotionDiag_t *diag)
 
 void core_link_user_service_beacon_link(void)
 {
+    DualCameraFusion_ServiceInputs();
     core_link_user_send_beacon_observations_if_due();
 }
 
