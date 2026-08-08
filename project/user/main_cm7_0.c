@@ -52,6 +52,7 @@ static void build_monitor_runtime_snapshot(MonitorRuntimeSnapshot *snapshot)
 {
     BatteryStatus battery_status;
     ICM_Health_t imu_health = {0};
+    HeightTofSnapshot_t height_snapshot = {0};
     uint8 ir_track_valid = 0U;
     if(snapshot == NULL)
     {
@@ -61,6 +62,7 @@ static void build_monitor_runtime_snapshot(MonitorRuntimeSnapshot *snapshot)
     VehicleMarkerLocalization_ServiceLostProtection();
     BatteryMonitor_GetStatus(&battery_status);
     ICM_GetHealth(&imu_health);
+    HeightManager_GetTofSnapshot(&height_snapshot);
     ir_track_valid = (uint8)((g_vehicle_marker_pose.valid && !g_vehicle_marker_position_lost_flag) ? 1U : 0U);
 
     snapshot->control_mode = control_mode;
@@ -83,9 +85,9 @@ static void build_monitor_runtime_snapshot(MonitorRuntimeSnapshot *snapshot)
     snapshot->beacon_count = ir_track_valid ? g_vehicle_marker_pose.detected_point_count : 0;
     snapshot->nearest_x = ir_track_valid ? g_vehicle_marker_pose.x : 0.0f;
     snapshot->nearest_y = ir_track_valid ? g_vehicle_marker_pose.y : 0.0f;
-    snapshot->tof_height_cm = tof_height_true_filt * 100.0f;
-    snapshot->fused_height_cm = g_height_result.height_cm;
-    snapshot->fused_velocity_cms = g_height_result.velocity_cms;
+    snapshot->tof_height_cm = height_snapshot.filtered_height_cm;
+    snapshot->fused_height_cm = height_snapshot.filtered_height_cm;
+    snapshot->fused_velocity_cms = height_snapshot.fused_velocity_cms;
     snapshot->imu_fault_mask = imu_health.fault_mask;
 }
 
@@ -152,10 +154,7 @@ static void update_monitor_view(void)
     monitor_page_enum page_before;
     MonitorRuntimeSnapshot snapshot;
 
-    if(CommMux_UpdateFromSwitch())
-    {
-        Vofa_ClearRxState();//清除旧状态，避免对新模式的干扰
-    }
+    CameraBoardLink_MainTask();
 
     build_monitor_runtime_snapshot(&snapshot);
     link_tick = drone_car_link_task();
@@ -177,8 +176,8 @@ static void update_monitor_view(void)
     camera_new_frame = CrossCoreCamera_ControlCoreService(current_roll,
                                                           current_pitch,
                                                           current_yaw,
-                                                          tof_height_true_filt * 100.0f,
-                                                          g_height_result.height_cm);
+                                                          snapshot.tof_height_cm,
+                                                          snapshot.fused_height_cm);
     assistant_image_mode = CommMux_IsAssistantImageMode();
     if(assistant_image_mode)
     {
@@ -248,8 +247,8 @@ static void initialize_control_core_modules(void)
 {
     CommMux_Init();
     CommMux_SwitchInit();
-    (void)CommMux_UpdateFromSwitch();
     Init_uart();
+    CameraBoardLink_MainInit();
     CrossCoreCamera_ControlCoreAssistantInit();
     core_link_init();
     core_link_user_init();

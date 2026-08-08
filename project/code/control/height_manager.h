@@ -33,6 +33,7 @@ typedef struct
     float flow_height_cm;
     float filtered_height_cm;
     float vertical_velocity_cms;
+    float fused_velocity_cms;
     float predicted_height_cm;
     float innovation_cm;
     float gate_cm;

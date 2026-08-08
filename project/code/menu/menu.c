@@ -186,6 +186,9 @@ Menu* menu_return_parent(Menu* currentMenu)
 void menu_execute_function(Menu* menu)
 {
     MenuItem* item = NULL;
+#if CY_CORE_CM7_0
+    HeightTofSnapshot_t height_snapshot = {0};
+#endif
 
     if(menu == NULL || menu->itemCount == 0)
     {
@@ -216,11 +219,13 @@ void menu_execute_function(Menu* menu)
     {
         core_link_user_poll();
 #if CY_CORE_CM7_0
+        CameraBoardLink_MainTask();
+        HeightManager_GetTofSnapshot(&height_snapshot);
         (void)CrossCoreCamera_ControlCoreService(current_roll,
                                                  current_pitch,
                                                  current_yaw,
-                                                 tof_height_true_filt * 100.0f,
-                                                 g_height_result.height_cm);
+                                                 height_snapshot.filtered_height_cm,
+                                                 height_snapshot.filtered_height_cm);
 #endif
         item->function();
 

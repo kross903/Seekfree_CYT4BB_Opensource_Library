@@ -162,8 +162,21 @@ void uart1_isr (void)
 {
     if(uart_isr_mask(UART_1))            // 串口1接收中断
     {
-        
-        uart_rx_interrupt_handler();  // 无线模块统一回调函数
+        if(CommMux_IsVofaMode())
+        {
+            uart_rx_interrupt_handler();
+        }
+        else if(CommMux_IsCameraBoardMode())
+        {
+            CameraBoardLink_RxIsr();
+        }
+        else
+        {
+            uint8 discard;
+            while(uart_query_byte(UART_1, &discard))
+            {
+            }
+        }
       
     }
     else                                // 串口1发送中断

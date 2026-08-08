@@ -18,6 +18,7 @@
 
 // ================================================= Communication =================================================
 #include "communication/comm_mux.h"
+#include "communication/camera_board_link.h"
 #include "communication/core_link.h"
 #include "communication/core_link_user.h"
 #include "communication/cross_core_camera.h"

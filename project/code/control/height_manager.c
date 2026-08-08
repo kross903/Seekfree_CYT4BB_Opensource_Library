@@ -174,6 +174,7 @@ static void height_publish_tof_snapshot(uint8 new_sample)
     snapshot.flow_height_cm = s_tof_accepted_flow_cm;
     snapshot.filtered_height_cm = tof_height_true_filt * 100.0f;
     snapshot.vertical_velocity_cms = tof_vel_mps_filt * 100.0f;
+    snapshot.fused_velocity_cms = s_height_diag.fused_velocity_cms;
     snapshot.predicted_height_cm = s_tof_predicted_cm;
     snapshot.innovation_cm = s_tof_innovation_cm;
     snapshot.gate_cm = s_tof_gate_cm;

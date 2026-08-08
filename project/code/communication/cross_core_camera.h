@@ -18,6 +18,7 @@ void CrossCoreCamera_CameraCoreInit(void);
 void CrossCoreCamera_CameraCoreTask(void);
 uint8 CrossCoreCamera_ControlCoreFetchFrame(void);
 uint8 CrossCoreCamera_ControlCoreGetVisionYaw(float *yaw_deg);
+uint8 CrossCoreCamera_ControlCoreGetCaptureTime(uint32 *capture_time_us);
 #if CY_CORE_CM7_0
 void CrossCoreCamera_ControlCoreAssistantInit(void);
 void CrossCoreCamera_ControlCoreTask(void);

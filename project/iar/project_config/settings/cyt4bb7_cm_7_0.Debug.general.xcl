@@ -1,20 +1,20 @@
-"D:\APP\iar\arm\bin\armPROC.dll" 
+"D:\IAR\arm\bin\armPROC.dll" 
 
-"D:\APP\iar\arm\bin\armJET.dll" 
+"D:\IAR\arm\bin\armJET.dll" 
 
-"D:\code\project\Seekfree_CYT4BB_Opensource_Library\project\iar\project_config\Debug_m7_0\Exe\cyt4bb7_cm_7_0.out" 
+"C:\Users\saileach\Desktop\飞跃雷区资料\CYT4BB7_Drone\Seekfree_CYT4BB_Opensource_Library\project\iar\project_config\Debug_m7_0\Exe\cyt4bb7_cm_7_0.out" 
 
---plugin="D:\APP\iar\arm\bin\armbat.dll" 
+--plugin="D:\IAR\arm\bin\armbat.dll" 
 
---device_macro="D:\APP\iar\arm/config/debugger/Infineon/CYT4BB_M7.dmac" 
+--device_macro="D:\IAR\arm/config/debugger/Infineon/CYT4BB_M7.dmac" 
 
---device_macro="D:\APP\iar\arm/config/debugger/Infineon/CYTVII_M7.dmac" 
+--device_macro="D:\IAR\arm/config/debugger/Infineon/CYTVII_M7.dmac" 
 
---device_macro="D:\APP\iar\arm/config/debugger/Infineon/CYTVII_Trace.dmac" 
+--device_macro="D:\IAR\arm/config/debugger/Infineon/CYTVII_Trace.dmac" 
 
---device_macro="D:\APP\iar\arm/config/debugger/Infineon/CYTVII_Common.dmac" 
+--device_macro="D:\IAR\arm/config/debugger/Infineon/CYTVII_Common.dmac" 
 
---flash_loader="D:\APP\iar\arm/config/flashloader/Infineon/FlashCYT4_CF4M_WF256K.board" 
+--flash_loader="D:\IAR\arm/config/flashloader/Infineon/FlashCYT4_CF4M_WF256K.board" 
 
 
 

@@ -53,6 +53,7 @@ typedef struct
     float yaw_deg;
     uint8 yaw_valid;
     uint8 yaw_reserved[3];
+    uint32 capture_time_us;
 } SharedVisionResult_t;
 
 typedef struct
@@ -89,7 +90,8 @@ typedef struct
     uint32 magic;
     uint32 write_seq;
     uint32 read_seq;
-    uint32 reserved[5];
+    uint32 capture_time_us;
+    uint32 reserved[4];
 } SharedVisionFrameCtrl_t;
 
 typedef char SharedVisionResultLayoutCheck[
@@ -146,6 +148,8 @@ __no_init uint8 g_cross_core_camera_assistant_image[MT9V03X_H][MT9V03X_W];
 
 #if CY_CORE_CM7_1
 
+static uint32 s_camera_core_capture_time_us = 0U;
+
 static uint8 CrossCoreCamera_CameraCoreAcquireFrame(void)
 {
     uint32 frame_seq;
@@ -164,6 +168,7 @@ static uint8 CrossCoreCamera_CameraCoreAcquireFrame(void)
 
     SCB_InvalidateDCache_by_Addr(g_cross_core_camera_image_copy[0], MT9V03X_IMAGE_SIZE);
     memcpy(mt9v03x_image[0], g_cross_core_camera_image_copy[0], MT9V03X_IMAGE_SIZE);
+    s_camera_core_capture_time_us = g_shared_vision_frame_ctrl->capture_time_us;
     g_shared_vision_frame_ctrl->read_seq = frame_seq;
     CrossCoreCamera_CleanFrameCtrl();
     mt9v03x_finish_flag = 1U;
@@ -571,6 +576,7 @@ static void CrossCoreCamera_ControlCorePublishFrame(void)
     memcpy(g_cross_core_camera_image_copy[0], mt9v03x_image[0], MT9V03X_IMAGE_SIZE);
     SCB_CleanDCache_by_Addr(g_cross_core_camera_image_copy[0], MT9V03X_IMAGE_SIZE);
     next_seq = g_shared_vision_frame_ctrl->write_seq + 1U;
+    g_shared_vision_frame_ctrl->capture_time_us = CameraBoardLink_TimeNowUs();
     g_shared_vision_frame_ctrl->write_seq = next_seq;
     CrossCoreCamera_CleanFrameCtrl();
 }
@@ -603,6 +609,7 @@ static void CrossCoreCamera_CleanScreenCtrl(void)
 static volatile uint8 s_vision_ipc_result_pending = 0U;
 static float s_control_vision_yaw_deg = 0.0f;
 static uint8 s_control_vision_yaw_valid = 0U;
+static uint32 s_control_vision_capture_time_us = 0U;
 
 static void CrossCoreCamera_ControlCoreIpcCallback(uint32 ipc_data)
 {
@@ -758,6 +765,7 @@ void CrossCoreCamera_CameraCoreTask(void)
     g_shared_vision_result->input_seq = input_snapshot.seq;
     g_shared_vision_result->yaw_deg = input_snapshot.yaw_deg;
     g_shared_vision_result->yaw_valid = input_valid;
+    g_shared_vision_result->capture_time_us = s_camera_core_capture_time_us;
     g_shared_vision_result->seq++;
     // 写回共享结果前清缓存，并通过 IPC 通知 0 核“新结果已就绪”。
     CrossCoreCamera_CleanResult();
@@ -799,6 +807,7 @@ uint8 CrossCoreCamera_ControlCoreFetchFrame(void)
     VehicleMarkerLocalization_SetLossDebug(&result_snapshot.loss_debug);
     s_control_vision_yaw_deg = result_snapshot.yaw_deg;
     s_control_vision_yaw_valid = result_snapshot.yaw_valid;
+    s_control_vision_capture_time_us = result_snapshot.capture_time_us;
     return 1U;
 #else
     return 0U;
@@ -817,6 +826,22 @@ uint8 CrossCoreCamera_ControlCoreGetVisionYaw(float *yaw_deg)
     return 1U;
 #else
     (void)yaw_deg;
+    return 0U;
+#endif
+}
+
+uint8 CrossCoreCamera_ControlCoreGetCaptureTime(uint32 *capture_time_us)
+{
+#if CY_CORE_CM7_0
+    if((NULL == capture_time_us) || (s_control_vision_capture_time_us == 0U))
+    {
+        return 0U;
+    }
+
+    *capture_time_us = s_control_vision_capture_time_us;
+    return 1U;
+#else
+    (void)capture_time_us;
     return 0U;
 #endif
 }
@@ -845,11 +870,6 @@ uint8 CrossCoreCamera_ControlCoreService(float roll_deg,
     static uint8 last_assistant_stream_enable = 0xFFU;
     uint8 camera_new_frame = 0U;
     uint8 assistant_stream_enable = 0U;
-
-    if(CommMux_UpdateFromSwitch())
-    {
-        Vofa_ClearRxState();
-    }
 
     assistant_stream_enable = CommMux_IsAssistantImageMode();
 
@@ -943,11 +963,13 @@ void CrossCoreCamera_ControlCoreAssistantInit(void)
     ipc_communicate_init(IPC_PORT_1, CrossCoreCamera_ControlCoreIpcCallback);
     s_control_vision_yaw_deg = 0.0f;
     s_control_vision_yaw_valid = 0U;
+    s_control_vision_capture_time_us = 0U;
     s_cross_core_camera_capture_ready = (mt9v03x_init() == 0U) ? 1U : 0U;
     g_shared_vision_frame_ctrl->magic = SHARED_VISION_FRAME_CTRL_MAGIC;
     g_shared_vision_frame_ctrl->write_seq = 0U;
     g_shared_vision_frame_ctrl->read_seq = 0U;
-    for(reserved_index = 0U; reserved_index < 5U; reserved_index++)
+    g_shared_vision_frame_ctrl->capture_time_us = 0U;
+    for(reserved_index = 0U; reserved_index < 4U; reserved_index++)
     {
         g_shared_vision_frame_ctrl->reserved[reserved_index] = 0U;
     }

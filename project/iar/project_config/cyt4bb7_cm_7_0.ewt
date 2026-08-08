@@ -1474,6 +1474,15 @@
             <name>$PROJ_DIR$\..\..\code\communication\comm_mux.c</name>
         </file>
         <file>
+            <name>$PROJ_DIR$\..\..\code\communication\camera_board_link.c</name>
+        </file>
+        <file>
+            <name>$PROJ_DIR$\..\..\code\communication\camera_board_link.h</name>
+        </file>
+        <file>
+            <name>$PROJ_DIR$\..\..\code\communication\camera_board_protocol.h</name>
+        </file>
+        <file>
             <name>$PROJ_DIR$\..\..\code\control\ControlMath.c</name>
         </file>
         <file>

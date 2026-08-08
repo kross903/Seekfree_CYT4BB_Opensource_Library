@@ -900,7 +900,7 @@ static void send_height_loop_tuning_data(void)
 
     HeightManager_Get_Diag(&height_diag);
     target_height_cm = HeightManager_Get_Active_Target();
-    actual_height_cm = g_height_result.height_cm;
+    actual_height_cm = height_diag.tof_height_filt_cm;
     height_error_cm = target_height_cm - actual_height_cm;
     height_p_output = HeightPID.Kp * height_error_cm;
     height_i_output = HeightPID.Ki * HeightPID.integral;

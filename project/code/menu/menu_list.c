@@ -115,6 +115,7 @@ void icm_init_menu()
 #define VISION_VIEW_SNAPSHOT_WAIT_TICKS 120U
 #define VISION_VIEW_SNAPSHOT_WAIT_MS    5U
 #define TRACK_LIGHT_RELEASE_TIMEOUT_TICKS 40U
+#define REAR_BOARD_RX_REFRESH_TICKS       20U
 #define MT9V03X_ADJUST_INFO_Y           128U
 #define MT9V03X_ADJUST_STEP_Y           148U
 #define MT9V03X_ADJUST_STATUS_Y         168U
@@ -142,6 +143,10 @@ static uint32 s_sensor_status_frame_previous_count = 0U;
 static uint32 s_sensor_status_frame_accumulated = 0U;
 static float s_sensor_status_image_fps = 0.0f;
 static uint8 s_sensor_status_frame_rate_valid = 0U;
+static uint8 s_rear_board_rx_page_active = 0U;
+static uint8 s_rear_board_rx_view = 0U;
+static uint8 s_rear_board_rx_beacon_index = 0U;
+static uint8 s_rear_board_rx_refresh_ticks = 0U;
 
 static void test_page_clear_line(uint16 y);
 
@@ -330,6 +335,14 @@ static void test_page_show_int(uint16 y, const char *label, int32 value, uint8 d
     ips200_show_int(TEST_VALUE_X, y, value, digits);
 }
 
+static void test_page_show_uint(uint16 y, const char *label, uint32 value, uint8 digits)
+{
+    test_page_clear_line(y);
+    ips200_set_color(RGB565_WHITE, RGB565_BLACK);
+    ips200_show_string(TEST_PAGE_X, y, (char *)label);
+    ips200_show_uint(TEST_VALUE_X, y, value, digits);
+}
+
 static void test_page_show_float(uint16 y, const char *label, float value, uint8 digits, uint8 point_digits)
 {
     test_page_clear_line(y);
@@ -503,6 +516,7 @@ static void vision_view_send_snapshot(void)
 {
     uint8 wait_count = 0U;
     uint8 sent = 0U;
+    HeightTofSnapshot_t height_snapshot = {0};
 
     if(!CommMux_IsAssistantImageMode())
     {
@@ -520,11 +534,12 @@ static void vision_view_send_snapshot(void)
     while(wait_count < VISION_VIEW_SNAPSHOT_WAIT_TICKS)
     {
         core_link_user_poll();
+        HeightManager_GetTofSnapshot(&height_snapshot);
         (void)CrossCoreCamera_ControlCoreService(current_roll,
                                                  current_pitch,
                                                  current_yaw,
-                                                 tof_height_true_filt * 100.0f,
-                                                 g_height_result.height_cm);
+                                                 height_snapshot.filtered_height_cm,
+                                                 height_snapshot.filtered_height_cm);
         if(CrossCoreCamera_ControlCoreSendAssistantFrame())
         {
             sent = 1U;
@@ -1021,6 +1036,7 @@ static void vofa_status_page(void)
 {
     VofaDiag_t diag = {0};
     char command_text[4] = {'-', '-', ' ', '\0'};
+    const char *mux_text = "IMAGE";
 
     Send_test();
     USART_PID_Adjust();
@@ -1032,7 +1048,16 @@ static void vofa_status_page(void)
         command_text[1] = ' ';
     }
 
-    test_page_show_text(TEST_ROW_Y(0U), "MUX:", diag.comm_mode == COMM_MUX_MODE_VOFA ? "VOFA " : "IMAGE",
+    if(diag.comm_mode == COMM_MUX_MODE_VOFA)
+    {
+        mux_text = "VOFA ";
+    }
+    else if(diag.comm_mode == COMM_MUX_MODE_CAMERA_BOARD)
+    {
+        mux_text = "BOARD";
+    }
+
+    test_page_show_text(TEST_ROW_Y(0U), "MUX:", mux_text,
                         diag.is_vofa_mode ? RGB565_GREEN : RGB565_YELLOW);
     test_page_show_text(TEST_ROW_Y(1U), "CMD PATH:", diag.is_vofa_mode ? "ON   " : "OFF  ",
                         diag.is_vofa_mode ? RGB565_GREEN : RGB565_RED);
@@ -1046,6 +1071,176 @@ static void vofa_status_page(void)
     test_page_show_float(TEST_ROW_Y(9U), "FREQ:", diag.loop_freq_hz, 4U, 1U);
     test_page_show_int(TEST_ROW_Y(10U), "OVERRUN:", (int32)diag.loop_overrun_count, 5U);
     test_page_show_text(TEST_ROW_Y(11U), "STREAM:", "VIEW ", RGB565_WHITE);
+}
+
+static void rear_board_show_pair_i32(uint8 row,
+                                     const char *left_label,
+                                     int32 left_value,
+                                     const char *right_label,
+                                     int32 right_value,
+                                     uint8 digits)
+{
+    uint16 y = TEST_ROW_Y(row);
+
+    test_page_clear_line(y);
+    ips200_set_color(RGB565_WHITE, RGB565_BLACK);
+    ips200_show_string(TEST_PAGE_X, y, (char *)left_label);
+    ips200_show_int(72U, y, left_value, digits);
+    ips200_show_string(132U, y, (char *)right_label);
+    ips200_show_int(180U, y, right_value, digits);
+}
+
+static void rear_board_draw_link(void)
+{
+    CameraBoardLinkDiag_t diag = {0};
+
+    CameraBoardLink_GetDiag(&diag);
+    test_page_show_text(TEST_ROW_Y(0U), "MODE:", diag.mode_active ? "BOARD" : "OTHER",
+                        diag.mode_active ? RGB565_GREEN : RGB565_YELLOW);
+    test_page_show_text(TEST_ROW_Y(1U), "ONLINE:", diag.online ? "YES  " : "NO   ",
+                        diag.online ? RGB565_GREEN : RGB565_RED);
+    test_page_show_text(TEST_ROW_Y(2U), "CAMERA:", diag.rear_camera_ready ? "READY" : "WAIT ",
+                        diag.rear_camera_ready ? RGB565_GREEN : RGB565_RED);
+    test_page_show_text(TEST_ROW_Y(3U), "CM7_1:", diag.rear_camera_core_alive ? "RUN  " : "WAIT ",
+                        diag.rear_camera_core_alive ? RGB565_GREEN : RGB565_RED);
+    test_page_show_text(TEST_ROW_Y(4U), "SYNC:", diag.rear_time_sync_valid ? "VALID" : "BAD  ",
+                        diag.rear_time_sync_valid ? RGB565_GREEN : RGB565_RED);
+    rear_board_show_pair_i32(5U, "RES:", diag.last_result_age_ms,
+                             "STAT:", diag.last_status_age_ms, 5U);
+    rear_board_show_pair_i32(6U, "STATE:", diag.rear_state_age_ms,
+                             "SYNC:", diag.rear_sync_error_us, 5U);
+    test_page_show_uint(TEST_ROW_Y(7U), "TX FRAME:", diag.tx_frame_count, 8U);
+    test_page_show_uint(TEST_ROW_Y(8U), "RX FRAME:", diag.rx_frame_count, 8U);
+    test_page_show_uint(TEST_ROW_Y(9U), "LOCAL CRC:", diag.crc_error_count, 8U);
+    test_page_show_uint(TEST_ROW_Y(10U), "REAR CRC:", diag.rear_crc_error_count, 5U);
+    test_page_show_text(TEST_ROW_Y(11U), "KEY:", "1< 2> 3B 4X", RGB565_CYAN);
+}
+
+static void rear_board_draw_result(void)
+{
+    CameraBoardVisionFrame_t frame = {0};
+    CameraBoardBeaconObservation_t observation = {0};
+    uint8 received = CameraBoardLink_GetLatestRearFrame(&frame);
+    uint8 beacon_valid = (uint8)(received &&
+        (s_rear_board_rx_beacon_index < frame.beacon_count));
+
+    if(beacon_valid)
+    {
+        observation = frame.beacon[s_rear_board_rx_beacon_index];
+    }
+
+    test_page_show_text(TEST_ROW_Y(0U), "KEY:", "1< 2> 3B 4X", RGB565_CYAN);
+    test_page_show_uint(TEST_ROW_Y(1U), "FRAME:", frame.camera_frame_seq, 8U);
+    test_page_show_uint(TEST_ROW_Y(2U), "CAPTURE US:", frame.capture_time_us, 10U);
+    rear_board_show_pair_i32(3U, "SEQ:", frame.state_seq_used,
+                             "RESET:", frame.reset_generation, 5U);
+    rear_board_show_pair_i32(4U, "AGE:", frame.state_age_us,
+                             "PROC:", frame.recognition_time_us, 5U);
+    test_page_show_uint(TEST_ROW_Y(5U), "FLAGS:", frame.result_flags, 3U);
+    rear_board_show_pair_i32(6U, "CAR X:", frame.car_x_mm,
+                             "Y:", frame.car_y_mm, 6U);
+    rear_board_show_pair_i32(7U, "RAW X:", frame.car_raw_x_mm,
+                             "Y:", frame.car_raw_y_mm, 6U);
+    rear_board_show_pair_i32(8U, "COUNT:", frame.beacon_count,
+                             "SEL:", (int32)s_rear_board_rx_beacon_index + 1, 2U);
+    rear_board_show_pair_i32(9U, "B X:", observation.x_mm,
+                             "Y:", observation.y_mm, 6U);
+    rear_board_show_pair_i32(10U, "CONF:", observation.detection_confidence,
+                             "SIG:", observation.position_sigma_cm, 3U);
+    if(received)
+    {
+        test_page_show_uint(TEST_ROW_Y(11U), "B FLAGS:", observation.flags, 3U);
+    }
+    else
+    {
+        test_page_show_text(TEST_ROW_Y(11U), "RESULT:", "WAIT ", RGB565_RED);
+    }
+}
+
+static void rear_board_draw_diag(void)
+{
+    CameraBoardLinkDiag_t diag = {0};
+
+    CameraBoardLink_GetDiag(&diag);
+    test_page_show_text(TEST_ROW_Y(0U), "KEY:", "1< 2> 3B 4X", RGB565_CYAN);
+    test_page_show_uint(TEST_ROW_Y(1U), "LOCAL PROTO:", diag.protocol_error_count, 8U);
+    test_page_show_uint(TEST_ROW_Y(2U), "LOCAL GAP:", diag.sequence_gap_count, 8U);
+    test_page_show_uint(TEST_ROW_Y(3U), "LOCAL FIFO:", diag.rx_overflow_count, 8U);
+    test_page_show_uint(TEST_ROW_Y(4U), "LOCAL TXDROP:", diag.tx_busy_drop_count, 8U);
+    test_page_show_uint(TEST_ROW_Y(5U), "REAR GAP:", diag.rear_sequence_gap_count, 5U);
+    test_page_show_uint(TEST_ROW_Y(6U), "REAR FIFO:", diag.rear_rx_overflow_count, 5U);
+    test_page_show_uint(TEST_ROW_Y(7U), "REAR TXDROP:", diag.rear_tx_busy_drop_count, 5U);
+    test_page_show_uint(TEST_ROW_Y(8U), "CAPTURE:", diag.rear_captured_frame_count, 8U);
+    test_page_show_uint(TEST_ROW_Y(9U), "PROCESS:", diag.rear_processed_frame_count, 8U);
+    test_page_show_uint(TEST_ROW_Y(10U), "DROP:", diag.rear_dropped_frame_count, 8U);
+    test_page_show_uint(TEST_ROW_Y(11U), "IPC RX:", diag.rear_ipc_result_count, 8U);
+}
+
+static void rear_board_rx_page(void)
+{
+    uint8 refresh_now = 0U;
+
+    if(!s_rear_board_rx_page_active)
+    {
+        s_rear_board_rx_page_active = 1U;
+        s_rear_board_rx_view = 0U;
+        s_rear_board_rx_beacon_index = 0U;
+        s_rear_board_rx_refresh_ticks = 0U;
+        key_flag = 0U;
+        refresh_now = 1U;
+    }
+
+    if(key_flag == Button_4 || g_menu_exit_flag || menu_is_monitor_view())
+    {
+        s_rear_board_rx_page_active = 0U;
+        s_rear_board_rx_refresh_ticks = 0U;
+        return;
+    }
+    if(key_flag == Button_1)
+    {
+        s_rear_board_rx_view = (s_rear_board_rx_view == 0U) ?
+                               2U : (uint8)(s_rear_board_rx_view - 1U);
+        key_flag = 0U;
+        refresh_now = 1U;
+    }
+    else if(key_flag == Button_2)
+    {
+        s_rear_board_rx_view = (uint8)((s_rear_board_rx_view + 1U) % 3U);
+        key_flag = 0U;
+        refresh_now = 1U;
+    }
+    else if(key_flag == Button_3)
+    {
+        s_rear_board_rx_beacon_index = (uint8)(
+            (s_rear_board_rx_beacon_index + 1U) % CAMERA_BOARD_MAX_BEACON_COUNT);
+        s_rear_board_rx_view = 1U;
+        key_flag = 0U;
+        refresh_now = 1U;
+    }
+
+    s_rear_board_rx_refresh_ticks++;
+    if(s_rear_board_rx_refresh_ticks >= REAR_BOARD_RX_REFRESH_TICKS)
+    {
+        s_rear_board_rx_refresh_ticks = 0U;
+        refresh_now = 1U;
+    }
+    if(!refresh_now)
+    {
+        return;
+    }
+
+    if(s_rear_board_rx_view == 0U)
+    {
+        rear_board_draw_link();
+    }
+    else if(s_rear_board_rx_view == 1U)
+    {
+        rear_board_draw_result();
+    }
+    else
+    {
+        rear_board_draw_diag();
+    }
 }
 
 static void vision_view_page(void)
@@ -1133,12 +1328,14 @@ static uint8 track_light_service_downlink(void)
         MonitorRuntimeSnapshot snapshot = {0};
         BatteryStatus battery_status;
         ICM_Health_t imu_health = {0};
+        HeightTofSnapshot_t height_snapshot = {0};
         uint8 ir_track_valid;
 
         s_track_light_status_tick_div = 0U;
         VehicleMarkerLocalization_ServiceLostProtection();
         BatteryMonitor_GetStatus(&battery_status);
         ICM_GetHealth(&imu_health);
+        HeightManager_GetTofSnapshot(&height_snapshot);
         ir_track_valid = (uint8)((g_vehicle_marker_pose.valid
                                   && !g_vehicle_marker_position_lost_flag) ? 1U : 0U);
 
@@ -1159,9 +1356,9 @@ static uint8 track_light_service_downlink(void)
         snapshot.beacon_count = ir_track_valid ? g_vehicle_marker_pose.detected_point_count : 0;
         snapshot.nearest_x = ir_track_valid ? g_vehicle_marker_pose.x : 0.0f;
         snapshot.nearest_y = ir_track_valid ? g_vehicle_marker_pose.y : 0.0f;
-        snapshot.tof_height_cm = tof_height_true_filt * 100.0f;
-        snapshot.fused_height_cm = g_height_result.height_cm;
-        snapshot.fused_velocity_cms = g_height_result.velocity_cms;
+        snapshot.tof_height_cm = height_snapshot.filtered_height_cm;
+        snapshot.fused_height_cm = height_snapshot.filtered_height_cm;
+        snapshot.fused_velocity_cms = height_snapshot.fused_velocity_cms;
         snapshot.imu_fault_mask = imu_health.fault_mask;
         core_link_user_send_drone_status_from_snapshot(&snapshot);
     }
@@ -1584,6 +1781,7 @@ void init_test_menu(void)
     menu_create_item(&testMenu, "Vision View", vision_view_page, NULL);
     menu_create_item(&testMenu, "Track Light", track_light_test_page, NULL);
     menu_create_item(&testMenu, "VOFA Status", vofa_status_page, NULL);
+    menu_create_item(&testMenu, "Rear Board RX", rear_board_rx_page, NULL);
     menu_create_item(&testMenu, "MT9V03X Adjust", mt9v03x_adjust_page, NULL);
     menu_create_item(&testMenu, "Binary Adjust", binary_threshold_adjust_page, NULL);
     
@@ -1610,6 +1808,10 @@ void menu_open_init()
  */
 void menu_open(void)
 {
+#if CY_CORE_CM7_0
+    HeightTofSnapshot_t height_snapshot = {0};
+#endif
+
     if (menu_is_monitor_view())
     {
         return;
@@ -1624,14 +1826,16 @@ void menu_open(void)
     // 菜单处理循环
     while (!g_menu_exit_flag && !menu_is_monitor_view())
     {
+        CameraBoardLink_MainTask();
         // 处理菜单逻辑
         g_currentMenu = menu_process(g_currentMenu);
 #if CY_CORE_CM7_0
+        HeightManager_GetTofSnapshot(&height_snapshot);
         (void)CrossCoreCamera_ControlCoreService(current_roll,
                                                  current_pitch,
                                                  current_yaw,
-                                                 tof_height_true_filt * 100.0f,
-                                                 g_height_result.height_cm);
+                                                 height_snapshot.filtered_height_cm,
+                                                 height_snapshot.filtered_height_cm);
 #endif
         Send_test();
         USART_PID_Adjust();
@@ -1642,7 +1846,9 @@ void menu_open(void)
         }
         
         // ????????????????
-        system_delay_ms(10);
+        system_delay_ms(5U);
+        CameraBoardLink_MainTask();
+        system_delay_ms(5U);
     }
     
     if (!menu_is_monitor_view())
