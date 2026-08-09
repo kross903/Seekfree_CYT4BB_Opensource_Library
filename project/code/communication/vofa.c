@@ -1372,6 +1372,8 @@ void USART_PID_Adjust(void)
                 case 'r': send_back_flag = 40; break;
                 case 'S':
                 case 's': send_back_flag = 41; break;
+                case 'T':
+                case 't': send_back_flag = 42; break;
                 case 'U':
                 case 'u': send_back_flag = 29; break;
                 case 'V':
@@ -2013,6 +2015,30 @@ void send_date_back(void)
                            0.0f,
                            0.0f,
                            0.0f);
+            break;
+        }
+
+        case 42:
+        {
+            MotorMixerLimitDiag_t mixer_diag = {0};
+
+            Motor_Mixer_Get_Limit_Diag(&mixer_diag);
+            send_sixteen_date(mixer_diag.raw_motor[0],
+                              mixer_diag.raw_motor[1],
+                              mixer_diag.raw_motor[2],
+                              mixer_diag.raw_motor[3],
+                              (float)mixer_diag.clamped_motor[0],
+                              (float)mixer_diag.clamped_motor[1],
+                              (float)mixer_diag.clamped_motor[2],
+                              (float)mixer_diag.clamped_motor[3],
+                              (float)mixer_diag.high_mask,
+                              (float)mixer_diag.low_mask,
+                              (float)mixer_diag.roll_limit_flags,
+                              (float)mixer_diag.pitch_limit_flags,
+                              (float)mixer_diag.yaw_limit_flags,
+                              (float)mixer_diag.throttle_limit_flags,
+                              (float)mixer_diag.invalid_output,
+                              (float)((mixer_diag.high_mask || mixer_diag.low_mask) ? 1U : 0U));
             break;
         }
 
