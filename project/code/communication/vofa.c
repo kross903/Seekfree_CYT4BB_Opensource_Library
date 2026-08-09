@@ -1380,6 +1380,8 @@ void USART_PID_Adjust(void)
                 case 'v': send_back_flag = 20; break;
                 case 'W':
                 case 'w': send_back_flag = 21; break;
+                case 'X':
+                case 'x': send_back_flag = 43; break;
                 case 'Y':
                 case 'y': send_back_flag = 33; break;
                 case 'Z':
@@ -2039,6 +2041,30 @@ void send_date_back(void)
                               (float)mixer_diag.throttle_limit_flags,
                               (float)mixer_diag.invalid_output,
                               (float)((mixer_diag.high_mask || mixer_diag.low_mask) ? 1U : 0U));
+            break;
+        }
+
+        case 43:
+        {
+            AngleLoopSqrtDiag_t sqrt_diag = {0};
+
+            Angle_Loop_Get_Sqrt_Diag(&sqrt_diag);
+            send_sixteen_date(sqrt_diag.roll_angle_error_deg,
+                              sqrt_diag.roll_linear_p_rate_dps,
+                              sqrt_diag.roll_sqrt_rate_dps,
+                              sqrt_diag.roll_selected_rate_dps,
+                              sqrt_diag.roll_rate_ff_dps,
+                              sqrt_diag.roll_rate_total_raw_dps,
+                              sqrt_diag.roll_rate_final_dps,
+                              current_gyro_roll,
+                              sqrt_diag.pitch_angle_error_deg,
+                              sqrt_diag.pitch_linear_p_rate_dps,
+                              sqrt_diag.pitch_sqrt_rate_dps,
+                              sqrt_diag.pitch_selected_rate_dps,
+                              sqrt_diag.pitch_rate_ff_dps,
+                              sqrt_diag.pitch_rate_total_raw_dps,
+                              sqrt_diag.pitch_rate_final_dps,
+                              current_gyro_pitch);
             break;
         }
 

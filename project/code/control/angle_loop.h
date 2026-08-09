@@ -4,6 +4,18 @@
 #include "zf_common_headfile.h"
 #include "control/pid_controller.h"
 
+#ifndef ANGLE_LOOP_SQRT_CONTROL_ENABLE
+#define ANGLE_LOOP_SQRT_CONTROL_ENABLE      (0U)
+#endif
+
+#ifndef ANGLE_LOOP_SQRT_BYPASS_DIAG_ENABLE
+#define ANGLE_LOOP_SQRT_BYPASS_DIAG_ENABLE  (1U)
+#endif
+
+#ifndef ANGLE_LOOP_SQRT_ACCEL_MAX_DPS2
+#define ANGLE_LOOP_SQRT_ACCEL_MAX_DPS2      (720.0f)
+#endif
+
 extern PID_Controller angle_pid_roll;
 extern PID_Controller angle_pid_pitch;
 extern PID_Controller angle_pid_yaw;
@@ -25,11 +37,30 @@ typedef struct
     float pitch_rate_final_dps;
 } AngleLoopRateFeedforwardDiag_t;
 
+typedef struct
+{
+    float roll_angle_error_deg;
+    float roll_linear_p_rate_dps;
+    float roll_sqrt_rate_dps;
+    float roll_selected_rate_dps;
+    float roll_rate_ff_dps;
+    float roll_rate_total_raw_dps;
+    float roll_rate_final_dps;
+    float pitch_angle_error_deg;
+    float pitch_linear_p_rate_dps;
+    float pitch_sqrt_rate_dps;
+    float pitch_selected_rate_dps;
+    float pitch_rate_ff_dps;
+    float pitch_rate_total_raw_dps;
+    float pitch_rate_final_dps;
+} AngleLoopSqrtDiag_t;
+
 float Angle_WrapDeg180(float angle_deg);
 void Angle_Loop_InitTiming(void);
 void Angle_Loop_Set_Rate_Feedforward(float roll_dps, float pitch_dps);
 void Angle_Loop_Reset_Rate_Feedforward(void);
 void Angle_Loop_Get_Rate_Feedforward_Diag(AngleLoopRateFeedforwardDiag_t *diag);
+void Angle_Loop_Get_Sqrt_Diag(AngleLoopSqrtDiag_t *diag);
 void Angle_Loop_Reset_Rate_Cmd_Lpf(void);
 void Angle_Loop_Update(float target_roll,
                        float target_pitch,
