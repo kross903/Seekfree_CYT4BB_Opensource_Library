@@ -13,7 +13,7 @@
 #include <string.h>
 
 /* 盲盒任务统一入口：起飞后360度预扫 + 缓慢降落。 */
-#define FLIGHT_TASK_STARTUP_SCAN_ENABLE          (1U)
+#define FLIGHT_TASK_STARTUP_SCAN_ENABLE          (0U)
 #define FLIGHT_TASK_AUTO_LAND_ENABLE             (0U)
 
 #define FLIGHT_TASK_STARTUP_WAIT_MS             (2000U)

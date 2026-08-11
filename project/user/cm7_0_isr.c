@@ -166,10 +166,6 @@ void uart1_isr (void)
         {
             uart_rx_interrupt_handler();
         }
-        else if(CommMux_IsCameraBoardMode())
-        {
-            CameraBoardLink_RxIsr();
-        }
         else
         {
             uint8 discard;
@@ -242,8 +238,7 @@ void uart5_isr (void)
 {
     if(uart_isr_mask(UART_5))            // 串口5接收中断
     {
-        
-        
+        CameraBoardLink_RxIsr();
        
     }
     else                                // 串口5发送中断

@@ -601,45 +601,35 @@ void CameraBoardLink_MainInit(void)
     s_time_ready = 0U;
     s_time_us = 0ULL;
     s_time_cycle_remainder = 0U;
-    s_mode_active = 0U;
+    s_mode_active = 1U;
     s_state_sequence = 0U;
-    s_reset_generation = 0U;
+    s_reset_generation = 1U;
     s_tx_sequence = 0U;
     s_state_history_head = 0U;
     s_state_history_count = 0U;
     memset(s_state_history, 0, sizeof(s_state_history));
     CameraBoardLink_ResetSession(1U);
+    uart_init(CAMERA_BOARD_UART_INDEX,
+              CAMERA_BOARD_UART_BAUDRATE,
+              CAMERA_BOARD_UART_TX_PIN,
+              CAMERA_BOARD_UART_RX_PIN);
+    uart_rx_interrupt(CAMERA_BOARD_UART_INDEX, 1U);
     (void)CameraBoardLink_TimeNowUs();
+    s_last_state_tx_us = CameraBoardLink_TimeNowUs() -
+                         CAMERA_BOARD_STATE_PERIOD_US;
 }
 
 void CameraBoardLink_MainTask(void)
 {
     uint8 mode_changed = CommMux_Service(Flight_Control_Is_Armed());
-    uint8 mode_active = CommMux_IsCameraBoardMode();
     uint32 now_us = CameraBoardLink_TimeNowUs();
 
     if(mode_changed)
     {
         Vofa_ClearRxState();
     }
-    if(mode_active != s_mode_active)
-    {
-        s_mode_active = mode_active;
-        CameraBoardLink_ResetSession(1U);
-        if(s_mode_active)
-        {
-            s_reset_generation++;
-            s_last_state_tx_us = now_us - CAMERA_BOARD_STATE_PERIOD_US;
-        }
-    }
 
     s_diag.mode_active = s_mode_active;
-    if(!s_mode_active)
-    {
-        s_diag.online = 0U;
-        return;
-    }
-
     CameraBoardLink_ServiceRx();
     CameraBoardLink_ServiceTx();
     if((uint32)(now_us - s_last_state_tx_us) >= CAMERA_BOARD_STATE_PERIOD_US)

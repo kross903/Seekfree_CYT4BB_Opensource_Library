@@ -3,10 +3,10 @@
 
 #include "zf_common_headfile.h"
 
-#define CAMERA_BOARD_UART_INDEX                 (UART_1)
+#define CAMERA_BOARD_UART_INDEX                 (UART_5)
 #define CAMERA_BOARD_UART_BAUDRATE              (115200U)
-#define CAMERA_BOARD_UART_TX_PIN                (UART1_TX_P04_1)
-#define CAMERA_BOARD_UART_RX_PIN                (UART1_RX_P04_0)
+#define CAMERA_BOARD_UART_TX_PIN                (UART5_TX_P02_1)
+#define CAMERA_BOARD_UART_RX_PIN                (UART5_RX_P02_0)
 
 #define CAMERA_BOARD_PROTOCOL_SOF1              (0xA5U)
 #define CAMERA_BOARD_PROTOCOL_SOF2              (0x5AU)

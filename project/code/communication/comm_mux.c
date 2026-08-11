@@ -32,12 +32,7 @@ static CommMuxMode_t CommMux_ReadSwitchMode(void)
     {
         return COMM_MUX_MODE_ASSISTANT_IMAGE;
     }
-    if((switch_0 == GPIO_HIGH) && (switch_1 == GPIO_HIGH))
-    {
-        return COMM_MUX_MODE_VOFA;
-    }
-
-    return COMM_MUX_MODE_CAMERA_BOARD;
+    return COMM_MUX_MODE_VOFA;
 }
 
 static uint8 CommMux_IsValidMode(CommMuxMode_t mode)
