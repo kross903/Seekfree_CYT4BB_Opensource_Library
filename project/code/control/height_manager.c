@@ -46,17 +46,20 @@ extern volatile uint8 armed;
 #define TOF_REJECT_INVALID_FRAMES         10U
 
 /*
- * ToF / optical-flow install compensation.
+ * ToF / optical-flow installation compensation.
  *
- * Axis convention used here:
- *   - Y is the body pitch axis.
- *   - ToF is mounted at +Y from body center by 7cm.
- *   - optical flow is mounted at -Y from body center by 7cm.
- *   - ToF beam is tilted toward +Y.
+ * The two ToF sensors are symmetric about the IMU/body reference point:
+ *   - T1 is at +Y and its beam tilts outward toward +Y by 15 degrees.
+ *   - T2 is at -Y and its beam tilts outward toward -Y by 15 degrees.
+ *
+ * The optical-flow installation remains at -Y.  The signs follow the
+ * existing body-axis convention used by body_y_down_offset_cm().
  */
-#define TOF_SENSOR_OFFSET_Y_CM            (7.0f)
+#define TOF1_SENSOR_OFFSET_Y_CM           (+14.0f)
+#define TOF2_SENSOR_OFFSET_Y_CM           (-14.0f)
+#define TOF1_SENSOR_TILT_Y_DEG            (+15.0f)
+#define TOF2_SENSOR_TILT_Y_DEG            (-15.0f)
 #define FLOW_SENSOR_OFFSET_Y_CM           (-7.0f)
-#define TOF_SENSOR_TILT_Y_DEG             (15.0f)
 #define TOF_BEAM_VERTICAL_COS_MIN         (0.20f)
 
 HeightFusionResult_t g_height_result = {0};
@@ -502,11 +505,13 @@ static float body_y_down_offset_cm(float offset_y_cm, float roll_deg, float pitc
     return offset_y_cm * sinf(roll_rad) * cosf(pitch_rad);
 }
 
-static float tof_beam_vertical_projection(float roll_deg, float pitch_deg)
+static float tof_beam_vertical_projection(float roll_deg,
+                                          float pitch_deg,
+                                          float beam_tilt_y_deg)
 {
     float roll_rad = roll_deg * DEG2RAD;
     float pitch_rad = pitch_deg * DEG2RAD;
-    float tilt_rad = TOF_SENSOR_TILT_Y_DEG * DEG2RAD;
+    float tilt_rad = beam_tilt_y_deg * DEG2RAD;
     float projection;
 
     projection = cosf(pitch_rad) *
@@ -521,7 +526,11 @@ static float tof_beam_vertical_projection(float roll_deg, float pitch_deg)
     return projection;
 }
 
-float HeightManager_GetCenterHeightFromTofCm(float tof_los_cm, float roll_deg, float pitch_deg)
+static float height_get_center_height_from_tof_cm(float tof_los_cm,
+                                                  float roll_deg,
+                                                  float pitch_deg,
+                                                  float sensor_offset_y_cm,
+                                                  float beam_tilt_y_deg)
 {
     float tof_vertical_cm;
     float tof_down_offset_cm;
@@ -532,24 +541,48 @@ float HeightManager_GetCenterHeightFromTofCm(float tof_los_cm, float roll_deg, f
         return 0.0f;
     }
 
-    tof_vertical_cm = tof_los_cm * tof_beam_vertical_projection(roll_deg, pitch_deg);
-    tof_down_offset_cm = body_y_down_offset_cm(TOF_SENSOR_OFFSET_Y_CM, roll_deg, pitch_deg);
+    tof_vertical_cm = tof_los_cm * tof_beam_vertical_projection(roll_deg,
+                                                                pitch_deg,
+                                                                beam_tilt_y_deg);
+    tof_down_offset_cm = body_y_down_offset_cm(sensor_offset_y_cm,
+                                               roll_deg,
+                                               pitch_deg);
     center_height_cm = tof_vertical_cm + tof_down_offset_cm;
 
     return center_height_cm > 0.0f ? center_height_cm : 0.0f;
 }
 
+static float height_get_flow_height_from_center_cm(float center_height_cm,
+                                                   float roll_deg,
+                                                   float pitch_deg)
+{
+    float flow_down_offset_cm;
+
+    flow_down_offset_cm = body_y_down_offset_cm(FLOW_SENSOR_OFFSET_Y_CM,
+                                                 roll_deg,
+                                                 pitch_deg);
+    return (center_height_cm - flow_down_offset_cm) > 0.0f ?
+           (center_height_cm - flow_down_offset_cm) : 0.0f;
+}
+
+/* Public helper retained for callers that use the T1 installation geometry. */
+float HeightManager_GetCenterHeightFromTofCm(float tof_los_cm, float roll_deg, float pitch_deg)
+{
+    return height_get_center_height_from_tof_cm(tof_los_cm,
+                                                roll_deg,
+                                                pitch_deg,
+                                                TOF1_SENSOR_OFFSET_Y_CM,
+                                                TOF1_SENSOR_TILT_Y_DEG);
+}
+
 float HeightManager_GetFlowHeightFromTofCm(float tof_los_cm, float roll_deg, float pitch_deg)
 {
     float center_height_cm;
-    float flow_down_offset_cm;
-    float flow_height_cm;
 
     center_height_cm = HeightManager_GetCenterHeightFromTofCm(tof_los_cm, roll_deg, pitch_deg);
-    flow_down_offset_cm = body_y_down_offset_cm(FLOW_SENSOR_OFFSET_Y_CM, roll_deg, pitch_deg);
-    flow_height_cm = center_height_cm - flow_down_offset_cm;
-
-    return flow_height_cm > 0.0f ? flow_height_cm : 0.0f;
+    return height_get_flow_height_from_center_cm(center_height_cm,
+                                                 roll_deg,
+                                                 pitch_deg);
 }
 
 static void update_tof_height_filter(float tof_los_cm,
@@ -672,19 +705,12 @@ static void height_start_or_update_candidate(float raw_los_cm,
     }
 }
 
-static void height_process_tof_sample(float raw_los_cm)
+static void height_process_tof_sample(float raw_los_cm,
+                                      float center_height_cm,
+                                      float flow_height_cm)
 {
-    float center_height_cm;
-    float flow_height_cm;
     float accepted_age_s;
     float predicted_velocity_cms;
-
-    center_height_cm = HeightManager_GetCenterHeightFromTofCm(raw_los_cm,
-                                                               current_roll,
-                                                               current_pitch);
-    flow_height_cm = HeightManager_GetFlowHeightFromTofCm(raw_los_cm,
-                                                          current_roll,
-                                                          current_pitch);
 
     s_height_diag.tof_raw_cm = raw_los_cm;
     s_height_diag.tof_comp_cm = center_height_cm;
@@ -868,7 +894,18 @@ void HeightManager_Task_10ms(void)
     DualTofSample_t tof_sample;
     uint8 tof_raw_new_sample = 0U;
     uint8 tof_sample_accepted = 0U;
+    uint8 tof1_range_valid;
+    uint8 tof2_range_valid;
     float raw_los_cm;
+    float tof1_raw_cm;
+    float tof2_raw_cm;
+    float tof1_center_cm;
+    float tof2_center_cm;
+    float tof1_flow_cm;
+    float tof2_flow_cm;
+    float selected_center_cm;
+    float selected_flow_cm;
+    DualTofSource_t selected_source;
     float auto_land_open_loop_throttle;
 
     height_increment_u16(&s_tof_raw_age_ticks);
@@ -899,21 +936,97 @@ void HeightManager_Task_10ms(void)
 
     if(tof_sample.selected_new_sample && tof_sample.selected_valid)
     {
-        raw_los_cm = (float)tof_sample.selected_mm * 0.1f;
-        tof_raw_new_sample = 1U;
-        s_tof_sample_sequence++;
-        if(s_tof_sample_sequence >= 1000000U)
-        {
-            s_tof_sample_sequence = 0U;
-        }
-        s_height_diag.tof_raw_cm = raw_los_cm;
-        s_height_diag.tof_selected_cm = raw_los_cm;
+        tof1_raw_cm = (float)tof_sample.tof1_raw_mm * 0.1f;
+        tof2_raw_cm = (float)tof_sample.tof2_raw_mm * 0.1f;
+        tof1_range_valid = (uint8)(tof_sample.tof1_valid &&
+                                   (tof1_raw_cm >= TOF_VALID_MIN_M * 100.0f) &&
+                                   (tof1_raw_cm <= TOF_VALID_MAX_M * 100.0f));
+        tof2_range_valid = (uint8)(tof_sample.tof2_valid &&
+                                   (tof2_raw_cm >= TOF_VALID_MIN_M * 100.0f) &&
+                                   (tof2_raw_cm <= TOF_VALID_MAX_M * 100.0f));
+        selected_source = DUAL_TOF_SOURCE_NONE;
+        selected_center_cm = 0.0f;
+        selected_flow_cm = 0.0f;
 
-        if(raw_los_cm >= TOF_VALID_MIN_M * 100.0f &&
-           raw_los_cm <= TOF_VALID_MAX_M * 100.0f)
+        if(tof1_range_valid)
         {
+            tof1_center_cm = height_get_center_height_from_tof_cm(tof1_raw_cm,
+                                                                  current_roll,
+                                                                  current_pitch,
+                                                                  TOF1_SENSOR_OFFSET_Y_CM,
+                                                                  TOF1_SENSOR_TILT_Y_DEG);
+            tof1_flow_cm = height_get_flow_height_from_center_cm(tof1_center_cm,
+                                                                 current_roll,
+                                                                 current_pitch);
+        }
+        if(tof2_range_valid)
+        {
+            tof2_center_cm = height_get_center_height_from_tof_cm(tof2_raw_cm,
+                                                                  current_roll,
+                                                                  current_pitch,
+                                                                  TOF2_SENSOR_OFFSET_Y_CM,
+                                                                  TOF2_SENSOR_TILT_Y_DEG);
+            tof2_flow_cm = height_get_flow_height_from_center_cm(tof2_center_cm,
+                                                                 current_roll,
+                                                                 current_pitch);
+        }
+
+        /* Select the larger height after each ToF has been mapped to the
+         * common IMU/body reference point. */
+        if(tof1_range_valid && tof2_range_valid)
+        {
+            if(tof1_center_cm > tof2_center_cm)
+            {
+                raw_los_cm = tof1_raw_cm;
+                selected_center_cm = tof1_center_cm;
+                selected_flow_cm = tof1_flow_cm;
+                selected_source = DUAL_TOF_SOURCE_TOF1;
+            }
+            else if(tof2_center_cm > tof1_center_cm)
+            {
+                raw_los_cm = tof2_raw_cm;
+                selected_center_cm = tof2_center_cm;
+                selected_flow_cm = tof2_flow_cm;
+                selected_source = DUAL_TOF_SOURCE_TOF2;
+            }
+            else
+            {
+                raw_los_cm = tof1_raw_cm;
+                selected_center_cm = tof1_center_cm;
+                selected_flow_cm = tof1_flow_cm;
+                selected_source = DUAL_TOF_SOURCE_EQUAL;
+            }
+        }
+        else if(tof1_range_valid)
+        {
+            raw_los_cm = tof1_raw_cm;
+            selected_center_cm = tof1_center_cm;
+            selected_flow_cm = tof1_flow_cm;
+            selected_source = DUAL_TOF_SOURCE_TOF1;
+        }
+        else if(tof2_range_valid)
+        {
+            raw_los_cm = tof2_raw_cm;
+            selected_center_cm = tof2_center_cm;
+            selected_flow_cm = tof2_flow_cm;
+            selected_source = DUAL_TOF_SOURCE_TOF2;
+        }
+
+        if(selected_source != DUAL_TOF_SOURCE_NONE)
+        {
+            tof_raw_new_sample = 1U;
+            s_tof_sample_sequence++;
+            if(s_tof_sample_sequence >= 1000000U)
+            {
+                s_tof_sample_sequence = 0U;
+            }
+            s_height_diag.tof_source = (uint8)selected_source;
+            s_height_diag.tof_raw_cm = raw_los_cm;
+            s_height_diag.tof_selected_cm = raw_los_cm;
             s_tof_raw_age_ticks = 0U;
-            height_process_tof_sample(raw_los_cm);
+            height_process_tof_sample(raw_los_cm,
+                                      selected_center_cm,
+                                      selected_flow_cm);
             tof_sample_accepted = (uint8)(tof_valid &&
                                           s_tof_state == HEIGHT_TOF_STATE_LIVE &&
                                           s_tof_accepted_age_ticks == 0U);
