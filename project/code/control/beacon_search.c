@@ -492,7 +492,7 @@ void BeaconSearch_Tick(uint16 elapsed_ms,
     }
 
     eligible = (uint8)(angle_mode && flight_ready &&
-                       !FlightAutoLand_IsStartupRecognitionBlocked() &&
+                       !BlindBoxTasks_IsBeaconSearchPaused() &&
                        velocity_loop_enabled &&
                        (NULL != stability_input) &&
                        stability_input->position_loop_enabled);
@@ -614,7 +614,7 @@ void BeaconSearch_OnObservationFrame(
     uint8 trusted_track_id;
 
     if((NULL == packet) || !s_eligible ||
-       FlightAutoLand_IsStartupRecognitionBlocked())
+       BlindBoxTasks_IsBeaconSearchPaused())
     {
         return;
     }
@@ -972,14 +972,14 @@ float BeaconSearch_LimitYawRate(float yaw_rate_dps)
     return yaw_rate_dps;
 }
 
-uint8 BeaconSearch_IsStartupRecognitionBlocked(void)
+uint8 BeaconSearch_IsPausedByBlindBoxTask(void)
 {
-    return FlightAutoLand_IsStartupRecognitionBlocked();
+    return BlindBoxTasks_IsBeaconSearchPaused();
 }
 
 uint8 BeaconSearch_GetFrameFlags(void)
 {
-    uint8 frame_flags = FlightAutoLand_GetFrameFlags();
+    uint8 frame_flags = BlindBoxTasks_GetFrameFlags();
 
     if((BEACON_SEARCH_FAILED == s_state) ||
        ((BEACON_SEARCH_VERIFYING == s_state) && s_verify_from_failed))

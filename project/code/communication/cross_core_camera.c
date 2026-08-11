@@ -935,7 +935,7 @@ void CrossCoreCamera_ControlCorePublishInput(float roll_deg,
            sizeof(s_control_binary_thresholds));
     g_shared_vision_input->beacon_recognition_enabled =
         (Flight_Takeoff_Is_Active() ||
-         BeaconSearch_IsStartupRecognitionBlocked()) ? 0U : 1U;
+         BeaconSearch_IsPausedByBlindBoxTask()) ? 0U : 1U;
     g_shared_vision_input->seq++;
     CrossCoreCamera_CleanInput();
 }

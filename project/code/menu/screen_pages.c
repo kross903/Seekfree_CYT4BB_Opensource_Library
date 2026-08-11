@@ -398,17 +398,17 @@ typedef struct
     uint8 takeoff_state;
     float takeoff_progress;
     FlightTakeoffDiag takeoff_diag;
-    FlightAutoLandDiag_t auto_land_diag;
+    BlindBoxTasksDiag_t auto_land_diag;
 } MonitorViewHudData;
 
-static const char *ui_monitor_auto_land_text(const FlightAutoLandDiag_t *diag)
+static const char *ui_monitor_auto_land_text(const BlindBoxTasksDiag_t *diag)
 {
     if(diag == NULL)
     {
         return NULL;
     }
 
-    switch((FlightAutoLandState_t)diag->state)
+    switch((BlindBoxTasksState_t)diag->state)
     {
         case AUTO_LAND_CONFIRMING: return "LAND CHECK 5S";
         case AUTO_LAND_ALIGNING:   return "LAND ALIGN";
@@ -474,7 +474,7 @@ static uint16 ui_monitor_hint_color(uint8 armed,
                                     uint32 imu_fault_mask,
                                     const char *esc_report_text,
                                     uint8 esc_active_fault,
-                                    const FlightAutoLandDiag_t *auto_land_diag)
+                                    const BlindBoxTasksDiag_t *auto_land_diag)
 {
     if(esc_report_text != NULL) return esc_active_fault ? RGB565_RED : RGB565_YELLOW;
     if(auto_land_diag != NULL && auto_land_diag->state == AUTO_LAND_OPEN_LOOP) return RGB565_RED;
@@ -499,7 +499,7 @@ static void ui_monitor_fill_view_hud(const MonitorRuntimeSnapshot *snapshot, Mon
     data->esc_status_stale = esc_status.stale;
     data->esc_active_fault = small_driver_esc_has_active_fault();
     data->esc_report_text = Flight_Safety_GetEscReportText();
-    FlightAutoLand_GetDiag(&data->auto_land_diag);
+    BlindBoxTasks_GetDiag(&data->auto_land_diag);
     auto_land_text = ui_monitor_auto_land_text(&data->auto_land_diag);
 
     data->mode_text = ui_monitor_mode_text(snapshot->control_mode);

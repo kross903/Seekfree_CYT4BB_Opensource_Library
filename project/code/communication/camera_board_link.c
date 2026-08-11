@@ -555,7 +555,7 @@ static void CameraBoardLink_SendMainState(void)
         flags |= CAMERA_BOARD_MAIN_FLAG_HEIGHT_VALID;
     }
     if(!Flight_Takeoff_Is_Active() &&
-       !BeaconSearch_IsStartupRecognitionBlocked())
+       !BeaconSearch_IsPausedByBlindBoxTask())
     {
         flags |= CAMERA_BOARD_MAIN_FLAG_BEACON_ENABLE;
     }

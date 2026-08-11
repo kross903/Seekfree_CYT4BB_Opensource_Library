@@ -969,10 +969,10 @@ void HeightManager_Task_10ms(void)
             s_auto_landing_touchdown_ticks = 0U;
         }
     }
-    FlightAutoLand_HeightTick_10ms();
+    BlindBoxTasks_HeightTick_10ms();
     height_publish_tof_snapshot(tof_raw_new_sample);
 
-    if(FlightAutoLand_GetThrottleOverride(&auto_land_open_loop_throttle))
+    if(BlindBoxTasks_GetThrottleOverride(&auto_land_open_loop_throttle))
     {
         (void)auto_land_open_loop_throttle;
         HeightSpeedPID_output = 0.0f;

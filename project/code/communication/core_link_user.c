@@ -454,7 +454,7 @@ static void core_link_user_build_beacon_observations(
                 core_link_user_deg_to_ddeg_i16(car_yaw_rel_uav_deg);
         }
         if(!Flight_Takeoff_Is_Active() &&
-           !BeaconSearch_IsStartupRecognitionBlocked())
+           !BeaconSearch_IsPausedByBlindBoxTask())
         {
             for(i = 0U; (i < fusion_snapshot.target_count) &&
                         (packet->count < CORE_LINK_BEACON_OBSERVATION_MAX_COUNT);
@@ -503,7 +503,7 @@ static void core_link_user_build_beacon_observations(
 #else
     VisionRuntime_GetBeaconSlots(slots, VISION_RUNTIME_BEACON_SLOT_COUNT);
     if(Flight_Takeoff_Is_Active() ||
-       BeaconSearch_IsStartupRecognitionBlocked())
+       BeaconSearch_IsPausedByBlindBoxTask())
     {
         memset(slots, 0, sizeof(slots));
     }
@@ -645,7 +645,7 @@ static void core_link_user_clear_remote_events(void)
 void core_link_user_init (void)
 {
     BeaconSearch_Init();
-    FlightAutoLand_Init();
+    BlindBoxTasks_Init();
     core_link_user_clear_remote_events();
     s_core_link_user_key_flag_remote = 0;
     s_core_link_user_screen_mirror_enabled = 0;
@@ -780,7 +780,7 @@ void core_link_user_tick (uint16 elapsed_ms)
                       car_motion_valid,
                       car_target_valid,
                       &search_stability);
-    FlightAutoLand_Tick(elapsed_ms);
+    BlindBoxTasks_Tick(elapsed_ms);
 }
 
 void core_link_user_get_beacon_diag(CoreLinkBeaconDiag_t *diag)

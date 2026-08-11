@@ -795,7 +795,7 @@ static uint8 control_task_handle_disarmed(void)
 
 static uint8 control_task_handle_auto_land_disarm(void)
 {
-    if(!FlightAutoLand_TakeDisarmRequest())
+    if(!BlindBoxTasks_TakeDisarmRequest())
     {
         return 0U;
     }
@@ -850,7 +850,7 @@ static void control_task_update_cruise_throttle(uint8 takeoff_active)
         Throttle_Runtime_Ramp(target_throttle, &current_throttle, THROTTLE_RAMP_RATE, CONTROL_DT_MS);
         base_throttle = current_throttle;
     }
-    if(FlightAutoLand_GetThrottleOverride(&landing_throttle))
+    if(BlindBoxTasks_GetThrottleOverride(&landing_throttle))
     {
         target_throttle = landing_throttle;
         current_throttle = landing_throttle;
@@ -1010,7 +1010,7 @@ static void control_task_update_velocity_target(uint8 takeoff_active)
 
 static void control_task_update_angle_loop(void)
 {
-    FlightAutoLand_ControlStep(0.002f, current_yaw, &target_angle_yaw);
+    BlindBoxTasks_ControlStep(0.002f, current_yaw, &target_angle_yaw);
     BeaconSearch_ControlStep(0.002f, current_yaw, &target_angle_yaw);
     Angle_Loop_Update(target_angle_roll,
                       target_angle_pitch,
@@ -1019,7 +1019,7 @@ static void control_task_update_angle_loop(void)
                       current_pitch,
                       current_yaw);
     target_yaw_rate = BeaconSearch_LimitYawRate(target_yaw_rate);
-    target_yaw_rate = FlightAutoLand_LimitYawRate(target_yaw_rate);
+    target_yaw_rate = BlindBoxTasks_LimitYawRate(target_yaw_rate);
 }
 
 static void control_task_update_rate_and_mixer(void)

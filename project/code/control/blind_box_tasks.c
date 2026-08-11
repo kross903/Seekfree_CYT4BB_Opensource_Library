@@ -1,4 +1,4 @@
-#include "control/flight_auto_land.h"
+#include "control/blind_box_tasks.h"
 
 #include "common/PIT_Demo.h"
 #include "control/beacon_search.h"
@@ -13,14 +13,14 @@
 #include <string.h>
 
 /* 盲盒任务统一入口：起飞后360度预扫 + 缓慢降落。 */
-#define FLIGHT_TASK_STARTUP_SCAN_ENABLE          (0U)
-#define FLIGHT_TASK_AUTO_LAND_ENABLE             (0U)
+#define BLIND_BOX_TASK_STARTUP_SCAN_ENABLE          (0U)
+#define BLIND_BOX_TASK_AUTO_LAND_ENABLE             (0U)
 
-#define FLIGHT_TASK_STARTUP_WAIT_MS             (2000U)
-#define FLIGHT_TASK_STARTUP_SCAN_ANGLE_DEG       (360.0f)
-#define FLIGHT_TASK_STARTUP_SETTLE_MS           (1000U)
-#define FLIGHT_TASK_STARTUP_YAW_RATE_DPS         (90.0f)
-#define FLIGHT_TASK_STARTUP_MAX_YAW_STEP_DEG     (10.0f)
+#define BLIND_BOX_TASK_STARTUP_WAIT_MS             (2000U)
+#define BLIND_BOX_TASK_STARTUP_SCAN_ANGLE_DEG       (360.0f)
+#define BLIND_BOX_TASK_STARTUP_SETTLE_MS           (1000U)
+#define BLIND_BOX_TASK_STARTUP_YAW_RATE_DPS         (90.0f)
+#define BLIND_BOX_TASK_STARTUP_MAX_YAW_STEP_DEG     (10.0f)
 
 #define AUTO_LAND_CONFIRM_MS                    (5000U)
 #define AUTO_LAND_STABLE_MS                      (500U)
@@ -32,31 +32,31 @@
 
 typedef enum
 {
-    FLIGHT_TASK_STARTUP_CONTROL_NONE = 0,
-    FLIGHT_TASK_STARTUP_CONTROL_SPIN,
-    FLIGHT_TASK_STARTUP_CONTROL_HOLD
-} FlightAutoLandStartupControl_t;
+    BLIND_BOX_TASK_STARTUP_CONTROL_NONE = 0,
+    BLIND_BOX_TASK_STARTUP_CONTROL_SPIN,
+    BLIND_BOX_TASK_STARTUP_CONTROL_HOLD
+} BlindBoxTasksStartupControl_t;
 
 typedef enum
 {
-    FLIGHT_TASK_STARTUP_WAIT_READY = 0,
-    FLIGHT_TASK_STARTUP_HOLD_BEFORE,
-    FLIGHT_TASK_STARTUP_SPIN,
-    FLIGHT_TASK_STARTUP_HOLD_AFTER,
-    FLIGHT_TASK_STARTUP_COMPLETE
-} FlightAutoLandStartupPhase_t;
+    BLIND_BOX_TASK_STARTUP_WAIT_READY = 0,
+    BLIND_BOX_TASK_STARTUP_HOLD_BEFORE,
+    BLIND_BOX_TASK_STARTUP_SPIN,
+    BLIND_BOX_TASK_STARTUP_HOLD_AFTER,
+    BLIND_BOX_TASK_STARTUP_COMPLETE
+} BlindBoxTasksStartupPhase_t;
 
-static volatile FlightAutoLandStartupControl_t s_startup_control =
-    FLIGHT_TASK_STARTUP_CONTROL_NONE;
-static volatile FlightAutoLandStartupPhase_t s_startup_phase =
-    FLIGHT_TASK_STARTUP_WAIT_READY;
+static volatile BlindBoxTasksStartupControl_t s_startup_control =
+    BLIND_BOX_TASK_STARTUP_CONTROL_NONE;
+static volatile BlindBoxTasksStartupPhase_t s_startup_phase =
+    BLIND_BOX_TASK_STARTUP_WAIT_READY;
 static volatile uint8 s_startup_turn_complete_event = 0U;
 static uint16 s_startup_elapsed_ms = 0U;
 static float s_startup_scan_start_yaw_deg = 0.0f;
 static float s_startup_command_progress_deg = 0.0f;
 static float s_startup_turn_progress_deg = 0.0f;
 
-static volatile FlightAutoLandState_t s_state = AUTO_LAND_IDLE;
+static volatile BlindBoxTasksState_t s_state = AUTO_LAND_IDLE;
 static volatile uint8 s_trigger_reason = BEACON_SEARCH_FAILURE_NONE;
 static volatile uint8 s_block_reason = AUTO_LAND_BLOCK_NONE;
 static volatile uint8 s_disarm_request = 0U;
@@ -72,7 +72,7 @@ static volatile uint8 s_landing_point_valid = 0U;
 static volatile uint8 s_fused_velocity_valid = 0U;
 static volatile uint8 s_was_armed = 0U;
 
-static uint16 flight_auto_land_add_ms(uint16 value, uint16 elapsed_ms)
+static uint16 blind_box_tasks_add_ms(uint16 value, uint16 elapsed_ms)
 {
     if(value <= (uint16)(60000U - elapsed_ms))
     {
@@ -81,7 +81,7 @@ static uint16 flight_auto_land_add_ms(uint16 value, uint16 elapsed_ms)
     return 60000U;
 }
 
-static uint16 flight_auto_land_startup_add_ms(uint16 value, uint16 elapsed_ms)
+static uint16 blind_box_tasks_startup_add_ms(uint16 value, uint16 elapsed_ms)
 {
     if(value <= (uint16)(60000U - elapsed_ms))
     {
@@ -90,7 +90,7 @@ static uint16 flight_auto_land_startup_add_ms(uint16 value, uint16 elapsed_ms)
     return 60000U;
 }
 
-static float flight_auto_land_wrap_deg(float angle_deg)
+static float blind_box_tasks_wrap_deg(float angle_deg)
 {
     while(angle_deg > 180.0f)
     {
@@ -103,28 +103,28 @@ static float flight_auto_land_wrap_deg(float angle_deg)
     return angle_deg;
 }
 
-static uint8 flight_auto_land_yaw_at_endpoint(float current_yaw_deg,
+static uint8 blind_box_tasks_yaw_at_endpoint(float current_yaw_deg,
                                               float endpoint_yaw_deg)
 {
-    return (uint8)(fabsf(flight_auto_land_wrap_deg(endpoint_yaw_deg -
+    return (uint8)(fabsf(blind_box_tasks_wrap_deg(endpoint_yaw_deg -
                                                    current_yaw_deg)) <=
-                   FLIGHT_TASK_STARTUP_MAX_YAW_STEP_DEG);
+                   BLIND_BOX_TASK_STARTUP_MAX_YAW_STEP_DEG);
 }
 
-static uint8 flight_auto_land_startup_is_active(void)
+static uint8 blind_box_tasks_startup_is_active(void)
 {
-    return (uint8)(FLIGHT_TASK_STARTUP_SCAN_ENABLE &&
-                   (((FLIGHT_TASK_STARTUP_WAIT_READY == s_startup_phase) &&
+    return (uint8)(BLIND_BOX_TASK_STARTUP_SCAN_ENABLE &&
+                   (((BLIND_BOX_TASK_STARTUP_WAIT_READY == s_startup_phase) &&
                      Flight_Takeoff_Is_Active()) ||
-                    (FLIGHT_TASK_STARTUP_HOLD_BEFORE == s_startup_phase) ||
-                    (FLIGHT_TASK_STARTUP_SPIN == s_startup_phase) ||
-                    (FLIGHT_TASK_STARTUP_HOLD_AFTER == s_startup_phase)));
+                    (BLIND_BOX_TASK_STARTUP_HOLD_BEFORE == s_startup_phase) ||
+                    (BLIND_BOX_TASK_STARTUP_SPIN == s_startup_phase) ||
+                    (BLIND_BOX_TASK_STARTUP_HOLD_AFTER == s_startup_phase)));
 }
 
-static void flight_auto_land_startup_reset_runtime(void)
+static void blind_box_tasks_startup_reset_runtime(void)
 {
-    s_startup_control = FLIGHT_TASK_STARTUP_CONTROL_NONE;
-    s_startup_phase = FLIGHT_TASK_STARTUP_WAIT_READY;
+    s_startup_control = BLIND_BOX_TASK_STARTUP_CONTROL_NONE;
+    s_startup_phase = BLIND_BOX_TASK_STARTUP_WAIT_READY;
     s_startup_turn_complete_event = 0U;
     s_startup_elapsed_ms = 0U;
     s_startup_scan_start_yaw_deg = 0.0f;
@@ -132,54 +132,54 @@ static void flight_auto_land_startup_reset_runtime(void)
     s_startup_turn_progress_deg = 0.0f;
 }
 
-static void flight_auto_land_startup_tick(uint16 elapsed_ms)
+static void blind_box_tasks_startup_tick(uint16 elapsed_ms)
 {
-#if FLIGHT_TASK_STARTUP_SCAN_ENABLE
+#if BLIND_BOX_TASK_STARTUP_SCAN_ENABLE
     switch(s_startup_phase)
     {
-    case FLIGHT_TASK_STARTUP_WAIT_READY:
+    case BLIND_BOX_TASK_STARTUP_WAIT_READY:
         if(Flight_Takeoff_Is_Active())
         {
-            s_startup_control = FLIGHT_TASK_STARTUP_CONTROL_HOLD;
+            s_startup_control = BLIND_BOX_TASK_STARTUP_CONTROL_HOLD;
             s_startup_elapsed_ms = 0U;
-            s_startup_phase = FLIGHT_TASK_STARTUP_HOLD_BEFORE;
+            s_startup_phase = BLIND_BOX_TASK_STARTUP_HOLD_BEFORE;
         }
         break;
 
-    case FLIGHT_TASK_STARTUP_HOLD_BEFORE:
-        s_startup_elapsed_ms = flight_auto_land_startup_add_ms(
+    case BLIND_BOX_TASK_STARTUP_HOLD_BEFORE:
+        s_startup_elapsed_ms = blind_box_tasks_startup_add_ms(
             s_startup_elapsed_ms, elapsed_ms);
-        if(s_startup_elapsed_ms >= FLIGHT_TASK_STARTUP_WAIT_MS)
+        if(s_startup_elapsed_ms >= BLIND_BOX_TASK_STARTUP_WAIT_MS)
         {
             s_startup_elapsed_ms = 0U;
             s_startup_turn_complete_event = 0U;
-            s_startup_control = FLIGHT_TASK_STARTUP_CONTROL_SPIN;
-            s_startup_phase = FLIGHT_TASK_STARTUP_SPIN;
+            s_startup_control = BLIND_BOX_TASK_STARTUP_CONTROL_SPIN;
+            s_startup_phase = BLIND_BOX_TASK_STARTUP_SPIN;
         }
         break;
 
-    case FLIGHT_TASK_STARTUP_SPIN:
+    case BLIND_BOX_TASK_STARTUP_SPIN:
         if(s_startup_turn_complete_event)
         {
             s_startup_turn_complete_event = 0U;
             s_startup_elapsed_ms = 0U;
-            s_startup_control = FLIGHT_TASK_STARTUP_CONTROL_HOLD;
-            s_startup_phase = FLIGHT_TASK_STARTUP_HOLD_AFTER;
+            s_startup_control = BLIND_BOX_TASK_STARTUP_CONTROL_HOLD;
+            s_startup_phase = BLIND_BOX_TASK_STARTUP_HOLD_AFTER;
         }
         break;
 
-    case FLIGHT_TASK_STARTUP_HOLD_AFTER:
-        s_startup_elapsed_ms = flight_auto_land_startup_add_ms(
+    case BLIND_BOX_TASK_STARTUP_HOLD_AFTER:
+        s_startup_elapsed_ms = blind_box_tasks_startup_add_ms(
             s_startup_elapsed_ms, elapsed_ms);
-        if(s_startup_elapsed_ms >= FLIGHT_TASK_STARTUP_SETTLE_MS)
+        if(s_startup_elapsed_ms >= BLIND_BOX_TASK_STARTUP_SETTLE_MS)
         {
-            s_startup_phase = FLIGHT_TASK_STARTUP_COMPLETE;
-            s_startup_control = FLIGHT_TASK_STARTUP_CONTROL_NONE;
+            s_startup_phase = BLIND_BOX_TASK_STARTUP_COMPLETE;
+            s_startup_control = BLIND_BOX_TASK_STARTUP_CONTROL_NONE;
             s_startup_elapsed_ms = 0U;
         }
         break;
 
-    case FLIGHT_TASK_STARTUP_COMPLETE:
+    case BLIND_BOX_TASK_STARTUP_COMPLETE:
     default:
         break;
     }
@@ -188,7 +188,7 @@ static void flight_auto_land_startup_tick(uint16 elapsed_ms)
 #endif
 }
 
-static void flight_auto_land_reset_runtime(void)
+static void blind_box_tasks_reset_runtime(void)
 {
     s_state = AUTO_LAND_IDLE;
     s_trigger_reason = BEACON_SEARCH_FAILURE_NONE;
@@ -208,7 +208,7 @@ static void flight_auto_land_reset_runtime(void)
     HeightManager_EndAutoLanding();
 }
 
-static uint8 flight_auto_land_flight_eligible(void)
+static uint8 blind_box_tasks_flight_eligible(void)
 {
     return (uint8)(armed &&
                    (control_mode == CONTROL_MODE_ANGLE) &&
@@ -218,7 +218,7 @@ static uint8 flight_auto_land_flight_eligible(void)
                    !emergency_stop_triggered);
 }
 
-static uint8 flight_auto_land_update_alignment(uint16 elapsed_ms)
+static uint8 blind_box_tasks_update_alignment(uint16 elapsed_ms)
 {
     VehicleMarkerLossDebug_t marker_loss = {0};
     PMWFlowState_t flow_state = {0};
@@ -269,7 +269,7 @@ static uint8 flight_auto_land_update_alignment(uint16 elapsed_ms)
        (s_position_error_cm <= AUTO_LAND_POSITION_GATE_CM) &&
        (s_horizontal_speed_cms <= AUTO_LAND_SPEED_GATE_CMS))
     {
-        s_stable_elapsed_ms = flight_auto_land_add_ms(s_stable_elapsed_ms,
+        s_stable_elapsed_ms = blind_box_tasks_add_ms(s_stable_elapsed_ms,
                                                        elapsed_ms);
     }
     else
@@ -279,48 +279,48 @@ static uint8 flight_auto_land_update_alignment(uint16 elapsed_ms)
     return (s_stable_elapsed_ms >= AUTO_LAND_STABLE_MS) ? 1U : 0U;
 }
 
-void FlightAutoLand_Init(void)
+void BlindBoxTasks_Init(void)
 {
     s_was_armed = 0U;
-    flight_auto_land_startup_reset_runtime();
-    flight_auto_land_reset_runtime();
+    blind_box_tasks_startup_reset_runtime();
+    blind_box_tasks_reset_runtime();
 }
 
-void FlightAutoLand_ControlStep(float dt_s,
+void BlindBoxTasks_ControlStep(float dt_s,
                                 float current_yaw_deg,
                                 volatile float *target_yaw_deg)
 {
-#if FLIGHT_TASK_STARTUP_SCAN_ENABLE
-    static FlightAutoLandStartupControl_t last_control =
-        FLIGHT_TASK_STARTUP_CONTROL_NONE;
+#if BLIND_BOX_TASK_STARTUP_SCAN_ENABLE
+    static BlindBoxTasksStartupControl_t last_control =
+        BLIND_BOX_TASK_STARTUP_CONTROL_NONE;
     static float previous_yaw_deg = 0.0f;
-    FlightAutoLandStartupControl_t control = s_startup_control;
+    BlindBoxTasksStartupControl_t control = s_startup_control;
 
     if(NULL == target_yaw_deg)
     {
         return;
     }
 
-    if(FLIGHT_TASK_STARTUP_CONTROL_NONE == control)
+    if(BLIND_BOX_TASK_STARTUP_CONTROL_NONE == control)
     {
-        last_control = FLIGHT_TASK_STARTUP_CONTROL_NONE;
+        last_control = BLIND_BOX_TASK_STARTUP_CONTROL_NONE;
         return;
     }
 
-    if(!flight_auto_land_startup_is_active())
+    if(!blind_box_tasks_startup_is_active())
     {
-        last_control = FLIGHT_TASK_STARTUP_CONTROL_NONE;
+        last_control = BLIND_BOX_TASK_STARTUP_CONTROL_NONE;
         return;
     }
 
     if(control != last_control)
     {
-        if((FLIGHT_TASK_STARTUP_CONTROL_SPIN == control) ||
-           (FLIGHT_TASK_STARTUP_CONTROL_HOLD == control))
+        if((BLIND_BOX_TASK_STARTUP_CONTROL_SPIN == control) ||
+           (BLIND_BOX_TASK_STARTUP_CONTROL_HOLD == control))
         {
             *target_yaw_deg = current_yaw_deg;
             previous_yaw_deg = current_yaw_deg;
-            if(FLIGHT_TASK_STARTUP_CONTROL_SPIN == control)
+            if(BLIND_BOX_TASK_STARTUP_CONTROL_SPIN == control)
             {
                 s_startup_scan_start_yaw_deg = current_yaw_deg;
                 s_startup_command_progress_deg = 0.0f;
@@ -331,20 +331,20 @@ void FlightAutoLand_ControlStep(float dt_s,
         last_control = control;
     }
 
-    if(FLIGHT_TASK_STARTUP_CONTROL_SPIN != control)
+    if(BLIND_BOX_TASK_STARTUP_CONTROL_SPIN != control)
     {
         return;
     }
 
     {
-        float yaw_delta_deg = flight_auto_land_wrap_deg(current_yaw_deg -
+        float yaw_delta_deg = blind_box_tasks_wrap_deg(current_yaw_deg -
                                                         previous_yaw_deg);
-        float remaining_deg = FLIGHT_TASK_STARTUP_SCAN_ANGLE_DEG -
+        float remaining_deg = BLIND_BOX_TASK_STARTUP_SCAN_ANGLE_DEG -
                               s_startup_command_progress_deg;
-        float target_step_deg = FLIGHT_TASK_STARTUP_YAW_RATE_DPS * dt_s;
+        float target_step_deg = BLIND_BOX_TASK_STARTUP_YAW_RATE_DPS * dt_s;
 
         previous_yaw_deg = current_yaw_deg;
-        if(fabsf(yaw_delta_deg) <= FLIGHT_TASK_STARTUP_MAX_YAW_STEP_DEG)
+        if(fabsf(yaw_delta_deg) <= BLIND_BOX_TASK_STARTUP_MAX_YAW_STEP_DEG)
         {
             s_startup_turn_progress_deg += yaw_delta_deg;
             if(s_startup_turn_progress_deg < 0.0f)
@@ -360,7 +360,7 @@ void FlightAutoLand_ControlStep(float dt_s,
             {
                 target_step_deg = remaining_deg;
             }
-            *target_yaw_deg = flight_auto_land_wrap_deg(*target_yaw_deg +
+            *target_yaw_deg = blind_box_tasks_wrap_deg(*target_yaw_deg +
                                                         target_step_deg);
             s_startup_command_progress_deg += target_step_deg;
         }
@@ -370,17 +370,17 @@ void FlightAutoLand_ControlStep(float dt_s,
         }
 
         if((s_startup_command_progress_deg >=
-            FLIGHT_TASK_STARTUP_SCAN_ANGLE_DEG) &&
+            BLIND_BOX_TASK_STARTUP_SCAN_ANGLE_DEG) &&
            (s_startup_turn_progress_deg >=
-            (FLIGHT_TASK_STARTUP_SCAN_ANGLE_DEG -
-             FLIGHT_TASK_STARTUP_MAX_YAW_STEP_DEG)) &&
-           flight_auto_land_yaw_at_endpoint(current_yaw_deg,
+            (BLIND_BOX_TASK_STARTUP_SCAN_ANGLE_DEG -
+             BLIND_BOX_TASK_STARTUP_MAX_YAW_STEP_DEG)) &&
+           blind_box_tasks_yaw_at_endpoint(current_yaw_deg,
                                              s_startup_scan_start_yaw_deg))
         {
-            s_startup_control = FLIGHT_TASK_STARTUP_CONTROL_HOLD;
+            s_startup_control = BLIND_BOX_TASK_STARTUP_CONTROL_HOLD;
             s_startup_turn_complete_event = 1U;
             *target_yaw_deg = s_startup_scan_start_yaw_deg;
-            last_control = FLIGHT_TASK_STARTUP_CONTROL_HOLD;
+            last_control = BLIND_BOX_TASK_STARTUP_CONTROL_HOLD;
         }
     }
 #else
@@ -390,79 +390,79 @@ void FlightAutoLand_ControlStep(float dt_s,
 #endif
 }
 
-float FlightAutoLand_LimitYawRate(float yaw_rate_dps)
+float BlindBoxTasks_LimitYawRate(float yaw_rate_dps)
 {
     if(!isfinite(yaw_rate_dps))
     {
         return 0.0f;
     }
-    if(!flight_auto_land_startup_is_active())
+    if(!blind_box_tasks_startup_is_active())
     {
         return yaw_rate_dps;
     }
-    if(yaw_rate_dps > FLIGHT_TASK_STARTUP_YAW_RATE_DPS)
+    if(yaw_rate_dps > BLIND_BOX_TASK_STARTUP_YAW_RATE_DPS)
     {
-        return FLIGHT_TASK_STARTUP_YAW_RATE_DPS;
+        return BLIND_BOX_TASK_STARTUP_YAW_RATE_DPS;
     }
-    if(yaw_rate_dps < -FLIGHT_TASK_STARTUP_YAW_RATE_DPS)
+    if(yaw_rate_dps < -BLIND_BOX_TASK_STARTUP_YAW_RATE_DPS)
     {
-        return -FLIGHT_TASK_STARTUP_YAW_RATE_DPS;
+        return -BLIND_BOX_TASK_STARTUP_YAW_RATE_DPS;
     }
     return yaw_rate_dps;
 }
 
-uint8 FlightAutoLand_IsStartupRecognitionBlocked(void)
+uint8 BlindBoxTasks_IsBeaconSearchPaused(void)
 {
-    return flight_auto_land_startup_is_active();
+    return blind_box_tasks_startup_is_active();
 }
 
-uint8 FlightAutoLand_GetFrameFlags(void)
+uint8 BlindBoxTasks_GetFrameFlags(void)
 {
-    return flight_auto_land_startup_is_active() ?
+    return blind_box_tasks_startup_is_active() ?
            CORE_LINK_BEACON_FRAME_FLAG_SEARCH_ACTIVE : 0U;
 }
 
-void FlightAutoLand_Tick(uint16 elapsed_ms)
+void BlindBoxTasks_Tick(uint16 elapsed_ms)
 {
-#if FLIGHT_TASK_AUTO_LAND_ENABLE
+#if BLIND_BOX_TASK_AUTO_LAND_ENABLE
     BeaconSearchDiag_t search_diag = {0};
 #endif
 
-    flight_auto_land_startup_tick(elapsed_ms);
+    blind_box_tasks_startup_tick(elapsed_ms);
 
     if(!armed)
     {
         s_was_armed = 0U;
-        flight_auto_land_startup_reset_runtime();
-#if FLIGHT_TASK_AUTO_LAND_ENABLE
+        blind_box_tasks_startup_reset_runtime();
+#if BLIND_BOX_TASK_AUTO_LAND_ENABLE
         if(s_state != AUTO_LAND_COMPLETE)
         {
-            flight_auto_land_reset_runtime();
+            blind_box_tasks_reset_runtime();
         }
         return;
 #else
         if(s_state != AUTO_LAND_IDLE)
         {
-            flight_auto_land_reset_runtime();
+            blind_box_tasks_reset_runtime();
         }
         return;
 #endif
     }
     if(!s_was_armed)
     {
-        flight_auto_land_startup_reset_runtime();
-#if FLIGHT_TASK_AUTO_LAND_ENABLE
-        flight_auto_land_reset_runtime();
+        blind_box_tasks_startup_reset_runtime();
+#if BLIND_BOX_TASK_AUTO_LAND_ENABLE
+        blind_box_tasks_reset_runtime();
 #endif
         s_was_armed = 1U;
     }
 
-#if FLIGHT_TASK_AUTO_LAND_ENABLE
-    if(!flight_auto_land_flight_eligible())
+#if BLIND_BOX_TASK_AUTO_LAND_ENABLE
+    if(!blind_box_tasks_flight_eligible())
     {
         if(s_state < AUTO_LAND_DESCENDING)
         {
-            flight_auto_land_reset_runtime();
+            blind_box_tasks_reset_runtime();
         }
         return;
     }
@@ -487,14 +487,14 @@ void FlightAutoLand_Tick(uint16 elapsed_ms)
     {
         if(search_diag.state == BEACON_SEARCH_TRACKING)
         {
-            flight_auto_land_reset_runtime();
+            blind_box_tasks_reset_runtime();
             return;
         }
     }
 
     if(s_state == AUTO_LAND_CONFIRMING)
     {
-        s_confirm_elapsed_ms = flight_auto_land_add_ms(s_confirm_elapsed_ms,
+        s_confirm_elapsed_ms = blind_box_tasks_add_ms(s_confirm_elapsed_ms,
                                                         elapsed_ms);
         if(s_confirm_elapsed_ms >= AUTO_LAND_CONFIRM_MS)
         {
@@ -512,7 +512,7 @@ void FlightAutoLand_Tick(uint16 elapsed_ms)
             s_stable_elapsed_ms = 0U;
             return;
         }
-        if(!flight_auto_land_update_alignment(elapsed_ms))
+        if(!blind_box_tasks_update_alignment(elapsed_ms))
         {
             if(!s_landing_point_valid)
             {
@@ -552,12 +552,12 @@ void FlightAutoLand_Tick(uint16 elapsed_ms)
 #endif
 }
 
-void FlightAutoLand_HeightTick_10ms(void)
+void BlindBoxTasks_HeightTick_10ms(void)
 {
-#if !FLIGHT_TASK_AUTO_LAND_ENABLE
+#if !BLIND_BOX_TASK_AUTO_LAND_ENABLE
     if(s_state != AUTO_LAND_IDLE)
     {
-        flight_auto_land_reset_runtime();
+        blind_box_tasks_reset_runtime();
     }
     return;
 #else
@@ -585,7 +585,7 @@ void FlightAutoLand_HeightTick_10ms(void)
 
     if(s_state == AUTO_LAND_OPEN_LOOP)
     {
-        s_open_loop_elapsed_ms = flight_auto_land_add_ms(
+        s_open_loop_elapsed_ms = blind_box_tasks_add_ms(
             s_open_loop_elapsed_ms, 10U);
         s_open_loop_throttle -= AUTO_LAND_OPEN_LOOP_STEP;
         if(s_open_loop_throttle <= SAFE_MIN_THROTTLE)
@@ -603,7 +603,7 @@ void FlightAutoLand_HeightTick_10ms(void)
 #endif
 }
 
-uint8 FlightAutoLand_IsActive(void)
+uint8 BlindBoxTasks_IsActive(void)
 {
     return (uint8)((s_state == AUTO_LAND_CONFIRMING) ||
                    (s_state == AUTO_LAND_ALIGNING) ||
@@ -612,7 +612,7 @@ uint8 FlightAutoLand_IsActive(void)
                    (s_state == AUTO_LAND_BLOCKED));
 }
 
-uint8 FlightAutoLand_TakeDisarmRequest(void)
+uint8 BlindBoxTasks_TakeDisarmRequest(void)
 {
     uint8 request;
     uint32 irq_state = __get_PRIMASK();
@@ -627,7 +627,7 @@ uint8 FlightAutoLand_TakeDisarmRequest(void)
     return request;
 }
 
-uint8 FlightAutoLand_GetThrottleOverride(float *throttle)
+uint8 BlindBoxTasks_GetThrottleOverride(float *throttle)
 {
     if((throttle == NULL) || (s_state != AUTO_LAND_OPEN_LOOP))
     {
@@ -637,7 +637,7 @@ uint8 FlightAutoLand_GetThrottleOverride(float *throttle)
     return 1U;
 }
 
-void FlightAutoLand_GetDiag(FlightAutoLandDiag_t *diag)
+void BlindBoxTasks_GetDiag(BlindBoxTasksDiag_t *diag)
 {
     HeightTofSnapshot_t tof_snapshot;
     uint32 irq_state;

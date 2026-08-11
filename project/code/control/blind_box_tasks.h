@@ -1,5 +1,5 @@
-#ifndef FLIGHT_AUTO_LAND_H
-#define FLIGHT_AUTO_LAND_H
+#ifndef BLIND_BOX_TASKS_H
+#define BLIND_BOX_TASKS_H
 
 #include "zf_common_typedef.h"
 
@@ -12,14 +12,14 @@ typedef enum
     AUTO_LAND_OPEN_LOOP,
     AUTO_LAND_COMPLETE,
     AUTO_LAND_BLOCKED
-} FlightAutoLandState_t;
+} BlindBoxTasksState_t;
 
 typedef enum
 {
     AUTO_LAND_BLOCK_NONE = 0,
     AUTO_LAND_BLOCK_NO_LAND_POINT,
     AUTO_LAND_BLOCK_NO_TOF
-} FlightAutoLandBlockReason_t;
+} BlindBoxTasksBlockReason_t;
 
 typedef struct
 {
@@ -39,20 +39,20 @@ typedef struct
     float horizontal_speed_cms;
     float target_height_cm;
     float open_loop_throttle;
-} FlightAutoLandDiag_t;
+} BlindBoxTasksDiag_t;
 
-void FlightAutoLand_Init(void);
-void FlightAutoLand_ControlStep(float dt_s,
+void BlindBoxTasks_Init(void);
+void BlindBoxTasks_ControlStep(float dt_s,
                                 float current_yaw_deg,
                                 volatile float *target_yaw_deg);
-float FlightAutoLand_LimitYawRate(float yaw_rate_dps);
-uint8 FlightAutoLand_IsStartupRecognitionBlocked(void);
-uint8 FlightAutoLand_GetFrameFlags(void);
-void FlightAutoLand_Tick(uint16 elapsed_ms);
-void FlightAutoLand_HeightTick_10ms(void);
-uint8 FlightAutoLand_IsActive(void);
-uint8 FlightAutoLand_TakeDisarmRequest(void);
-uint8 FlightAutoLand_GetThrottleOverride(float *throttle);
-void FlightAutoLand_GetDiag(FlightAutoLandDiag_t *diag);
+float BlindBoxTasks_LimitYawRate(float yaw_rate_dps);
+uint8 BlindBoxTasks_IsBeaconSearchPaused(void);
+uint8 BlindBoxTasks_GetFrameFlags(void);
+void BlindBoxTasks_Tick(uint16 elapsed_ms);
+void BlindBoxTasks_HeightTick_10ms(void);
+uint8 BlindBoxTasks_IsActive(void);
+uint8 BlindBoxTasks_TakeDisarmRequest(void);
+uint8 BlindBoxTasks_GetThrottleOverride(float *throttle);
+void BlindBoxTasks_GetDiag(BlindBoxTasksDiag_t *diag);
 
 #endif
