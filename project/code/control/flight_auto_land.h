@@ -3,8 +3,6 @@
 
 #include "zf_common_typedef.h"
 
-#define FLIGHT_AUTO_LAND_ENABLE (0U)
-
 typedef enum
 {
     AUTO_LAND_IDLE = 0,
@@ -44,6 +42,12 @@ typedef struct
 } FlightAutoLandDiag_t;
 
 void FlightAutoLand_Init(void);
+void FlightAutoLand_ControlStep(float dt_s,
+                                float current_yaw_deg,
+                                volatile float *target_yaw_deg);
+float FlightAutoLand_LimitYawRate(float yaw_rate_dps);
+uint8 FlightAutoLand_IsStartupRecognitionBlocked(void);
+uint8 FlightAutoLand_GetFrameFlags(void);
 void FlightAutoLand_Tick(uint16 elapsed_ms);
 void FlightAutoLand_HeightTick_10ms(void);
 uint8 FlightAutoLand_IsActive(void);

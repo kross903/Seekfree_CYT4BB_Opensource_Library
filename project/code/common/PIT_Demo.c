@@ -1010,6 +1010,7 @@ static void control_task_update_velocity_target(uint8 takeoff_active)
 
 static void control_task_update_angle_loop(void)
 {
+    FlightAutoLand_ControlStep(0.002f, current_yaw, &target_angle_yaw);
     BeaconSearch_ControlStep(0.002f, current_yaw, &target_angle_yaw);
     Angle_Loop_Update(target_angle_roll,
                       target_angle_pitch,
@@ -1018,6 +1019,7 @@ static void control_task_update_angle_loop(void)
                       current_pitch,
                       current_yaw);
     target_yaw_rate = BeaconSearch_LimitYawRate(target_yaw_rate);
+    target_yaw_rate = FlightAutoLand_LimitYawRate(target_yaw_rate);
 }
 
 static void control_task_update_rate_and_mixer(void)

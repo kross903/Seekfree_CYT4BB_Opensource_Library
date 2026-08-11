@@ -12,6 +12,16 @@
 #include <math.h>
 #include <string.h>
 
+/* 盲盒任务统一入口：起飞后360度预扫 + 缓慢降落。 */
+#define FLIGHT_TASK_STARTUP_SCAN_ENABLE          (1U)
+#define FLIGHT_TASK_AUTO_LAND_ENABLE             (0U)
+
+#define FLIGHT_TASK_STARTUP_WAIT_MS             (2000U)
+#define FLIGHT_TASK_STARTUP_SCAN_ANGLE_DEG       (360.0f)
+#define FLIGHT_TASK_STARTUP_SETTLE_MS           (1000U)
+#define FLIGHT_TASK_STARTUP_YAW_RATE_DPS         (90.0f)
+#define FLIGHT_TASK_STARTUP_MAX_YAW_STEP_DEG     (10.0f)
+
 #define AUTO_LAND_CONFIRM_MS                    (5000U)
 #define AUTO_LAND_STABLE_MS                      (500U)
 #define AUTO_LAND_POSITION_GATE_CM               (30.0f)
@@ -19,6 +29,32 @@
 #define AUTO_LAND_OPEN_LOOP_RATE_PER_S            (80.0f)
 #define AUTO_LAND_OPEN_LOOP_STEP                 (AUTO_LAND_OPEN_LOOP_RATE_PER_S * 0.010f)
 #define AUTO_LAND_OPEN_LOOP_TIMEOUT_MS         (10000U)
+
+typedef enum
+{
+    FLIGHT_TASK_STARTUP_CONTROL_NONE = 0,
+    FLIGHT_TASK_STARTUP_CONTROL_SPIN,
+    FLIGHT_TASK_STARTUP_CONTROL_HOLD
+} FlightAutoLandStartupControl_t;
+
+typedef enum
+{
+    FLIGHT_TASK_STARTUP_WAIT_READY = 0,
+    FLIGHT_TASK_STARTUP_HOLD_BEFORE,
+    FLIGHT_TASK_STARTUP_SPIN,
+    FLIGHT_TASK_STARTUP_HOLD_AFTER,
+    FLIGHT_TASK_STARTUP_COMPLETE
+} FlightAutoLandStartupPhase_t;
+
+static volatile FlightAutoLandStartupControl_t s_startup_control =
+    FLIGHT_TASK_STARTUP_CONTROL_NONE;
+static volatile FlightAutoLandStartupPhase_t s_startup_phase =
+    FLIGHT_TASK_STARTUP_WAIT_READY;
+static volatile uint8 s_startup_turn_complete_event = 0U;
+static uint16 s_startup_elapsed_ms = 0U;
+static float s_startup_scan_start_yaw_deg = 0.0f;
+static float s_startup_command_progress_deg = 0.0f;
+static float s_startup_turn_progress_deg = 0.0f;
 
 static volatile FlightAutoLandState_t s_state = AUTO_LAND_IDLE;
 static volatile uint8 s_trigger_reason = BEACON_SEARCH_FAILURE_NONE;
@@ -43,6 +79,113 @@ static uint16 flight_auto_land_add_ms(uint16 value, uint16 elapsed_ms)
         return (uint16)(value + elapsed_ms);
     }
     return 60000U;
+}
+
+static uint16 flight_auto_land_startup_add_ms(uint16 value, uint16 elapsed_ms)
+{
+    if(value <= (uint16)(60000U - elapsed_ms))
+    {
+        return (uint16)(value + elapsed_ms);
+    }
+    return 60000U;
+}
+
+static float flight_auto_land_wrap_deg(float angle_deg)
+{
+    while(angle_deg > 180.0f)
+    {
+        angle_deg -= 360.0f;
+    }
+    while(angle_deg < -180.0f)
+    {
+        angle_deg += 360.0f;
+    }
+    return angle_deg;
+}
+
+static uint8 flight_auto_land_yaw_at_endpoint(float current_yaw_deg,
+                                              float endpoint_yaw_deg)
+{
+    return (uint8)(fabsf(flight_auto_land_wrap_deg(endpoint_yaw_deg -
+                                                   current_yaw_deg)) <=
+                   FLIGHT_TASK_STARTUP_MAX_YAW_STEP_DEG);
+}
+
+static uint8 flight_auto_land_startup_is_active(void)
+{
+    return (uint8)(FLIGHT_TASK_STARTUP_SCAN_ENABLE &&
+                   (((FLIGHT_TASK_STARTUP_WAIT_READY == s_startup_phase) &&
+                     Flight_Takeoff_Is_Active()) ||
+                    (FLIGHT_TASK_STARTUP_HOLD_BEFORE == s_startup_phase) ||
+                    (FLIGHT_TASK_STARTUP_SPIN == s_startup_phase) ||
+                    (FLIGHT_TASK_STARTUP_HOLD_AFTER == s_startup_phase)));
+}
+
+static void flight_auto_land_startup_reset_runtime(void)
+{
+    s_startup_control = FLIGHT_TASK_STARTUP_CONTROL_NONE;
+    s_startup_phase = FLIGHT_TASK_STARTUP_WAIT_READY;
+    s_startup_turn_complete_event = 0U;
+    s_startup_elapsed_ms = 0U;
+    s_startup_scan_start_yaw_deg = 0.0f;
+    s_startup_command_progress_deg = 0.0f;
+    s_startup_turn_progress_deg = 0.0f;
+}
+
+static void flight_auto_land_startup_tick(uint16 elapsed_ms)
+{
+#if FLIGHT_TASK_STARTUP_SCAN_ENABLE
+    switch(s_startup_phase)
+    {
+    case FLIGHT_TASK_STARTUP_WAIT_READY:
+        if(Flight_Takeoff_Is_Active())
+        {
+            s_startup_control = FLIGHT_TASK_STARTUP_CONTROL_HOLD;
+            s_startup_elapsed_ms = 0U;
+            s_startup_phase = FLIGHT_TASK_STARTUP_HOLD_BEFORE;
+        }
+        break;
+
+    case FLIGHT_TASK_STARTUP_HOLD_BEFORE:
+        s_startup_elapsed_ms = flight_auto_land_startup_add_ms(
+            s_startup_elapsed_ms, elapsed_ms);
+        if(s_startup_elapsed_ms >= FLIGHT_TASK_STARTUP_WAIT_MS)
+        {
+            s_startup_elapsed_ms = 0U;
+            s_startup_turn_complete_event = 0U;
+            s_startup_control = FLIGHT_TASK_STARTUP_CONTROL_SPIN;
+            s_startup_phase = FLIGHT_TASK_STARTUP_SPIN;
+        }
+        break;
+
+    case FLIGHT_TASK_STARTUP_SPIN:
+        if(s_startup_turn_complete_event)
+        {
+            s_startup_turn_complete_event = 0U;
+            s_startup_elapsed_ms = 0U;
+            s_startup_control = FLIGHT_TASK_STARTUP_CONTROL_HOLD;
+            s_startup_phase = FLIGHT_TASK_STARTUP_HOLD_AFTER;
+        }
+        break;
+
+    case FLIGHT_TASK_STARTUP_HOLD_AFTER:
+        s_startup_elapsed_ms = flight_auto_land_startup_add_ms(
+            s_startup_elapsed_ms, elapsed_ms);
+        if(s_startup_elapsed_ms >= FLIGHT_TASK_STARTUP_SETTLE_MS)
+        {
+            s_startup_phase = FLIGHT_TASK_STARTUP_COMPLETE;
+            s_startup_control = FLIGHT_TASK_STARTUP_CONTROL_NONE;
+            s_startup_elapsed_ms = 0U;
+        }
+        break;
+
+    case FLIGHT_TASK_STARTUP_COMPLETE:
+    default:
+        break;
+    }
+#else
+    (void)elapsed_ms;
+#endif
 }
 
 static void flight_auto_land_reset_runtime(void)
@@ -139,36 +282,182 @@ static uint8 flight_auto_land_update_alignment(uint16 elapsed_ms)
 void FlightAutoLand_Init(void)
 {
     s_was_armed = 0U;
+    flight_auto_land_startup_reset_runtime();
     flight_auto_land_reset_runtime();
+}
+
+void FlightAutoLand_ControlStep(float dt_s,
+                                float current_yaw_deg,
+                                volatile float *target_yaw_deg)
+{
+#if FLIGHT_TASK_STARTUP_SCAN_ENABLE
+    static FlightAutoLandStartupControl_t last_control =
+        FLIGHT_TASK_STARTUP_CONTROL_NONE;
+    static float previous_yaw_deg = 0.0f;
+    FlightAutoLandStartupControl_t control = s_startup_control;
+
+    if(NULL == target_yaw_deg)
+    {
+        return;
+    }
+
+    if(FLIGHT_TASK_STARTUP_CONTROL_NONE == control)
+    {
+        last_control = FLIGHT_TASK_STARTUP_CONTROL_NONE;
+        return;
+    }
+
+    if(!flight_auto_land_startup_is_active())
+    {
+        last_control = FLIGHT_TASK_STARTUP_CONTROL_NONE;
+        return;
+    }
+
+    if(control != last_control)
+    {
+        if((FLIGHT_TASK_STARTUP_CONTROL_SPIN == control) ||
+           (FLIGHT_TASK_STARTUP_CONTROL_HOLD == control))
+        {
+            *target_yaw_deg = current_yaw_deg;
+            previous_yaw_deg = current_yaw_deg;
+            if(FLIGHT_TASK_STARTUP_CONTROL_SPIN == control)
+            {
+                s_startup_scan_start_yaw_deg = current_yaw_deg;
+                s_startup_command_progress_deg = 0.0f;
+                s_startup_turn_progress_deg = 0.0f;
+                s_startup_turn_complete_event = 0U;
+            }
+        }
+        last_control = control;
+    }
+
+    if(FLIGHT_TASK_STARTUP_CONTROL_SPIN != control)
+    {
+        return;
+    }
+
+    {
+        float yaw_delta_deg = flight_auto_land_wrap_deg(current_yaw_deg -
+                                                        previous_yaw_deg);
+        float remaining_deg = FLIGHT_TASK_STARTUP_SCAN_ANGLE_DEG -
+                              s_startup_command_progress_deg;
+        float target_step_deg = FLIGHT_TASK_STARTUP_YAW_RATE_DPS * dt_s;
+
+        previous_yaw_deg = current_yaw_deg;
+        if(fabsf(yaw_delta_deg) <= FLIGHT_TASK_STARTUP_MAX_YAW_STEP_DEG)
+        {
+            s_startup_turn_progress_deg += yaw_delta_deg;
+            if(s_startup_turn_progress_deg < 0.0f)
+            {
+                s_startup_turn_progress_deg = 0.0f;
+            }
+        }
+
+        if(isfinite(target_step_deg) && (target_step_deg > 0.0f) &&
+           (remaining_deg > 0.0f))
+        {
+            if(target_step_deg > remaining_deg)
+            {
+                target_step_deg = remaining_deg;
+            }
+            *target_yaw_deg = flight_auto_land_wrap_deg(*target_yaw_deg +
+                                                        target_step_deg);
+            s_startup_command_progress_deg += target_step_deg;
+        }
+        else if(remaining_deg <= 0.0f)
+        {
+            *target_yaw_deg = s_startup_scan_start_yaw_deg;
+        }
+
+        if((s_startup_command_progress_deg >=
+            FLIGHT_TASK_STARTUP_SCAN_ANGLE_DEG) &&
+           (s_startup_turn_progress_deg >=
+            (FLIGHT_TASK_STARTUP_SCAN_ANGLE_DEG -
+             FLIGHT_TASK_STARTUP_MAX_YAW_STEP_DEG)) &&
+           flight_auto_land_yaw_at_endpoint(current_yaw_deg,
+                                             s_startup_scan_start_yaw_deg))
+        {
+            s_startup_control = FLIGHT_TASK_STARTUP_CONTROL_HOLD;
+            s_startup_turn_complete_event = 1U;
+            *target_yaw_deg = s_startup_scan_start_yaw_deg;
+            last_control = FLIGHT_TASK_STARTUP_CONTROL_HOLD;
+        }
+    }
+#else
+    (void)dt_s;
+    (void)current_yaw_deg;
+    (void)target_yaw_deg;
+#endif
+}
+
+float FlightAutoLand_LimitYawRate(float yaw_rate_dps)
+{
+    if(!isfinite(yaw_rate_dps))
+    {
+        return 0.0f;
+    }
+    if(!flight_auto_land_startup_is_active())
+    {
+        return yaw_rate_dps;
+    }
+    if(yaw_rate_dps > FLIGHT_TASK_STARTUP_YAW_RATE_DPS)
+    {
+        return FLIGHT_TASK_STARTUP_YAW_RATE_DPS;
+    }
+    if(yaw_rate_dps < -FLIGHT_TASK_STARTUP_YAW_RATE_DPS)
+    {
+        return -FLIGHT_TASK_STARTUP_YAW_RATE_DPS;
+    }
+    return yaw_rate_dps;
+}
+
+uint8 FlightAutoLand_IsStartupRecognitionBlocked(void)
+{
+    return flight_auto_land_startup_is_active();
+}
+
+uint8 FlightAutoLand_GetFrameFlags(void)
+{
+    return flight_auto_land_startup_is_active() ?
+           CORE_LINK_BEACON_FRAME_FLAG_SEARCH_ACTIVE : 0U;
 }
 
 void FlightAutoLand_Tick(uint16 elapsed_ms)
 {
-#if !FLIGHT_AUTO_LAND_ENABLE
-    (void)elapsed_ms;
-    if(s_state != AUTO_LAND_IDLE)
-    {
-        flight_auto_land_reset_runtime();
-    }
-    return;
-#else
+#if FLIGHT_TASK_AUTO_LAND_ENABLE
     BeaconSearchDiag_t search_diag = {0};
+#endif
+
+    flight_auto_land_startup_tick(elapsed_ms);
 
     if(!armed)
     {
         s_was_armed = 0U;
+        flight_auto_land_startup_reset_runtime();
+#if FLIGHT_TASK_AUTO_LAND_ENABLE
         if(s_state != AUTO_LAND_COMPLETE)
         {
             flight_auto_land_reset_runtime();
         }
         return;
+#else
+        if(s_state != AUTO_LAND_IDLE)
+        {
+            flight_auto_land_reset_runtime();
+        }
+        return;
+#endif
     }
     if(!s_was_armed)
     {
+        flight_auto_land_startup_reset_runtime();
+#if FLIGHT_TASK_AUTO_LAND_ENABLE
         flight_auto_land_reset_runtime();
+#endif
         s_was_armed = 1U;
     }
 
+#if FLIGHT_TASK_AUTO_LAND_ENABLE
     if(!flight_auto_land_flight_eligible())
     {
         if(s_state < AUTO_LAND_DESCENDING)
@@ -265,7 +554,7 @@ void FlightAutoLand_Tick(uint16 elapsed_ms)
 
 void FlightAutoLand_HeightTick_10ms(void)
 {
-#if !FLIGHT_AUTO_LAND_ENABLE
+#if !FLIGHT_TASK_AUTO_LAND_ENABLE
     if(s_state != AUTO_LAND_IDLE)
     {
         flight_auto_land_reset_runtime();
