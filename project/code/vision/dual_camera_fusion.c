@@ -4,7 +4,7 @@
 #define DUAL_CAMERA_FUSION_TRACK_COUNT            (12U)
 #define DUAL_CAMERA_FUSION_MAX_CANDIDATES         (12U)
 #define DUAL_CAMERA_FUSION_MAX_AGE_US             (100000U)
-#define DUAL_CAMERA_FUSION_PAIR_GATE_US           (20000)
+#define DUAL_CAMERA_FUSION_PAIR_GATE_US           (100000)
 #define DUAL_CAMERA_FUSION_DEDUP_GATE_MIN_CM      (20.0f)
 #define DUAL_CAMERA_FUSION_DEDUP_GATE_MAX_CM      (40.0f)
 #define DUAL_CAMERA_FUSION_TRACK_GATE_MIN_CM      (20.0f)
@@ -677,8 +677,7 @@ void DualCameraFusion_BuildSnapshot(uint32 now_us)
                                                 now_us, 1U);
     rear_latest = DualCameraFusion_LatestFrame(s_rear_cache, s_rear_count,
                                                now_us, 1U);
-    if(!link_diag.mode_active || !link_diag.online ||
-       !link_diag.rear_extrinsic_valid)
+    if(!link_diag.mode_active || !link_diag.rear_extrinsic_valid)
     {
         rear_latest = NULL;
     }

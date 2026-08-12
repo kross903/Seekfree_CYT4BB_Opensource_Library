@@ -3,6 +3,8 @@
 #define CAMERA_BOARD_RX_FIFO_SIZE       (512U)
 #define CAMERA_BOARD_DWT_LAR_UNLOCK     (0xC5ACCE55UL)
 #define CAMERA_BOARD_STATE_HISTORY_SIZE (32U)
+#define CAMERA_BOARD_RESULT_FRESH_US    (100000U)
+#define CAMERA_BOARD_STATUS_ONLINE_US   (1200000U)
 
 typedef struct
 {
@@ -79,6 +81,27 @@ static uint8 CameraBoardLink_DwtInit(void)
     DWT->LAR = CAMERA_BOARD_DWT_LAR_UNLOCK;
     DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
     return 1U;
+}
+
+static uint8 CameraBoardLink_IsResultFreshAt(uint32 now_us)
+{
+    return (uint8)(s_last_result_rx_us != 0U &&
+        ((uint32)(now_us - s_last_result_rx_us) <=
+         CAMERA_BOARD_RESULT_FRESH_US));
+}
+
+static uint8 CameraBoardLink_IsStatusRecentAt(uint32 now_us)
+{
+    return (uint8)(s_last_status_rx_us != 0U &&
+        ((uint32)(now_us - s_last_status_rx_us) <=
+         CAMERA_BOARD_STATUS_ONLINE_US));
+}
+
+static uint8 CameraBoardLink_IsLinkOnlineAt(uint32 now_us)
+{
+    return (uint8)(s_mode_active &&
+        (CameraBoardLink_IsResultFreshAt(now_us) ||
+         CameraBoardLink_IsStatusRecentAt(now_us)));
 }
 
 uint32 CameraBoardLink_TimeNowUs(void)
@@ -644,9 +667,8 @@ void CameraBoardLink_MainTask(void)
     s_diag.last_status_age_ms = (s_last_status_rx_us == 0U) ? 0xFFFFU :
         (uint16)(((uint32)(now_us - s_last_status_rx_us) / 1000U) > 0xFFFFU ?
                  0xFFFFU : ((uint32)(now_us - s_last_status_rx_us) / 1000U));
-    s_diag.online = (uint8)(s_last_result_rx_us != 0U &&
-        ((uint32)(now_us - s_last_result_rx_us) <= CAMERA_BOARD_LINK_TIMEOUT_US));
-    if(!s_diag.online)
+    s_diag.online = CameraBoardLink_IsLinkOnlineAt(now_us);
+    if(!CameraBoardLink_IsResultFreshAt(now_us))
     {
         s_latest_frame_valid = 0U;
     }
@@ -672,7 +694,10 @@ void CameraBoardLink_RxIsr(void)
 
 uint8 CameraBoardLink_GetRearFrame(CameraBoardVisionFrame_t *frame)
 {
-    if((frame == NULL) || !s_latest_frame_valid || !CameraBoardLink_IsOnline())
+    uint32 now_us = CameraBoardLink_TimeNowUs();
+
+    if((frame == NULL) || !s_latest_frame_valid ||
+       !CameraBoardLink_IsResultFreshAt(now_us))
     {
         return 0U;
     }
@@ -732,6 +757,5 @@ void CameraBoardLink_GetDiag(CameraBoardLinkDiag_t *diag)
 uint8 CameraBoardLink_IsOnline(void)
 {
     uint32 now_us = CameraBoardLink_TimeNowUs();
-    return (uint8)(s_mode_active && (s_last_result_rx_us != 0U) &&
-        ((uint32)(now_us - s_last_result_rx_us) <= CAMERA_BOARD_LINK_TIMEOUT_US));
+    return CameraBoardLink_IsLinkOnlineAt(now_us);
 }
