@@ -3,6 +3,20 @@
 
 #include "zf_common_headfile.h"
 
+/*
+ * 电机布局（从机体上方向下俯视，机头朝 +X）：
+ *
+ *                         机头 (+X)
+ *                            ^
+ *          左前 M3 (CW)             右前 M2 (CCW)
+ *                    \             /
+ *                     \   机身    /
+ *                     /           \    机臂
+ *          左后 M4 (CCW)            右后 M1 (CW)
+ *
+ * M1~M4 分别对应 motor_throttle[0]~motor_throttle[3]。
+ * CW/CCW 表示俯视时桨叶的顺/逆时针旋转方向，实际旋向需拆桨点动确认。
+ */
 typedef struct
 {
     float raw_output[4];

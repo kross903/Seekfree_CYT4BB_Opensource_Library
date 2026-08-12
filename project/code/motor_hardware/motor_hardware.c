@@ -18,10 +18,6 @@
 #define MOTOR_UART_NORMAL_SERVICE_US   1000U
 #define MOTOR_UART_ESTOP_SERVICE_US    250U
 
-// 1  2     4   3
-// 3  4     2   1
-
-
 #define MOTOR_HW_COMP_M1_SCALE         1.00f
 #define MOTOR_HW_COMP_M3_SCALE         1.00f
 #define MOTOR_HW_COMP_M4_SCALE         1.00f
