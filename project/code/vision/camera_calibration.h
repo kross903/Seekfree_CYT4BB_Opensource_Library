@@ -43,6 +43,8 @@ void CameraCalibration_Init(void);
 void CameraCalibration_GetParams(CameraCalibration_Params_t *params);
 
 uint8 CameraCalibration_IsPixelInValidRegion(float img_x, float img_y);
+uint8 CameraCalibration_PixelToCameraRay(float img_x, float img_y, float ray_camera[3]);
+uint8 CameraCalibration_CameraRayToPixel(const float ray_camera[3], float *img_x, float *img_y);
 uint8 CameraCalibration_PixelToBodyRay(float img_x, float img_y, float ray_body[3]);
 uint8 CameraCalibration_BodyRayToPixel(const float ray_body[3], float *img_x, float *img_y);
 

@@ -101,7 +101,7 @@ static uint8 CameraCalibration_SolveFisheyeTheta(float theta_d, float *theta)
     return 1U;
 }
 
-static uint8 CameraCalibration_ParamsPixelToRay(float img_x, float img_y, float ray_body[3])
+static uint8 CameraCalibration_ParamsPixelToRay(float img_x, float img_y, float ray_camera[3])
 {
     float mx = 0.0f;
     float my = 0.0f;
@@ -111,7 +111,7 @@ static uint8 CameraCalibration_ParamsPixelToRay(float img_x, float img_y, float 
     float cos_theta = 0.0f;
     float scale = 0.0f;
 
-    if(ray_body == NULL || !CameraCalibration_IsPixelInValidRegion(img_x, img_y))
+    if(ray_camera == NULL || !CameraCalibration_IsPixelInValidRegion(img_x, img_y))
     {
         return 0U;
     }
@@ -122,10 +122,9 @@ static uint8 CameraCalibration_ParamsPixelToRay(float img_x, float img_y, float 
 
     if(theta_d < 1e-6f)
     {
-        ray_body[0] = 0.0f;
-        ray_body[1] = 0.0f;
-        ray_body[2] = 1.0f;
-        CameraCalibration_ApplyMountOffset(ray_body);
+        ray_camera[0] = 0.0f;
+        ray_camera[1] = 0.0f;
+        ray_camera[2] = 1.0f;
         return 1U;
     }
 
@@ -138,14 +137,13 @@ static uint8 CameraCalibration_ParamsPixelToRay(float img_x, float img_y, float 
     cos_theta = cosf(theta);
     scale = sin_theta / theta_d;
 
-    ray_body[0] = my * scale;
-    ray_body[1] = mx * scale;
-    ray_body[2] = cos_theta;
-    CameraCalibration_ApplyMountOffset(ray_body);
+    ray_camera[0] = my * scale;
+    ray_camera[1] = mx * scale;
+    ray_camera[2] = cos_theta;
     return 1U;
 }
 
-static uint8 CameraCalibration_FallbackPixelToRay(float img_x, float img_y, float ray_body[3])
+static uint8 CameraCalibration_FallbackPixelToRay(float img_x, float img_y, float ray_camera[3])
 {
     float du = img_x - CAMERA_CALIBRATION_IMG_CENTER_X;
     float dv = img_y - CAMERA_CALIBRATION_IMG_CENTER_Y;
@@ -156,17 +154,16 @@ static uint8 CameraCalibration_FallbackPixelToRay(float img_x, float img_y, floa
     float cos_theta = 0.0f;
     float scale = 0.0f;
 
-    if(ray_body == NULL || !CameraCalibration_IsPixelInValidRegion(img_x, img_y))
+    if(ray_camera == NULL || !CameraCalibration_IsPixelInValidRegion(img_x, img_y))
     {
         return 0U;
     }
 
     if(radius < 1e-6f)
     {
-        ray_body[0] = 0.0f;
-        ray_body[1] = 0.0f;
-        ray_body[2] = 1.0f;
-        CameraCalibration_ApplyMountOffset(ray_body);
+        ray_camera[0] = 0.0f;
+        ray_camera[1] = 0.0f;
+        ray_camera[2] = 1.0f;
         return 1U;
     }
 
@@ -175,15 +172,14 @@ static uint8 CameraCalibration_FallbackPixelToRay(float img_x, float img_y, floa
     cos_theta = cosf(theta);
     scale = sin_theta / radius;
 
-    ray_body[0] = dv * scale;
-    ray_body[1] = du * scale;
-    ray_body[2] = cos_theta;
-    CameraCalibration_ApplyMountOffset(ray_body);
+    ray_camera[0] = dv * scale;
+    ray_camera[1] = du * scale;
+    ray_camera[2] = cos_theta;
     return 1U;
 }
 
 #if CAMERA_RAY_TABLE_HAS_DATA
-static uint8 CameraCalibration_TablePixelToRay(float img_x, float img_y, float ray_body[3])
+static uint8 CameraCalibration_TablePixelToRay(float img_x, float img_y, float ray_camera[3])
 {
     int x0 = (int)floorf(img_x);
     int y0 = (int)floorf(img_y);
@@ -197,7 +193,7 @@ static uint8 CameraCalibration_TablePixelToRay(float img_x, float img_y, float r
     float rz = 0.0f;
     float len = 0.0f;
 
-    if(ray_body == NULL ||
+    if(ray_camera == NULL ||
        img_x < 0.0f || img_x > ((float)MT9V03X_W - 1.0f) ||
        img_y < 0.0f || img_y > ((float)MT9V03X_H - 1.0f))
     {
@@ -228,21 +224,20 @@ static uint8 CameraCalibration_TablePixelToRay(float img_x, float img_y, float r
          ((1.0f - tx) * ty * (float)camera_ray_table_z[y1][x0]) +
          (tx * ty * (float)camera_ray_table_z[y1][x1]);
 
-    ray_body[0] = rx * inv_q;
-    ray_body[1] = ry * inv_q;
-    ray_body[2] = rz * inv_q;
-    len = sqrtf((ray_body[0] * ray_body[0]) +
-                (ray_body[1] * ray_body[1]) +
-                (ray_body[2] * ray_body[2]));
+    ray_camera[0] = rx * inv_q;
+    ray_camera[1] = ry * inv_q;
+    ray_camera[2] = rz * inv_q;
+    len = sqrtf((ray_camera[0] * ray_camera[0]) +
+                (ray_camera[1] * ray_camera[1]) +
+                (ray_camera[2] * ray_camera[2]));
     if(len < 1e-6f)
     {
         return 0U;
     }
 
-    ray_body[0] /= len;
-    ray_body[1] /= len;
-    ray_body[2] /= len;
-    CameraCalibration_ApplyMountOffset(ray_body);
+    ray_camera[0] /= len;
+    ray_camera[1] /= len;
+    ray_camera[2] /= len;
     return 1U;
 }
 #endif
@@ -300,20 +295,30 @@ uint8 CameraCalibration_IsPixelInValidRegion(float img_x, float img_y)
     return 1U;
 }
 
-uint8 CameraCalibration_PixelToBodyRay(float img_x, float img_y, float ray_body[3])
+uint8 CameraCalibration_PixelToCameraRay(float img_x, float img_y, float ray_camera[3])
 {
 #if CAMERA_RAY_TABLE_HAS_DATA
-    return CameraCalibration_TablePixelToRay(img_x, img_y, ray_body);
+    return CameraCalibration_TablePixelToRay(img_x, img_y, ray_camera);
 #else
 #if CAMERA_CALIBRATION_HAS_GENERATED_PARAMS
-    return CameraCalibration_ParamsPixelToRay(img_x, img_y, ray_body);
+    return CameraCalibration_ParamsPixelToRay(img_x, img_y, ray_camera);
 #else
-    return CameraCalibration_FallbackPixelToRay(img_x, img_y, ray_body);
+    return CameraCalibration_FallbackPixelToRay(img_x, img_y, ray_camera);
 #endif
 #endif
 }
 
-uint8 CameraCalibration_BodyRayToPixel(const float ray_body[3], float *img_x, float *img_y)
+uint8 CameraCalibration_PixelToBodyRay(float img_x, float img_y, float ray_body[3])
+{
+    if(!CameraCalibration_PixelToCameraRay(img_x, img_y, ray_body))
+    {
+        return 0U;
+    }
+    CameraCalibration_ApplyMountOffset(ray_body);
+    return 1U;
+}
+
+uint8 CameraCalibration_CameraRayToPixel(const float ray_camera[3], float *img_x, float *img_y)
 {
     float x = 0.0f;
     float y = 0.0f;
@@ -326,21 +331,15 @@ uint8 CameraCalibration_BodyRayToPixel(const float ray_body[3], float *img_x, fl
     float theta8 = 0.0f;
     float theta_d = 0.0f;
     float scale = 0.0f;
-    float camera_ray[3];
 
-    if(ray_body == NULL || img_x == NULL || img_y == NULL || ray_body[2] <= 0.0f)
+    if(ray_camera == NULL || img_x == NULL || img_y == NULL || ray_camera[2] <= 0.0f)
     {
         return 0U;
     }
 
-    camera_ray[0] = ray_body[0];
-    camera_ray[1] = ray_body[1];
-    camera_ray[2] = ray_body[2];
-    CameraCalibration_RemoveMountOffset(camera_ray);
-
-    x = camera_ray[1];
-    y = camera_ray[0];
-    z = camera_ray[2];
+    x = ray_camera[1];
+    y = ray_camera[0];
+    z = ray_camera[2];
     lateral = sqrtf((x * x) + (y * y));
 
     if(lateral < 1e-6f)
@@ -375,6 +374,22 @@ uint8 CameraCalibration_BodyRayToPixel(const float ray_body[3], float *img_x, fl
     return CameraCalibration_IsPixelInValidRegion(*img_x, *img_y);
 }
 
+uint8 CameraCalibration_BodyRayToPixel(const float ray_body[3], float *img_x, float *img_y)
+{
+    float camera_ray[3];
+
+    if(ray_body == NULL)
+    {
+        return 0U;
+    }
+
+    camera_ray[0] = ray_body[0];
+    camera_ray[1] = ray_body[1];
+    camera_ray[2] = ray_body[2];
+    CameraCalibration_RemoveMountOffset(camera_ray);
+    return CameraCalibration_CameraRayToPixel(camera_ray, img_x, img_y);
+}
+
 uint8 CameraCalibration_UndistortPoint(float distorted_x,
                                        float distorted_y,
                                        float *undistorted_x,
@@ -387,7 +402,7 @@ uint8 CameraCalibration_UndistortPoint(float distorted_x,
         return 0U;
     }
 
-    if(!CameraCalibration_PixelToBodyRay(distorted_x, distorted_y, ray))
+    if(!CameraCalibration_PixelToCameraRay(distorted_x, distorted_y, ray))
     {
         return 0U;
     }
@@ -429,7 +444,7 @@ uint8 CameraCalibration_RectifiedModelPointToSource(float rectified_x,
     ray_body[1] /= length;
     ray_body[2] /= length;
 
-    return CameraCalibration_BodyRayToPixel(ray_body, source_x, source_y);
+    return CameraCalibration_CameraRayToPixel(ray_body, source_x, source_y);
 }
 
 uint8 CameraCalibration_RectifiedPointToSource(float rectified_x,
