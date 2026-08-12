@@ -178,7 +178,7 @@
   "undistort_height": 240,
   "mount_roll_offset_deg": 0.0,
   "mount_pitch_offset_deg": 0.0,
-  "mount_yaw_offset_deg": 0.0,
+  "mount_yaw_offset_deg": 180.0,
   "offset_x_cm": 0.0,
   "offset_y_cm": 0.0,
   "offset_z_cm": 0.0

@@ -17,56 +17,46 @@
     (0.5f * sqrtf(((float)MT9V03X_W * (float)MT9V03X_W) + \
                   ((float)MT9V03X_H * (float)MT9V03X_H)))
 
+/* 主摄绕光轴旋转180度安装：X/Y反向，Z方向保持不变。 */
+static const float s_camera_mount_rotation[3][3] =
+{
+    {-1.0f, 0.0f, 0.0f},
+    {0.0f, -1.0f, 0.0f},
+    {0.0f, 0.0f, 1.0f}
+};
+
 static void CameraCalibration_ApplyMountOffset(float ray[3])
 {
-    const float roll = CAMERA_MOUNT_ROLL_OFFSET_DEG * CAMERA_CALIBRATION_DEG2RAD;
-    const float pitch = CAMERA_MOUNT_PITCH_OFFSET_DEG * CAMERA_CALIBRATION_DEG2RAD;
-    const float yaw = CAMERA_MOUNT_YAW_OFFSET_DEG * CAMERA_CALIBRATION_DEG2RAD;
-    const float sr = sinf(roll);
-    const float cr = cosf(roll);
-    const float sp = sinf(pitch);
-    const float cp = cosf(pitch);
-    const float sy = sinf(yaw);
-    const float cy = cosf(yaw);
     float x = ray[0];
     float y = ray[1];
     float z = ray[2];
-    float x1 = x;
-    float y1 = (cr * y) - (sr * z);
-    float z1 = (sr * y) + (cr * z);
-    float x2 = (cp * x1) + (sp * z1);
-    float y2 = y1;
-    float z2 = (-sp * x1) + (cp * z1);
 
-    ray[0] = (cy * x2) - (sy * y2);
-    ray[1] = (sy * x2) + (cy * y2);
-    ray[2] = z2;
+    ray[0] = s_camera_mount_rotation[0][0] * x +
+             s_camera_mount_rotation[0][1] * y +
+             s_camera_mount_rotation[0][2] * z;
+    ray[1] = s_camera_mount_rotation[1][0] * x +
+             s_camera_mount_rotation[1][1] * y +
+             s_camera_mount_rotation[1][2] * z;
+    ray[2] = s_camera_mount_rotation[2][0] * x +
+             s_camera_mount_rotation[2][1] * y +
+             s_camera_mount_rotation[2][2] * z;
 }
 
 static void CameraCalibration_RemoveMountOffset(float ray[3])
 {
-    const float roll = -CAMERA_MOUNT_ROLL_OFFSET_DEG * CAMERA_CALIBRATION_DEG2RAD;
-    const float pitch = -CAMERA_MOUNT_PITCH_OFFSET_DEG * CAMERA_CALIBRATION_DEG2RAD;
-    const float yaw = -CAMERA_MOUNT_YAW_OFFSET_DEG * CAMERA_CALIBRATION_DEG2RAD;
-    const float sy = sinf(yaw);
-    const float cy = cosf(yaw);
-    const float sp = sinf(pitch);
-    const float cp = cosf(pitch);
-    const float sr = sinf(roll);
-    const float cr = cosf(roll);
     float x = ray[0];
     float y = ray[1];
     float z = ray[2];
-    float x1 = (cy * x) - (sy * y);
-    float y1 = (sy * x) + (cy * y);
-    float z1 = z;
-    float x2 = (cp * x1) + (sp * z1);
-    float y2 = y1;
-    float z2 = (-sp * x1) + (cp * z1);
 
-    ray[0] = x2;
-    ray[1] = (cr * y2) - (sr * z2);
-    ray[2] = (sr * y2) + (cr * z2);
+    ray[0] = s_camera_mount_rotation[0][0] * x +
+             s_camera_mount_rotation[1][0] * y +
+             s_camera_mount_rotation[2][0] * z;
+    ray[1] = s_camera_mount_rotation[0][1] * x +
+             s_camera_mount_rotation[1][1] * y +
+             s_camera_mount_rotation[2][1] * z;
+    ray[2] = s_camera_mount_rotation[0][2] * x +
+             s_camera_mount_rotation[1][2] * y +
+             s_camera_mount_rotation[2][2] * z;
 }
 
 static uint8 CameraCalibration_SolveFisheyeTheta(float theta_d, float *theta)

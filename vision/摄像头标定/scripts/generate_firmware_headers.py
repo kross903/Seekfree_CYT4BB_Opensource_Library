@@ -101,7 +101,7 @@ def generate_headers(calibration_path: Path | str, output_dir: Path | str, q: in
  * @brief 由 scripts/generate_firmware_headers.py 自动生成。
  *
  * 初版标定：{cfg.get("used_count", 0)} 张有效图片，RMS {cfg.get("rms", 0.0):.6f} px。
- * 相机安装角和相对机体位置不是棋盘格内参标定的输出，当前为 0，需实机测量。
+ * 相机安装角和相对机体位置不是棋盘格内参标定的输出，需按实机安装配置。
  */
 
 #ifndef CAMERA_CALIBRATION_PARAMS_H_

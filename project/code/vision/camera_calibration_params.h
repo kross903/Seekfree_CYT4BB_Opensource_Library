@@ -3,7 +3,7 @@
  * @brief 由 scripts/generate_firmware_headers.py 自动生成。
  *
  * 初版标定：16 张有效图片，RMS 0.222251 px。
- * 相机安装角和相对机体位置不是棋盘格内参标定的输出，当前为 0，需实机测量。
+ * 相机安装角和相对机体位置不是棋盘格内参标定的输出，需按实机安装配置。
  */
 
 #ifndef CAMERA_CALIBRATION_PARAMS_H_
@@ -24,9 +24,9 @@
 #define CAMERA_CALIBRATION_K3                       (0.0206813988f)
 #define CAMERA_CALIBRATION_K4                       (-0.00718848343f)
 #define CAMERA_CALIBRATION_VALID_RADIUS_PX          (0.0f)
-#define CAMERA_MOUNT_ROLL_OFFSET_DEG                (-15.0f)
+#define CAMERA_MOUNT_ROLL_OFFSET_DEG                (0.0f)
 #define CAMERA_MOUNT_PITCH_OFFSET_DEG               (0.0f)
-#define CAMERA_MOUNT_YAW_OFFSET_DEG                 (0.0f)
+#define CAMERA_MOUNT_YAW_OFFSET_DEG                 (180.0f)
 #define CAMERA_OFFSET_X_CM                          (0.0f)
 #define CAMERA_OFFSET_Y_CM                          (0.0f)
 #define CAMERA_OFFSET_Z_CM                          (0.0f)
