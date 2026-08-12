@@ -3,9 +3,10 @@
 #define CAMERA_BOARD_RX_FIFO_SIZE       (512U)
 #define CAMERA_BOARD_DWT_LAR_UNLOCK     (0xC5ACCE55UL)
 #define CAMERA_BOARD_STATE_HISTORY_SIZE (32U)
-#define CAMERA_BOARD_RESULT_FRESH_US    (100000U)
+#define CAMERA_BOARD_RESULT_FRESH_US    (300000U)
 #define CAMERA_BOARD_STATUS_ONLINE_US   (1200000U)
-
+//STATUS帧 = 副板说：“我在线，我摄像头正常”
+//RESULT帧 = 副板说：“我刚看完一帧图像，识别结果在这里”
 typedef struct
 {
     uint16 sequence;
