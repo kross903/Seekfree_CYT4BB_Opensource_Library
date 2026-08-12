@@ -17,12 +17,12 @@
     (0.5f * sqrtf(((float)MT9V03X_W * (float)MT9V03X_W) + \
                   ((float)MT9V03X_H * (float)MT9V03X_H)))
 
-/* 主摄绕光轴旋转180度安装：X/Y反向，Z方向保持不变。 */
+/* 主摄固定安装外参：Roll=-15度，Pitch=0度，Yaw=180度。 */
 static const float s_camera_mount_rotation[3][3] =
 {
     {-1.0f, 0.0f, 0.0f},
-    {0.0f, -1.0f, 0.0f},
-    {0.0f, 0.0f, 1.0f}
+    {0.0f, -0.9659258f, -0.2588190f},
+    {0.0f, -0.2588190f, 0.9659258f}
 };
 
 static void CameraCalibration_ApplyMountOffset(float ray[3])
