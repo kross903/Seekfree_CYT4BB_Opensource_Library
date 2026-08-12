@@ -10,12 +10,14 @@
 #define POSITION_LOOP_STATUS_CAR_FF_VALID        (0x10U)
 #define POSITION_LOOP_STATUS_TRAJECTORY_READY    (0x20U)
 #define POSITION_LOOP_STATUS_TIMING_VALID        (0x40U)
-#define POSITION_LOOP_STATUS_STOP_PREDICTION     (0x80U)
+#define POSITION_LOOP_STATUS_BRAKE_MONITORING    (0x80U)
 
-#define POSITION_LOOP_STOP_PRED_CAR_VELOCITY_VALID  (0x01U)
-#define POSITION_LOOP_STOP_PRED_ACTIVE              (0x02U)
-#define POSITION_LOOP_STOP_PRED_OVERSHOOT           (0x04U)
-#define POSITION_LOOP_STOP_PRED_STATIC_FALLBACK     (0x08U)
+#define POSITION_LOOP_BRAKE_DIAG_CAR_VELOCITY_VALID (0x01U)
+#define POSITION_LOOP_BRAKE_DIAG_CLOSING_ACTIVE     (0x02U)
+#define POSITION_LOOP_BRAKE_DIAG_MARGIN_LOW         (0x04U)
+#define POSITION_LOOP_BRAKE_DIAG_STATIC_FALLBACK    (0x08U)
+#define POSITION_LOOP_BRAKE_DIAG_DIRECTION_ACTIVE   (0x10U)
+#define POSITION_LOOP_BRAKE_DIAG_REVERSE_ACTIVE     (0x20U)
 
 #define POSITION_LOOP_OBSERVATION_INVALID      (0U)
 #define POSITION_LOOP_OBSERVATION_LIVE         (1U)
@@ -44,11 +46,23 @@ typedef struct
 typedef struct
 {
     float position_kp;
+    float correction_accel_max_cms2;
     float correction_speed_max_cms;
     float target_speed_max_cms;
     float acceleration_max_cms2;
     float jerk_max_cms3;
 } PositionLoopTrajectoryConfig_t;
+
+typedef struct
+{
+    float effective_accel_cms2;
+    float effective_jerk_cms3;
+    float control_delay_ms;
+    float safety_buffer_cm;
+    float boost_margin_cm;
+    float brake_accel_max_cms2;
+    float brake_jerk_max_cms3;
+} PositionLoopBrakeConfig_t;
 
 typedef struct
 {
@@ -74,6 +88,8 @@ typedef struct
     float target_accel_y_cms2;
     float position_error_distance_cm;
     float position_correction_speed_cms;
+    float proportional_speed_cms;
+    float sqrt_speed_cms;
     float relative_closing_speed_cms;
     float filtered_closing_speed_cms;
     float brake_schedule_ratio;
@@ -83,12 +99,8 @@ typedef struct
     float relative_velocity_y_cms;
     float relative_speed_cms;
     float stopping_distance_cm;
-    float stop_offset_x_cm;
-    float stop_offset_y_cm;
-    float predicted_error_x_cm;
-    float predicted_error_y_cm;
-    float predicted_error_distance_cm;
-    float envelope_speed_cms;
+    float brake_delay_distance_cm;
+    float brake_margin_cm;
     float trajectory_dt_s;
     float vision_innovation_cm;
     uint32 trajectory_reset_count;
@@ -103,8 +115,9 @@ typedef struct
     uint8 velocity_ready;
     uint8 timing_valid;
     uint8 trajectory_reset_reason;
-    uint8 stop_prediction_flags;
+    uint8 brake_diag_flags;
     uint8 brake_schedule_active;
+    uint8 sqrt_controller_active;
     uint8 frozen_hold_active;
 } PositionLoopDiag_t;
 
@@ -130,6 +143,8 @@ uint8 Position_Loop_Is_Frozen_Hold_Active(void);
 void Position_Loop_Reset_Trajectory(uint8 reason);
 uint8 Position_Loop_Set_Trajectory_Config(const PositionLoopTrajectoryConfig_t *config);
 void Position_Loop_Get_Trajectory_Config(PositionLoopTrajectoryConfig_t *config);
+uint8 Position_Loop_Set_Brake_Config(const PositionLoopBrakeConfig_t *config);
+void Position_Loop_Get_Brake_Config(PositionLoopBrakeConfig_t *config);
 void Position_Loop_Get_Diag(PositionLoopDiag_t *diag);
 
 #endif

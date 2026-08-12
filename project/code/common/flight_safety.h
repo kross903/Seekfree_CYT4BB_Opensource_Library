@@ -3,8 +3,8 @@
 
 #include "zf_common_headfile.h"
 
-#define SAFE_MAX_ANGLE_ROLL     30.0f
-#define SAFE_MAX_ANGLE_PITCH    30.0f
+#define SAFE_MAX_ANGLE_ROLL     35.0f
+#define SAFE_MAX_ANGLE_PITCH    35.0f
 #define SAFE_MAX_ANGLE_YAW      180.0f
 
 #define EMERGENCY_STOP_REASON_NONE            0

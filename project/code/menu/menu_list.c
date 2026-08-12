@@ -1973,7 +1973,6 @@ static void motor_test_page(void)
 
     static uint8 selected_row = MOTOR_TEST_ROW_MOTOR;
     static uint8 edit_row = MOTOR_TEST_EDIT_NONE;
-    static uint8 output_confirm = 0U;
     static uint8 backup_motor = 0U;
     static uint16 backup_throttle = 0U;
     uint8 selected_motor = 0U;
@@ -1989,7 +1988,6 @@ static void motor_test_page(void)
         Flight_Motor_Test_Start();
         selected_row = MOTOR_TEST_ROW_MOTOR;
         edit_row = MOTOR_TEST_EDIT_NONE;
-        output_confirm = 0U;
     }
 
     selected_motor = Flight_Motor_Test_Get_Selected();
@@ -1998,14 +1996,15 @@ static void motor_test_page(void)
     output_limit = Flight_Motor_Test_Get_Output_Limit();
     test_limit = (MOTOR_TEST_MAX_THROTTLE < output_limit) ? MOTOR_TEST_MAX_THROTTLE : output_limit;
 
-    if(key_flag == Button_4)
+    /* 电机输出期间任意实体按键只执行本地急停，本次按键不再触发原功能。 */
+    if(output_enable && key_flag != 0U)
     {
-        if(output_confirm)
-        {
-            output_confirm = 0U;
-            key_flag = 0;
-        }
-        else if(edit_row != MOTOR_TEST_EDIT_NONE)
+        Flight_Motor_Test_Set_Output_Enable(0U);
+        key_flag = 0U;
+    }
+    else if(key_flag == Button_4)
+    {
+        if(edit_row != MOTOR_TEST_EDIT_NONE)
         {
             if(edit_row == MOTOR_TEST_ROW_MOTOR)
             {
@@ -2022,20 +2021,6 @@ static void motor_test_page(void)
         {
             Flight_Motor_Test_Stop();
             return;
-        }
-    }
-    else if(output_confirm)
-    {
-        if(key_flag == Button_1)
-        {
-            output_confirm = 0U;
-            key_flag = 0;
-        }
-        else if(key_flag == Button_2)
-        {
-            Flight_Motor_Test_Set_Output_Enable(1U);
-            output_confirm = 0U;
-            key_flag = 0;
         }
     }
     else if(edit_row != MOTOR_TEST_EDIT_NONE)
@@ -2096,7 +2081,7 @@ static void motor_test_page(void)
                 }
                 else
                 {
-                    output_confirm = 1U;
+                    Flight_Motor_Test_Set_Output_Enable(1U);
                 }
             }
             else if(!output_enable)
@@ -2113,10 +2098,10 @@ static void motor_test_page(void)
     throttle = Flight_Motor_Test_Get_Throttle();
     output_enable = Flight_Motor_Test_Get_Output_Enable();
 
-    if(output_confirm)
+    if(output_enable)
     {
-        key_text = "K2 OK K1 NO";
-        key_color = RGB565_YELLOW;
+        key_text = "ANY KEY STOP";
+        key_color = RGB565_RED;
     }
     else if(edit_row == MOTOR_TEST_ROW_MOTOR)
     {
@@ -2128,12 +2113,6 @@ static void motor_test_page(void)
         key_text = "K1+ K2- K3";
         key_color = RGB565_CYAN;
     }
-    else if(output_enable && selected_row != MOTOR_TEST_ROW_OUTPUT)
-    {
-        key_text = "OUT ON LOCK";
-        key_color = RGB565_YELLOW;
-    }
-
     test_page_show_text(TEST_ROW_Y(0U), "KEY:", key_text, key_color);
     test_page_show_text(TEST_ROW_Y(1U),
                         (selected_row == MOTOR_TEST_ROW_MOTOR) ? "> MOTOR:" : "  MOTOR:",
@@ -2143,17 +2122,11 @@ static void motor_test_page(void)
                        (selected_row == MOTOR_TEST_ROW_THROTTLE) ? "> THR:" : "  THR:",
                        (int32)throttle, 4U);
     test_page_show_text(TEST_ROW_Y(3U),
-                        (selected_row == MOTOR_TEST_ROW_OUTPUT) ? "> OUT:" : "  OUT:",
-                        output_enable ? "ON   " : "OFF  ",
+                        (selected_row == MOTOR_TEST_ROW_OUTPUT) ?
+                            (output_enable ? "> STOP:" : "> START:") :
+                            (output_enable ? "  STOP:" : "  START:"),
+                        output_enable ? "RUN  " : "READY",
                         output_enable ? RGB565_RED : RGB565_GREEN);
-    test_page_show_text(TEST_ROW_Y(4U), "MODE:",
-                        output_confirm ? "CONF " :
-                        (edit_row != MOTOR_TEST_EDIT_NONE) ? "EDIT " :
-                        output_enable ? "HOT  " : "SEL  ",
-                        output_confirm ? RGB565_YELLOW :
-                        output_enable ? RGB565_RED :
-                        (edit_row != MOTOR_TEST_EDIT_NONE) ? RGB565_CYAN : RGB565_WHITE);
-    test_page_show_text(TEST_ROW_Y(5U), "PROP:", "REMOVE", RGB565_YELLOW);
 }
 
 /*

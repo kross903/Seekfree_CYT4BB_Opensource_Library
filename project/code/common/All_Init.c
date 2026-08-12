@@ -120,8 +120,8 @@ static void init_default_pid_parameters(void)
     PID_Init(&angle_pid_yaw,   6.0f, 0.0f, 0.0f, 250.0f, 400.0f, 12.0f, 0.0f);
     /* 速度D由velocity_loop.c独立滤波，末尾legacy alpha不参与速度D计算。 */
     /* 水平速度PID输出单位统一为cm/s^2，积分限幅也表示加速度贡献。 */
-    PID_Init(&vel_pid_x, 2.8f, 1.0f, 0.20f, 263.0f, 80.0f, 0.0f, 0.0f);
-    PID_Init(&vel_pid_y, 2.8f, 1.0f, 0.20f, 263.0f, 80.0f, 0.0f, 0.0f);
+    PID_Init(&vel_pid_x, 2.8f, 1.0f, 0.20f, 458.0f, 80.0f, 0.0f, 0.0f);
+    PID_Init(&vel_pid_y, 2.8f, 1.0f, 0.20f, 458.0f, 80.0f, 0.0f, 0.0f);
     /* 二维位置参数由position_loop.c中的轨迹配置统一初始化。 */
 
     PID_SetReferenceDt(&gyro_pid_roll, LEGACY_FAST_PID_DT_S);

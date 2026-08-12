@@ -55,7 +55,7 @@
 #define PMW_FLOW_GRAVITY_CMS2               (980.665f)
 #define PMW_FLOW_VEL_LPF_CUTOFF_HZ          (15.0f)
 #define PMW_FLOW_VEL_DEADBAND_CMS           (5.0f)
-#define PMW_FLOW_TILT_GATE_DEG              (25.0f)
+#define PMW_FLOW_TILT_GATE_DEG              (30.0f)
 #define PMW_FLOW_VEL_ABS_LIMIT_CMS          (300.0f)
 #define PMW_FLOW_VEL_SLEW_LIMIT_CMS2        (1500.0f)
 #define PMW_FLOW_VEL_SLEW_MIN_STEP_CMS      (12.0f)
@@ -109,14 +109,14 @@
 #define PMW_FLOW_INVALID_HOLD_FRAMES        (3U)
 #define PMW_FLOW_INVALID_DECAY_FRAMES       (8U)
 #define PMW_FLOW_INVALID_DECAY_ALPHA        (0.85f)
-#define PMW_FLOW_WORLD_TILT_GATE_DEG        (25.0f)
+#define PMW_FLOW_WORLD_TILT_GATE_DEG        (30.0f)
 #define PMW_FLOW_DWT_LAR_UNLOCK             (0xC5ACCE55UL)
 #define PMW_FLOW_GYRO_SNAPSHOT_MAX_OFFSET_S (0.002f)
 #define PMW_FLOW_GYRO_SNAPSHOT_MAX_RETRIES  (4U)
 
 /*
  * 机体系 → 水平面投影时 1/cos 的下限保护：cos(60°)=0.5。
- * 正常情况倾角门把超过 25° 的样本冻结掉，下面的 1/cos 顶多放大 1/cos(25°) ≈ 1.10×；
+ * 正常情况倾角门把超过 30° 的样本冻结掉，下面的 1/cos 顶多放大 1/cos(30°) ≈ 1.15×；
  * 这个 floor 只是兜底，避免姿态读数瞬间出现极端值时除法爆掉。
  */
 #define PMW_FLOW_TILT_COS_FLOOR             (0.5f)

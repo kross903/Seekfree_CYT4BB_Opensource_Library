@@ -34,7 +34,7 @@ static void send_sixteen_date(float date_1, float date_2, float date_3, float da
                               float date_9, float date_10, float date_11, float date_12,
                               float date_13, float date_14, float date_15, float date_16);
 
-/* 保留的回传模式：F1/F2/F3/F4/F5/F6/F7/F8/F9/FA/FC/FD/FE/FG/FI/FK/FL/FM/FN/FO/FP/FQ/FU/FV/FW/FY/FZ。 */
+/* 保留的回传模式见VOFA_MANUAL.md，send_back_flag只保存当前选择。 */
 static int send_back_flag = 0;
 static uint8 send_back_command = 'R';
 
@@ -385,7 +385,7 @@ static uint8 set_position_feedforward_value(uint8 item, float value)
     }
 
     Position_Loop_Get_Trajectory_Config(&trajectory);
-    /* M3～M7依次设置位置P、修正速度、目标速度、加速度和Jerk上限。 */
+    /* M3～M8依次设置位置P、修正速度、目标速度、整形A/J和纠偏包络A。 */
     switch(item)
     {
         case '3': trajectory.position_kp = value; break;
@@ -393,9 +393,29 @@ static uint8 set_position_feedforward_value(uint8 item, float value)
         case '5': trajectory.target_speed_max_cms = value; break;
         case '6': trajectory.acceleration_max_cms2 = value; break;
         case '7': trajectory.jerk_max_cms3 = value; break;
+        case '8': trajectory.correction_accel_max_cms2 = value; break;
         default: return 0U;
     }
     return Position_Loop_Set_Trajectory_Config(&trajectory);
+}
+
+static uint8 set_position_brake_value(uint8 item, float value)
+{
+    PositionLoopBrakeConfig_t brake = {0};
+
+    Position_Loop_Get_Brake_Config(&brake);
+    switch(item)
+    {
+        case '1': brake.effective_accel_cms2 = value; break;
+        case '2': brake.effective_jerk_cms3 = value; break;
+        case '3': brake.control_delay_ms = value; break;
+        case '4': brake.safety_buffer_cm = value; break;
+        case '5': brake.boost_margin_cm = value; break;
+        case '6': brake.brake_accel_max_cms2 = value; break;
+        case '7': brake.brake_jerk_max_cms3 = value; break;
+        default: return 0U;
+    }
+    return Position_Loop_Set_Brake_Config(&brake);
 }
 
 static uint8 set_hover_angle_compensation_value(uint8 item, float value)
@@ -577,7 +597,24 @@ static void send_pid_data_back(uint8 command)
                            trajectory.target_speed_max_cms,
                            trajectory.acceleration_max_cms2,
                            trajectory.jerk_max_cms3,
-                           0.0f);
+                           trajectory.correction_accel_max_cms2);
+            return;
+        }
+
+        case 'N':
+        {
+            PositionLoopBrakeConfig_t brake = {0};
+
+            Position_Loop_Get_Brake_Config(&brake);
+            send_sixteen_date(brake.effective_accel_cms2,
+                              brake.effective_jerk_cms3,
+                              brake.control_delay_ms,
+                              brake.safety_buffer_cm,
+                              brake.boost_margin_cm,
+                              brake.brake_accel_max_cms2,
+                              brake.brake_jerk_max_cms3,
+                              0.0f, 0.0f, 0.0f, 0.0f,
+                              0.0f, 0.0f, 0.0f, 0.0f, 0.0f);
             return;
         }
 
@@ -1314,6 +1351,15 @@ void USART_PID_Adjust(void)
             reply_command = 'M';
             break;
 
+        case 'N':
+            if(has_value)
+            {
+                write_success = set_position_brake_value(item, data_get);
+            }
+            send_back_command = 'N';
+            reply_command = 'N';
+            break;
+
         case 'F':
             switch(item)
             {
@@ -1930,8 +1976,8 @@ void send_date_back(void)
             Position_Loop_Get_Diag(&pos_diag);
             send_sixteen_date(pos_diag.position_error_distance_cm,
                               pos_diag.relative_closing_speed_cms,
-                              pos_diag.stopping_distance_cm,
-                              pos_diag.envelope_speed_cms,
+                              pos_diag.proportional_speed_cms,
+                              pos_diag.sqrt_speed_cms,
                               pos_diag.car_ff_filtered_vx_cms,
                               pos_diag.car_ff_filtered_vy_cms,
                               pos_diag.correction_vx_cms,
@@ -1957,17 +2003,17 @@ void send_date_back(void)
                               pos_diag.relative_velocity_x_cms,
                               pos_diag.relative_velocity_y_cms,
                               pos_diag.relative_speed_cms,
+                              pos_diag.relative_closing_speed_cms,
+                              pos_diag.filtered_closing_speed_cms,
                               pos_diag.stopping_distance_cm,
-                              pos_diag.stop_offset_x_cm,
-                              pos_diag.stop_offset_y_cm,
-                              pos_diag.predicted_error_x_cm,
-                              pos_diag.predicted_error_y_cm,
-                              pos_diag.predicted_error_distance_cm,
-                              (float)pos_diag.stop_prediction_flags,
+                              pos_diag.brake_delay_distance_cm,
+                              pos_diag.brake_margin_cm,
+                              pos_diag.proportional_speed_cms,
+                              pos_diag.sqrt_speed_cms,
                               pos_diag.correction_vx_cms,
                               pos_diag.correction_vy_cms,
-                              pos_diag.desired_vx_cms,
-                              pos_diag.desired_vy_cms);
+                              pos_diag.brake_schedule_ratio,
+                              (float)pos_diag.brake_diag_flags);
             break;
         }
 
@@ -1986,14 +2032,14 @@ void send_date_back(void)
                               pos_diag.brake_accel_limit_cms2,
                               trajectory.jerk_max_cms3,
                               pos_diag.brake_jerk_limit_cms3,
-                              pos_diag.relative_velocity_x_cms,
-                              pos_diag.relative_velocity_y_cms,
-                              pos_diag.desired_vx_cms,
-                              pos_diag.desired_vy_cms,
+                              pos_diag.stopping_distance_cm,
+                              pos_diag.brake_delay_distance_cm,
+                              pos_diag.brake_margin_cm,
+                              (float)pos_diag.brake_diag_flags,
                               pos_diag.target_accel_x_cms2,
                               pos_diag.target_accel_y_cms2,
                               pos_diag.position_error_distance_cm,
-                              (float)pos_diag.stop_prediction_flags);
+                              0.0f);
             break;
         }
 
