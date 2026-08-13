@@ -30,6 +30,9 @@ typedef struct
 
 void core_link_user_get_beacon_diag(CoreLinkBeaconDiag_t *diag);
 void core_link_user_get_car_motion_diag(CoreLinkCarMotionDiag_t *diag);
+/* 用最新有效的小车绝对Yaw与指定飞机Yaw计算车机相对Yaw。 */
+uint8 core_link_user_get_car_relative_yaw_deg(float uav_yaw_deg,
+                                              float *relative_yaw_deg);
 uint8 core_link_user_is_screen_mirror_enabled (void);
 uint8 core_link_user_consume_screen_mirror_enabled_changed (void);
 uint8 core_link_user_consume_monitor_exit_request (void);

@@ -179,6 +179,20 @@ static uint8 core_link_user_get_uplink_car_absolute_yaw_deg(float *yaw_deg)
     return 1U;
 }
 
+uint8 core_link_user_get_car_relative_yaw_deg(float uav_yaw_deg,
+                                              float *relative_yaw_deg)
+{
+    float car_yaw_deg;
+
+    if((relative_yaw_deg == NULL) || !isfinite(uav_yaw_deg) ||
+       !core_link_user_get_uplink_car_absolute_yaw_deg(&car_yaw_deg))
+    {
+        return 0U;
+    }
+    *relative_yaw_deg = core_link_user_wrap_angle(car_yaw_deg - uav_yaw_deg);
+    return 1U;
+}
+
 static uint8 core_link_user_track_id_in_use(uint8 track_id)
 {
     uint8 i;

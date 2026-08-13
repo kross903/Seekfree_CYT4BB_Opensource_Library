@@ -32,8 +32,10 @@ typedef struct
     float yaw_deg;
     float tof_height_cm;
     float fused_height_cm;
+    float car_yaw_rel_uav_deg;
     uint8 binary_thresholds[VISION_BINARY_ZONE_COUNT];
     uint8 beacon_recognition_enabled;
+    uint8 car_yaw_valid;
 } SharedVisionInput_t;
 
 typedef struct
@@ -94,6 +96,9 @@ typedef struct
     uint32 reserved[4];
 } SharedVisionFrameCtrl_t;
 
+typedef char SharedVisionInputLayoutCheck[
+    (sizeof(SharedVisionInput_t) <=
+     (SHARED_VISION_RESULT_ADDR - SHARED_VISION_INPUT_ADDR)) ? 1 : -1];
 typedef char SharedVisionResultLayoutCheck[
     (sizeof(SharedVisionResult_t) <= (SHARED_VISION_SCREEN_CTRL_ADDR - SHARED_VISION_RESULT_ADDR)) ? 1 : -1];
 typedef char SharedVisionScreenCtrlLayoutCheck[
@@ -637,6 +642,7 @@ void CrossCoreCamera_CameraCoreInit(void)
     g_shared_vision_input->yaw_deg = 0.0f;
     g_shared_vision_input->tof_height_cm = 100.0f;
     g_shared_vision_input->fused_height_cm = 100.0f;
+    g_shared_vision_input->car_yaw_rel_uav_deg = 0.0f;
     g_shared_vision_input->binary_thresholds[VISION_BINARY_ZONE_INNER] =
         (uint8)VISION_BINARY_THRESHOLD_INNER;
     g_shared_vision_input->binary_thresholds[VISION_BINARY_ZONE_MIDDLE] =
@@ -644,6 +650,7 @@ void CrossCoreCamera_CameraCoreInit(void)
     g_shared_vision_input->binary_thresholds[VISION_BINARY_ZONE_OUTER] =
         (uint8)VISION_BINARY_THRESHOLD_OUTER;
     g_shared_vision_input->beacon_recognition_enabled = 0U;
+    g_shared_vision_input->car_yaw_valid = 0U;
     g_shared_vision_snapshot_metadata->magic = 0U;
     g_shared_vision_snapshot_metadata->image_seq = 0U;
     g_shared_vision_snapshot_metadata->input_seq = 0U;
@@ -712,6 +719,7 @@ void CrossCoreCamera_CameraCoreTask(void)
         input_snapshot.yaw_deg = 0.0f;
         input_snapshot.tof_height_cm = 100.0f;
         input_snapshot.fused_height_cm = 100.0f;
+        input_snapshot.car_yaw_rel_uav_deg = 0.0f;
         input_snapshot.binary_thresholds[VISION_BINARY_ZONE_INNER] =
             (uint8)VISION_BINARY_THRESHOLD_INNER;
         input_snapshot.binary_thresholds[VISION_BINARY_ZONE_MIDDLE] =
@@ -719,6 +727,7 @@ void CrossCoreCamera_CameraCoreTask(void)
         input_snapshot.binary_thresholds[VISION_BINARY_ZONE_OUTER] =
             (uint8)VISION_BINARY_THRESHOLD_OUTER;
         input_snapshot.beacon_recognition_enabled = 0U;
+        input_snapshot.car_yaw_valid = 0U;
     }
 
     // 起飞预扫描完成前关闭信标分支，小车标志识别保持运行。
@@ -728,6 +737,9 @@ void CrossCoreCamera_CameraCoreTask(void)
         input_snapshot.binary_thresholds[VISION_BINARY_ZONE_OUTER]);
     VisionRuntime_SetBeaconRecognitionEnabled((uint8)(
         input_valid && input_snapshot.beacon_recognition_enabled));
+    VehicleMarkerLocalization_SetOpeningDirectionPrior(
+        input_snapshot.car_yaw_rel_uav_deg,
+        (uint8)(input_valid && input_snapshot.car_yaw_valid));
     recognition_timer_valid = (uint8)(CrossCoreCamera_DwtInit() &&
                                       (SystemCoreClock != 0U));
     if(recognition_timer_valid)
@@ -926,18 +938,24 @@ void CrossCoreCamera_ControlCorePublishInput(float roll_deg,
                                              float tof_height_cm,
                                              float fused_height_cm)
 {
+    float car_yaw_rel_uav_deg = 0.0f;
+    uint8 car_yaw_valid = core_link_user_get_car_relative_yaw_deg(
+        yaw_deg, &car_yaw_rel_uav_deg);
+
     g_shared_vision_input->magic = SHARED_VISION_MAGIC;
     g_shared_vision_input->roll_deg = roll_deg;
     g_shared_vision_input->pitch_deg = pitch_deg;
     g_shared_vision_input->yaw_deg = yaw_deg;
     g_shared_vision_input->tof_height_cm = tof_height_cm;
     g_shared_vision_input->fused_height_cm = fused_height_cm;
+    g_shared_vision_input->car_yaw_rel_uav_deg = car_yaw_rel_uav_deg;
     memcpy((void *)g_shared_vision_input->binary_thresholds,
            s_control_binary_thresholds,
            sizeof(s_control_binary_thresholds));
     g_shared_vision_input->beacon_recognition_enabled =
         (Flight_Takeoff_Is_Active() ||
          BeaconSearch_IsPausedByBlindBoxTask()) ? 0U : 1U;
+    g_shared_vision_input->car_yaw_valid = car_yaw_valid;
     g_shared_vision_input->seq++;
     CrossCoreCamera_CleanInput();
 }

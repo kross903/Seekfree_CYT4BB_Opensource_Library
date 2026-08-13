@@ -90,6 +90,9 @@ typedef struct
     float opening_ratio_score;
     float concavity_score;
     float basic_blob_score;
+    float direction_expected_deg;            /* 通信Yaw给出的期望开口方向。 */
+    float direction_error_deg;               /* 视觉开口方向与期望方向的夹角。 */
+    float direction_score;                   /* 开口方向一致性软评分。 */
     float geometry_score;
     float arm_angle_deg;
     float base_cm;
@@ -105,6 +108,7 @@ typedef struct
     float open_v_gate_center_gap;
     uint8 open_v_apex_index;
     uint8 open_v_gate_from_primary;
+    uint8 direction_prior_valid;
     uint8 candidate_count;
     uint8 geometry_reject_count;
     uint8 reject_reason;
@@ -139,6 +143,9 @@ void VehicleMarkerLocalization_ServiceLostProtection(void);
 void VehicleMarkerLocalization_GetLossDebug(VehicleMarkerLossDebug_t *debug);
 void VehicleMarkerLocalization_SetLossDebug(const VehicleMarkerLossDebug_t *debug);
 void VehicleMarkerLocalization_GetChevronDebug(VehicleMarkerChevronDebug_t *debug);
+/* 设置当前帧的小车相对机体Yaw；无效时方向项自动退出综合评分。 */
+void VehicleMarkerLocalization_SetOpeningDirectionPrior(float car_yaw_rel_uav_deg,
+                                                        uint8 valid);
 uint8 VehicleMarkerLocalization_GetFollowPoint(
     const VehicleMarkerPose_t *pose,
     float *filtered_x, float *filtered_y,

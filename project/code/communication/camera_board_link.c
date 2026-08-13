@@ -563,6 +563,7 @@ static void CameraBoardLink_SendMainState(void)
     ICM_Health_t imu_health = {0};
     HeightTofSnapshot_t height_snapshot = {0};
     float height_cm;
+    float car_yaw_rel_uav_deg = 0.0f;
     uint32 now_us = CameraBoardLink_TimeNowUs();
 
     HeightManager_GetTofSnapshot(&height_snapshot);
@@ -583,6 +584,12 @@ static void CameraBoardLink_SendMainState(void)
     {
         flags |= CAMERA_BOARD_MAIN_FLAG_BEACON_ENABLE;
     }
+    if((flags & CAMERA_BOARD_MAIN_FLAG_POSE_VALID) != 0U &&
+       core_link_user_get_car_relative_yaw_deg(current_yaw,
+                                               &car_yaw_rel_uav_deg))
+    {
+        flags |= CAMERA_BOARD_MAIN_FLAG_CAR_YAW_VALID;
+    }
 
     s_state_sequence++;
     CameraBoardLink_WriteU32(&payload[0], now_us);
@@ -593,6 +600,8 @@ static void CameraBoardLink_SendMainState(void)
     CameraBoardLink_WriteI16(&payload[12], CameraBoardLink_FloatToI16(current_yaw, 100.0f));
     CameraBoardLink_WriteU16(&payload[14], CameraBoardLink_FloatToU16(height_cm, 10.0f));
     CameraBoardLink_WriteU16(&payload[16], flags);
+    CameraBoardLink_WriteI16(&payload[18],
+        CameraBoardLink_FloatToI16(car_yaw_rel_uav_deg, 100.0f));
 
     if(CameraBoardLink_StartFrame(CAMERA_BOARD_MSG_MAIN_STATE,
                                   payload, sizeof(payload)))

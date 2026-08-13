@@ -37,6 +37,8 @@ static volatile uint32 s_vehicle_marker_debug_mark_lost_count = 0U;
 static volatile uint32 s_vehicle_marker_debug_timeout_count = 0U;
 
 static VehicleMarkerChevronDebug_t s_vehicle_marker_chevron_debug = {0};
+static float s_vehicle_marker_opening_direction_prior_deg = 0.0f;
+static uint8 s_vehicle_marker_opening_direction_prior_valid = 0U;
 
 static void vehicle_marker_chevron_reset_debug(void);
 
@@ -203,12 +205,23 @@ void VehicleMarkerLocalization_GetChevronDebug(VehicleMarkerChevronDebug_t *debu
     *debug = s_vehicle_marker_chevron_debug;
 }
 
+void VehicleMarkerLocalization_SetOpeningDirectionPrior(float car_yaw_rel_uav_deg,
+                                                        uint8 valid)
+{
+    s_vehicle_marker_opening_direction_prior_valid =
+        (uint8)(valid && isfinite(car_yaw_rel_uav_deg));
+    s_vehicle_marker_opening_direction_prior_deg =
+        s_vehicle_marker_opening_direction_prior_valid ?
+        car_yaw_rel_uav_deg : 0.0f;
+}
+
 void VehicleMarkerLocalization_Init(void)
 {
     vehicle_marker_set_position_lost();
     g_vehicle_marker_pose_update_seq = 0U;
     vehicle_marker_reset_loss_debug();
     vehicle_marker_chevron_reset_debug();
+    VehicleMarkerLocalization_SetOpeningDirectionPrior(0.0f, 0U);
 }
 
 void VehicleMarkerLocalization_Task5ms(void)
@@ -290,13 +303,22 @@ void VehicleMarkerLocalization_ServiceLostProtection(void)
 #define VEHICLE_MARKER_CHEVRON_CONCAVITY_RATIO_LOW          (0.08f) /* 凹陷开始计分的比例。 */
 #define VEHICLE_MARKER_CHEVRON_CONCAVITY_RATIO_GOOD         (0.12f) /* 凹陷满分区间下界。 */
 #define VEHICLE_MARKER_CHEVRON_CONCAVITY_RATIO_HIGH         (0.35f) /* 凹陷满分区间上界。 */
-#define VEHICLE_MARKER_CHEVRON_CONCAVITY_RATIO_MAX          (0.45f) /* 过深凹陷拒绝边界。 */
+#define VEHICLE_MARKER_CHEVRON_CONCAVITY_RATIO_MAX          (0.55f) /* 过深凹陷拒绝边界。 */
 #define VEHICLE_MARKER_CHEVRON_GEOMETRY_SCORE_MIN            (0.55f) /* 车标综合分最低值。 */
+
+/*
+ * 通信Yaw方向先验调参区。视觉heading由V尖端指向开口，当前车标开口朝车尾，
+ * 因此相对车头Yaw增加180度。方向只参与软评分，通信失效时保持原几何模型。
+ */
+#define VEHICLE_MARKER_CHEVRON_OPENING_TO_CAR_YAW_DEG       (180.0f) /* 开口方向相对车头Yaw。 */
+#define VEHICLE_MARKER_CHEVRON_DIRECTION_FULL_ERROR_DEG      (20.0f) /* 小于该误差方向满分。 */
+#define VEHICLE_MARKER_CHEVRON_DIRECTION_ZERO_ERROR_DEG      (70.0f) /* 大于该误差方向零分。 */
+#define VEHICLE_MARKER_CHEVRON_SCORE_DIRECTION_WEIGHT         (0.20f) /* 方向先验综合分权重。 */
 
 /* 简化模型权重：总和为1，避免增加额外的相互耦合门限。 */
 #define VEHICLE_MARKER_CHEVRON_SCORE_SYMMETRY_WEIGHT         (0.30f) /* 臂对称性权重。 */
-#define VEHICLE_MARKER_CHEVRON_SCORE_OPENING_WEIGHT          (0.30f) /* 开口比例权重。 */
-#define VEHICLE_MARKER_CHEVRON_SCORE_CONCAVITY_WEIGHT        (0.25f) /* 凸包凹陷权重。 */
+#define VEHICLE_MARKER_CHEVRON_SCORE_OPENING_WEIGHT          (0.25f) /* 开口比例权重。 */
+#define VEHICLE_MARKER_CHEVRON_SCORE_CONCAVITY_WEIGHT        (0.30f) /* 凸包凹陷权重。 */
 #define VEHICLE_MARKER_CHEVRON_SCORE_BLOB_WEIGHT             (0.15f) /* 基础Blob权重。 */
 
 /* 凸包计算最多使用的轮廓点，超过时均匀抽样以限制单帧计算量。 */
@@ -647,6 +669,28 @@ static float vehicle_marker_chevron_score_concavity(float ratio)
     return (VEHICLE_MARKER_CHEVRON_CONCAVITY_RATIO_MAX - ratio) /
            (VEHICLE_MARKER_CHEVRON_CONCAVITY_RATIO_MAX -
             VEHICLE_MARKER_CHEVRON_CONCAVITY_RATIO_HIGH);
+}
+
+static float vehicle_marker_chevron_wrap_deg(float angle_deg)
+{
+    while(angle_deg > 180.0f) angle_deg -= 360.0f;
+    while(angle_deg < -180.0f) angle_deg += 360.0f;
+    return angle_deg;
+}
+
+static float vehicle_marker_chevron_score_direction(float error_deg)
+{
+    if(error_deg <= VEHICLE_MARKER_CHEVRON_DIRECTION_FULL_ERROR_DEG)
+    {
+        return 1.0f;
+    }
+    if(error_deg >= VEHICLE_MARKER_CHEVRON_DIRECTION_ZERO_ERROR_DEG)
+    {
+        return 0.0f;
+    }
+    return (VEHICLE_MARKER_CHEVRON_DIRECTION_ZERO_ERROR_DEG - error_deg) /
+           (VEHICLE_MARKER_CHEVRON_DIRECTION_ZERO_ERROR_DEG -
+            VEHICLE_MARKER_CHEVRON_DIRECTION_FULL_ERROR_DEG);
 }
 
 static float vehicle_marker_chevron_score_basic_blob(
@@ -1710,6 +1754,10 @@ static uint8 vehicle_marker_chevron_process_candidate(
     float opening_ratio_score = 0.0f;
     float concavity_score = 0.0f;
     float basic_blob_score = 0.0f;
+    float base_geometry_score = 0.0f;
+    float direction_expected_deg = 0.0f;
+    float direction_error_deg = 0.0f;
+    float direction_score = 0.0f;
     float geometry_score = 0.0f;
     VehicleMarkerChevronGate_t blob_gate;
     float effective_open_v_score = 0.0f;
@@ -1821,6 +1869,15 @@ static uint8 vehicle_marker_chevron_process_candidate(
     arm_symmetry = (left_span_cm < right_span_cm) ?
                    left_span_cm / right_span_cm : right_span_cm / left_span_cm;
     opening_ratio = base_cm / (left_span_cm + right_span_cm);
+    heading_x = left_dx + right_dx;
+    heading_y = left_dy + right_dy;
+    if((heading_x * heading_x + heading_y * heading_y) <
+       VEHICLE_MARKER_CHEVRON_POINT_EPS)
+    {
+        heading_x = left_dx;
+        heading_y = left_dy;
+    }
+    heading_deg = atan2f(heading_y, heading_x) * (180.0f / 3.14159265f);
     vehicle_marker_chevron_measure_concavity(&candidate->contour,
                                               &concavity_depth_px,
                                               &concavity_ratio);
@@ -1833,11 +1890,26 @@ static uint8 vehicle_marker_chevron_process_candidate(
     vehicle_marker_chevron_get_gate(&candidate->blob, &blob_gate);
     basic_blob_score = vehicle_marker_chevron_score_basic_blob(
         &candidate->blob, &blob_gate);
-    geometry_score =
+    base_geometry_score =
         arm_symmetry_score * VEHICLE_MARKER_CHEVRON_SCORE_SYMMETRY_WEIGHT +
         opening_ratio_score * VEHICLE_MARKER_CHEVRON_SCORE_OPENING_WEIGHT +
         concavity_score * VEHICLE_MARKER_CHEVRON_SCORE_CONCAVITY_WEIGHT +
         basic_blob_score * VEHICLE_MARKER_CHEVRON_SCORE_BLOB_WEIGHT;
+    geometry_score = base_geometry_score;
+    if(s_vehicle_marker_opening_direction_prior_valid)
+    {
+        direction_expected_deg = vehicle_marker_chevron_wrap_deg(
+            s_vehicle_marker_opening_direction_prior_deg +
+            VEHICLE_MARKER_CHEVRON_OPENING_TO_CAR_YAW_DEG);
+        direction_error_deg = fabsf(vehicle_marker_chevron_wrap_deg(
+            heading_deg - direction_expected_deg));
+        direction_score = vehicle_marker_chevron_score_direction(
+            direction_error_deg);
+        geometry_score =
+            base_geometry_score *
+                (1.0f - VEHICLE_MARKER_CHEVRON_SCORE_DIRECTION_WEIGHT) +
+            direction_score * VEHICLE_MARKER_CHEVRON_SCORE_DIRECTION_WEIGHT;
+    }
 
     s_vehicle_marker_chevron_debug.left_arm_cm = left_span_cm;
     s_vehicle_marker_chevron_debug.right_arm_cm = right_span_cm;
@@ -1850,6 +1922,12 @@ static uint8 vehicle_marker_chevron_process_candidate(
     s_vehicle_marker_chevron_debug.opening_ratio_score = opening_ratio_score;
     s_vehicle_marker_chevron_debug.concavity_score = concavity_score;
     s_vehicle_marker_chevron_debug.basic_blob_score = basic_blob_score;
+    s_vehicle_marker_chevron_debug.direction_expected_deg =
+        direction_expected_deg;
+    s_vehicle_marker_chevron_debug.direction_error_deg = direction_error_deg;
+    s_vehicle_marker_chevron_debug.direction_score = direction_score;
+    s_vehicle_marker_chevron_debug.direction_prior_valid =
+        s_vehicle_marker_opening_direction_prior_valid;
     s_vehicle_marker_chevron_debug.geometry_score = geometry_score;
     /* 以下旧几何量仅保留用于观察，不再作为独立门限。 */
     s_vehicle_marker_chevron_debug.arm_angle_deg = arm_angle_deg;
@@ -1871,15 +1949,6 @@ static uint8 vehicle_marker_chevron_process_candidate(
     }
 
     s_vehicle_marker_chevron_debug.reject_reason = VEHICLE_MARKER_CHEVRON_REJECT_NONE;
-    heading_x = left_dx + right_dx;
-    heading_y = left_dy + right_dy;
-    if((heading_x * heading_x + heading_y * heading_y) < VEHICLE_MARKER_CHEVRON_POINT_EPS)
-    {
-        heading_x = left_dx;
-        heading_y = left_dy;
-    }
-    heading_deg = atan2f(heading_y, heading_x) * (180.0f / 3.14159265f);
-
     if(estimated_z <= 1.0f)
     {
         estimated_z = VEHICLE_MARKER_CHEVRON_REF_HEIGHT_CM;
