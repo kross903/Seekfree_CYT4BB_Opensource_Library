@@ -1,5 +1,6 @@
 #include "control/height_manager.h"
 #include "control/dual_tof_manager.h"
+#include "control/motor_mixer.h"
 #include "common/project_headfile.h"
 #include <math.h>
 #include <string.h>
@@ -278,6 +279,10 @@ static void height_clear_control_diag(void)
     s_height_diag.velocity_error_cms = 0.0f;
     s_height_diag.height_pid_output_cms = 0.0f;
     s_height_diag.velocity_pid_output = 0.0f;
+    s_height_diag.height_pid_limit_flags = 0U;
+    s_height_diag.velocity_pid_limit_flags = 0U;
+    s_height_diag.height_integrator_held = 0U;
+    s_height_diag.velocity_integrator_held = 0U;
     s_height_diag.velocity_feedback_cms = 0.0f;
     s_height_diag.cascade_enabled = HEIGHT_CASCADE_ENABLE;
 }
@@ -1192,20 +1197,46 @@ void HeightManager_Task_10ms(void)
             float target_vz_cms;
             float raw_velocity_output;
             float velocity_feedback_cms;
+            float height_integral_before;
+            float velocity_integral_before;
+            MotorMixerLimitDiag_t mixer_diag = {0};
+            uint8 throttle_negative_limited;
+            uint8 throttle_positive_limited;
+            uint8 height_negative_limited;
+            uint8 height_positive_limited;
 
             velocity_feedback_cms = s_height_velocity_feedback_cms;
-            height_pid_vz_cms = PID_Calculate(&HeightPID,
-                                              actual_cm + error_cm,
-                                              actual_cm,
-                                              TOF_DT);
+            Motor_Mixer_Get_Limit_Diag(&mixer_diag);
+            throttle_negative_limited = (uint8)((mixer_diag.throttle_limit_flags &
+                                                  MOTOR_MIXER_LIMIT_NEGATIVE) != 0U);
+            throttle_positive_limited = (uint8)((mixer_diag.throttle_limit_flags &
+                                                  MOTOR_MIXER_LIMIT_POSITIVE) != 0U);
+
+            /* 外环同时服从自身速度目标边界和下游油门能力，避免串级上层继续积累。 */
+            height_negative_limited = (uint8)(throttle_negative_limited ||
+                                               (s_height_diag.target_velocity_cms <=
+                                                -HEIGHT_VEL_TARGET_LIMIT_CMS));
+            height_positive_limited = (uint8)(throttle_positive_limited ||
+                                               (s_height_diag.target_velocity_cms >=
+                                                HEIGHT_VEL_TARGET_LIMIT_CMS));
+            height_integral_before = HeightPID.integral;
+            height_pid_vz_cms = PID_CalculateLimited(&HeightPID,
+                                                     actual_cm + error_cm,
+                                                     actual_cm,
+                                                     TOF_DT,
+                                                     height_negative_limited,
+                                                     height_positive_limited);
             target_vz_cms = height_clamp_float(height_pid_vz_cms,
                                                -HEIGHT_VEL_TARGET_LIMIT_CMS,
                                                HEIGHT_VEL_TARGET_LIMIT_CMS);
 
-            raw_velocity_output = PID_Calculate(&HeightVelPID,
-                                                target_vz_cms,
-                                                velocity_feedback_cms,
-                                                TOF_DT);
+            velocity_integral_before = HeightVelPID.integral;
+            raw_velocity_output = PID_CalculateLimited(&HeightVelPID,
+                                                       target_vz_cms,
+                                                       velocity_feedback_cms,
+                                                       TOF_DT,
+                                                       throttle_negative_limited,
+                                                       throttle_positive_limited);
             HeightSpeedPID_output = raw_velocity_output *
                                     (s_soft_takeoff_active ? s_soft_takeoff_output_blend : 1.0f);
 
@@ -1213,6 +1244,20 @@ void HeightManager_Task_10ms(void)
             s_height_diag.target_velocity_cms = target_vz_cms;
             s_height_diag.velocity_error_cms = target_vz_cms - velocity_feedback_cms;
             s_height_diag.velocity_pid_output = HeightSpeedPID_output;
+            s_height_diag.height_pid_limit_flags =
+                (uint8)((height_negative_limited ? MOTOR_MIXER_LIMIT_NEGATIVE : 0U) |
+                        (height_positive_limited ? MOTOR_MIXER_LIMIT_POSITIVE : 0U));
+            s_height_diag.velocity_pid_limit_flags = mixer_diag.throttle_limit_flags;
+            s_height_diag.height_integrator_held =
+                (uint8)((HeightPID.integral == height_integral_before) &&
+                        ((height_negative_limited && (error_cm < 0.0f)) ||
+                         (height_positive_limited && (error_cm > 0.0f))));
+            s_height_diag.velocity_integrator_held =
+                (uint8)((HeightVelPID.integral == velocity_integral_before) &&
+                        ((throttle_negative_limited &&
+                          (s_height_diag.velocity_error_cms < 0.0f)) ||
+                         (throttle_positive_limited &&
+                          (s_height_diag.velocity_error_cms > 0.0f))));
             s_height_diag.cascade_enabled = 1U;
         }
 #else

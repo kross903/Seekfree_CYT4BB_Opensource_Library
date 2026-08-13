@@ -104,11 +104,15 @@ static float pid_calculate_error_internal(PID_Controller *pid,
                                           float error,
                                           float dt,
                                           int use_external_derivative,
-                                          float external_derivative)
+                                          float external_derivative,
+                                          int negative_limited,
+                                          int positive_limited)
 {
     float output = 0.0f;
     float integral_factor = 1.0f;
     float raw_derivative = 0.0f;
+    float integral_before;
+    float integral_output_delta;
 
     pid_update_timing_cache(pid, dt);
 
@@ -118,8 +122,14 @@ static float pid_calculate_error_internal(PID_Controller *pid,
                                                                  : (pid->IntegralThreshold / fabsf(error));
     }
 
-    // 误差越大，积分缩放越强，保持原工程的积分抑制策略不变。
-    pid->integral += integral_factor * error * pid->integral_step_scale;
+    integral_before = pid->integral;
+    // 执行器受限时只禁止积分继续推向受限方向，反向误差仍可释放已有积分。
+    if(!((negative_limited && (error < 0.0f)) ||
+         (positive_limited && (error > 0.0f))))
+    {
+        // 误差越大，积分缩放越强，保持原工程的积分抑制策略不变。
+        pid->integral += integral_factor * error * pid->integral_step_scale;
+    }
 
     // 积分限幅
     if(pid->integral > pid->integral_limit)
@@ -146,6 +156,15 @@ static float pid_calculate_error_internal(PID_Controller *pid,
     // 计算 PID 输出
     output = pid->Kp * error + pid->Ki * pid->integral + pid->Kd * pid->derivative;
 
+    /* PID自身输出受限时也撤销推动饱和的新增积分，反向释放积分不受影响。 */
+    integral_output_delta = pid->Ki * (pid->integral - integral_before);
+    if(((output > pid->output_limit) && (integral_output_delta > 0.0f)) ||
+       ((output < -pid->output_limit) && (integral_output_delta < 0.0f)))
+    {
+        pid->integral = integral_before;
+        output = pid->Kp * error + pid->Ki * pid->integral + pid->Kd * pid->derivative;
+    }
+
     // 输出限幅
     if(output > pid->output_limit)
     {
@@ -164,7 +183,22 @@ static float pid_calculate_error_internal(PID_Controller *pid,
 
 float PID_CalculateError(PID_Controller *pid, float error, float dt)
 {
-    return pid_calculate_error_internal(pid, error, dt, 0, 0.0f);
+    return pid_calculate_error_internal(pid, error, dt, 0, 0.0f, 0, 0);
+}
+
+float PID_CalculateErrorLimited(PID_Controller *pid,
+                                float error,
+                                float dt,
+                                int negative_limited,
+                                int positive_limited)
+{
+    return pid_calculate_error_internal(pid,
+                                        error,
+                                        dt,
+                                        0,
+                                        0.0f,
+                                        negative_limited,
+                                        positive_limited);
 }
 
 float PID_CalculateErrorWithDerivative(PID_Controller *pid,
@@ -172,12 +206,26 @@ float PID_CalculateErrorWithDerivative(PID_Controller *pid,
                                        float derivative,
                                        float dt)
 {
-    return pid_calculate_error_internal(pid, error, dt, 1, derivative);
+    return pid_calculate_error_internal(pid, error, dt, 1, derivative, 0, 0);
 }
 
 float PID_Calculate(PID_Controller *pid, float target, float current, float dt)
 {
     return PID_CalculateError(pid, target - current, dt);
+}
+
+float PID_CalculateLimited(PID_Controller *pid,
+                           float target,
+                           float current,
+                           float dt,
+                           int negative_limited,
+                           int positive_limited)
+{
+    return PID_CalculateErrorLimited(pid,
+                                     target - current,
+                                     dt,
+                                     negative_limited,
+                                     positive_limited);
 }
 
 /*

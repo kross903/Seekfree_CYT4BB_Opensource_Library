@@ -934,6 +934,7 @@ static void send_height_loop_tuning_data(void)
     float speed_d_output = 0.0f;
     float speed_total_output = 0.0f;
     float speed_final_output = 0.0f;
+    uint8 anti_windup_status = 0U;
 
     HeightManager_Get_Diag(&height_diag);
     target_height_cm = HeightManager_Get_Active_Target();
@@ -951,6 +952,13 @@ static void send_height_loop_tuning_data(void)
     speed_d_output = HeightVelPID.Kd * HeightVelPID.derivative;
     speed_total_output = speed_p_output + speed_i_output + speed_d_output;
     speed_final_output = HeightSpeedPID_output;
+    anti_windup_status = (uint8)((height_diag.cascade_enabled ? 0x01U : 0U) |
+                                 (height_diag.height_integrator_held ? 0x02U : 0U) |
+                                 (height_diag.velocity_integrator_held ? 0x04U : 0U) |
+                                 ((height_diag.height_pid_limit_flags & MOTOR_MIXER_LIMIT_NEGATIVE) ? 0x08U : 0U) |
+                                 ((height_diag.height_pid_limit_flags & MOTOR_MIXER_LIMIT_POSITIVE) ? 0x10U : 0U) |
+                                 ((height_diag.velocity_pid_limit_flags & MOTOR_MIXER_LIMIT_NEGATIVE) ? 0x20U : 0U) |
+                                 ((height_diag.velocity_pid_limit_flags & MOTOR_MIXER_LIMIT_POSITIVE) ? 0x40U : 0U));
 
     send_sixteen_date(target_height_cm,
                       actual_height_cm,
@@ -967,7 +975,7 @@ static void send_height_loop_tuning_data(void)
                       height_error_cm,
                       speed_error_cms,
                       speed_final_output,
-                      (float)height_diag.cascade_enabled);
+                      (float)anti_windup_status);
 }
 
 void Init_uart(void)
@@ -2075,18 +2083,18 @@ void send_date_back(void)
                               mixer_diag.raw_motor[1],
                               mixer_diag.raw_motor[2],
                               mixer_diag.raw_motor[3],
-                              (float)mixer_diag.clamped_motor[0],
-                              (float)mixer_diag.clamped_motor[1],
-                              (float)mixer_diag.clamped_motor[2],
-                              (float)mixer_diag.clamped_motor[3],
-                              (float)mixer_diag.high_mask,
-                              (float)mixer_diag.low_mask,
+                              mixer_diag.allocated_motor[0],
+                              mixer_diag.allocated_motor[1],
+                              mixer_diag.allocated_motor[2],
+                              mixer_diag.allocated_motor[3],
+                              mixer_diag.roll_pitch_scale,
+                              mixer_diag.yaw_scale,
+                              mixer_diag.requested_throttle,
+                              mixer_diag.applied_throttle,
                               (float)mixer_diag.roll_limit_flags,
                               (float)mixer_diag.pitch_limit_flags,
                               (float)mixer_diag.yaw_limit_flags,
-                              (float)mixer_diag.throttle_limit_flags,
-                              (float)mixer_diag.invalid_output,
-                              (float)((mixer_diag.high_mask || mixer_diag.low_mask) ? 1U : 0U));
+                              (float)mixer_diag.throttle_limit_flags);
             break;
         }
 

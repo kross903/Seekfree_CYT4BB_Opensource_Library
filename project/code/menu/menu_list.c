@@ -1,6 +1,7 @@
 #include "common/project_headfile.h"
 #include "motor_hardware/small_driver_uart_control.h"
 
+#include <math.h>
 #include <stdio.h>
 
 /* ????? */
@@ -117,6 +118,7 @@ void icm_init_menu()
 #define TRACK_LIGHT_RELEASE_TIMEOUT_TICKS 40U
 #define VISION_FUSION_REFRESH_US          50000U
 #define VISION_FUSION_ROW_COUNT           12U
+#define VISION_FUSION_VIEW_COUNT          3U
 #define VISION_FUSION_TARGETS_PER_SOURCE  3U
 #define VISION_FUSION_DIVIDER_Y           ((uint16)(TEST_ROW_Y(8U) + 17U))
 #define REAR_BOARD_RX_ROW_COUNT           12U
@@ -229,12 +231,24 @@ static uint8 vision_fusion_target_index(uint8 display_index)
 
 static void vision_fusion_draw_title(void)
 {
-    test_page_clear_line(20U);
+    ips200_clear();
     ips200_set_font(IPS200_8X16_FONT);
     ips200_set_color(RGB565_WHITE, RGB565_BLACK);
-    ips200_show_string(TEST_PAGE_X, 20U,
-        (s_vision_fusion_view == 0U) ?
-        "Fusion Drone P1 K1/K2 K4" : "Fusion Car P2 K1/K2 K4");
+    if(s_vision_fusion_view == 0U)
+    {
+        ips200_show_string(TEST_PAGE_X, 20U,
+                           "FUS P1 BCN-UAV K1< K2> K4");
+    }
+    else if(s_vision_fusion_view == 1U)
+    {
+        ips200_show_string(TEST_PAGE_X, 20U,
+                           "FUS P2 BCN-CAR K1< K2> K4");
+    }
+    else
+    {
+        ips200_show_string(TEST_PAGE_X, 20U,
+                           "FUS P3 CAR-UAV K1< K2> K4");
+    }
 }
 
 static void vision_fusion_capture_snapshot(uint32 now_us)
@@ -252,6 +266,159 @@ static void vision_fusion_draw_row(uint8 row)
     uint8 target_index;
 
     test_page_clear_line(y);
+    if(s_vision_fusion_view == 2U)
+    {
+        int32 front_x = (int32)s_vision_fusion_snapshot.front_car_x_cm;
+        int32 front_y = (int32)s_vision_fusion_snapshot.front_car_y_cm;
+        int32 rear_x = (int32)s_vision_fusion_snapshot.rear_car_x_cm;
+        int32 rear_y = (int32)s_vision_fusion_snapshot.rear_car_y_cm;
+
+        ips200_set_font(IPS200_8X16_FONT);
+        ips200_set_color(RGB565_WHITE, RGB565_BLACK);
+        if(row == 0U)
+        {
+            ips200_show_string(20U, y, "SRC");
+            ips200_show_string(52U, y, "VALID");
+            ips200_show_string(108U, y, "X");
+            ips200_show_string(164U, y, "Y");
+        }
+        else if((row == 1U) || (row == 2U))
+        {
+            uint8 front = (row == 1U) ? 1U : 0U;
+            uint8 valid = front ? s_vision_fusion_snapshot.front_car_valid :
+                                  s_vision_fusion_snapshot.rear_car_valid;
+
+            ips200_set_color(front ? RGB565_CYAN : RGB565_YELLOW,
+                             RGB565_BLACK);
+            ips200_show_string(20U, y, front ? "F" : "R");
+            ips200_set_color(valid ? RGB565_GREEN : RGB565_RED,
+                             RGB565_BLACK);
+            ips200_show_string(52U, y, valid ? "OK" : "--");
+            ips200_set_color(RGB565_WHITE, RGB565_BLACK);
+            if(valid)
+            {
+                ips200_show_int(92U, y, front ? front_x : rear_x, 5U);
+                ips200_show_int(148U, y, front ? front_y : rear_y, 5U);
+            }
+            else
+            {
+                ips200_show_string(108U, y, "--");
+                ips200_show_string(164U, y, "--");
+            }
+        }
+        else if(row == 3U)
+        {
+            ips200_draw_line(4U, (uint16)(y - 3U), 235U,
+                             (uint16)(y - 3U), RGB565_CYAN);
+            ips200_show_string(20U, y, "REF");
+            if(s_vision_fusion_snapshot.reference_source ==
+               DUAL_CAMERA_FUSION_SOURCE_FRONT)
+            {
+                ips200_set_color(RGB565_CYAN, RGB565_BLACK);
+                ips200_show_string(52U, y, "F");
+            }
+            else if(s_vision_fusion_snapshot.reference_source ==
+                    DUAL_CAMERA_FUSION_SOURCE_REAR)
+            {
+                ips200_set_color(RGB565_YELLOW, RGB565_BLACK);
+                ips200_show_string(52U, y, "R");
+            }
+            else
+            {
+                ips200_set_color(RGB565_RED, RGB565_BLACK);
+                ips200_show_string(52U, y, "--");
+            }
+            ips200_set_color(RGB565_WHITE, RGB565_BLACK);
+            if(s_vision_fusion_snapshot.car_valid)
+            {
+                ips200_show_int(92U, y,
+                    (int32)s_vision_fusion_snapshot.car_x_cm, 5U);
+                ips200_show_int(148U, y,
+                    (int32)s_vision_fusion_snapshot.car_y_cm, 5U);
+            }
+            else
+            {
+                ips200_show_string(108U, y, "--");
+                ips200_show_string(164U, y, "--");
+            }
+        }
+        else if(row == 4U)
+        {
+            ips200_show_string(20U, y, "DIFF");
+            if(s_vision_fusion_snapshot.front_car_valid &&
+               s_vision_fusion_snapshot.rear_car_valid)
+            {
+                ips200_show_int(92U, y, rear_x - front_x, 5U);
+                ips200_show_int(148U, y, rear_y - front_y, 5U);
+            }
+            else
+            {
+                ips200_show_string(108U, y, "--");
+                ips200_show_string(164U, y, "--");
+            }
+        }
+        else if(row == 5U)
+        {
+            ips200_show_string(20U, y, "DIST");
+            if(s_vision_fusion_snapshot.car_valid)
+            {
+                float car_x = s_vision_fusion_snapshot.car_x_cm;
+                float car_y = s_vision_fusion_snapshot.car_y_cm;
+                ips200_show_int(92U, y,
+                    (int32)sqrtf(car_x * car_x + car_y * car_y), 5U);
+                ips200_show_string(148U, y, "cm");
+            }
+            else
+            {
+                ips200_show_string(108U, y, "--");
+            }
+        }
+        else if(row == 6U)
+        {
+            ips200_show_string(20U, y, "AGE F");
+            if(s_vision_fusion_diag.front_age_ms == 0xFFFFU)
+            {
+                ips200_show_string(68U, y, "---");
+            }
+            else
+            {
+                ips200_show_uint(68U, y,
+                    (s_vision_fusion_diag.front_age_ms > 999U) ? 999U :
+                        s_vision_fusion_diag.front_age_ms, 3U);
+            }
+            ips200_show_string(116U, y, "R");
+            if(s_vision_fusion_diag.rear_age_ms == 0xFFFFU)
+            {
+                ips200_show_string(132U, y, "---");
+            }
+            else
+            {
+                ips200_show_uint(132U, y,
+                    (s_vision_fusion_diag.rear_age_ms > 999U) ? 999U :
+                        s_vision_fusion_diag.rear_age_ms, 3U);
+            }
+            ips200_show_string(172U, y, "ms");
+        }
+        else if(row == 7U)
+        {
+            ips200_show_string(20U, y, "PAIR");
+            ips200_set_color(s_vision_fusion_diag.pair_valid ? RGB565_GREEN :
+                             RGB565_YELLOW, RGB565_BLACK);
+            ips200_show_string(60U, y,
+                s_vision_fusion_diag.pair_valid ? "OK" : "--");
+            ips200_set_color(RGB565_WHITE, RGB565_BLACK);
+            ips200_show_string(92U, y, "DT");
+            ips200_show_int(116U, y, s_vision_fusion_diag.pair_dt_ms, 4U);
+            ips200_show_string(164U, y, "ms");
+        }
+        else if(row == 8U)
+        {
+            ips200_set_color(RGB565_CYAN, RGB565_BLACK);
+            ips200_show_string(20U, y, "AXIS UAV X:FWD Y:LEFT");
+        }
+        return;
+    }
+
     ips200_draw_line(4U, VISION_FUSION_DIVIDER_Y,
                      235U, VISION_FUSION_DIVIDER_Y, RGB565_CYAN);
     ips200_set_font(IPS200_8X16_FONT);
@@ -423,9 +590,18 @@ static void vision_fusion_page(void)
         s_vision_fusion_row_cursor = 0U;
         return;
     }
-    if((key_flag == Button_1) || (key_flag == Button_2))
+    if(key_flag == Button_1)
     {
-        s_vision_fusion_view = (uint8)(1U - s_vision_fusion_view);
+        s_vision_fusion_view = (s_vision_fusion_view == 0U) ?
+            2U : (uint8)(s_vision_fusion_view - 1U);
+        s_vision_fusion_row_cursor = 0U;
+        vision_fusion_draw_title();
+        key_flag = 0U;
+    }
+    else if(key_flag == Button_2)
+    {
+        s_vision_fusion_view = (uint8)((s_vision_fusion_view + 1U) %
+                                       VISION_FUSION_VIEW_COUNT);
         s_vision_fusion_row_cursor = 0U;
         vision_fusion_draw_title();
         key_flag = 0U;

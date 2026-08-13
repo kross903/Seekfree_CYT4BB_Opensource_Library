@@ -33,7 +33,12 @@ typedef struct
 typedef struct
 {
     float raw_motor[4];
+    float allocated_motor[4];
     uint16 clamped_motor[4];
+    float roll_pitch_scale;
+    float yaw_scale;
+    float requested_throttle;
+    float applied_throttle;
     uint8 high_mask;
     uint8 low_mask;
     uint8 roll_limit_flags;
@@ -55,6 +60,7 @@ void Motor_Mixer_Update_BaseOnly(volatile uint16 motor_throttle_out[4],
                                  float roll_deg,
                                  float pitch_deg);
 uint8 Motor_Mixer_HasInvalidOutput(void);
+void Motor_Mixer_Reset_State(void);
 void Motor_Mixer_Get_Saturation(MotorMixerSaturation_t *saturation);
 void Motor_Mixer_Get_Limit_Diag(MotorMixerLimitDiag_t *diag);
 

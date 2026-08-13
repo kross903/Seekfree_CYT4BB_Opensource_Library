@@ -23,6 +23,8 @@ typedef struct
     float d_output;
     float raw_output;
     float output;
+    uint8 limit_flags;
+    uint8 integrator_held;
     uint8 saturated;
 } RateLoopDiag_t;
 

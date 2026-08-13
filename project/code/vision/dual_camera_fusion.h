@@ -48,12 +48,19 @@ typedef struct
     uint32 tracker_reset_count;
     float car_x_cm;
     float car_y_cm;
+    /* F/R car positions aligned to the snapshot reference UAV axes. */
+    float front_car_x_cm;
+    float front_car_y_cm;
+    float rear_car_x_cm;
+    float rear_car_y_cm;
     float yaw_deg;
     uint8 valid;
     uint8 paired;
     uint8 reference_source;
     uint8 car_valid;
     uint8 car_raw_valid;
+    uint8 front_car_valid;
+    uint8 rear_car_valid;
     uint8 yaw_valid;
     uint8 target_count;
     DualCameraFusionTarget_t target[DUAL_CAMERA_FUSION_MAX_TARGETS];

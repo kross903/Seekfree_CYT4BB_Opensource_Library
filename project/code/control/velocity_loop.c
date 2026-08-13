@@ -382,7 +382,7 @@ void Velocity_Loop_Update_Attitude_Target(uint8 velocity_ready,
     float acceleration_body_x;
     float acceleration_body_y;
     float acceleration_limit;
-    MotorMixerSaturation_t mixer_saturation = {0};
+    MotorMixerLimitDiag_t mixer_diag = {0};
     uint8 motor_limited;
     uint8 status = 0U;
     uint8 accel_limited;
@@ -417,8 +417,10 @@ void Velocity_Loop_Update_Attitude_Target(uint8 velocity_ready,
     previous_i_x = vel_pid_x.integral;
     previous_i_y = vel_pid_y.integral;
 
-    Motor_Mixer_Get_Saturation(&mixer_saturation);
-    motor_limited = (uint8)(mixer_saturation.high || mixer_saturation.low);
+    Motor_Mixer_Get_Limit_Diag(&mixer_diag);
+    /* Yaw或公共油门受限时Roll/Pitch仍完整可实现，不应冻结水平速度积分。 */
+    motor_limited = (uint8)((mixer_diag.roll_limit_flags != 0U) ||
+                            (mixer_diag.pitch_limit_flags != 0U));
     if(motor_limited) status |= VELOCITY_LOOP_STATUS_MOTOR_LIMITED;
 
     /* 电机饱和时只允许I项向减小饱和的方向恢复，避免继续顶死。 */

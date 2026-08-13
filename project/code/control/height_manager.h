@@ -73,6 +73,10 @@ typedef struct
     float velocity_error_cms;
     float height_pid_output_cms;
     float velocity_pid_output;
+    uint8 height_pid_limit_flags;
+    uint8 velocity_pid_limit_flags;
+    uint8 height_integrator_held;
+    uint8 velocity_integrator_held;
     float tof_predicted_cm;
     float tof_innovation_cm;
     float tof_gate_cm;

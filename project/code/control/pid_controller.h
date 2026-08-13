@@ -35,8 +35,23 @@ void PID_PrepareRuntimeDt(PID_Controller *pid, float runtime_dt_s);
 // 根据目标值、当前值和实际运行周期计算新的控制输出。
 float PID_Calculate(PID_Controller *pid, float target, float current, float dt);
 
+// 带方向性执行器限幅的PID计算：受限方向上的误差不再累积积分，反向解除饱和仍允许积分更新。
+float PID_CalculateLimited(PID_Controller *pid,
+                           float target,
+                           float current,
+                           float dt,
+                           int negative_limited,
+                           int positive_limited);
+
 // 使用调用方已经处理好的误差计算输出，适用于周期角度等非普通减法误差。
 float PID_CalculateError(PID_Controller *pid, float error, float dt);
+
+// 使用调用方误差和方向性执行器限幅计算PID输出。
+float PID_CalculateErrorLimited(PID_Controller *pid,
+                                float error,
+                                float dt,
+                                int negative_limited,
+                                int positive_limited);
 
 // 使用调用方已经滤波好的微分值计算PID，P/I和总输出限幅仍沿用当前控制器配置。
 float PID_CalculateErrorWithDerivative(PID_Controller *pid,

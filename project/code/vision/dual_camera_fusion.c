@@ -132,6 +132,34 @@ static const DualCameraFusionFrame_t *DualCameraFusion_LatestFrame(
     return best;
 }
 
+static uint8 DualCameraFusion_AlignCarToReference(
+    const DualCameraFusionFrame_t *source,
+    const DualCameraFusionFrame_t *reference,
+    float *aligned_x_cm, float *aligned_y_cm)
+{
+    float yaw_delta_rad;
+    float cosine;
+    float sine;
+
+    if((source == NULL) || (reference == NULL) ||
+       (aligned_x_cm == NULL) || (aligned_y_cm == NULL) ||
+       !source->car_valid || !source->yaw_valid || !reference->yaw_valid ||
+       !isfinite(source->car_x_cm) || !isfinite(source->car_y_cm) ||
+       !isfinite(source->yaw_deg) || !isfinite(reference->yaw_deg))
+    {
+        return 0U;
+    }
+
+    yaw_delta_rad = DualCameraFusion_Wrap180(source->yaw_deg -
+                                             reference->yaw_deg) *
+                    DUAL_CAMERA_FUSION_DEG_TO_RAD;
+    cosine = cosf(yaw_delta_rad);
+    sine = sinf(yaw_delta_rad);
+    *aligned_x_cm = cosine * source->car_x_cm - sine * source->car_y_cm;
+    *aligned_y_cm = sine * source->car_x_cm + cosine * source->car_y_cm;
+    return 1U;
+}
+
 static void DualCameraFusion_ResetTracks(void)
 {
     memset(s_tracks, 0, sizeof(s_tracks));
@@ -648,6 +676,8 @@ void DualCameraFusion_BuildSnapshot(uint32 now_us)
     const DualCameraFusionFrame_t *rear_latest;
     const DualCameraFusionFrame_t *paired_front = NULL;
     const DualCameraFusionFrame_t *paired_rear = NULL;
+    const DualCameraFusionFrame_t *display_front = NULL;
+    const DualCameraFusionFrame_t *display_rear = NULL;
     const DualCameraFusionFrame_t *reference = NULL;
     DualCameraFusionCandidate_t candidate[DUAL_CAMERA_FUSION_MAX_CANDIDATES];
     uint8 track_id[DUAL_CAMERA_FUSION_MAX_TARGETS] = {0};
@@ -789,6 +819,15 @@ void DualCameraFusion_BuildSnapshot(uint32 now_us)
         s_snapshot.car_raw_valid = reference->car_raw_valid;
         s_snapshot.yaw_deg = reference->yaw_deg;
         s_snapshot.yaw_valid = reference->yaw_valid;
+
+        display_front = (paired_front != NULL) ? paired_front : front_latest;
+        display_rear = (paired_rear != NULL) ? paired_rear : rear_latest;
+        s_snapshot.front_car_valid = DualCameraFusion_AlignCarToReference(
+            display_front, reference,
+            &s_snapshot.front_car_x_cm, &s_snapshot.front_car_y_cm);
+        s_snapshot.rear_car_valid = DualCameraFusion_AlignCarToReference(
+            display_rear, reference,
+            &s_snapshot.rear_car_x_cm, &s_snapshot.rear_car_y_cm);
     }
 
     DualCameraFusion_SortCandidates(candidate, candidate_count);

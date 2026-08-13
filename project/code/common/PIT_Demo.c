@@ -367,6 +367,7 @@ static void clear_motor_throttle_state(void)
     motor_throttle[1] = 0U;
     motor_throttle[2] = 0U;
     motor_throttle[3] = 0U;
+    Motor_Mixer_Reset_State();
 }
 
 void PIT_Demo_Safety_Reset_Angle_Rate_Cmd_Lpf(void)
