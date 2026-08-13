@@ -446,17 +446,8 @@ static int write_result(const char *path, const char *binary_path,
     {
         fprintf(file, "  \"undistorted\":null,\n");
     }
-    fprintf(file, "  \"binary_path\":\"");
-    if(binary_path != NULL)
-    {
-        const char *cursor = binary_path;
-        while(*cursor != '\0')
-        {
-            if(*cursor == '\\') fputc('/', file); else fputc(*cursor, file);
-            cursor++;
-        }
-    }
-    fprintf(file, "\",\n  \"beacons\":[\n");
+    (void)binary_path;
+    fprintf(file, "  \"binary_path\":\"binary.pgm\",\n  \"beacons\":[\n");
     for(i = 0; i < VISION_RUNTIME_BEACON_SLOT_COUNT; i++)
     {
         RawOverlayBox_t overlay_box;
@@ -595,16 +586,38 @@ static int write_result(const char *path, const char *binary_path,
             right_line_end_raw_u, right_line_end_raw_v);
     fprintf(file,
             "\"physical\":{\"area_cm2\":%.6f,\"occupancy\":%.6f,\"circularity\":%.6f,"
-            "\"left_arm_cm\":%.6f,\"right_arm_cm\":%.6f,\"arm_angle_deg\":%.6f,"
-            "\"base_cm\":%.6f,\"triangle_height_cm\":%.6f},",
+            "\"left_arm_cm\":%.6f,\"right_arm_cm\":%.6f,\"mean_arm_cm\":%.6f,"
+            "\"arm_symmetry\":%.6f,\"opening_ratio\":%.6f,"
+            "\"concavity_depth_px\":%.6f,\"concavity_ratio\":%.6f,"
+            "\"arm_angle_deg\":%.6f,\"base_cm\":%.6f,\"triangle_height_cm\":%.6f},",
             chevron.physical_area_cm2,
             chevron.physical_occupancy_ratio,
             chevron.physical_circularity,
             chevron.left_arm_cm,
             chevron.right_arm_cm,
+            chevron.mean_arm_cm,
+            chevron.arm_symmetry,
+            chevron.opening_ratio,
+            chevron.concavity_depth_px,
+            chevron.concavity_ratio,
             chevron.arm_angle_deg,
             chevron.base_cm,
             chevron.triangle_height_cm);
+    fprintf(file,
+            "\"scores\":{\"arm_symmetry\":%.6f,\"opening_ratio\":%.6f,"
+            "\"concavity\":%.6f,\"basic_blob\":%.6f,\"geometry\":%.6f},",
+            chevron.arm_symmetry_score,
+            chevron.opening_ratio_score,
+            chevron.concavity_score,
+            chevron.basic_blob_score,
+            chevron.geometry_score);
+    fprintf(file,
+            "\"direction\":{\"prior_valid\":%u,\"expected_deg\":%.6f,"
+            "\"error_deg\":%.6f,\"score\":%.6f},",
+            (unsigned)chevron.direction_prior_valid,
+            chevron.direction_expected_deg,
+            chevron.direction_error_deg,
+            chevron.direction_score);
     fprintf(file,
             "\"candidate_count\":%u,\"geometry_reject_count\":%u,\"reject_reason\":%u}\n",
             (unsigned)chevron.candidate_count,
@@ -630,6 +643,10 @@ int main(int argc, char **argv)
     float roll_deg = parse_float(get_option(argc, argv, "--roll"), 0.0f);
     float pitch_deg = parse_float(get_option(argc, argv, "--pitch"), 0.0f);
     float height_cm = parse_float(get_option(argc, argv, "--height"), 100.0f);
+    float car_yaw_rel_uav_deg = parse_float(
+        get_option(argc, argv, "--car-yaw-rel-uav"), 0.0f);
+    uint8 direction_prior_valid =
+        has_option(argc, argv, "--direction-prior-valid") ? 1U : 0U;
     const char *binary_mode_text = get_option(argc, argv, "--binary-mode");
     int threshold_value = parse_int(get_option(argc, argv, "--threshold"),
                                     (int)VISION_BINARY_THRESHOLD_BEACON);
@@ -689,7 +706,7 @@ int main(int argc, char **argv)
 
     if(input_path == NULL || output_path == NULL || !read_raw(input_path))
     {
-        fprintf(stderr, "usage: vision_sim --input frame.raw --output result.json [--binary binary.pgm] [--vehicle-binary vehicle_binary.pgm] [--disable-vehicle-fallback] [--vehicle-threshold 145] [--vehicle-fallback-threshold 50] [--beacon-threshold 50] [--coarse-center-threshold 150] [--coarse-near-threshold 60] [--coarse-middle-threshold 50] [--coarse-far-threshold 50] [--coarse-edge-threshold 40] [--binary-mode gray|pre_transform|undistort_binary_ipm|post_transform]\n");
+        fprintf(stderr, "usage: vision_sim --input frame.raw --output result.json [--binary binary.pgm] [--vehicle-binary vehicle_binary.pgm] [--disable-vehicle-fallback] [--vehicle-threshold 145] [--vehicle-fallback-threshold 50] [--beacon-threshold 50] [--coarse-center-threshold 150] [--coarse-near-threshold 60] [--coarse-middle-threshold 50] [--coarse-far-threshold 50] [--coarse-edge-threshold 40] [--car-yaw-rel-uav 0] [--direction-prior-valid] [--binary-mode gray|pre_transform|undistort_binary_ipm|post_transform]\n");
         return 2;
     }
 
@@ -740,6 +757,8 @@ int main(int argc, char **argv)
 
     IPM_Interface_Init();
     VehicleMarkerLocalization_Init();
+    VehicleMarkerLocalization_SetOpeningDirectionPrior(
+        car_yaw_rel_uav_deg, direction_prior_valid);
     BeaconDetect_Init();
     VisionRuntime_SetRecognitionThresholds(vehicle_threshold,
                                            beacon_threshold);

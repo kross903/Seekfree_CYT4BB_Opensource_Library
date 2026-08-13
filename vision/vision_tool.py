@@ -61,6 +61,54 @@ RUNTIME_THRESHOLD_MACROS = (
     "VISION_RUNTIME_COARSE_THRESHOLD_FAR",
     "VISION_RUNTIME_COARSE_THRESHOLD_EDGE",
 )
+VEHICLE_MARKER_MODEL_MACROS = {
+    "mean_arm_min_cm": "VEHICLE_MARKER_CHEVRON_MEAN_ARM_MIN_CM",
+    "mean_arm_max_cm": "VEHICLE_MARKER_CHEVRON_MEAN_ARM_MAX_CM",
+    "min_arm_symmetry": "VEHICLE_MARKER_CHEVRON_MIN_ARM_SYMMETRY",
+    "opening_ratio_min": "VEHICLE_MARKER_CHEVRON_OPENING_RATIO_MIN",
+    "opening_ratio_max": "VEHICLE_MARKER_CHEVRON_OPENING_RATIO_MAX",
+    "concavity_ratio_low": "VEHICLE_MARKER_CHEVRON_CONCAVITY_RATIO_LOW",
+    "concavity_ratio_max": "VEHICLE_MARKER_CHEVRON_CONCAVITY_RATIO_MAX",
+    "geometry_score_min": "VEHICLE_MARKER_CHEVRON_GEOMETRY_SCORE_MIN",
+    "direction_weight": "VEHICLE_MARKER_CHEVRON_SCORE_DIRECTION_WEIGHT",
+}
+
+
+def decode_process_output(payload: bytes | None) -> str:
+    if not payload:
+        return ""
+    try:
+        return payload.decode("utf-8")
+    except UnicodeDecodeError:
+        return payload.decode("gb18030", errors="replace")
+
+
+def read_json_compat(path: Path) -> dict:
+    payload = path.read_bytes()
+    try:
+        text = payload.decode("utf-8")
+    except UnicodeDecodeError:
+        text = payload.decode("gb18030")
+    result = json.loads(text)
+    if not isinstance(result, dict):
+        raise ValueError(f"JSON根节点必须是对象: {path}")
+    return result
+
+
+def parse_vehicle_marker_model(source_path: Path) -> dict[str, float]:
+    source_text = source_path.read_text(encoding="utf-8")
+    values: dict[str, float] = {}
+    for result_name, macro_name in VEHICLE_MARKER_MODEL_MACROS.items():
+        match = re.search(
+            rf"^\s*#define\s+{re.escape(macro_name)}\s+\(?\s*"
+            rf"([-+]?(?:\d+(?:\.\d*)?|\.\d+))\s*[Ff]?\s*\)?",
+            source_text,
+            re.MULTILINE,
+        )
+        if match is None:
+            raise ValueError(f"缺少车标模型宏 {macro_name}")
+        values[result_name] = float(match.group(1))
+    return values
 
 
 class Simulator:
@@ -173,8 +221,8 @@ class Simulator:
             ]
         elif os.name == "nt" and Path(compiler).suffix.lower() == ".exe":
             process_command = ["cmd.exe", "/d", "/c", subprocess.list2cmdline(command)]
-        result = subprocess.run(process_command, cwd=str(APP_ROOT), capture_output=True, text=True)
-        log = "$ " + " ".join(process_command) + f"\n[returncode={result.returncode}]\n" + (result.stdout or "") + (result.stderr or "")
+        result = subprocess.run(process_command, cwd=str(APP_ROOT), capture_output=True)
+        log = "$ " + " ".join(process_command) + f"\n[returncode={result.returncode}]\n" + decode_process_output(result.stdout) + decode_process_output(result.stderr)
         if result.returncode != 0:
             return False, log
         self.manifest_path().write_text(
@@ -200,6 +248,8 @@ class Simulator:
         binary_mode: str = "gray",
         coarse_thresholds: tuple[int, int, int, int, int] | None = None,
         disable_vehicle_fallback: bool = False,
+        car_yaw_rel_uav_deg: float = 0.0,
+        direction_prior_valid: bool = False,
     ) -> tuple[bool, str, Path | None, Path | None, Path | None, Path | None, Path | None, Path | None, Path | None]:
         self.pipeline_mode = 1 if binary_mode == "post_transform" else 0
         executable = self.output_path()
@@ -245,7 +295,10 @@ class Simulator:
             "--coarse-far-threshold", str(zone_thresholds[3]),
             "--coarse-edge-threshold", str(zone_thresholds[4]),
             "--binary-mode", binary_mode,
+            "--car-yaw-rel-uav", str(car_yaw_rel_uav_deg),
         ]
+        if direction_prior_valid:
+            command.append("--direction-prior-valid")
         if disable_vehicle_fallback:
             command.append("--disable-vehicle-fallback")
         if undistort:
@@ -258,10 +311,21 @@ class Simulator:
             command.extend(("--birdview-mask", str(birdview_mask_path)))
             if binary_mode != "gray":
                 command.extend(("--birdview-binary", str(birdview_binary_path)))
-        result = subprocess.run(command, cwd=str(APP_ROOT), capture_output=True, text=True)
-        log = "$ " + " ".join(command) + f"\n[returncode={result.returncode}]\n" + (result.stdout or "") + (result.stderr or "")
+        result = subprocess.run(command, cwd=str(APP_ROOT), capture_output=True)
+        log = "$ " + " ".join(command) + f"\n[returncode={result.returncode}]\n" + decode_process_output(result.stdout) + decode_process_output(result.stderr)
         if result.returncode != 0 or not result_path.exists():
             return False, log, None, None, None, None, None, None, None
+        payload = read_json_compat(result_path)
+        chevron = payload.setdefault("chevron", {})
+        if isinstance(chevron, dict):
+            chevron["thresholds"] = parse_vehicle_marker_model(
+                self.source_dir / "vehicle_marker_localization.c"
+            )
+        result_path.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+            newline="\n",
+        )
         return (
             True,
             log,
@@ -288,6 +352,8 @@ class VisionToolApp:
         self.roll_var = tk.StringVar(value="0")
         self.pitch_var = tk.StringVar(value="0")
         self.yaw_var = tk.StringVar(value="0")
+        self.car_yaw_rel_uav_var = tk.StringVar(value="0")
+        self.direction_prior_valid_var = tk.BooleanVar(value=False)
         self.height_var = tk.StringVar(value="100")
         self.vehicle_threshold_var = tk.StringVar(value="145")
         self.vehicle_fallback_threshold_var = tk.StringVar(value="50")
@@ -339,8 +405,8 @@ class VisionToolApp:
         self.roi_save_button: ttk.Button | None = None
         self.ui_queue: queue.Queue[tuple[str, object]] = queue.Queue()
         self.simulation_queue: queue.Queue[
-            tuple[Path, float, float, float, bool, bool, int, int,
-                  tuple[int, int, int, int, int], str]
+            tuple[Path, float, float, float, float, bool, bool, bool, int, int,
+                  int, tuple[int, int, int, int, int], str]
         ] = queue.Queue()
         self.capture_stop_event = threading.Event()
         self.capture_running = False
@@ -556,11 +622,18 @@ class VisionToolApp:
         for row, left, right in (
             (0, ("Roll (deg)", self.roll_var), ("Pitch (deg)", self.pitch_var)),
             (1, ("Yaw (deg)", self.yaw_var), ("ToF height (cm)", self.height_var)),
+            (2, ("车相对机体Yaw (deg)", self.car_yaw_rel_uav_var), None),
         ):
             ttk.Label(params, text=left[0]).grid(row=row, column=0, sticky="w", pady=3)
             ttk.Entry(params, textvariable=left[1], width=10).grid(row=row, column=1, sticky="ew", padx=(5, 10), pady=3)
-            ttk.Label(params, text=right[0]).grid(row=row, column=2, sticky="w", pady=3)
-            ttk.Entry(params, textvariable=right[1], width=10).grid(row=row, column=3, sticky="ew", padx=(5, 0), pady=3)
+            if right is not None:
+                ttk.Label(params, text=right[0]).grid(row=row, column=2, sticky="w", pady=3)
+                ttk.Entry(params, textvariable=right[1], width=10).grid(row=row, column=3, sticky="ew", padx=(5, 0), pady=3)
+        ttk.Checkbutton(
+            params,
+            text="启用开口方向先验",
+            variable=self.direction_prior_valid_var,
+        ).grid(row=2, column=2, columnspan=2, sticky="w", pady=3)
 
         processing = ttk.LabelFrame(processing_tab, text="图像处理", padding=6)
         processing.grid(row=1, column=0, sticky="ew", pady=(8, 0))
@@ -716,6 +789,7 @@ class VisionToolApp:
             roll = float(self.roll_var.get())
             pitch = float(self.pitch_var.get())
             height = float(self.height_var.get())
+            car_yaw_rel_uav = float(self.car_yaw_rel_uav_var.get())
             thresholds = (
                 int(self.vehicle_threshold_var.get()),
                 int(self.vehicle_fallback_threshold_var.get()),
@@ -735,6 +809,8 @@ class VisionToolApp:
             roll,
             pitch,
             height,
+            car_yaw_rel_uav,
+            bool(self.direction_prior_valid_var.get()),
             bool(self.undistort_var.get()),
             bool(self.birdview_var.get()),
             *thresholds,
@@ -744,11 +820,13 @@ class VisionToolApp:
 
     def simulation_worker(self) -> None:
         while True:
-            (frame_path, roll, pitch, height, undistort, birdview,
+            (frame_path, roll, pitch, height, car_yaw_rel_uav,
+             direction_prior_valid, undistort, birdview,
              vehicle_threshold, vehicle_fallback_threshold, beacon_threshold,
              coarse_thresholds, binary_mode) = self.simulation_queue.get()
             try:
-                self.run_worker(frame_path, roll, pitch, height, undistort, birdview,
+                self.run_worker(frame_path, roll, pitch, height, car_yaw_rel_uav,
+                                direction_prior_valid, undistort, birdview,
                                 vehicle_threshold, vehicle_fallback_threshold,
                                 beacon_threshold,
                                 coarse_thresholds, binary_mode)
@@ -1059,9 +1137,7 @@ class VisionToolApp:
             raise ValueError(f"图像尺寸为 {image.width}×{image.height}，需要 {WIDTH}×{HEIGHT}")
         metadata_path = source_path.with_suffix(".json")
         if metadata_path.is_file():
-            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-            if not isinstance(metadata, dict):
-                raise ValueError("帧JSON根节点必须是对象")
+            metadata = read_json_compat(metadata_path)
         else:
             metadata = {}
         image_type = int(metadata.get("image_type", 2))
@@ -1207,6 +1283,7 @@ class VisionToolApp:
             roll = float(self.roll_var.get())
             pitch = float(self.pitch_var.get())
             height = float(self.height_var.get())
+            car_yaw_rel_uav = float(self.car_yaw_rel_uav_var.get())
             if any(
                 value < 1 or value > 255
                 for value in (
@@ -1240,6 +1317,8 @@ class VisionToolApp:
                 roll,
                 pitch,
                 height,
+                car_yaw_rel_uav,
+                bool(self.direction_prior_valid_var.get()),
                 primary_threshold,
                 fallback_threshold,
                 beacon_threshold,
@@ -1256,7 +1335,7 @@ class VisionToolApp:
         ok, log, result_path = simulator_result[0], simulator_result[1], simulator_result[2]
         if not ok or result_path is None:
             raise RuntimeError(log)
-        result = json.loads(result_path.read_text(encoding="utf-8"))
+        result = read_json_compat(result_path)
         vehicle_binary_path = output_dir / "vehicle_binary.pgm"
         if not vehicle_binary_path.exists():
             raise RuntimeError(f"未生成箭头位图: {vehicle_binary_path}")
@@ -1272,6 +1351,8 @@ class VisionToolApp:
         roll: float,
         pitch: float,
         height: float,
+        car_yaw_rel_uav: float,
+        direction_prior_valid: bool,
         primary_threshold: int,
         fallback_threshold: int,
         beacon_threshold: int,
@@ -1318,6 +1399,8 @@ class VisionToolApp:
                         "gray",
                         coarse_thresholds,
                         disable_vehicle_fallback=disable_fallback,
+                        car_yaw_rel_uav_deg=car_yaw_rel_uav,
+                        direction_prior_valid=direction_prior_valid,
                     )
                     results[mode_name], binaries[mode_name] = (
                         self.load_vehicle_diagnostic_result(simulation, mode_dir)
@@ -1503,8 +1586,25 @@ class VisionToolApp:
         }.get(reason, f"未知({reason})")
 
     @staticmethod
-    def chevron_physical_failures(physical: dict) -> list[str]:
+    def chevron_physical_failures(
+        physical: dict,
+        scores: dict | None = None,
+        thresholds: dict | None = None,
+    ) -> list[str]:
         failures: list[str] = []
+        limits = {
+            "mean_arm_min_cm": 4.0,
+            "mean_arm_max_cm": 55.0,
+            "min_arm_symmetry": 0.40,
+            "opening_ratio_min": 0.20,
+            "opening_ratio_max": 0.70,
+            "concavity_ratio_low": 0.08,
+            "concavity_ratio_max": 0.55,
+            "geometry_score_min": 0.55,
+        }
+        if isinstance(thresholds, dict):
+            limits.update({key: float(value) for key, value in thresholds.items()
+                           if key in limits})
 
         def outside(name: str, value: float, minimum: float, maximum: float, unit: str = "") -> None:
             if value < minimum or value > maximum:
@@ -1512,19 +1612,24 @@ class VisionToolApp:
                     f"{name}{value:.2f}{unit}不在{minimum:g}~{maximum:g}{unit}"
                 )
 
-        left_arm = float(physical.get("left_arm_cm", 0.0))
-        right_arm = float(physical.get("right_arm_cm", 0.0))
-        angle = float(physical.get("arm_angle_deg", 0.0))
-        base = float(physical.get("base_cm", 0.0))
-        triangle_height = float(physical.get("triangle_height_cm", 0.0))
-        outside("左臂", left_arm, 10.5, 42.0, "cm")
-        outside("右臂", right_arm, 10.5, 42.0, "cm")
-        if right_arm > 0.0:
-            arm_ratio = left_arm / right_arm
-            outside("臂长比", arm_ratio, 0.55, 2.90)
-        outside("夹角", angle, 30.0, 90.0, "°")
-        outside("底边", base, 15.0, 46.0, "cm")
-        outside("三角高", triangle_height, 8.0, 24.0, "cm")
+        outside("平均臂长", float(physical.get("mean_arm_cm", 0.0)),
+                limits["mean_arm_min_cm"], limits["mean_arm_max_cm"], "cm")
+        outside("臂对称度", float(physical.get("arm_symmetry", 0.0)),
+                limits["min_arm_symmetry"], 1.0)
+        outside("开口比例", float(physical.get("opening_ratio", 0.0)),
+                limits["opening_ratio_min"], limits["opening_ratio_max"])
+        concavity_ratio = float(physical.get("concavity_ratio", 0.0))
+        if (concavity_ratio <= limits["concavity_ratio_low"] or
+                concavity_ratio >= limits["concavity_ratio_max"]):
+            failures.append(
+                f"凹陷比例{concavity_ratio:.2f}不在开区间"
+                f"{limits['concavity_ratio_low']:g}~{limits['concavity_ratio_max']:g}"
+            )
+        geometry_score = float((scores or {}).get("geometry", 0.0))
+        if scores is not None and geometry_score < limits["geometry_score_min"]:
+            failures.append(
+                f"综合分{geometry_score:.2f}<{limits['geometry_score_min']:g}"
+            )
         return failures
 
     @classmethod
@@ -1532,19 +1637,24 @@ class VisionToolApp:
         chevron = result.get("chevron", {}) if isinstance(result, dict) else {}
         physical = chevron.get("physical", {}) if isinstance(chevron, dict) else {}
         open_v = chevron.get("open_v", {}) if isinstance(chevron, dict) else {}
+        scores = chevron.get("scores", {}) if isinstance(chevron, dict) else {}
+        direction = chevron.get("direction", {}) if isinstance(chevron, dict) else {}
+        thresholds = chevron.get("thresholds", {}) if isinstance(chevron, dict) else {}
         valid = bool(result.get("vehicle", {}).get("valid")) if isinstance(result, dict) else False
         reason = int(chevron.get("reject_reason", 0)) if isinstance(chevron, dict) else 0
         status = "通过" if valid else cls.chevron_reject_text(reason)
-        details = cls.chevron_physical_failures(physical) if reason == 4 else []
+        details = cls.chevron_physical_failures(
+            physical, scores, thresholds,
+        ) if reason == 4 else []
         detail_text = f"[{'；'.join(details)}]" if details else ""
         return (
             f"{label}: {status}{detail_text}，open-V={float(open_v.get('score', 0.0)):.3f}，"
-            f"空隙={float(open_v.get('center_gap', 0.0)):.3f}，"
-            f"夹角={float(physical.get('arm_angle_deg', 0.0)):.1f}°，"
-            f"臂={float(physical.get('left_arm_cm', 0.0)):.1f}/"
-            f"{float(physical.get('right_arm_cm', 0.0)):.1f}cm，"
-            f"底/高={float(physical.get('base_cm', 0.0)):.1f}/"
-            f"{float(physical.get('triangle_height_cm', 0.0)):.1f}cm"
+            f"平均臂长={float(physical.get('mean_arm_cm', 0.0)):.1f}cm，"
+            f"对称/开口/凹陷={float(physical.get('arm_symmetry', 0.0)):.2f}/"
+            f"{float(physical.get('opening_ratio', 0.0)):.2f}/"
+            f"{float(physical.get('concavity_ratio', 0.0)):.2f}，"
+            f"综合分={float(scores.get('geometry', 0.0)):.3f}，"
+            f"方向={'启用' if direction.get('prior_valid') else '关闭'}"
         )
 
     @classmethod
@@ -1821,7 +1931,7 @@ class VisionToolApp:
     def apply_frame_metadata(self, path: Path) -> None:
         metadata_path = path.with_suffix(".json")
         try:
-            payload = json.loads(metadata_path.read_text(encoding="utf-8"))
+            payload = read_json_compat(metadata_path)
             telemetry = payload.get("telemetry")
             if not isinstance(telemetry, dict):
                 self.frame_telemetry_var.set("帧姿态/高度：无元数据")
@@ -1835,6 +1945,15 @@ class VisionToolApp:
             self.pitch_var.set(f"{pitch:.6f}")
             self.yaw_var.set(f"{yaw:.6f}")
             self.height_var.set(f"{tof_height:.6f}")
+            car_yaw_rel_uav = telemetry.get("car_yaw_rel_uav_deg")
+            if car_yaw_rel_uav is not None:
+                self.car_yaw_rel_uav_var.set(f"{float(car_yaw_rel_uav):.6f}")
+            direction_prior_valid = telemetry.get(
+                "car_yaw_valid",
+                telemetry.get("direction_prior_valid"),
+            )
+            if direction_prior_valid is not None:
+                self.direction_prior_valid_var.set(bool(direction_prior_valid))
             image_seq = telemetry.get("image_seq", "-")
             input_seq = telemetry.get("input_seq", "-")
             self.frame_telemetry_var.set(
@@ -1881,6 +2000,7 @@ class VisionToolApp:
             roll = float(self.roll_var.get())
             pitch = float(self.pitch_var.get())
             height = float(self.height_var.get())
+            car_yaw_rel_uav = float(self.car_yaw_rel_uav_var.get())
             thresholds = (
                 int(self.vehicle_threshold_var.get()),
                 int(self.vehicle_fallback_threshold_var.get()),
@@ -1903,7 +2023,8 @@ class VisionToolApp:
         binary_mode = self.binary_mode_var.get()
         threading.Thread(
             target=self.run_worker,
-            args=(self.current_frame, roll, pitch, height, undistort, birdview,
+            args=(self.current_frame, roll, pitch, height, car_yaw_rel_uav,
+                  bool(self.direction_prior_valid_var.get()), undistort, birdview,
                   *thresholds, coarse_thresholds, binary_mode),
             daemon=True,
         ).start()
@@ -1949,6 +2070,10 @@ class VisionToolApp:
                 float(self.pitch_var.get()),
                 float(self.height_var.get()),
             )
+            fallback_direction = (
+                float(self.car_yaw_rel_uav_var.get()),
+                bool(self.direction_prior_valid_var.get()),
+            )
             recognition_thresholds = (
                 int(self.vehicle_threshold_var.get()),
                 int(self.vehicle_fallback_threshold_var.get()),
@@ -1974,7 +2099,7 @@ class VisionToolApp:
         threading.Thread(
             target=self.classified_batch_worker,
             args=(Path(self.source_var.get()), root, raw_files, fallback_pose,
-                  recognition_thresholds, coarse_thresholds,
+                  fallback_direction, recognition_thresholds, coarse_thresholds,
                   self.binary_mode_var.get()),
             daemon=True,
         ).start()
@@ -1985,6 +2110,7 @@ class VisionToolApp:
         root: Path,
         raw_files: list[Path],
         fallback_pose: tuple[float, float, float],
+        fallback_direction: tuple[float, bool],
         recognition_thresholds: tuple[int, int, int],
         coarse_thresholds: tuple[int, int, int, int, int],
         binary_mode: str,
@@ -1995,13 +2121,21 @@ class VisionToolApp:
             simulator = Simulator(source)
             for index, raw_path in enumerate(raw_files, start=1):
                 roll, pitch, height = fallback_pose
+                car_yaw_rel_uav, direction_prior_valid = fallback_direction
                 metadata_path = raw_path.with_suffix(".json")
                 if metadata_path.exists():
-                    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+                    metadata = read_json_compat(metadata_path)
                     telemetry = metadata.get("telemetry", {})
                     roll = float(telemetry.get("roll_deg", roll))
                     pitch = float(telemetry.get("pitch_deg", pitch))
                     height = float(telemetry.get("tof_height_cm", height))
+                    car_yaw_rel_uav = float(telemetry.get(
+                        "car_yaw_rel_uav_deg", car_yaw_rel_uav,
+                    ))
+                    direction_prior_valid = bool(telemetry.get(
+                        "car_yaw_valid",
+                        telemetry.get("direction_prior_valid", direction_prior_valid),
+                    ))
 
                 frame_dir = run_dir / f"{index:03d}"
                 result = simulator.run(
@@ -2018,11 +2152,13 @@ class VisionToolApp:
                     coarse_thresholds[2],
                     binary_mode,
                     coarse_thresholds,
+                    car_yaw_rel_uav_deg=car_yaw_rel_uav,
+                    direction_prior_valid=direction_prior_valid,
                 )
                 ok, log, result_path = result[0], result[1], result[2]
                 if not ok or result_path is None:
                     raise RuntimeError(f"{raw_path.name} 仿真失败\n{log}")
-                payload = json.loads(result_path.read_text(encoding="utf-8"))
+                payload = read_json_compat(result_path)
                 expected_arrow = "有箭头" in raw_path.parts
                 set_type = self.classification_set_type(raw_path, root)
                 expected_beacon_count = self.classification_expected_beacon_count(
@@ -2180,6 +2316,10 @@ class VisionToolApp:
                 float(self.pitch_var.get()),
                 float(self.height_var.get()),
             )
+            fallback_direction = (
+                float(self.car_yaw_rel_uav_var.get()),
+                bool(self.direction_prior_valid_var.get()),
+            )
             recognition_thresholds = (
                 int(self.vehicle_threshold_var.get()),
                 int(self.vehicle_fallback_threshold_var.get()),
@@ -2211,6 +2351,7 @@ class VisionToolApp:
                 root,
                 image_files,
                 fallback_pose,
+                fallback_direction,
                 recognition_thresholds,
                 coarse_thresholds,
                 self.binary_mode_var.get(),
@@ -2245,6 +2386,7 @@ class VisionToolApp:
         root: Path,
         image_files: list[Path],
         fallback_pose: tuple[float, float, float],
+        fallback_direction: tuple[float, bool],
         recognition_thresholds: tuple[int, int, int],
         coarse_thresholds: tuple[int, int, int, int, int],
         binary_mode: str,
@@ -2263,14 +2405,22 @@ class VisionToolApp:
                     input_path.write_bytes(image.tobytes())
 
                     roll, pitch, height = fallback_pose
+                    car_yaw_rel_uav, direction_prior_valid = fallback_direction
                     metadata_path = image_path.with_suffix(".json")
                     pose_source = "界面参数"
                     if metadata_path.exists():
-                        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+                        metadata = read_json_compat(metadata_path)
                         telemetry = metadata.get("telemetry", {})
                         roll = float(telemetry.get("roll_deg", roll))
                         pitch = float(telemetry.get("pitch_deg", pitch))
                         height = float(telemetry.get("tof_height_cm", height))
+                        car_yaw_rel_uav = float(telemetry.get(
+                            "car_yaw_rel_uav_deg", car_yaw_rel_uav,
+                        ))
+                        direction_prior_valid = bool(telemetry.get(
+                            "car_yaw_valid",
+                            telemetry.get("direction_prior_valid", direction_prior_valid),
+                        ))
                         pose_source = "同名JSON"
 
                     result = simulator.run(
@@ -2287,11 +2437,13 @@ class VisionToolApp:
                         coarse_thresholds[2],
                         binary_mode,
                         coarse_thresholds,
+                        car_yaw_rel_uav_deg=car_yaw_rel_uav,
+                        direction_prior_valid=direction_prior_valid,
                     )
                     ok, log, result_path = result[0], result[1], result[2]
                     if not ok or result_path is None:
                         raise RuntimeError(log.rstrip() or "仿真未生成结果")
-                    payload = json.loads(result_path.read_text(encoding="utf-8"))
+                    payload = read_json_compat(result_path)
                     valid_beacons = [
                         item for item in payload.get("beacons", []) if item.get("valid")
                     ]
@@ -2430,6 +2582,8 @@ class VisionToolApp:
         roll: float,
         pitch: float,
         height: float,
+        car_yaw_rel_uav: float,
+        direction_prior_valid: bool,
         undistort: bool,
         birdview: bool,
         vehicle_threshold: int,
@@ -2449,9 +2603,11 @@ class VisionToolApp:
             ok, log, result_path, undistorted_path, birdview_path, undistorted_mask_path, birdview_mask_path, undistorted_binary_path, birdview_binary_path = simulator.run(
                 raw_path, run_dir, roll, pitch, height, undistort, birdview,
                 vehicle_threshold, vehicle_fallback_threshold, beacon_threshold,
-                coarse_thresholds[2], binary_mode, coarse_thresholds
+                coarse_thresholds[2], binary_mode, coarse_thresholds,
+                car_yaw_rel_uav_deg=car_yaw_rel_uav,
+                direction_prior_valid=direction_prior_valid,
             )
-            payload = json.loads(result_path.read_text(encoding="utf-8")) if result_path else None
+            payload = read_json_compat(result_path) if result_path else None
             binary_enabled = binary_mode != "gray"
             undistorted_image_path = undistorted_binary_path if binary_enabled and undistorted_binary_path else undistorted_path
             birdview_image_path = birdview_binary_path if binary_enabled and birdview_binary_path else birdview_path
@@ -2711,10 +2867,15 @@ class VisionToolApp:
         chevron = result.get("chevron", {})
         physical = chevron.get("physical", {}) if isinstance(chevron, dict) else {}
         open_v = chevron.get("open_v", {}) if isinstance(chevron, dict) else {}
+        scores = chevron.get("scores", {}) if isinstance(chevron, dict) else {}
+        direction = chevron.get("direction", {}) if isinstance(chevron, dict) else {}
+        thresholds = chevron.get("thresholds", {}) if isinstance(chevron, dict) else {}
         reject_reason = int(chevron.get("reject_reason", 0)) if isinstance(chevron, dict) else 0
         reject_text = self.chevron_reject_text(reject_reason)
         physical_failures = (
-            self.chevron_physical_failures(physical) if reject_reason == 4 else []
+            self.chevron_physical_failures(
+                physical, scores, thresholds,
+            ) if reject_reason == 4 else []
         )
         physical_failure_text = (
             f"（{'；'.join(physical_failures)}）" if physical_failures else ""
@@ -2724,14 +2885,28 @@ class VisionToolApp:
             f"{reject_text}{physical_failure_text}"
             f"\n物理面积: {physical.get('area_cm2', 0):.2f} cm²，圆度: {physical.get('circularity', 0):.3f}"
             f"\n两臂: {physical.get('left_arm_cm', 0):.2f}/{physical.get('right_arm_cm', 0):.2f} cm"
+            f"，平均: {physical.get('mean_arm_cm', 0):.2f} cm"
+            f"\n臂对称度/开口比例: {physical.get('arm_symmetry', 0):.3f}/"
+            f"{physical.get('opening_ratio', 0):.3f}"
+            f"，凹陷: {physical.get('concavity_depth_px', 0):.2f}px/"
+            f"{physical.get('concavity_ratio', 0):.3f}"
+            f"\n评分 对称/开口/凹陷/基础/综合: "
+            f"{scores.get('arm_symmetry', 0):.3f}/{scores.get('opening_ratio', 0):.3f}/"
+            f"{scores.get('concavity', 0):.3f}/{scores.get('basic_blob', 0):.3f}/"
+            f"{scores.get('geometry', 0):.3f}"
+            f"（门槛 {thresholds.get('geometry_score_min', '?')}）"
+            f"\n方向先验: {'启用' if direction.get('prior_valid') else '关闭'}"
+            f"，期望/误差/评分: {direction.get('expected_deg', 0):.1f}°/"
+            f"{direction.get('error_deg', 0):.1f}°/{direction.get('score', 0):.3f}"
+            f"，权重: {thresholds.get('direction_weight', '?')}"
             f"\nV形拟合: {open_v.get('score', 0):.3f}，顶点假设: {open_v.get('hypothesis_score', 0):.3f}/"
             f"{open_v.get('hypothesis_second_score', 0):.3f}，差值: {open_v.get('hypothesis_margin', 0):.3f}"
             f"，臂连续度: {open_v.get('arm_continuity', 0):.3f}"
             f"，记录得分: {open_v.get('gate_score', open_v.get('score', 0)):.3f}"
             f"，中心空隙记录: {open_v.get('gate_center_gap', open_v.get('center_gap', 0)):.3f}"
             f"（{'首轮/当前取较大' if open_v.get('gate_from_primary', 0) else '当前位图'}）"
-            f"，夹角: {physical.get('arm_angle_deg', 0):.2f}°"
-            f"\n底边/高: {physical.get('base_cm', 0):.2f}/{physical.get('triangle_height_cm', 0):.2f} cm"
+            f"\n旧几何诊断 夹角/底边/高: {physical.get('arm_angle_deg', 0):.2f}°/"
+            f"{physical.get('base_cm', 0):.2f}/{physical.get('triangle_height_cm', 0):.2f} cm"
         )
         beacon_lines = []
         for beacon_index, beacon in enumerate(result.get("beacons", []), start=1):
@@ -2837,6 +3012,13 @@ def self_test() -> int:
     assert (SIM_ROOT / "vision_sim_main.c").exists()
     assert Simulator(DEFAULT_SOURCE).source_files()
     assert "recognition_thresholds" in VisionToolApp.show_result.__code__.co_varnames
+    assert decode_process_output("中文日志".encode("gb18030")) == "中文日志"
+    model_thresholds = parse_vehicle_marker_model(
+        DEFAULT_SOURCE / "vehicle_marker_localization.c"
+    )
+    assert model_thresholds["mean_arm_min_cm"] == 4.0
+    assert model_thresholds["opening_ratio_min"] == 0.20
+    assert model_thresholds["opening_ratio_max"] == 0.70
     macro_sample = "\n".join(
         f"#define {macro} ({value}U) /* test */"
         for macro, value in zip(
@@ -2871,6 +3053,11 @@ def self_test() -> int:
     ]
     with tempfile.TemporaryDirectory() as temp_dir_text:
         temp_dir = Path(temp_dir_text)
+        legacy_json_path = temp_dir / "legacy_result.json"
+        legacy_json_path.write_bytes(
+            '{"binary_path":"C:/飞跃雷区资料/binary.pgm"}'.encode("gb18030")
+        )
+        assert read_json_compat(legacy_json_path)["binary_path"].endswith("binary.pgm")
         (temp_dir / "same.png").touch()
         (temp_dir / "same.raw").touch()
         (temp_dir / "nested").mkdir()
@@ -2924,16 +3111,37 @@ def self_test() -> int:
         "confidence_box_size": 0.2,
         "confidence_box_size_min": 0.3,
     })
-    assert "左臂9.00cm" in "；".join(VisionToolApp.chevron_physical_failures({
-        "area_cm2": 500.0,
-        "occupancy": 0.5,
-        "circularity": 0.3,
-        "left_arm_cm": 9.0,
-        "right_arm_cm": 18.0,
-        "arm_angle_deg": 70.0,
-        "base_cm": 28.0,
-        "triangle_height_cm": 14.0,
+    simplified_failures = "；".join(VisionToolApp.chevron_physical_failures({
+        "mean_arm_cm": 3.0,
+        "arm_symmetry": 0.39,
+        "opening_ratio": 0.71,
+        "concavity_ratio": 0.08,
+    }, {"geometry": 0.54}, {
+        "mean_arm_max_cm": 55.0,
+        "concavity_ratio_max": 0.55,
+        "geometry_score_min": 0.55,
     }))
+    assert "平均臂长3.00cm" in simplified_failures
+    assert "臂对称度0.39" in simplified_failures
+    assert "开口比例0.71" in simplified_failures
+    assert "凹陷比例0.08" in simplified_failures
+    assert "综合分0.54<0.55" in simplified_failures
+    diagnostic_text = VisionToolApp.format_threshold_diagnostic("首轮145", {
+        "vehicle": {"valid": 0},
+        "chevron": {
+            "reject_reason": 4,
+            "physical": {
+                "mean_arm_cm": 30.0,
+                "arm_symmetry": 0.8,
+                "opening_ratio": 0.4,
+                "concavity_ratio": 0.2,
+            },
+            "scores": {"geometry": 0.6},
+            "direction": {"prior_valid": 1},
+        },
+    })
+    assert "综合分=0.600" in diagnostic_text
+    assert "方向=启用" in diagnostic_text
     assert VisionToolApp.pose_warning_text(6.0, -7.0) == ""
     assert "姿态警告" in VisionToolApp.pose_warning_text(8.0, 0.0)
     category_root = Path("分类")

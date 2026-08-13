@@ -296,15 +296,15 @@ void VehicleMarkerLocalization_ServiceLostProtection(void)
  *   5. GEOMETRY_SCORE_MIN：最终车标确认阈值。
  */
 #define VEHICLE_MARKER_CHEVRON_MEAN_ARM_MIN_CM             (4.0f)  /* 平均臂长下限，单位cm。 */
-#define VEHICLE_MARKER_CHEVRON_MEAN_ARM_MAX_CM             (55.0f) /* 平均臂长上限，单位cm。 */
+#define VEHICLE_MARKER_CHEVRON_MEAN_ARM_MAX_CM             (40.0f) /* 平均臂长上限，单位cm。 */
 #define VEHICLE_MARKER_CHEVRON_MIN_ARM_SYMMETRY             (0.40f) /* 短臂/长臂的最低比例。 */
 #define VEHICLE_MARKER_CHEVRON_OPENING_RATIO_MIN            (0.20f) /* base/(left+right)下限。 */
 #define VEHICLE_MARKER_CHEVRON_OPENING_RATIO_MAX            (0.70f) /* base/(left+right)上限。 */
 #define VEHICLE_MARKER_CHEVRON_CONCAVITY_RATIO_LOW          (0.08f) /* 凹陷开始计分的比例。 */
-#define VEHICLE_MARKER_CHEVRON_CONCAVITY_RATIO_GOOD         (0.12f) /* 凹陷满分区间下界。 */
-#define VEHICLE_MARKER_CHEVRON_CONCAVITY_RATIO_HIGH         (0.35f) /* 凹陷满分区间上界。 */
-#define VEHICLE_MARKER_CHEVRON_CONCAVITY_RATIO_MAX          (0.55f) /* 过深凹陷拒绝边界。 */
-#define VEHICLE_MARKER_CHEVRON_GEOMETRY_SCORE_MIN            (0.55f) /* 车标综合分最低值。 */
+#define VEHICLE_MARKER_CHEVRON_CONCAVITY_RATIO_GOOD         (0.10f) /* 凹陷满分区间下界。 */
+#define VEHICLE_MARKER_CHEVRON_CONCAVITY_RATIO_HIGH         (0.40f) /* 凹陷满分区间上界。 */
+#define VEHICLE_MARKER_CHEVRON_CONCAVITY_RATIO_MAX          (0.65f) /* 过深凹陷拒绝边界。 */
+#define VEHICLE_MARKER_CHEVRON_GEOMETRY_SCORE_MIN            (0.40f) /* 车标综合分最低值。 */
 
 /*
  * 通信Yaw方向先验调参区。视觉heading由V尖端指向开口，当前车标开口朝车尾，
@@ -312,14 +312,14 @@ void VehicleMarkerLocalization_ServiceLostProtection(void)
  */
 #define VEHICLE_MARKER_CHEVRON_OPENING_TO_CAR_YAW_DEG       (180.0f) /* 开口方向相对车头Yaw。 */
 #define VEHICLE_MARKER_CHEVRON_DIRECTION_FULL_ERROR_DEG      (20.0f) /* 小于该误差方向满分。 */
-#define VEHICLE_MARKER_CHEVRON_DIRECTION_ZERO_ERROR_DEG      (70.0f) /* 大于该误差方向零分。 */
-#define VEHICLE_MARKER_CHEVRON_SCORE_DIRECTION_WEIGHT         (0.20f) /* 方向先验综合分权重。 */
+#define VEHICLE_MARKER_CHEVRON_DIRECTION_ZERO_ERROR_DEG      (50.0f) /* 大于该误差方向零分。 */
+#define VEHICLE_MARKER_CHEVRON_SCORE_DIRECTION_WEIGHT         (0.30f) /* 方向先验综合分权重。 */
 
 /* 简化模型权重：总和为1，避免增加额外的相互耦合门限。 */
-#define VEHICLE_MARKER_CHEVRON_SCORE_SYMMETRY_WEIGHT         (0.30f) /* 臂对称性权重。 */
-#define VEHICLE_MARKER_CHEVRON_SCORE_OPENING_WEIGHT          (0.25f) /* 开口比例权重。 */
-#define VEHICLE_MARKER_CHEVRON_SCORE_CONCAVITY_WEIGHT        (0.30f) /* 凸包凹陷权重。 */
-#define VEHICLE_MARKER_CHEVRON_SCORE_BLOB_WEIGHT             (0.15f) /* 基础Blob权重。 */
+#define VEHICLE_MARKER_CHEVRON_SCORE_SYMMETRY_WEIGHT         (0.20f) /* 臂对称性权重。 */
+#define VEHICLE_MARKER_CHEVRON_SCORE_OPENING_WEIGHT          (0.20f) /* 开口比例权重。 */
+#define VEHICLE_MARKER_CHEVRON_SCORE_CONCAVITY_WEIGHT        (0.50f) /* 凸包凹陷权重。 */
+#define VEHICLE_MARKER_CHEVRON_SCORE_BLOB_WEIGHT             (0.10f) /* 基础Blob权重。 */
 
 /* 凸包计算最多使用的轮廓点，超过时均匀抽样以限制单帧计算量。 */
 #define VEHICLE_MARKER_CHEVRON_HULL_MAX_POINTS               (96U)
