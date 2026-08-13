@@ -153,6 +153,7 @@ static uint8 s_rear_board_rx_frame_received = 0U;
 static CameraBoardLinkDiag_t s_rear_board_rx_diag_snapshot;
 static CameraBoardVisionFrame_t s_rear_board_rx_frame_snapshot;
 static uint8 s_vision_fusion_page_active = 0U;
+static uint8 s_vision_fusion_view = 0U;
 static uint32 s_vision_fusion_last_refresh_us = 0U;
 static uint8 s_vision_fusion_row_cursor = 0U;
 static DualCameraFusionSnapshot_t s_vision_fusion_snapshot;
@@ -168,12 +169,66 @@ static const char *vision_fusion_source_text(uint8 source)
 {
     switch(source)
     {
-        case DUAL_CAMERA_FUSION_SOURCE_FRONT: return "F ";
-        case DUAL_CAMERA_FUSION_SOURCE_REAR: return "R ";
-        case DUAL_CAMERA_FUSION_SOURCE_BOTH_FRONT: return "BF";
-        case DUAL_CAMERA_FUSION_SOURCE_BOTH_REAR: return "BR";
+        case DUAL_CAMERA_FUSION_SOURCE_FRONT:
+        case DUAL_CAMERA_FUSION_SOURCE_BOTH_FRONT:
+            return "F ";
+        case DUAL_CAMERA_FUSION_SOURCE_REAR:
+        case DUAL_CAMERA_FUSION_SOURCE_BOTH_REAR:
+            return "R ";
         default: return "--";
     }
+}
+
+static uint8 vision_fusion_source_is_front(uint8 source)
+{
+    return (uint8)((source == DUAL_CAMERA_FUSION_SOURCE_FRONT) ||
+                   (source == DUAL_CAMERA_FUSION_SOURCE_BOTH_FRONT));
+}
+
+static uint8 vision_fusion_target_index(uint8 display_index)
+{
+    uint8 source_group;
+    uint8 target_index;
+    uint8 matched_index = 0U;
+
+    for(source_group = 0U; source_group < 2U; source_group++)
+    {
+        for(target_index = 0U;
+            target_index < s_vision_fusion_snapshot.target_count;
+            target_index++)
+        {
+            const DualCameraFusionTarget_t *target =
+                &s_vision_fusion_snapshot.target[target_index];
+            uint8 is_front;
+
+            if(!target->valid)
+            {
+                continue;
+            }
+            is_front = vision_fusion_source_is_front(target->source);
+            if(((source_group == 0U) && !is_front) ||
+               ((source_group == 1U) && is_front))
+            {
+                continue;
+            }
+            if(matched_index == display_index)
+            {
+                return target_index;
+            }
+            matched_index++;
+        }
+    }
+    return 0xFFU;
+}
+
+static void vision_fusion_draw_title(void)
+{
+    test_page_clear_line(20U);
+    ips200_set_font(IPS200_8X16_FONT);
+    ips200_set_color(RGB565_WHITE, RGB565_BLACK);
+    ips200_show_string(TEST_PAGE_X, 20U,
+        (s_vision_fusion_view == 0U) ?
+        "Fusion Drone P1 K1/K2 K4" : "Fusion Car P2 K1/K2 K4");
 }
 
 static void vision_fusion_capture_snapshot(uint32 now_us)
@@ -262,15 +317,17 @@ static void vision_fusion_draw_row(uint8 row)
     {
         ips200_show_string(20U, y, "ID");
         ips200_show_string(44U, y, "SRC");
-        ips200_show_string(76U, y, "DX");
-        ips200_show_string(124U, y, "DY");
+        ips200_show_string(76U, y,
+            (s_vision_fusion_view == 0U) ? "X" : "DX");
+        ips200_show_string(124U, y,
+            (s_vision_fusion_view == 0U) ? "Y" : "DY");
         ips200_show_string(176U, y, "S");
         ips200_show_string(208U, y, "C");
     }
     else
     {
-        target_index = (uint8)(row - 6U);
-        if((target_index >= s_vision_fusion_snapshot.target_count) ||
+        target_index = vision_fusion_target_index((uint8)(row - 6U));
+        if((target_index == 0xFFU) ||
            !s_vision_fusion_snapshot.target[target_index].valid)
         {
             ips200_show_string(20U, y, "-- --   --    --   --  ---");
@@ -282,10 +339,12 @@ static void vision_fusion_draw_row(uint8 row)
         ips200_show_string(44U, y,
             vision_fusion_source_text(
                 s_vision_fusion_snapshot.target[target_index].source));
-        ips200_show_int(76U, y,
-            (int32)s_vision_fusion_snapshot.target[target_index].dx_cm, 5U);
-        ips200_show_int(124U, y,
-            (int32)s_vision_fusion_snapshot.target[target_index].dy_cm, 5U);
+        ips200_show_int(76U, y, (int32)((s_vision_fusion_view == 0U) ?
+            s_vision_fusion_snapshot.target[target_index].x_cm :
+            s_vision_fusion_snapshot.target[target_index].dx_cm), 5U);
+        ips200_show_int(124U, y, (int32)((s_vision_fusion_view == 0U) ?
+            s_vision_fusion_snapshot.target[target_index].y_cm :
+            s_vision_fusion_snapshot.target[target_index].dy_cm), 5U);
         ips200_show_uint(176U, y,
             s_vision_fusion_snapshot.target[target_index].position_sigma_cm, 2U);
         ips200_show_uint(208U, y,
@@ -318,14 +377,13 @@ static void vision_fusion_page(void)
     if(!s_vision_fusion_page_active)
     {
         s_vision_fusion_page_active = 1U;
+        s_vision_fusion_view = 0U;
         s_vision_fusion_last_refresh_us = 0U;
         s_vision_fusion_row_cursor = 0U;
         memset(&s_vision_fusion_snapshot, 0,
                sizeof(s_vision_fusion_snapshot));
         memset(&s_vision_fusion_diag, 0, sizeof(s_vision_fusion_diag));
-        ips200_set_font(IPS200_8X16_FONT);
-        ips200_set_color(RGB565_WHITE, RGB565_BLACK);
-        ips200_show_string(TEST_PAGE_X, 20U, "Vision Fusion K4 Back");
+        vision_fusion_draw_title();
         key_flag = 0U;
     }
     if(key_flag == Button_4 || g_menu_exit_flag || menu_is_monitor_view())
@@ -334,6 +392,13 @@ static void vision_fusion_page(void)
         s_vision_fusion_last_refresh_us = 0U;
         s_vision_fusion_row_cursor = 0U;
         return;
+    }
+    if((key_flag == Button_1) || (key_flag == Button_2))
+    {
+        s_vision_fusion_view = (uint8)(1U - s_vision_fusion_view);
+        s_vision_fusion_row_cursor = 0U;
+        vision_fusion_draw_title();
+        key_flag = 0U;
     }
     key_flag = 0U;
     vision_fusion_draw_page();
