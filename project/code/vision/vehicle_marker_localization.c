@@ -270,35 +270,41 @@ void VehicleMarkerLocalization_ServiceLostProtection(void)
 #define VEHICLE_MARKER_CHEVRON_PHYSICAL_EXPECTED_OCCUPANCY (0.78f)
 #define VEHICLE_MARKER_CHEVRON_PHYSICAL_MAX_CIRCULARITY    (0.55f)
 #define VEHICLE_MARKER_CHEVRON_PHYSICAL_EXPECTED_CIRCULARITY (0.30f)
-/* 临时调试：1=几乎关闭最终物理几何门控，0=恢复正常箭头尺寸范围。 */
-#define VEHICLE_MARKER_CHEVRON_RELAX_GEOMETRY_GATE         (1U)
-#if VEHICLE_MARKER_CHEVRON_RELAX_GEOMETRY_GATE
-#define VEHICLE_MARKER_CHEVRON_MIN_ARM_CM                  (0.5f)
-#define VEHICLE_MARKER_CHEVRON_MAX_ARM_CM                  (300.0f)
-#define VEHICLE_MARKER_CHEVRON_MIN_ARM_RATIO               (0.01f)
-#define VEHICLE_MARKER_CHEVRON_MAX_ARM_RATIO               (100.0f)
-#define VEHICLE_MARKER_CHEVRON_MIN_ANGLE_DEG               (1.0f)
-#define VEHICLE_MARKER_CHEVRON_MAX_ANGLE_DEG               (179.0f)
-#define VEHICLE_MARKER_CHEVRON_MIN_BASE_CM                 (0.5f)
-#define VEHICLE_MARKER_CHEVRON_MAX_BASE_CM                 (300.0f)
-#define VEHICLE_MARKER_CHEVRON_MIN_TRIANGLE_HEIGHT_CM      (0.1f)
-#define VEHICLE_MARKER_CHEVRON_MAX_TRIANGLE_HEIGHT_CM      (200.0f)
-#else
-#define VEHICLE_MARKER_CHEVRON_MIN_ARM_CM                  (8.0f)
-#define VEHICLE_MARKER_CHEVRON_MAX_ARM_CM                  (48.0f)
-#define VEHICLE_MARKER_CHEVRON_MIN_ARM_RATIO               (0.55f)
-#define VEHICLE_MARKER_CHEVRON_MAX_ARM_RATIO               (2.90f)
-#define VEHICLE_MARKER_CHEVRON_MIN_ANGLE_DEG               (20.0f)
-#define VEHICLE_MARKER_CHEVRON_MAX_ANGLE_DEG               (110.0f)
-#define VEHICLE_MARKER_CHEVRON_MIN_BASE_CM                 (15.0f)
-#define VEHICLE_MARKER_CHEVRON_MAX_BASE_CM                 (46.0f)
-#define VEHICLE_MARKER_CHEVRON_MIN_TRIANGLE_HEIGHT_CM      (8.0f)
-#define VEHICLE_MARKER_CHEVRON_MAX_TRIANGLE_HEIGHT_CM      (24.0f)
-#endif
-#define VEHICLE_MARKER_CHEVRON_EXPECTED_ANGLE_DEG          (70.0f)
-#define VEHICLE_MARKER_CHEVRON_EXPECTED_ANGLE_COS          (0.34202014f)
-/* 1/sin(70 deg)，将目标附近的余弦差近似换算为弧度误差。 */
-#define VEHICLE_MARKER_CHEVRON_COS_ERROR_TO_RAD            (1.06417777f)
+
+/*
+ * 简化车标模型的调参区。尺寸只做宽松安全筛选，最终识别主要依赖
+ * 尺度无关的臂对称性、V 形开口比例和凸包凹陷比例。
+ *
+ * 需要现场调参时优先调整下面这些宏：
+ *   1. MEAN_ARM_MIN/MAX_CM：排除明显过小或过大的候选；
+ *   2. OPENING_RATIO_MIN/MAX：base / (left_arm + right_arm) 的有效范围；
+ *   3. MIN_ARM_SYMMETRY：左右臂长度的最低相似程度；
+ *   4. CONCAVITY_RATIO_*：凸包凹陷深度相对轮廓宽度的评分区间；
+ *   5. GEOMETRY_SCORE_MIN：最终车标确认阈值。
+ */
+#define VEHICLE_MARKER_CHEVRON_MEAN_ARM_MIN_CM             (4.0f)  /* 平均臂长下限，单位cm。 */
+#define VEHICLE_MARKER_CHEVRON_MEAN_ARM_MAX_CM             (55.0f) /* 平均臂长上限，单位cm。 */
+#define VEHICLE_MARKER_CHEVRON_MIN_ARM_SYMMETRY             (0.40f) /* 短臂/长臂的最低比例。 */
+#define VEHICLE_MARKER_CHEVRON_OPENING_RATIO_MIN            (0.20f) /* base/(left+right)下限。 */
+#define VEHICLE_MARKER_CHEVRON_OPENING_RATIO_MAX            (0.70f) /* base/(left+right)上限。 */
+#define VEHICLE_MARKER_CHEVRON_CONCAVITY_RATIO_LOW          (0.08f) /* 凹陷开始计分的比例。 */
+#define VEHICLE_MARKER_CHEVRON_CONCAVITY_RATIO_GOOD         (0.12f) /* 凹陷满分区间下界。 */
+#define VEHICLE_MARKER_CHEVRON_CONCAVITY_RATIO_HIGH         (0.35f) /* 凹陷满分区间上界。 */
+#define VEHICLE_MARKER_CHEVRON_CONCAVITY_RATIO_MAX          (0.45f) /* 过深凹陷拒绝边界。 */
+#define VEHICLE_MARKER_CHEVRON_GEOMETRY_SCORE_MIN            (0.55f) /* 车标综合分最低值。 */
+
+/* 简化模型权重：总和为1，避免增加额外的相互耦合门限。 */
+#define VEHICLE_MARKER_CHEVRON_SCORE_SYMMETRY_WEIGHT         (0.30f) /* 臂对称性权重。 */
+#define VEHICLE_MARKER_CHEVRON_SCORE_OPENING_WEIGHT          (0.30f) /* 开口比例权重。 */
+#define VEHICLE_MARKER_CHEVRON_SCORE_CONCAVITY_WEIGHT        (0.25f) /* 凸包凹陷权重。 */
+#define VEHICLE_MARKER_CHEVRON_SCORE_BLOB_WEIGHT             (0.15f) /* 基础Blob权重。 */
+
+/* 凸包计算最多使用的轮廓点，超过时均匀抽样以限制单帧计算量。 */
+#define VEHICLE_MARKER_CHEVRON_HULL_MAX_POINTS               (96U)
+
+/* Apex 候选选择仍使用约70度作为弱偏好，不作为最终物理硬门限。 */
+#define VEHICLE_MARKER_CHEVRON_EXPECTED_ANGLE_COS            (0.34202014f)
+#define VEHICLE_MARKER_CHEVRON_COS_ERROR_TO_RAD              (1.06417777f)
 #define VEHICLE_MARKER_CHEVRON_MIN_CONTOUR_POINTS          (8U)
 #define VEHICLE_MARKER_CHEVRON_POINT_EPS                   (1e-4f)
 #define VEHICLE_MARKER_CHEVRON_SEED_SAMPLE_POINTS          (64U)
@@ -314,9 +320,9 @@ void VehicleMarkerLocalization_ServiceLostProtection(void)
     VEHICLE_MARKER_CHEVRON_SEED_SAMPLE_POINTS > VISION_RUNTIME_CONTOUR_MAX_POINTS
 #error "Invalid chevron seed contour sample count"
 #endif
-#if VEHICLE_MARKER_CHEVRON_RELAX_GEOMETRY_GATE != 0U && \
-    VEHICLE_MARKER_CHEVRON_RELAX_GEOMETRY_GATE != 1U
-#error "VEHICLE_MARKER_CHEVRON_RELAX_GEOMETRY_GATE must be 0 or 1"
+#if VEHICLE_MARKER_CHEVRON_HULL_MAX_POINTS < 3U || \
+    VEHICLE_MARKER_CHEVRON_HULL_MAX_POINTS > VISION_RUNTIME_CONTOUR_MAX_POINTS
+#error "Invalid chevron hull sample count"
 #endif
 
 typedef struct
@@ -391,6 +397,299 @@ static int vehicle_marker_chevron_clamp_int(int value, int min_value, int max_va
 static int vehicle_marker_chevron_round_to_int(float value)
 {
     return (int)(value + 0.5f);
+}
+
+typedef struct
+{
+    float x;
+    float y;
+} VehicleMarkerHullPoint_t;
+
+/* 凸包工作区放在静态内存，避免每次识别在任务栈上分配约2 KB。 */
+static VehicleMarkerHullPoint_t
+    s_vehicle_marker_hull_points[VEHICLE_MARKER_CHEVRON_HULL_MAX_POINTS];
+static VehicleMarkerHullPoint_t
+    s_vehicle_marker_hull[VEHICLE_MARKER_CHEVRON_HULL_MAX_POINTS * 2U];
+
+static float vehicle_marker_chevron_cross(const VehicleMarkerHullPoint_t *o,
+                                          const VehicleMarkerHullPoint_t *a,
+                                          const VehicleMarkerHullPoint_t *b)
+{
+    return (a->x - o->x) * (b->y - o->y) -
+           (a->y - o->y) * (b->x - o->x);
+}
+
+static float vehicle_marker_chevron_segment_distance_sq(
+    const VehicleMarkerHullPoint_t *point,
+    const VehicleMarkerHullPoint_t *start,
+    const VehicleMarkerHullPoint_t *end)
+{
+    float dx;
+    float dy;
+    float length_sq;
+    float t;
+    float nearest_x;
+    float nearest_y;
+
+    dx = end->x - start->x;
+    dy = end->y - start->y;
+    length_sq = dx * dx + dy * dy;
+    if(length_sq <= VEHICLE_MARKER_CHEVRON_POINT_EPS)
+    {
+        dx = point->x - start->x;
+        dy = point->y - start->y;
+        return dx * dx + dy * dy;
+    }
+
+    t = ((point->x - start->x) * dx +
+         (point->y - start->y) * dy) / length_sq;
+    if(t < 0.0f)
+    {
+        t = 0.0f;
+    }
+    else if(t > 1.0f)
+    {
+        t = 1.0f;
+    }
+    nearest_x = start->x + t * dx;
+    nearest_y = start->y + t * dy;
+    dx = point->x - nearest_x;
+    dy = point->y - nearest_y;
+    return dx * dx + dy * dy;
+}
+
+static float vehicle_marker_chevron_measure_concavity(
+    const VisionContour_t *contour,
+    float *depth_px,
+    float *depth_ratio)
+{
+    VehicleMarkerHullPoint_t *points = s_vehicle_marker_hull_points;
+    VehicleMarkerHullPoint_t *hull = s_vehicle_marker_hull;
+    uint16 sample_count;
+    uint16 hull_count;
+    uint16 i;
+    uint16 k;
+    float min_x = 1e30f;
+    float max_x = -1e30f;
+    float min_y = 1e30f;
+    float max_y = -1e30f;
+    float width;
+    float height;
+    float scale;
+    float best_depth_sq = 0.0f;
+
+    if(depth_px != NULL)
+    {
+        *depth_px = 0.0f;
+    }
+    if(depth_ratio != NULL)
+    {
+        *depth_ratio = 0.0f;
+    }
+    if(contour == NULL || contour->point_count < 3U)
+    {
+        return 0.0f;
+    }
+
+    sample_count = contour->point_count;
+    if(sample_count > VEHICLE_MARKER_CHEVRON_HULL_MAX_POINTS)
+    {
+        sample_count = VEHICLE_MARKER_CHEVRON_HULL_MAX_POINTS;
+    }
+    for(i = 0U; i < sample_count; ++i)
+    {
+        uint16 source_index = (sample_count == contour->point_count) ?
+            i : (uint16)(((uint32)i * (uint32)(contour->point_count - 1U)) /
+                         (uint32)(sample_count - 1U));
+        points[i].x = (float)contour->point_x[source_index];
+        points[i].y = (float)contour->point_y[source_index];
+        if(points[i].x < min_x) min_x = points[i].x;
+        if(points[i].x > max_x) max_x = points[i].x;
+        if(points[i].y < min_y) min_y = points[i].y;
+        if(points[i].y > max_y) max_y = points[i].y;
+    }
+
+    /* 插入排序足够覆盖车标有限ROI内的采样点，避免引入额外库依赖。 */
+    for(i = 1U; i < sample_count; ++i)
+    {
+        VehicleMarkerHullPoint_t value = points[i];
+        uint16 j = i;
+        while(j > 0U &&
+              (points[j - 1U].x > value.x ||
+               (points[j - 1U].x == value.x && points[j - 1U].y > value.y)))
+        {
+            points[j] = points[j - 1U];
+            --j;
+        }
+        points[j] = value;
+    }
+
+    hull_count = 0U;
+    for(i = 0U; i < sample_count; ++i)
+    {
+        while(hull_count >= 2U &&
+              vehicle_marker_chevron_cross(&hull[hull_count - 2U],
+                                            &hull[hull_count - 1U],
+                                            &points[i]) <= 0.0f)
+        {
+            --hull_count;
+        }
+        hull[hull_count++] = points[i];
+    }
+    k = hull_count;
+    for(i = (sample_count > 1U) ? (uint16)(sample_count - 1U) : 0U;
+        i > 0U; --i)
+    {
+        while(hull_count > k &&
+              vehicle_marker_chevron_cross(&hull[hull_count - 2U],
+                                            &hull[hull_count - 1U],
+                                            &points[i - 1U]) <= 0.0f)
+        {
+            --hull_count;
+        }
+        hull[hull_count++] = points[i - 1U];
+    }
+    if(hull_count > 1U)
+    {
+        --hull_count;
+    }
+    if(hull_count < 3U)
+    {
+        return 0.0f;
+    }
+
+    width = max_x - min_x;
+    height = max_y - min_y;
+    scale = (width > height) ? width : height;
+    if(scale <= VEHICLE_MARKER_CHEVRON_POINT_EPS)
+    {
+        return 0.0f;
+    }
+
+    /* 凹陷轮廓点位于凸包内部，取其到所有凸包边的最近距离。 */
+    for(i = 0U; i < sample_count; ++i)
+    {
+        float nearest_distance_sq = 1e30f;
+        for(k = 0U; k < hull_count; ++k)
+        {
+            uint16 next = (k + 1U < hull_count) ? (uint16)(k + 1U) : 0U;
+            float distance_sq = vehicle_marker_chevron_segment_distance_sq(
+                &points[i], &hull[k], &hull[next]);
+            if(distance_sq < nearest_distance_sq)
+            {
+                nearest_distance_sq = distance_sq;
+            }
+        }
+        if(nearest_distance_sq > best_depth_sq)
+        {
+            best_depth_sq = nearest_distance_sq;
+        }
+    }
+
+    if(depth_px != NULL)
+    {
+        *depth_px = sqrtf(best_depth_sq);
+    }
+    if(depth_ratio != NULL)
+    {
+        *depth_ratio = sqrtf(best_depth_sq) / scale;
+    }
+    return sqrtf(best_depth_sq) / scale;
+}
+
+static float vehicle_marker_chevron_score_unit(float value,
+                                                float min_value,
+                                                float max_value)
+{
+    if(!isfinite(value) || max_value <= min_value)
+    {
+        return 0.0f;
+    }
+    if(value <= min_value)
+    {
+        return 0.0f;
+    }
+    if(value >= max_value)
+    {
+        return 1.0f;
+    }
+    return (value - min_value) / (max_value - min_value);
+}
+
+static float vehicle_marker_chevron_score_interval(float value,
+                                                    float min_value,
+                                                    float max_value)
+{
+    if(!isfinite(value) || value < min_value || value > max_value)
+    {
+        return 0.0f;
+    }
+    return 1.0f;
+}
+
+static float vehicle_marker_chevron_score_concavity(float ratio)
+{
+    if(!isfinite(ratio) || ratio <= VEHICLE_MARKER_CHEVRON_CONCAVITY_RATIO_LOW ||
+       ratio >= VEHICLE_MARKER_CHEVRON_CONCAVITY_RATIO_MAX)
+    {
+        return 0.0f;
+    }
+    if(ratio < VEHICLE_MARKER_CHEVRON_CONCAVITY_RATIO_GOOD)
+    {
+        return (ratio - VEHICLE_MARKER_CHEVRON_CONCAVITY_RATIO_LOW) /
+               (VEHICLE_MARKER_CHEVRON_CONCAVITY_RATIO_GOOD -
+                VEHICLE_MARKER_CHEVRON_CONCAVITY_RATIO_LOW);
+    }
+    if(ratio <= VEHICLE_MARKER_CHEVRON_CONCAVITY_RATIO_HIGH)
+    {
+        return 1.0f;
+    }
+    return (VEHICLE_MARKER_CHEVRON_CONCAVITY_RATIO_MAX - ratio) /
+           (VEHICLE_MARKER_CHEVRON_CONCAVITY_RATIO_MAX -
+            VEHICLE_MARKER_CHEVRON_CONCAVITY_RATIO_HIGH);
+}
+
+static float vehicle_marker_chevron_score_basic_blob(
+    const VisionBlob_t *blob,
+    const VehicleMarkerChevronGate_t *gate)
+{
+    float occupancy_score;
+    float circularity_score;
+    float area;
+    float area_score;
+
+    if(blob == NULL || gate == NULL)
+    {
+        return 0.0f;
+    }
+    area = gate->physical ? blob->physical_area_cm2 : (float)blob->area;
+    if(area < gate->min_area || area > gate->max_area)
+    {
+        area_score = 0.0f;
+    }
+    else
+    {
+        area_score = 1.0f;
+    }
+    if(gate->physical)
+    {
+        occupancy_score = 1.0f - fabsf(
+            blob->physical_occupancy_ratio -
+            VEHICLE_MARKER_CHEVRON_PHYSICAL_EXPECTED_OCCUPANCY);
+        circularity_score = 1.0f - fabsf(
+            blob->physical_circularity -
+            VEHICLE_MARKER_CHEVRON_PHYSICAL_EXPECTED_CIRCULARITY);
+    }
+    else
+    {
+        occupancy_score = vehicle_marker_chevron_score_interval(
+            blob->occupancy_ratio, gate->min_occupancy, gate->max_occupancy);
+        circularity_score = 1.0f - blob->circularity;
+    }
+    return (vehicle_marker_chevron_clamp_float(area_score, 0.0f, 1.0f) +
+            vehicle_marker_chevron_clamp_float(occupancy_score, 0.0f, 1.0f) +
+            vehicle_marker_chevron_clamp_float(circularity_score, 0.0f, 1.0f)) /
+           3.0f;
 }
 
 static void vehicle_marker_chevron_reset_debug(void)
@@ -1123,10 +1422,10 @@ static uint8 vehicle_marker_chevron_image_shape_projects_valid(
     float base_dy;
     float left_span;
     float right_span;
-    float arm_ratio;
-    float arm_angle;
     float base;
-    float triangle_height;
+    float mean_arm;
+    float arm_symmetry;
+    float opening_ratio;
 
     if(apex_img == NULL || left_tip_img == NULL || right_tip_img == NULL)
     {
@@ -1162,32 +1461,22 @@ static uint8 vehicle_marker_chevron_image_shape_projects_valid(
     {
         return 0U;
     }
-    arm_ratio = left_span / right_span;
-    arm_angle = acosf(vehicle_marker_chevron_clamp_float(
-        (left_dx * right_dx + left_dy * right_dy) /
-        (left_span * right_span), -1.0f, 1.0f)) *
-        (180.0f / 3.14159265f);
-    triangle_height = fabsf(base_dx * (apex.y - left_tip.y) -
-                            base_dy * (apex.x - left_tip.x)) / base;
+    mean_arm = 0.5f * (left_span + right_span);
+    arm_symmetry = (left_span < right_span) ?
+                   left_span / right_span : right_span / left_span;
+    opening_ratio = base / (left_span + right_span);
 
     return (uint8)(
-        left_span >= VEHICLE_MARKER_CHEVRON_MIN_ARM_CM &&
-        left_span <= VEHICLE_MARKER_CHEVRON_MAX_ARM_CM &&
-        right_span >= VEHICLE_MARKER_CHEVRON_MIN_ARM_CM &&
-        right_span <= VEHICLE_MARKER_CHEVRON_MAX_ARM_CM &&
-        arm_ratio >= VEHICLE_MARKER_CHEVRON_MIN_ARM_RATIO &&
-        arm_ratio <= VEHICLE_MARKER_CHEVRON_MAX_ARM_RATIO &&
-        arm_angle >= VEHICLE_MARKER_CHEVRON_MIN_ANGLE_DEG &&
-        arm_angle <= VEHICLE_MARKER_CHEVRON_MAX_ANGLE_DEG &&
-        base >= VEHICLE_MARKER_CHEVRON_MIN_BASE_CM &&
-        base <= VEHICLE_MARKER_CHEVRON_MAX_BASE_CM &&
-        triangle_height >= VEHICLE_MARKER_CHEVRON_MIN_TRIANGLE_HEIGHT_CM &&
-        triangle_height <= VEHICLE_MARKER_CHEVRON_MAX_TRIANGLE_HEIGHT_CM);
+        mean_arm >= VEHICLE_MARKER_CHEVRON_MEAN_ARM_MIN_CM &&
+        mean_arm <= VEHICLE_MARKER_CHEVRON_MEAN_ARM_MAX_CM &&
+        arm_symmetry >= VEHICLE_MARKER_CHEVRON_MIN_ARM_SYMMETRY &&
+        opening_ratio >= VEHICLE_MARKER_CHEVRON_OPENING_RATIO_MIN &&
+        opening_ratio <= VEHICLE_MARKER_CHEVRON_OPENING_RATIO_MAX);
 }
 
 /* Build an extreme triangle and use two-arm evidence only to select its apex.
- * Physical geometry remains a preference, while Open-V metrics never reject
- * the candidate here. No contour-line fitting is performed. */
+ * This Open-V sampling describes contour support; it does not estimate the
+ * vehicle heading and does not participate in the final simplified score. */
 static uint8 vehicle_marker_chevron_extract_image_geometry(
     const VehicleMarkerChevronCandidate_t *candidate,
     VehicleMarkerPoint2D_t *apex,
@@ -1406,13 +1695,23 @@ static uint8 vehicle_marker_chevron_process_candidate(
     float left_dy = 0.0f;
     float right_dx = 0.0f;
     float right_dy = 0.0f;
-    float arm_ratio = 0.0f;
     float arm_dot = 0.0f;
     float arm_angle_deg = 0.0f;
     float base_dx = 0.0f;
     float base_dy = 0.0f;
     float base_cm = 0.0f;
     float triangle_height_cm = 0.0f;
+    float mean_arm_cm = 0.0f;
+    float arm_symmetry = 0.0f;
+    float opening_ratio = 0.0f;
+    float concavity_depth_px = 0.0f;
+    float concavity_ratio = 0.0f;
+    float arm_symmetry_score = 0.0f;
+    float opening_ratio_score = 0.0f;
+    float concavity_score = 0.0f;
+    float basic_blob_score = 0.0f;
+    float geometry_score = 0.0f;
+    VehicleMarkerChevronGate_t blob_gate;
     float effective_open_v_score = 0.0f;
     float effective_open_v_center_gap = 0.0f;
 
@@ -1512,32 +1811,59 @@ static uint8 vehicle_marker_chevron_process_candidate(
         return 0U;
     }
 
-    arm_ratio = left_span_cm / right_span_cm;
     arm_dot = left_dx * right_dx + left_dy * right_dy;
     arm_angle_deg = acosf(vehicle_marker_chevron_clamp_float(
         arm_dot / (left_span_cm * right_span_cm), -1.0f, 1.0f)) *
         (180.0f / 3.14159265f);
     triangle_height_cm = fabsf(base_dx * (apex.y - left_tip.y) -
                                   base_dy * (apex.x - left_tip.x)) / base_cm;
+    mean_arm_cm = 0.5f * (left_span_cm + right_span_cm);
+    arm_symmetry = (left_span_cm < right_span_cm) ?
+                   left_span_cm / right_span_cm : right_span_cm / left_span_cm;
+    opening_ratio = base_cm / (left_span_cm + right_span_cm);
+    vehicle_marker_chevron_measure_concavity(&candidate->contour,
+                                              &concavity_depth_px,
+                                              &concavity_ratio);
+    arm_symmetry_score = vehicle_marker_chevron_score_unit(
+        arm_symmetry, VEHICLE_MARKER_CHEVRON_MIN_ARM_SYMMETRY, 1.0f);
+    opening_ratio_score = vehicle_marker_chevron_score_interval(
+        opening_ratio, VEHICLE_MARKER_CHEVRON_OPENING_RATIO_MIN,
+        VEHICLE_MARKER_CHEVRON_OPENING_RATIO_MAX);
+    concavity_score = vehicle_marker_chevron_score_concavity(concavity_ratio);
+    vehicle_marker_chevron_get_gate(&candidate->blob, &blob_gate);
+    basic_blob_score = vehicle_marker_chevron_score_basic_blob(
+        &candidate->blob, &blob_gate);
+    geometry_score =
+        arm_symmetry_score * VEHICLE_MARKER_CHEVRON_SCORE_SYMMETRY_WEIGHT +
+        opening_ratio_score * VEHICLE_MARKER_CHEVRON_SCORE_OPENING_WEIGHT +
+        concavity_score * VEHICLE_MARKER_CHEVRON_SCORE_CONCAVITY_WEIGHT +
+        basic_blob_score * VEHICLE_MARKER_CHEVRON_SCORE_BLOB_WEIGHT;
 
     s_vehicle_marker_chevron_debug.left_arm_cm = left_span_cm;
     s_vehicle_marker_chevron_debug.right_arm_cm = right_span_cm;
+    s_vehicle_marker_chevron_debug.mean_arm_cm = mean_arm_cm;
+    s_vehicle_marker_chevron_debug.arm_symmetry = arm_symmetry;
+    s_vehicle_marker_chevron_debug.opening_ratio = opening_ratio;
+    s_vehicle_marker_chevron_debug.concavity_depth_px = concavity_depth_px;
+    s_vehicle_marker_chevron_debug.concavity_ratio = concavity_ratio;
+    s_vehicle_marker_chevron_debug.arm_symmetry_score = arm_symmetry_score;
+    s_vehicle_marker_chevron_debug.opening_ratio_score = opening_ratio_score;
+    s_vehicle_marker_chevron_debug.concavity_score = concavity_score;
+    s_vehicle_marker_chevron_debug.basic_blob_score = basic_blob_score;
+    s_vehicle_marker_chevron_debug.geometry_score = geometry_score;
+    /* 以下旧几何量仅保留用于观察，不再作为独立门限。 */
     s_vehicle_marker_chevron_debug.arm_angle_deg = arm_angle_deg;
     s_vehicle_marker_chevron_debug.base_cm = base_cm;
     s_vehicle_marker_chevron_debug.triangle_height_cm = triangle_height_cm;
 
-    if(left_span_cm < VEHICLE_MARKER_CHEVRON_MIN_ARM_CM ||
-       left_span_cm > VEHICLE_MARKER_CHEVRON_MAX_ARM_CM ||
-       right_span_cm < VEHICLE_MARKER_CHEVRON_MIN_ARM_CM ||
-       right_span_cm > VEHICLE_MARKER_CHEVRON_MAX_ARM_CM ||
-       arm_ratio < VEHICLE_MARKER_CHEVRON_MIN_ARM_RATIO ||
-       arm_ratio > VEHICLE_MARKER_CHEVRON_MAX_ARM_RATIO ||
-       arm_angle_deg < VEHICLE_MARKER_CHEVRON_MIN_ANGLE_DEG ||
-       arm_angle_deg > VEHICLE_MARKER_CHEVRON_MAX_ANGLE_DEG ||
-       base_cm < VEHICLE_MARKER_CHEVRON_MIN_BASE_CM ||
-       base_cm > VEHICLE_MARKER_CHEVRON_MAX_BASE_CM ||
-       triangle_height_cm < VEHICLE_MARKER_CHEVRON_MIN_TRIANGLE_HEIGHT_CM ||
-       triangle_height_cm > VEHICLE_MARKER_CHEVRON_MAX_TRIANGLE_HEIGHT_CM)
+    if(mean_arm_cm < VEHICLE_MARKER_CHEVRON_MEAN_ARM_MIN_CM ||
+       mean_arm_cm > VEHICLE_MARKER_CHEVRON_MEAN_ARM_MAX_CM ||
+       arm_symmetry < VEHICLE_MARKER_CHEVRON_MIN_ARM_SYMMETRY ||
+       opening_ratio < VEHICLE_MARKER_CHEVRON_OPENING_RATIO_MIN ||
+       opening_ratio > VEHICLE_MARKER_CHEVRON_OPENING_RATIO_MAX ||
+       concavity_ratio <= VEHICLE_MARKER_CHEVRON_CONCAVITY_RATIO_LOW ||
+       concavity_ratio >= VEHICLE_MARKER_CHEVRON_CONCAVITY_RATIO_MAX ||
+       geometry_score < VEHICLE_MARKER_CHEVRON_GEOMETRY_SCORE_MIN)
     {
         s_vehicle_marker_chevron_debug.reject_reason =
             VEHICLE_MARKER_CHEVRON_REJECT_PHYSICAL_GEOMETRY;

@@ -81,6 +81,16 @@ typedef struct
     float physical_circularity;
     float left_arm_cm;
     float right_arm_cm;
+    float mean_arm_cm;
+    float arm_symmetry;
+    float opening_ratio;
+    float concavity_depth_px;
+    float concavity_ratio;
+    float arm_symmetry_score;
+    float opening_ratio_score;
+    float concavity_score;
+    float basic_blob_score;
+    float geometry_score;
     float arm_angle_deg;
     float base_cm;
     float triangle_height_cm;
