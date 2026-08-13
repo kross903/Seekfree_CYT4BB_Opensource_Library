@@ -17,12 +17,12 @@
     (0.5f * sqrtf(((float)MT9V03X_W * (float)MT9V03X_W) + \
                   ((float)MT9V03X_H * (float)MT9V03X_H)))
 
-/* 主摄固定安装外参：Roll=-15度，Pitch=0度，Yaw=180度。 */
-static const float s_camera_mount_rotation[3][3] =
+/* 上电时由安装角宏生成，运行期只执行矩阵乘法。 */
+static float s_camera_mount_rotation[3][3] =
 {
-    {-1.0f, 0.0f, 0.0f},
-    {0.0f, -0.9659258f, -0.2588190f},
-    {0.0f, -0.2588190f, 0.9659258f}
+    {1.0f, 0.0f, 0.0f},
+    {0.0f, 1.0f, 0.0f},
+    {0.0f, 0.0f, 1.0f}
 };
 
 static void CameraCalibration_ApplyMountOffset(float ray[3])
@@ -244,6 +244,26 @@ static uint8 CameraCalibration_TablePixelToRay(float img_x, float img_y, float r
 
 void CameraCalibration_Init(void)
 {
+    float roll = CAMERA_MOUNT_ROLL_OFFSET_DEG * CAMERA_CALIBRATION_DEG2RAD;
+    float pitch = CAMERA_MOUNT_PITCH_OFFSET_DEG * CAMERA_CALIBRATION_DEG2RAD;
+    float yaw = CAMERA_MOUNT_YAW_OFFSET_DEG * CAMERA_CALIBRATION_DEG2RAD;
+    float sr = sinf(roll);
+    float cr = cosf(roll);
+    float sp = sinf(pitch);
+    float cp = cosf(pitch);
+    float sy = sinf(yaw);
+    float cy = cosf(yaw);
+
+    /* 相机安装外参采用 Rz(yaw) * Ry(pitch) * Rx(roll)。 */
+    s_camera_mount_rotation[0][0] = cy * cp;
+    s_camera_mount_rotation[0][1] = cy * sp * sr - sy * cr;
+    s_camera_mount_rotation[0][2] = cy * sp * cr + sy * sr;
+    s_camera_mount_rotation[1][0] = sy * cp;
+    s_camera_mount_rotation[1][1] = sy * sp * sr + cy * cr;
+    s_camera_mount_rotation[1][2] = sy * sp * cr - cy * sr;
+    s_camera_mount_rotation[2][0] = -sp;
+    s_camera_mount_rotation[2][1] = cp * sr;
+    s_camera_mount_rotation[2][2] = cp * cr;
 }
 
 void CameraCalibration_GetParams(CameraCalibration_Params_t *params)
