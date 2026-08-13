@@ -339,12 +339,21 @@ static void vision_fusion_draw_row(uint8 row)
         ips200_show_string(44U, y,
             vision_fusion_source_text(
                 s_vision_fusion_snapshot.target[target_index].source));
-        ips200_show_int(76U, y, (int32)((s_vision_fusion_view == 0U) ?
-            s_vision_fusion_snapshot.target[target_index].x_cm :
-            s_vision_fusion_snapshot.target[target_index].dx_cm), 5U);
-        ips200_show_int(124U, y, (int32)((s_vision_fusion_view == 0U) ?
-            s_vision_fusion_snapshot.target[target_index].y_cm :
-            s_vision_fusion_snapshot.target[target_index].dy_cm), 5U);
+        if((s_vision_fusion_view != 0U) &&
+           !s_vision_fusion_snapshot.car_valid)
+        {
+            ips200_show_string(76U, y, "--");
+            ips200_show_string(124U, y, "--");
+        }
+        else
+        {
+            ips200_show_int(76U, y, (int32)((s_vision_fusion_view == 0U) ?
+                s_vision_fusion_snapshot.target[target_index].x_cm :
+                s_vision_fusion_snapshot.target[target_index].dx_cm), 5U);
+            ips200_show_int(124U, y, (int32)((s_vision_fusion_view == 0U) ?
+                s_vision_fusion_snapshot.target[target_index].y_cm :
+                s_vision_fusion_snapshot.target[target_index].dy_cm), 5U);
+        }
         ips200_show_uint(176U, y,
             s_vision_fusion_snapshot.target[target_index].position_sigma_cm, 2U);
         ips200_show_uint(208U, y,

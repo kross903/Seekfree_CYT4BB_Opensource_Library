@@ -5,10 +5,11 @@
 #define DUAL_CAMERA_FUSION_MAX_CANDIDATES         (12U)
 #define DUAL_CAMERA_FUSION_MAX_AGE_US             (300000U)
 #define DUAL_CAMERA_FUSION_PAIR_GATE_US           (300000)
-#define DUAL_CAMERA_FUSION_DEDUP_GATE_MIN_CM      (20.0f)
-#define DUAL_CAMERA_FUSION_DEDUP_GATE_MAX_CM      (40.0f)
-#define DUAL_CAMERA_FUSION_TRACK_GATE_MIN_CM      (20.0f)
-#define DUAL_CAMERA_FUSION_TRACK_GATE_MAX_CM      (60.0f)
+#define DUAL_CAMERA_FUSION_DEDUP_GATE_MIN_CM      (45.0f)
+#define DUAL_CAMERA_FUSION_DEDUP_GATE_MAX_CM      (80.0f)
+#define DUAL_CAMERA_FUSION_TIME_MARGIN_MAX_CM     (35.0f)
+#define DUAL_CAMERA_FUSION_TRACK_GATE_MIN_CM      (30.0f)
+#define DUAL_CAMERA_FUSION_TRACK_GATE_MAX_CM      (80.0f)
 #define DUAL_CAMERA_FUSION_TRACK_MAX_MISS         (5U)
 #define DUAL_CAMERA_FUSION_RESIDUAL_HISTORY_SIZE  (64U)
 #define DUAL_CAMERA_FUSION_DEG_TO_RAD             (0.017453292519943295f)
@@ -48,8 +49,8 @@ typedef struct
     uint8 track_id;
     uint8 miss_count;
     uint8 position_sigma_cm;
-    float dx_cm;
-    float dy_cm;
+    float x_cm;
+    float y_cm;
 } DualCameraFusionTrack_t;
 
 static DualCameraFusionFrame_t s_front_cache[DUAL_CAMERA_FUSION_CACHE_SIZE];
@@ -91,15 +92,13 @@ static uint8 DualCameraFusion_FrameStrong(const DualCameraFusionFrame_t *frame,
                                            uint32 now_us)
 {
     if((frame == NULL) || !frame->valid || !frame->yaw_valid ||
-       !frame->car_valid || (frame->capture_time_us == 0U) ||
+       (frame->capture_time_us == 0U) ||
        ((uint32)(now_us - frame->capture_time_us) >
         DUAL_CAMERA_FUSION_MAX_AGE_US))
     {
         return 0U;
     }
-    return (uint8)(isfinite(frame->yaw_deg) &&
-                   isfinite(frame->car_x_cm) &&
-                   isfinite(frame->car_y_cm));
+    return (uint8)isfinite(frame->yaw_deg);
 }
 
 static const DualCameraFusionFrame_t *DualCameraFusion_LatestFrame(
@@ -212,26 +211,29 @@ static void DualCameraFusion_AddFrameBeacon(
     uint8 beacon_index,
     DualCameraFusionCandidate_t *candidate)
 {
-    float relative_x;
-    float relative_y;
+    float source_x;
+    float source_y;
     float yaw_delta_rad;
     float cosine;
     float sine;
 
     memset(candidate, 0, sizeof(*candidate));
-    relative_x = (float)source->beacon[beacon_index].x_mm * 0.1f -
-                 source->car_x_cm;
-    relative_y = (float)source->beacon[beacon_index].y_mm * 0.1f -
-                 source->car_y_cm;
+    source_x = (float)source->beacon[beacon_index].x_mm * 0.1f;
+    source_y = (float)source->beacon[beacon_index].y_mm * 0.1f;
     yaw_delta_rad = DualCameraFusion_Wrap180(source->yaw_deg -
                                              reference->yaw_deg) *
                     DUAL_CAMERA_FUSION_DEG_TO_RAD;
     cosine = cosf(yaw_delta_rad);
     sine = sinf(yaw_delta_rad);
-    candidate->dx_cm = cosine * relative_x - sine * relative_y;
-    candidate->dy_cm = sine * relative_x + cosine * relative_y;
-    candidate->x_cm = reference->car_x_cm + candidate->dx_cm;
-    candidate->y_cm = reference->car_y_cm + candidate->dy_cm;
+    /* Align axes by yaw; horizontal translation between captures is ignored. */
+    candidate->x_cm = cosine * source_x - sine * source_y;
+    candidate->y_cm = sine * source_x + cosine * source_y;
+    if(reference->car_valid && isfinite(reference->car_x_cm) &&
+       isfinite(reference->car_y_cm))
+    {
+        candidate->dx_cm = candidate->x_cm - reference->car_x_cm;
+        candidate->dy_cm = candidate->y_cm - reference->car_y_cm;
+    }
     candidate->detection_confidence =
         source->beacon[beacon_index].detection_confidence;
     candidate->position_sigma_cm =
@@ -279,6 +281,7 @@ static uint8 DualCameraFusion_BuildCandidates(
     const DualCameraFusionFrame_t *front,
     const DualCameraFusionFrame_t *rear,
     const DualCameraFusionFrame_t *reference,
+    uint32 pair_abs_dt_us,
     DualCameraFusionCandidate_t output[DUAL_CAMERA_FUSION_MAX_CANDIDATES])
 {
     DualCameraFusionCandidate_t front_candidate[CAMERA_BOARD_MAX_BEACON_COUNT];
@@ -325,6 +328,7 @@ static uint8 DualCameraFusion_BuildCandidates(
                 float dy;
                 float distance_sq;
                 float sigma_combined;
+                float time_margin_cm;
                 float gate_cm;
 
                 if(rear_used[r]) continue;
@@ -339,6 +343,11 @@ static uint8 DualCameraFusion_BuildCandidates(
                 gate_cm = 3.0f * sigma_combined;
                 if(gate_cm < DUAL_CAMERA_FUSION_DEDUP_GATE_MIN_CM)
                     gate_cm = DUAL_CAMERA_FUSION_DEDUP_GATE_MIN_CM;
+                /* Linearly absorb UAV translation over the accepted pair gap. */
+                time_margin_cm = DUAL_CAMERA_FUSION_TIME_MARGIN_MAX_CM *
+                    (float)pair_abs_dt_us /
+                    (float)DUAL_CAMERA_FUSION_PAIR_GATE_US;
+                gate_cm += time_margin_cm;
                 if(gate_cm > DUAL_CAMERA_FUSION_DEDUP_GATE_MAX_CM)
                     gate_cm = DUAL_CAMERA_FUSION_DEDUP_GATE_MAX_CM;
                 if((distance_sq <= gate_cm * gate_cm) &&
@@ -431,8 +440,8 @@ static void DualCameraFusion_UpdateTracks(
                 float sigma;
 
                 if(track_used[track] || !s_tracks[track].valid) continue;
-                dx = candidate[i].dx_cm - s_tracks[track].dx_cm;
-                dy = candidate[i].dy_cm - s_tracks[track].dy_cm;
+                dx = candidate[i].x_cm - s_tracks[track].x_cm;
+                dy = candidate[i].y_cm - s_tracks[track].y_cm;
                 distance_sq = dx * dx + dy * dy;
                 sigma = sqrtf((float)candidate[i].position_sigma_cm *
                               (float)candidate[i].position_sigma_cm +
@@ -457,8 +466,8 @@ static void DualCameraFusion_UpdateTracks(
         candidate_used[best_candidate] = 1U;
         track_used[best_track] = 1U;
         track_id[best_candidate] = s_tracks[best_track].track_id;
-        s_tracks[best_track].dx_cm = candidate[best_candidate].dx_cm;
-        s_tracks[best_track].dy_cm = candidate[best_candidate].dy_cm;
+        s_tracks[best_track].x_cm = candidate[best_candidate].x_cm;
+        s_tracks[best_track].y_cm = candidate[best_candidate].y_cm;
         s_tracks[best_track].position_sigma_cm =
             candidate[best_candidate].position_sigma_cm;
         s_tracks[best_track].miss_count = 0U;
@@ -485,8 +494,8 @@ static void DualCameraFusion_UpdateTracks(
         s_tracks[track].track_id = DualCameraFusion_AllocateTrackId();
         if(s_tracks[track].track_id == 0U) continue;
         s_tracks[track].valid = 1U;
-        s_tracks[track].dx_cm = candidate[i].dx_cm;
-        s_tracks[track].dy_cm = candidate[i].dy_cm;
+        s_tracks[track].x_cm = candidate[i].x_cm;
+        s_tracks[track].y_cm = candidate[i].y_cm;
         s_tracks[track].position_sigma_cm = candidate[i].position_sigma_cm;
         track_id[i] = s_tracks[track].track_id;
     }
@@ -693,11 +702,6 @@ void DualCameraFusion_BuildSnapshot(uint32 now_us)
     s_diag.rear_beacon_count = (rear_any != NULL) ? rear_any->beacon_count : 0U;
     if(front_latest == NULL) s_diag.front_stale_build_count++;
     if(rear_latest == NULL) s_diag.rear_stale_build_count++;
-    if((front_any != NULL) && !front_any->car_valid &&
-       (front_any->beacon_count > 0U)) s_diag.cross_source_reject_count++;
-    if((rear_any != NULL) && !rear_any->car_valid &&
-       (rear_any->beacon_count > 0U)) s_diag.cross_source_reject_count++;
-
     if((front_latest != NULL) && (rear_latest != NULL))
     {
         uint8 f;
@@ -748,7 +752,8 @@ void DualCameraFusion_BuildSnapshot(uint32 now_us)
             paired_rear->yaw_deg - paired_front->yaw_deg);
         s_diag.paired_build_count++;
         candidate_count = DualCameraFusion_BuildCandidates(
-            paired_front, paired_rear, reference, candidate);
+            paired_front, paired_rear, reference, (uint32)best_abs_dt,
+            candidate);
     }
     else if((front_latest != NULL) && ((rear_latest == NULL) ||
             ((uint32)(now_us - front_latest->capture_time_us) <=
@@ -758,7 +763,7 @@ void DualCameraFusion_BuildSnapshot(uint32 now_us)
         s_snapshot.reference_source = DUAL_CAMERA_FUSION_SOURCE_FRONT;
         s_diag.front_only_build_count++;
         candidate_count = DualCameraFusion_BuildCandidates(
-            front_latest, NULL, reference, candidate);
+            front_latest, NULL, reference, 0U, candidate);
     }
     else if(rear_latest != NULL)
     {
@@ -766,7 +771,7 @@ void DualCameraFusion_BuildSnapshot(uint32 now_us)
         s_snapshot.reference_source = DUAL_CAMERA_FUSION_SOURCE_REAR;
         s_diag.rear_only_build_count++;
         candidate_count = DualCameraFusion_BuildCandidates(
-            NULL, rear_latest, reference, candidate);
+            NULL, rear_latest, reference, 0U, candidate);
     }
     else
     {
