@@ -362,7 +362,9 @@ static void CrossCoreCamera_CameraCoreDrawVisionScreen(const VisionRuntimeDiag_t
     else if(display_mode == CROSS_CORE_CAMERA_VISION_DISPLAY_UNDISTORT)
     {
         const uint8 *undistorted_image = VisionRuntime_GetUndistortedImage();
-        ips200_show_gray_image(0U, image_y, (uint8 *)undistorted_image,
+        ips200_show_gray_image(0U, image_y,
+                               (undistorted_image != NULL) ?
+                                   undistorted_image : mt9v03x_image[0],
                                MT9V03X_W, MT9V03X_H, image_w, image_h, 0U);
     }
     else if(binary_display_image != NULL)

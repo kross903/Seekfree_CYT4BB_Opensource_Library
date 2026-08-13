@@ -117,6 +117,8 @@ void icm_init_menu()
 #define TRACK_LIGHT_RELEASE_TIMEOUT_TICKS 40U
 #define VISION_FUSION_REFRESH_US          50000U
 #define VISION_FUSION_ROW_COUNT           12U
+#define VISION_FUSION_TARGETS_PER_SOURCE  3U
+#define VISION_FUSION_DIVIDER_Y           ((uint16)(TEST_ROW_Y(8U) + 17U))
 #define REAR_BOARD_RX_ROW_COUNT           12U
 #define MT9V03X_ADJUST_INFO_Y           128U
 #define MT9V03X_ADJUST_STEP_Y           148U
@@ -187,36 +189,40 @@ static uint8 vision_fusion_source_is_front(uint8 source)
 
 static uint8 vision_fusion_target_index(uint8 display_index)
 {
-    uint8 source_group;
+    uint8 want_front;
+    uint8 source_index;
     uint8 target_index;
     uint8 matched_index = 0U;
 
-    for(source_group = 0U; source_group < 2U; source_group++)
+    if(display_index < VISION_FUSION_TARGETS_PER_SOURCE)
     {
-        for(target_index = 0U;
-            target_index < s_vision_fusion_snapshot.target_count;
-            target_index++)
-        {
-            const DualCameraFusionTarget_t *target =
-                &s_vision_fusion_snapshot.target[target_index];
-            uint8 is_front;
+        want_front = 1U;
+        source_index = display_index;
+    }
+    else
+    {
+        want_front = 0U;
+        source_index = (uint8)(display_index -
+                               VISION_FUSION_TARGETS_PER_SOURCE);
+    }
 
-            if(!target->valid)
-            {
-                continue;
-            }
-            is_front = vision_fusion_source_is_front(target->source);
-            if(((source_group == 0U) && !is_front) ||
-               ((source_group == 1U) && is_front))
-            {
-                continue;
-            }
-            if(matched_index == display_index)
-            {
-                return target_index;
-            }
-            matched_index++;
+    for(target_index = 0U;
+        target_index < s_vision_fusion_snapshot.target_count;
+        target_index++)
+    {
+        const DualCameraFusionTarget_t *target =
+            &s_vision_fusion_snapshot.target[target_index];
+
+        if(!target->valid ||
+           (vision_fusion_source_is_front(target->source) != want_front))
+        {
+            continue;
         }
+        if(matched_index == source_index)
+        {
+            return target_index;
+        }
+        matched_index++;
     }
     return 0xFFU;
 }
@@ -246,6 +252,8 @@ static void vision_fusion_draw_row(uint8 row)
     uint8 target_index;
 
     test_page_clear_line(y);
+    ips200_draw_line(4U, VISION_FUSION_DIVIDER_Y,
+                     235U, VISION_FUSION_DIVIDER_Y, RGB565_CYAN);
     ips200_set_font(IPS200_8X16_FONT);
     ips200_set_color(RGB565_WHITE, RGB565_BLACK);
     if(row == 0U)
@@ -330,15 +338,28 @@ static void vision_fusion_draw_row(uint8 row)
         if((target_index == 0xFFU) ||
            !s_vision_fusion_snapshot.target[target_index].valid)
         {
-            ips200_show_string(20U, y, "-- --   --    --   --  ---");
+            ips200_show_string(20U, y, "--");
+            ips200_set_color(((row - 6U) <
+                              VISION_FUSION_TARGETS_PER_SOURCE) ?
+                                 RGB565_CYAN : RGB565_YELLOW,
+                             RGB565_BLACK);
+            ips200_show_string(44U, y,
+                ((row - 6U) < VISION_FUSION_TARGETS_PER_SOURCE) ?
+                    "F " : "R ");
+            ips200_set_color(RGB565_WHITE, RGB565_BLACK);
+            ips200_show_string(76U, y, "--    --   --  ---");
             return;
         }
         ips200_show_uint(20U, y,
                          s_vision_fusion_snapshot.target[target_index].track_id,
                          2U);
+        ips200_set_color(vision_fusion_source_is_front(
+            s_vision_fusion_snapshot.target[target_index].source) ?
+                RGB565_CYAN : RGB565_YELLOW, RGB565_BLACK);
         ips200_show_string(44U, y,
             vision_fusion_source_text(
                 s_vision_fusion_snapshot.target[target_index].source));
+        ips200_set_color(RGB565_WHITE, RGB565_BLACK);
         if((s_vision_fusion_view != 0U) &&
            !s_vision_fusion_snapshot.car_valid)
         {
