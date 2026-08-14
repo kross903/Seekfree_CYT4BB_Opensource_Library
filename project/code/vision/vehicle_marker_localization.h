@@ -22,7 +22,8 @@ extern "C" {
 #define VEHICLE_MARKER_CHEVRON_REJECT_IMAGE_GEOMETRY    (2U)
 #define VEHICLE_MARKER_CHEVRON_REJECT_WORLD_PROJECTION  (3U)
 #define VEHICLE_MARKER_CHEVRON_REJECT_PHYSICAL_GEOMETRY (4U)
-#define VEHICLE_MARKER_CHEVRON_REJECT_OPEN_V             (5U) /* 兼容旧诊断结果，当前不再产生。 */
+#define VEHICLE_MARKER_CHEVRON_REJECT_OPEN_V             (5U)
+#define VEHICLE_MARKER_CHEVRON_REJECT_YAW_DIRECTION      (6U)
 
 typedef struct
 {
@@ -143,7 +144,7 @@ void VehicleMarkerLocalization_ServiceLostProtection(void);
 void VehicleMarkerLocalization_GetLossDebug(VehicleMarkerLossDebug_t *debug);
 void VehicleMarkerLocalization_SetLossDebug(const VehicleMarkerLossDebug_t *debug);
 void VehicleMarkerLocalization_GetChevronDebug(VehicleMarkerChevronDebug_t *debug);
-/* 设置当前帧的小车相对机体Yaw；无效时方向项自动退出综合评分。 */
+/* 设置当前帧的小车相对机体Yaw；无效或超出方向门限时不产生新车标。 */
 void VehicleMarkerLocalization_SetOpeningDirectionPrior(float car_yaw_rel_uav_deg,
                                                         uint8 valid);
 uint8 VehicleMarkerLocalization_GetFollowPoint(

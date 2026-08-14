@@ -585,6 +585,24 @@ static int write_result(const char *path, const char *binary_path,
     fprintf(file, "\"right_line_end_raw_img\":{\"u\":%.3f,\"v\":%.3f},",
             right_line_end_raw_u, right_line_end_raw_v);
     fprintf(file,
+            "\"open_v\":{\"arm_support\":%.6f,\"center_gap\":%.6f,"
+            "\"arm_continuity\":%.6f,\"score\":%.6f,"
+            "\"hypothesis_score\":%.6f,\"hypothesis_second_score\":%.6f,"
+            "\"hypothesis_margin\":%.6f,\"gate_score\":%.6f,"
+            "\"gate_center_gap\":%.6f,\"gate_from_primary\":%u,"
+            "\"apex_index\":%u},",
+            chevron.open_v_arm_support,
+            chevron.open_v_center_gap,
+            chevron.open_v_arm_continuity,
+            chevron.open_v_score,
+            chevron.open_v_hypothesis_score,
+            chevron.open_v_hypothesis_second_score,
+            chevron.open_v_hypothesis_margin,
+            chevron.open_v_gate_score,
+            chevron.open_v_gate_center_gap,
+            (unsigned)chevron.open_v_gate_from_primary,
+            (unsigned)chevron.open_v_apex_index);
+    fprintf(file,
             "\"physical\":{\"area_cm2\":%.6f,\"occupancy\":%.6f,\"circularity\":%.6f,"
             "\"left_arm_cm\":%.6f,\"right_arm_cm\":%.6f,\"mean_arm_cm\":%.6f,"
             "\"arm_symmetry\":%.6f,\"opening_ratio\":%.6f,"

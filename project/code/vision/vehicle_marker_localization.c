@@ -302,18 +302,33 @@ void VehicleMarkerLocalization_ServiceLostProtection(void)
 #define VEHICLE_MARKER_CHEVRON_OPENING_RATIO_MAX            (0.70f) /* base/(left+right)上限。 */
 #define VEHICLE_MARKER_CHEVRON_CONCAVITY_RATIO_LOW          (0.08f) /* 凹陷开始计分的比例。 */
 #define VEHICLE_MARKER_CHEVRON_CONCAVITY_RATIO_GOOD         (0.10f) /* 凹陷满分区间下界。 */
-#define VEHICLE_MARKER_CHEVRON_CONCAVITY_RATIO_HIGH         (0.40f) /* 凹陷满分区间上界。 */
-#define VEHICLE_MARKER_CHEVRON_CONCAVITY_RATIO_MAX          (0.65f) /* 过深凹陷拒绝边界。 */
-#define VEHICLE_MARKER_CHEVRON_GEOMETRY_SCORE_MIN            (0.40f) /* 车标综合分最低值。 */
+#define VEHICLE_MARKER_CHEVRON_CONCAVITY_RATIO_HIGH         (0.70f) /* 凹陷满分区间上界。 */
+#define VEHICLE_MARKER_CHEVRON_CONCAVITY_RATIO_MAX          (0.85f) /* 过深凹陷拒绝边界。 */
+#define VEHICLE_MARKER_CHEVRON_GEOMETRY_SCORE_MIN            (0.50f) /* 车标综合分最低值。 */
 
 /*
- * 通信Yaw方向先验调参区。视觉heading由V尖端指向开口，当前车标开口朝车尾，
- * 因此相对车头Yaw增加180度。方向只参与软评分，通信失效时保持原几何模型。
+ * Yaw选定顶点后的Open-V形状验证调参区。算法沿左右臂同步采样，要求
+ * 两臂具有前景支撑、臂间主要为背景，并用最长断裂段降低连续性得分。
+ * 现场调试优先调整SCORE_MIN；弱光或轻微断裂时再调整ARM_PRESENT_RATIO。
+ * WINDOW_RADIUS和采样数量主要影响抗噪能力与计算量，通常保持默认值。
+ */
+#define VEHICLE_MARKER_CHEVRON_OPEN_V_SCORE_MIN              (0.25f) /* 最低Open-V得分；越高越严格。 */
+#define VEHICLE_MARKER_CHEVRON_OPEN_V_ARM_PRESENT_RATIO      (0.15f) /* 单侧臂判为存在的最低前景比例。 */
+#define VEHICLE_MARKER_CHEVRON_OPEN_V_WINDOW_RADIUS          (1)     /* 前景采样邻域半径；1表示3x3邻域。 */
+#define VEHICLE_MARKER_CHEVRON_OPEN_V_MIN_SAMPLES            (4U)    /* 短臂仍需执行的最少同步采样数。 */
+#define VEHICLE_MARKER_CHEVRON_OPEN_V_MAX_SAMPLES            (64U)   /* 长臂允许的最多同步采样数。 */
+/* 内部边界裕量随采样半径自动计算，不作为独立调参项。 */
+#define VEHICLE_MARKER_CHEVRON_OPEN_V_INTERIOR_MARGIN        \
+    (VEHICLE_MARKER_CHEVRON_OPEN_V_WINDOW_RADIUS + 1)
+
+/*
+ * 通信Yaw顶点选择调参区。视觉heading由V尖端指向开口，当前车标开口朝车尾，
+ * 因此相对车头Yaw增加180度。通信Yaw无效或所有顶点假设均超出门限时拒绝车标。
  */
 #define VEHICLE_MARKER_CHEVRON_OPENING_TO_CAR_YAW_DEG       (180.0f) /* 开口方向相对车头Yaw。 */
 #define VEHICLE_MARKER_CHEVRON_DIRECTION_FULL_ERROR_DEG      (20.0f) /* 小于该误差方向满分。 */
 #define VEHICLE_MARKER_CHEVRON_DIRECTION_ZERO_ERROR_DEG      (50.0f) /* 大于该误差方向零分。 */
-#define VEHICLE_MARKER_CHEVRON_SCORE_DIRECTION_WEIGHT         (0.30f) /* 方向先验综合分权重。 */
+#define VEHICLE_MARKER_CHEVRON_YAW_APEX_MAX_ERROR_DEG         (35.0f) /* 顶点假设允许的最大Yaw误差。 */
 
 /* 简化模型权重：总和为1，避免增加额外的相互耦合门限。 */
 #define VEHICLE_MARKER_CHEVRON_SCORE_SYMMETRY_WEIGHT         (0.20f) /* 臂对称性权重。 */
@@ -324,18 +339,9 @@ void VehicleMarkerLocalization_ServiceLostProtection(void)
 /* 凸包计算最多使用的轮廓点，超过时均匀抽样以限制单帧计算量。 */
 #define VEHICLE_MARKER_CHEVRON_HULL_MAX_POINTS               (96U)
 
-/* Apex 候选选择仍使用约70度作为弱偏好，不作为最终物理硬门限。 */
-#define VEHICLE_MARKER_CHEVRON_EXPECTED_ANGLE_COS            (0.34202014f)
-#define VEHICLE_MARKER_CHEVRON_COS_ERROR_TO_RAD              (1.06417777f)
 #define VEHICLE_MARKER_CHEVRON_MIN_CONTOUR_POINTS          (8U)
 #define VEHICLE_MARKER_CHEVRON_POINT_EPS                   (1e-4f)
 #define VEHICLE_MARKER_CHEVRON_SEED_SAMPLE_POINTS          (64U)
-#define VEHICLE_MARKER_CHEVRON_OPEN_V_WINDOW_RADIUS        (1)
-#define VEHICLE_MARKER_CHEVRON_OPEN_V_MIN_SAMPLES          (4U)
-#define VEHICLE_MARKER_CHEVRON_OPEN_V_MAX_SAMPLES          (64U)
-#define VEHICLE_MARKER_CHEVRON_OPEN_V_ARM_PRESENT_RATIO    (0.20f)
-#define VEHICLE_MARKER_CHEVRON_OPEN_V_INTERIOR_MARGIN      \
-    (VEHICLE_MARKER_CHEVRON_OPEN_V_WINDOW_RADIUS + 1)
 #define VEHICLE_MARKER_CHEVRON_MAX_FRAME_CANDIDATES        (4U)
 
 #if VEHICLE_MARKER_CHEVRON_SEED_SAMPLE_POINTS < 3U || \
@@ -1518,9 +1524,58 @@ static uint8 vehicle_marker_chevron_image_shape_projects_valid(
         opening_ratio <= VEHICLE_MARKER_CHEVRON_OPENING_RATIO_MAX);
 }
 
-/* Build an extreme triangle and use two-arm evidence only to select its apex.
- * This Open-V sampling describes contour support; it does not estimate the
- * vehicle heading and does not participate in the final simplified score. */
+static uint8 vehicle_marker_chevron_hypothesis_direction_error(
+    const VehicleMarkerPoint2D_t *apex_img,
+    const VehicleMarkerPoint2D_t *left_tip_img,
+    const VehicleMarkerPoint2D_t *right_tip_img,
+    float expected_heading_deg,
+    float *heading_deg,
+    float *error_deg)
+{
+    VehicleMarkerWorldPoint_t apex;
+    VehicleMarkerWorldPoint_t left_tip;
+    VehicleMarkerWorldPoint_t right_tip;
+    float heading_x;
+    float heading_y;
+    float measured_heading_deg;
+
+    if(apex_img == NULL || left_tip_img == NULL || right_tip_img == NULL ||
+       heading_deg == NULL || error_deg == NULL)
+    {
+        return 0U;
+    }
+    if(!IPM_FullRectifiedImage2PlaneF(
+           apex_img->u, apex_img->v, VEHICLE_MARKER_CHEVRON_PLANE_HEIGHT_CM,
+           &apex.x, &apex.y) ||
+       !IPM_FullRectifiedImage2PlaneF(
+           left_tip_img->u, left_tip_img->v,
+           VEHICLE_MARKER_CHEVRON_PLANE_HEIGHT_CM,
+           &left_tip.x, &left_tip.y) ||
+       !IPM_FullRectifiedImage2PlaneF(
+           right_tip_img->u, right_tip_img->v,
+           VEHICLE_MARKER_CHEVRON_PLANE_HEIGHT_CM,
+           &right_tip.x, &right_tip.y))
+    {
+        return 0U;
+    }
+
+    heading_x = (left_tip.x - apex.x) + (right_tip.x - apex.x);
+    heading_y = (left_tip.y - apex.y) + (right_tip.y - apex.y);
+    if(heading_x * heading_x + heading_y * heading_y <=
+       VEHICLE_MARKER_CHEVRON_POINT_EPS)
+    {
+        return 0U;
+    }
+    measured_heading_deg = atan2f(heading_y, heading_x) *
+                           (180.0f / 3.14159265f);
+    *heading_deg = measured_heading_deg;
+    *error_deg = fabsf(vehicle_marker_chevron_wrap_deg(
+        measured_heading_deg - expected_heading_deg));
+    return 1U;
+}
+
+/* Build an extreme triangle, then use the communicated car/UAV Yaw difference
+ * as the sole apex selector. Shape scores validate the selected hypothesis. */
 static uint8 vehicle_marker_chevron_extract_image_geometry(
     const VehicleMarkerChevronCandidate_t *candidate,
     VehicleMarkerPoint2D_t *apex,
@@ -1530,12 +1585,9 @@ static uint8 vehicle_marker_chevron_extract_image_geometry(
 {
     const VisionContour_t *contour;
     VehicleMarkerPoint2D_t triangle[3] = {{0}};
-    VehicleMarkerPoint2D_t raw_apex;
-    VehicleMarkerPoint2D_t raw_left_tip;
-    VehicleMarkerPoint2D_t raw_right_tip;
-    VehicleMarkerPoint2D_t refined_apex;
-    VehicleMarkerPoint2D_t refined_left_tip;
-    VehicleMarkerPoint2D_t refined_right_tip;
+    VehicleMarkerPoint2D_t hypothesis_apex[3] = {{0}};
+    VehicleMarkerPoint2D_t hypothesis_left_tip[3] = {{0}};
+    VehicleMarkerPoint2D_t hypothesis_right_tip[3] = {{0}};
     uint16 seed_indices[VEHICLE_MARKER_CHEVRON_SEED_SAMPLE_POINTS];
     uint16 seed_count = 0U;
     uint16 pair_i = 0U;
@@ -1546,16 +1598,28 @@ static uint8 vehicle_marker_chevron_extract_image_geometry(
     int best_apex = -1;
     float best_pair_dist_sq = -1.0f;
     float best_third_dist_sq = -1.0f;
-    float best_apex_score = -1.0f;
-    float second_apex_score = 0.0f;
-    float best_apex_angle_error = 1e30f;
-    float angle_error[3] = {1e30f, 1e30f, 1e30f};
+    float best_direction_error = 1e30f;
+    float expected_heading_deg;
+    float hypothesis_heading_deg[3] = {0.0f, 0.0f, 0.0f};
+    float direction_error[3] = {1e30f, 1e30f, 1e30f};
     float apex_score[3] = {0.0f, 0.0f, 0.0f};
     VehicleMarkerOpenVMetrics_t open_v[3] = {{0}};
     float cross;
 
     if(candidate == NULL || apex == NULL || left_tip == NULL ||
        right_tip == NULL) return 0U;
+    if(!s_vehicle_marker_opening_direction_prior_valid)
+    {
+        s_vehicle_marker_chevron_debug.direction_prior_valid = 0U;
+        s_vehicle_marker_chevron_debug.reject_reason =
+            VEHICLE_MARKER_CHEVRON_REJECT_YAW_DIRECTION;
+        return 0U;
+    }
+    expected_heading_deg = vehicle_marker_chevron_wrap_deg(
+        s_vehicle_marker_opening_direction_prior_deg +
+        VEHICLE_MARKER_CHEVRON_OPENING_TO_CAR_YAW_DEG);
+    s_vehicle_marker_chevron_debug.direction_prior_valid = 1U;
+    s_vehicle_marker_chevron_debug.direction_expected_deg = expected_heading_deg;
     contour = &candidate->contour;
     if(contour->point_count < VEHICLE_MARKER_CHEVRON_MIN_CONTOUR_POINTS)
         return 0U;
@@ -1619,78 +1683,70 @@ static uint8 vehicle_marker_chevron_extract_image_geometry(
     {
         int a = ((int)i + 1) % 3;
         int b = ((int)i + 2) % 3;
+        VehicleMarkerPoint2D_t refined_apex;
+        VehicleMarkerPoint2D_t refined_left_tip;
+        VehicleMarkerPoint2D_t refined_right_tip;
         float ax = triangle[a].u - triangle[i].u;
         float ay = triangle[a].v - triangle[i].v;
         float bx = triangle[b].u - triangle[i].u;
         float by = triangle[b].v - triangle[i].v;
         float len_a_sq = ax * ax + ay * ay;
         float len_b_sq = bx * bx + by * by;
-        float angle_cos;
-        float error;
         if(len_a_sq <= 1.0f || len_b_sq <= 1.0f) continue;
-        angle_cos = vehicle_marker_chevron_clamp_float(
-            (ax * bx + ay * by) / sqrtf(len_a_sq * len_b_sq),
-            -1.0f, 1.0f);
-        error = fabsf(angle_cos - VEHICLE_MARKER_CHEVRON_EXPECTED_ANGLE_COS) *
-                VEHICLE_MARKER_CHEVRON_COS_ERROR_TO_RAD;
-        angle_error[i] = error;
+        vehicle_marker_chevron_refine_point_3x3(
+            binary_view, &triangle[i], &refined_apex);
+        vehicle_marker_chevron_refine_point_3x3(
+            binary_view, &triangle[a], &refined_left_tip);
+        vehicle_marker_chevron_refine_point_3x3(
+            binary_view, &triangle[b], &refined_right_tip);
+        if(vehicle_marker_chevron_image_shape_projects_valid(
+               &refined_apex, &refined_left_tip, &refined_right_tip))
+        {
+            hypothesis_apex[i] = refined_apex;
+            hypothesis_left_tip[i] = refined_left_tip;
+            hypothesis_right_tip[i] = refined_right_tip;
+        }
+        else
+        {
+            hypothesis_apex[i] = triangle[i];
+            hypothesis_left_tip[i] = triangle[a];
+            hypothesis_right_tip[i] = triangle[b];
+        }
         vehicle_marker_chevron_measure_open_v(
-            &triangle[i], &triangle[a], &triangle[b], binary_view,
+            &hypothesis_apex[i], &hypothesis_left_tip[i],
+            &hypothesis_right_tip[i], binary_view,
             &open_v[i]);
-        apex_score[i] = open_v[i].arm_support * open_v[i].arm_continuity;
+        apex_score[i] = open_v[i].score;
+        (void)vehicle_marker_chevron_hypothesis_direction_error(
+            &hypothesis_apex[i], &hypothesis_left_tip[i],
+            &hypothesis_right_tip[i], expected_heading_deg,
+            &hypothesis_heading_deg[i], &direction_error[i]);
     }
     for(i = 0U; i < 3U; ++i)
     {
-        if(angle_error[i] >= 1e29f)
+        if(direction_error[i] >= 1e29f)
         {
             continue;
         }
-        if(best_apex < 0 ||
-           apex_score[i] > best_apex_score + VEHICLE_MARKER_CHEVRON_POINT_EPS ||
-           (fabsf(apex_score[i] - best_apex_score) <=
-                VEHICLE_MARKER_CHEVRON_POINT_EPS &&
-            angle_error[i] < best_apex_angle_error))
+        if(best_apex < 0 || direction_error[i] < best_direction_error)
         {
-            if(best_apex >= 0)
-            {
-                second_apex_score = best_apex_score;
-            }
             best_apex = (int)i;
-            best_apex_score = apex_score[i];
-            best_apex_angle_error = angle_error[i];
-        }
-        else if(apex_score[i] > second_apex_score)
-        {
-            second_apex_score = apex_score[i];
+            best_direction_error = direction_error[i];
         }
     }
-    if(best_apex < 0)
+    if(best_apex < 0 ||
+       best_direction_error > VEHICLE_MARKER_CHEVRON_YAW_APEX_MAX_ERROR_DEG)
     {
+        s_vehicle_marker_chevron_debug.direction_error_deg =
+            (best_apex >= 0) ? best_direction_error : 180.0f;
+        s_vehicle_marker_chevron_debug.reject_reason =
+            VEHICLE_MARKER_CHEVRON_REJECT_YAW_DIRECTION;
         return 0U;
     }
 
-    raw_apex = triangle[best_apex];
-    raw_left_tip = triangle[(best_apex + 1) % 3];
-    raw_right_tip = triangle[(best_apex + 2) % 3];
-    vehicle_marker_chevron_refine_point_3x3(
-        binary_view, &raw_apex, &refined_apex);
-    vehicle_marker_chevron_refine_point_3x3(
-        binary_view, &raw_left_tip, &refined_left_tip);
-    vehicle_marker_chevron_refine_point_3x3(
-        binary_view, &raw_right_tip, &refined_right_tip);
-    if(vehicle_marker_chevron_image_shape_projects_valid(
-           &refined_apex, &refined_left_tip, &refined_right_tip))
-    {
-        *apex = refined_apex;
-        *left_tip = refined_left_tip;
-        *right_tip = refined_right_tip;
-    }
-    else
-    {
-        *apex = raw_apex;
-        *left_tip = raw_left_tip;
-        *right_tip = raw_right_tip;
-    }
+    *apex = hypothesis_apex[best_apex];
+    *left_tip = hypothesis_left_tip[best_apex];
+    *right_tip = hypothesis_right_tip[best_apex];
 
     cross = (left_tip->u - apex->u) * (right_tip->v - apex->v) -
             (left_tip->v - apex->v) * (right_tip->u - apex->u);
@@ -1701,13 +1757,22 @@ static uint8 vehicle_marker_chevron_extract_image_geometry(
         *right_tip = temp;
     }
     {
+        float second_apex_score = 0.0f;
+        for(i = 0U; i < 3U; ++i)
+        {
+            if((int)i != best_apex && apex_score[i] > second_apex_score)
+            {
+                second_apex_score = apex_score[i];
+            }
+        }
         s_vehicle_marker_chevron_debug.open_v_hypothesis_score =
-            best_apex_score;
+            apex_score[best_apex];
         s_vehicle_marker_chevron_debug.open_v_hypothesis_second_score =
             second_apex_score;
         s_vehicle_marker_chevron_debug.open_v_hypothesis_margin =
-            best_apex_score - second_apex_score;
+            apex_score[best_apex] - second_apex_score;
         s_vehicle_marker_chevron_debug.open_v_apex_index = (uint8)best_apex;
+        s_vehicle_marker_chevron_debug.direction_error_deg = best_direction_error;
     }
     return vehicle_marker_chevron_image_distance_sq(apex, left_tip) > 1.0f &&
            vehicle_marker_chevron_image_distance_sq(apex, right_tip) > 1.0f;
@@ -1817,6 +1882,12 @@ static uint8 vehicle_marker_chevron_process_candidate(
             effective_open_v_center_gap;
         s_vehicle_marker_chevron_debug.open_v_gate_from_primary =
             (open_v_gate != NULL) ? 1U : 0U;
+        if(fitted_open_v.score < VEHICLE_MARKER_CHEVRON_OPEN_V_SCORE_MIN)
+        {
+            s_vehicle_marker_chevron_debug.reject_reason =
+                VEHICLE_MARKER_CHEVRON_REJECT_OPEN_V;
+            return 0U;
+        }
     }
 
     if(!IPM_FullRectifiedImage2PlaneF(
@@ -1896,20 +1967,13 @@ static uint8 vehicle_marker_chevron_process_candidate(
         concavity_score * VEHICLE_MARKER_CHEVRON_SCORE_CONCAVITY_WEIGHT +
         basic_blob_score * VEHICLE_MARKER_CHEVRON_SCORE_BLOB_WEIGHT;
     geometry_score = base_geometry_score;
-    if(s_vehicle_marker_opening_direction_prior_valid)
-    {
-        direction_expected_deg = vehicle_marker_chevron_wrap_deg(
-            s_vehicle_marker_opening_direction_prior_deg +
-            VEHICLE_MARKER_CHEVRON_OPENING_TO_CAR_YAW_DEG);
-        direction_error_deg = fabsf(vehicle_marker_chevron_wrap_deg(
-            heading_deg - direction_expected_deg));
-        direction_score = vehicle_marker_chevron_score_direction(
-            direction_error_deg);
-        geometry_score =
-            base_geometry_score *
-                (1.0f - VEHICLE_MARKER_CHEVRON_SCORE_DIRECTION_WEIGHT) +
-            direction_score * VEHICLE_MARKER_CHEVRON_SCORE_DIRECTION_WEIGHT;
-    }
+    direction_expected_deg = vehicle_marker_chevron_wrap_deg(
+        s_vehicle_marker_opening_direction_prior_deg +
+        VEHICLE_MARKER_CHEVRON_OPENING_TO_CAR_YAW_DEG);
+    direction_error_deg = fabsf(vehicle_marker_chevron_wrap_deg(
+        heading_deg - direction_expected_deg));
+    direction_score = vehicle_marker_chevron_score_direction(
+        direction_error_deg);
 
     s_vehicle_marker_chevron_debug.left_arm_cm = left_span_cm;
     s_vehicle_marker_chevron_debug.right_arm_cm = right_span_cm;
@@ -1934,6 +1998,12 @@ static uint8 vehicle_marker_chevron_process_candidate(
     s_vehicle_marker_chevron_debug.base_cm = base_cm;
     s_vehicle_marker_chevron_debug.triangle_height_cm = triangle_height_cm;
 
+    if(direction_error_deg > VEHICLE_MARKER_CHEVRON_YAW_APEX_MAX_ERROR_DEG)
+    {
+        s_vehicle_marker_chevron_debug.reject_reason =
+            VEHICLE_MARKER_CHEVRON_REJECT_YAW_DIRECTION;
+        return 0U;
+    }
     if(mean_arm_cm < VEHICLE_MARKER_CHEVRON_MEAN_ARM_MIN_CM ||
        mean_arm_cm > VEHICLE_MARKER_CHEVRON_MEAN_ARM_MAX_CM ||
        arm_symmetry < VEHICLE_MARKER_CHEVRON_MIN_ARM_SYMMETRY ||

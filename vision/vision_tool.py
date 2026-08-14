@@ -70,7 +70,12 @@ VEHICLE_MARKER_MODEL_MACROS = {
     "concavity_ratio_low": "VEHICLE_MARKER_CHEVRON_CONCAVITY_RATIO_LOW",
     "concavity_ratio_max": "VEHICLE_MARKER_CHEVRON_CONCAVITY_RATIO_MAX",
     "geometry_score_min": "VEHICLE_MARKER_CHEVRON_GEOMETRY_SCORE_MIN",
-    "direction_weight": "VEHICLE_MARKER_CHEVRON_SCORE_DIRECTION_WEIGHT",
+    "yaw_apex_max_error_deg": "VEHICLE_MARKER_CHEVRON_YAW_APEX_MAX_ERROR_DEG",
+    "open_v_score_min": "VEHICLE_MARKER_CHEVRON_OPEN_V_SCORE_MIN",
+    "symmetry_weight": "VEHICLE_MARKER_CHEVRON_SCORE_SYMMETRY_WEIGHT",
+    "opening_weight": "VEHICLE_MARKER_CHEVRON_SCORE_OPENING_WEIGHT",
+    "concavity_weight": "VEHICLE_MARKER_CHEVRON_SCORE_CONCAVITY_WEIGHT",
+    "blob_weight": "VEHICLE_MARKER_CHEVRON_SCORE_BLOB_WEIGHT",
 }
 
 
@@ -631,7 +636,7 @@ class VisionToolApp:
                 ttk.Entry(params, textvariable=right[1], width=10).grid(row=row, column=3, sticky="ew", padx=(5, 0), pady=3)
         ttk.Checkbutton(
             params,
-            text="启用开口方向先验",
+            text="启用通信Yaw顶点选择（车标必需）",
             variable=self.direction_prior_valid_var,
         ).grid(row=2, column=2, columnspan=2, sticky="w", pady=3)
 
@@ -1582,7 +1587,8 @@ class VisionToolApp:
             2: "图像几何失败",
             3: "物理投影失败",
             4: "物理几何不符",
-            5: "旧版Open-V门控",
+            5: "Yaw选定顶点的V形空隙不足",
+            6: "通信Yaw无效或顶点方向不符",
         }.get(reason, f"未知({reason})")
 
     @staticmethod
@@ -1648,7 +1654,9 @@ class VisionToolApp:
         ) if reason == 4 else []
         detail_text = f"[{'；'.join(details)}]" if details else ""
         return (
-            f"{label}: {status}{detail_text}，open-V={float(open_v.get('score', 0.0)):.3f}，"
+            f"{label}: {status}{detail_text}，open-V="
+            f"{float(open_v.get('score', 0.0)):.3f}/"
+            f"{float(thresholds.get('open_v_score_min', 0.0)):.3f}，"
             f"平均臂长={float(physical.get('mean_arm_cm', 0.0)):.1f}cm，"
             f"对称/开口/凹陷={float(physical.get('arm_symmetry', 0.0)):.2f}/"
             f"{float(physical.get('opening_ratio', 0.0)):.2f}/"
@@ -1687,6 +1695,55 @@ class VisionToolApp:
             ),
             route,
         ))
+
+    @staticmethod
+    def format_chevron_scores(result: dict | None) -> str:
+        if not isinstance(result, dict):
+            return "车标V形评分：当前候选未生成独立评分"
+        chevron = result.get("chevron", {})
+        if not isinstance(chevron, dict):
+            return "车标V形评分：当前候选未生成独立评分"
+        scores = chevron.get("scores", {})
+        thresholds = chevron.get("thresholds", {})
+        direction = chevron.get("direction", {})
+        if not isinstance(scores, dict) or not scores:
+            return "车标V形评分：当前候选未生成独立评分"
+        if not isinstance(thresholds, dict):
+            thresholds = {}
+
+        weights = {
+            "symmetry_weight": float(thresholds.get("symmetry_weight", 0.20)),
+            "opening_weight": float(thresholds.get("opening_weight", 0.20)),
+            "concavity_weight": float(thresholds.get("concavity_weight", 0.50)),
+            "blob_weight": float(thresholds.get("blob_weight", 0.10)),
+        }
+        components = (
+            ("对称", float(scores.get("arm_symmetry", 0.0)), weights["symmetry_weight"]),
+            ("开口", float(scores.get("opening_ratio", 0.0)), weights["opening_weight"]),
+            ("凹陷", float(scores.get("concavity", 0.0)), weights["concavity_weight"]),
+            ("Blob", float(scores.get("basic_blob", 0.0)), weights["blob_weight"]),
+        )
+        contributions = tuple(score * weight for _, score, weight in components)
+        component_text = "  ".join(
+            f"{name} {score:.3f}×{weight:.2f}={contribution:.3f}"
+            for (name, score, weight), contribution in zip(components, contributions)
+        )
+        base_score = sum(contributions)
+        final_score = float(scores.get("geometry", 0.0))
+        score_min = float(thresholds.get("geometry_score_min", 0.0))
+        if isinstance(direction, dict) and direction.get("prior_valid"):
+            direction_error = float(direction.get("error_deg", 0.0))
+            max_error = float(thresholds.get("yaw_apex_max_error_deg", 0.0))
+            direction_text = (
+                f"Yaw顶点误差 {direction_error:.1f}°/{max_error:.1f}°"
+            )
+        else:
+            direction_text = "通信Yaw无效"
+        return (
+            f"车标V形评分：{component_text}\n"
+            f"基础几何分 {base_score:.3f}  {direction_text}  "
+            f"最终综合分 {final_score:.3f}/{score_min:.3f}"
+        )
 
     @staticmethod
     def pose_warning_text(roll: float, pitch: float) -> str:
@@ -1778,6 +1835,12 @@ class VisionToolApp:
                 vehicle_route = "跳过箭头，直接识别信标"
             else:
                 vehicle_route = "箭头优先"
+            if diagnostic:
+                chevron_score_result = diagnostic.get("official")
+            elif candidate.get("vehicle_valid"):
+                chevron_score_result = result
+            else:
+                chevron_score_result = None
             ttk.Label(
                 tab,
                 text=(
@@ -1790,13 +1853,14 @@ class VisionToolApp:
                     f"位置: ({candidate.get('x_cm', 0):.1f}, {candidate.get('y_cm', 0):.1f}) cm  "
                     f"detection_confidence: {int(candidate.get('detection_confidence', 0))}  "
                     f"位置 1σ: {int(candidate.get('position_sigma_cm', 0))} cm\n"
-                    f"候选框大小评分 B: {candidate.get('confidence_box_size', 0):.2f}  "
+                    f"通用候选/信标评分：候选框大小 B: {candidate.get('confidence_box_size', 0):.2f}  "
                     f"当前位置B门槛: {candidate.get('confidence_box_size_min', 0):.2f}  "
                     f"面积评分 A: {candidate.get('confidence_area', 0):.2f}  "
                     f"阈值稳定性评分 T: {candidate.get('confidence_stability', 0):.2f}  "
                     f"边缘评分 E: {candidate.get('confidence_edge', 0):.2f}  "
                     f"姿态放宽量: {candidate.get('adaptive_relaxation', 0):.2f}  "
                     f"实际圆度门槛: {candidate.get('adaptive_min_circularity', 0.15):.3f}\n"
+                    f"{self.format_chevron_scores(chevron_score_result)}\n"
                     f"{self.format_candidate_diagnostic(diagnostic)}"
                 ),
                 justify=tk.LEFT,
@@ -2898,8 +2962,10 @@ class VisionToolApp:
             f"\n方向先验: {'启用' if direction.get('prior_valid') else '关闭'}"
             f"，期望/误差/评分: {direction.get('expected_deg', 0):.1f}°/"
             f"{direction.get('error_deg', 0):.1f}°/{direction.get('score', 0):.3f}"
-            f"，权重: {thresholds.get('direction_weight', '?')}"
-            f"\nV形拟合: {open_v.get('score', 0):.3f}，顶点假设: {open_v.get('hypothesis_score', 0):.3f}/"
+            f"，顶点最大误差: {thresholds.get('yaw_apex_max_error_deg', '?')}°"
+            f"\nV形拟合: {open_v.get('score', 0):.3f}/"
+            f"{float(thresholds.get('open_v_score_min', 0.0)):.3f}，顶点假设: "
+            f"{open_v.get('hypothesis_score', 0):.3f}/"
             f"{open_v.get('hypothesis_second_score', 0):.3f}，差值: {open_v.get('hypothesis_margin', 0):.3f}"
             f"，臂连续度: {open_v.get('arm_continuity', 0):.3f}"
             f"，记录得分: {open_v.get('gate_score', open_v.get('score', 0)):.3f}"
@@ -3019,6 +3085,9 @@ def self_test() -> int:
     assert model_thresholds["mean_arm_min_cm"] == 4.0
     assert model_thresholds["opening_ratio_min"] == 0.20
     assert model_thresholds["opening_ratio_max"] == 0.70
+    assert abs(sum(model_thresholds[key] for key in (
+        "symmetry_weight", "opening_weight", "concavity_weight", "blob_weight",
+    )) - 1.0) < 1e-6
     macro_sample = "\n".join(
         f"#define {macro} ({value}U) /* test */"
         for macro, value in zip(
@@ -3142,6 +3211,31 @@ def self_test() -> int:
     })
     assert "综合分=0.600" in diagnostic_text
     assert "方向=启用" in diagnostic_text
+    score_text = VisionToolApp.format_chevron_scores({
+        "chevron": {
+            "scores": {
+                "arm_symmetry": 0.5,
+                "opening_ratio": 1.0,
+                "concavity": 0.8,
+                "basic_blob": 0.9,
+                "geometry": 0.79,
+            },
+            "thresholds": {
+                "symmetry_weight": 0.2,
+                "opening_weight": 0.2,
+                "concavity_weight": 0.5,
+                "blob_weight": 0.1,
+                "geometry_score_min": 0.4,
+                "yaw_apex_max_error_deg": 35.0,
+            },
+            "direction": {"prior_valid": 0},
+        },
+    })
+    assert "对称 0.500×0.20=0.100" in score_text
+    assert "凹陷 0.800×0.50=0.400" in score_text
+    assert "基础几何分 0.790" in score_text
+    assert "通信Yaw无效" in score_text
+    assert "最终综合分 0.790/0.400" in score_text
     assert VisionToolApp.pose_warning_text(6.0, -7.0) == ""
     assert "姿态警告" in VisionToolApp.pose_warning_text(8.0, 0.0)
     category_root = Path("分类")
