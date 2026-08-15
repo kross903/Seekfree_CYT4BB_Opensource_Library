@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import queue
 import re
@@ -14,6 +15,7 @@ import sys
 import tempfile
 import threading
 import time
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from tkinter import filedialog, messagebox, scrolledtext, ttk
@@ -77,6 +79,284 @@ VEHICLE_MARKER_MODEL_MACROS = {
     "concavity_weight": "VEHICLE_MARKER_CHEVRON_SCORE_CONCAVITY_WEIGHT",
     "blob_weight": "VEHICLE_MARKER_CHEVRON_SCORE_BLOB_WEIGHT",
 }
+
+
+def wrap_degrees(angle_deg: float) -> float:
+    return (angle_deg + 180.0) % 360.0 - 180.0
+
+
+def build_ideal_chevron_points(
+    center: tuple[float, float],
+    arm_length_cm: float,
+    opening_angle_deg: float,
+    opening_direction_deg: float,
+) -> dict[str, tuple[float, float]]:
+    """Build apex and arm endpoints around the triangle centroid."""
+    half_angle = math.radians(opening_angle_deg * 0.5)
+    triangle_height = arm_length_cm * math.cos(half_angle)
+    half_base = arm_length_cm * math.sin(half_angle)
+    apex_direction = math.radians(opening_direction_deg - 180.0)
+    forward = (math.cos(apex_direction), math.sin(apex_direction))
+    left = (-forward[1], forward[0])
+    apex = (
+        center[0] + (2.0 * triangle_height / 3.0) * forward[0],
+        center[1] + (2.0 * triangle_height / 3.0) * forward[1],
+    )
+    base_center = (
+        center[0] - (triangle_height / 3.0) * forward[0],
+        center[1] - (triangle_height / 3.0) * forward[1],
+    )
+    return {
+        "center": center,
+        "apex": apex,
+        "left_tip": (
+            base_center[0] + half_base * left[0],
+            base_center[1] + half_base * left[1],
+        ),
+        "right_tip": (
+            base_center[0] - half_base * left[0],
+            base_center[1] - half_base * left[1],
+        ),
+    }
+
+
+@dataclass(frozen=True)
+class IdealArrowCalibration:
+    image_width: int
+    image_height: int
+    undistort_width: int
+    undistort_height: int
+    fx: float
+    fy: float
+    cx: float
+    cy: float
+    k1: float
+    k2: float
+    k3: float
+    k4: float
+    mount_roll_deg: float
+    mount_pitch_deg: float
+    mount_yaw_deg: float
+    offset_x_cm: float
+    offset_y_cm: float
+    offset_z_cm: float
+
+    @classmethod
+    def from_header(cls, header_path: Path) -> "IdealArrowCalibration":
+        source = header_path.read_text(encoding="utf-8")
+
+        def macro(name: str) -> float:
+            match = re.search(
+                rf"^\s*#define\s+{re.escape(name)}\s+\(?\s*([-+0-9.eE]+)",
+                source,
+                re.MULTILINE,
+            )
+            if match is None:
+                raise ValueError(f"标定文件缺少宏: {name}")
+            return float(match.group(1))
+
+        return cls(
+            image_width=int(macro("CAMERA_CALIBRATION_IMAGE_WIDTH")),
+            image_height=int(macro("CAMERA_CALIBRATION_IMAGE_HEIGHT")),
+            undistort_width=int(macro("CAMERA_CALIBRATION_UNDISTORT_WIDTH")),
+            undistort_height=int(macro("CAMERA_CALIBRATION_UNDISTORT_HEIGHT")),
+            fx=macro("CAMERA_CALIBRATION_FX"),
+            fy=macro("CAMERA_CALIBRATION_FY"),
+            cx=macro("CAMERA_CALIBRATION_CX"),
+            cy=macro("CAMERA_CALIBRATION_CY"),
+            k1=macro("CAMERA_CALIBRATION_K1"),
+            k2=macro("CAMERA_CALIBRATION_K2"),
+            k3=macro("CAMERA_CALIBRATION_K3"),
+            k4=macro("CAMERA_CALIBRATION_K4"),
+            mount_roll_deg=macro("CAMERA_MOUNT_ROLL_OFFSET_DEG"),
+            mount_pitch_deg=macro("CAMERA_MOUNT_PITCH_OFFSET_DEG"),
+            mount_yaw_deg=macro("CAMERA_MOUNT_YAW_OFFSET_DEG"),
+            offset_x_cm=macro("CAMERA_OFFSET_X_CM"),
+            offset_y_cm=macro("CAMERA_OFFSET_Y_CM"),
+            offset_z_cm=macro("CAMERA_OFFSET_Z_CM"),
+        )
+
+
+class IdealArrowProjector:
+    """Firmware-equivalent projection between the target plane and rectified canvas."""
+
+    def __init__(self, calibration: IdealArrowCalibration) -> None:
+        self.calibration = calibration
+        self.mount_rotation = self._mount_rotation(
+            calibration.mount_roll_deg,
+            calibration.mount_pitch_deg,
+            calibration.mount_yaw_deg,
+        )
+
+    @staticmethod
+    def _mount_rotation(
+        roll_deg: float, pitch_deg: float, yaw_deg: float,
+    ) -> tuple[tuple[float, float, float], ...]:
+        roll = math.radians(roll_deg)
+        pitch = math.radians(pitch_deg)
+        yaw = math.radians(yaw_deg)
+        sr, cr = math.sin(roll), math.cos(roll)
+        sp, cp = math.sin(pitch), math.cos(pitch)
+        sy, cy = math.sin(yaw), math.cos(yaw)
+        return (
+            (cy * cp, cy * sp * sr - sy * cr, cy * sp * cr + sy * sr),
+            (sy * cp, sy * sp * sr + cy * cr, sy * sp * cr - cy * sr),
+            (-sp, cp * sr, cp * cr),
+        )
+
+    @staticmethod
+    def _attitude_rotation(
+        roll_deg: float, pitch_deg: float,
+    ) -> tuple[tuple[float, float, float], ...]:
+        roll = math.radians(roll_deg)
+        pitch = math.radians(pitch_deg)
+        sr, cr = math.sin(roll), math.cos(roll)
+        sp, cp = math.sin(pitch), math.cos(pitch)
+        return (
+            (cp, 0.0, sp),
+            (sr * sp, cr, -sr * cp),
+            (-cr * sp, sr, cr * cp),
+        )
+
+    @staticmethod
+    def _mat_vec(
+        matrix: tuple[tuple[float, float, float], ...],
+        vector: tuple[float, float, float],
+    ) -> tuple[float, float, float]:
+        return tuple(
+            sum(matrix[row][column] * vector[column] for column in range(3))
+            for row in range(3)
+        )  # type: ignore[return-value]
+
+    @staticmethod
+    def _transpose_mat_vec(
+        matrix: tuple[tuple[float, float, float], ...],
+        vector: tuple[float, float, float],
+    ) -> tuple[float, float, float]:
+        return tuple(
+            sum(matrix[row][column] * vector[row] for row in range(3))
+            for column in range(3)
+        )  # type: ignore[return-value]
+
+    def image_to_plane(
+        self,
+        image_point: tuple[float, float],
+        roll_deg: float,
+        pitch_deg: float,
+        height_cm: float,
+        plane_height_cm: float,
+    ) -> tuple[float, float] | None:
+        calibration = self.calibration
+        center_x = (calibration.undistort_width - 1.0) * 0.5
+        center_y = (calibration.undistort_height - 1.0) * 0.5
+        ray_camera = (
+            (image_point[1] - center_y) / calibration.fy,
+            (image_point[0] - center_x) / calibration.fx,
+            1.0,
+        )
+        ray_body = self._mat_vec(self.mount_rotation, ray_camera)
+        ray_world = self._mat_vec(
+            self._attitude_rotation(roll_deg, pitch_deg), ray_body,
+        )
+        camera_z = -height_cm + calibration.offset_z_cm
+        plane_z = -plane_height_cm
+        if abs(ray_world[2]) < 1e-9:
+            return None
+        distance = (plane_z - camera_z) / ray_world[2]
+        if distance <= 0.0:
+            return None
+        return (
+            -(calibration.offset_x_cm + distance * ray_world[0]),
+            -(calibration.offset_y_cm + distance * ray_world[1]),
+        )
+
+    def plane_to_image(
+        self,
+        world_point: tuple[float, float],
+        roll_deg: float,
+        pitch_deg: float,
+        height_cm: float,
+        plane_height_cm: float,
+    ) -> tuple[float, float] | None:
+        calibration = self.calibration
+        camera_z = -height_cm + calibration.offset_z_cm
+        vector_world = (
+            -world_point[0] - calibration.offset_x_cm,
+            -world_point[1] - calibration.offset_y_cm,
+            -plane_height_cm - camera_z,
+        )
+        vector_body = self._transpose_mat_vec(
+            self._attitude_rotation(roll_deg, pitch_deg), vector_world,
+        )
+        vector_camera = self._transpose_mat_vec(self.mount_rotation, vector_body)
+        if vector_camera[2] <= 1e-9:
+            return None
+        center_x = (calibration.undistort_width - 1.0) * 0.5
+        center_y = (calibration.undistort_height - 1.0) * 0.5
+        image_x = center_x + calibration.fx * vector_camera[1] / vector_camera[2]
+        image_y = center_y + calibration.fy * vector_camera[0] / vector_camera[2]
+        if not (0.0 <= image_x < calibration.undistort_width and
+                0.0 <= image_y < calibration.undistort_height):
+            return None
+        return image_x, image_y
+
+    def undistort_gray(self, source_image: Image.Image) -> tuple[Image.Image, Image.Image]:
+        calibration = self.calibration
+        source = source_image.convert("L")
+        if source.size != (calibration.image_width, calibration.image_height):
+            raise ValueError(
+                f"去畸变输入尺寸为{source.width}×{source.height}，"
+                f"需要{calibration.image_width}×{calibration.image_height}"
+            )
+        source_bytes = source.tobytes()
+        output = bytearray(calibration.undistort_width * calibration.undistort_height)
+        mask = bytearray(len(output))
+        center_x = (calibration.undistort_width - 1.0) * 0.5
+        center_y = (calibration.undistort_height - 1.0) * 0.5
+        source_width = calibration.image_width
+        output_index = 0
+        for image_y in range(calibration.undistort_height):
+            normalized_y = (image_y - center_y) / calibration.fy
+            for image_x in range(calibration.undistort_width):
+                normalized_x = (image_x - center_x) / calibration.fx
+                radius = math.hypot(normalized_x, normalized_y)
+                if radius < 1e-12:
+                    source_x = calibration.cx
+                    source_y = calibration.cy
+                else:
+                    theta = math.atan(radius)
+                    theta2 = theta * theta
+                    theta4 = theta2 * theta2
+                    theta6 = theta4 * theta2
+                    theta8 = theta4 * theta4
+                    distorted_theta = theta * (
+                        1.0 + calibration.k1 * theta2 + calibration.k2 * theta4 +
+                        calibration.k3 * theta6 + calibration.k4 * theta8
+                    )
+                    scale = distorted_theta / radius
+                    source_x = calibration.fx * normalized_x * scale + calibration.cx
+                    source_y = calibration.fy * normalized_y * scale + calibration.cy
+                if (0.0 <= source_x < calibration.image_width - 1 and
+                        0.0 <= source_y < calibration.image_height - 1):
+                    source_x_q8 = int(round(source_x * 256.0))
+                    source_y_q8 = int(round(source_y * 256.0))
+                    x0 = source_x_q8 >> 8
+                    y0 = source_y_q8 >> 8
+                    weight_x = source_x_q8 & 0xFF
+                    weight_y = source_y_q8 & 0xFF
+                    row0 = y0 * source_width
+                    row1 = row0 + source_width
+                    weighted_sum = (
+                        source_bytes[row0 + x0] * (256 - weight_x) * (256 - weight_y) +
+                        source_bytes[row0 + x0 + 1] * weight_x * (256 - weight_y) +
+                        source_bytes[row1 + x0] * (256 - weight_x) * weight_y +
+                        source_bytes[row1 + x0 + 1] * weight_x * weight_y
+                    )
+                    output[output_index] = (weighted_sum + 32768) >> 16
+                    mask[output_index] = 255
+                output_index += 1
+        size = (calibration.undistort_width, calibration.undistort_height)
+        return Image.frombytes("L", size, bytes(output)), Image.frombytes("L", size, bytes(mask))
 
 
 def decode_process_output(payload: bytes | None) -> str:
@@ -378,6 +658,7 @@ class VisionToolApp:
         self.binary_image: ImageTk.PhotoImage | None = None
         self.current_source_image: Image.Image | None = None
         self.current_undistorted_image: Image.Image | None = None
+        self.current_undistorted_gray_image: Image.Image | None = None
         self.current_birdview_image: Image.Image | None = None
         self.current_undistorted_mask: Image.Image | None = None
         self.current_birdview_mask: Image.Image | None = None
@@ -408,6 +689,28 @@ class VisionToolApp:
         self.roi_source_image: Image.Image | None = None
         self.roi_status_var = tk.StringVar(value="未选择区域")
         self.roi_save_button: ttk.Button | None = None
+        self.ideal_arrow_window: tk.Toplevel | None = None
+        self.ideal_arrow_canvas: tk.Canvas | None = None
+        self.ideal_arrow_photo: ImageTk.PhotoImage | None = None
+        self.ideal_arrow_background_var = tk.StringVar(value="gray")
+        self.ideal_arrow_threshold_var = tk.StringVar(value="60")
+        self.ideal_arrow_arm_length_var = tk.StringVar(value="19")
+        self.ideal_arrow_angle_var = tk.StringVar(value="70")
+        self.ideal_arrow_plane_height_var = tk.StringVar(value="17")
+        self.ideal_arrow_opening_offset_var = tk.StringVar(value="180")
+        self.ideal_arrow_car_yaw_var = tk.StringVar(value="0")
+        self.ideal_arrow_yaw_relative_var = tk.BooleanVar(value=False)
+        self.ideal_arrow_yaw_source_var = tk.StringVar(value="手动")
+        self.ideal_arrow_status_var = tk.StringVar(value="暂无投影")
+        self.ideal_arrow_center = ((FINE_WIDTH - 1.0) * 0.5,
+                                   (FINE_HEIGHT - 1.0) * 0.5)
+        self.ideal_arrow_zoom = 1.0
+        self.ideal_arrow_offset = (0.0, 0.0)
+        self.ideal_arrow_pan_start: tuple[float, float, float, float] | None = None
+        self.ideal_arrow_fitted = False
+        self.ideal_arrow_pending_open = False
+        self.ideal_arrow_projector: IdealArrowProjector | None = None
+        self.ideal_arrow_background_cache_key: tuple[object, ...] | None = None
         self.ui_queue: queue.Queue[tuple[str, object]] = queue.Queue()
         self.simulation_queue: queue.Queue[
             tuple[Path, float, float, float, float, bool, bool, bool, int, int,
@@ -548,30 +851,35 @@ class VisionToolApp:
         ttk.Button(action_bar, text="打开连通域候选区", command=self.open_current_candidate_window).grid(
             row=2, column=0, columnspan=2, sticky="ew", pady=(6, 0)
         )
+        ttk.Button(
+            action_bar,
+            text="理想箭头投影",
+            command=self.request_ideal_arrow_window,
+        ).grid(row=3, column=0, columnspan=2, sticky="ew", pady=(6, 0))
         self.candidate_diagnostic_button = ttk.Button(
             action_bar,
             text="运行候选双阈值诊断",
             command=self.start_candidate_diagnostics,
         )
         self.candidate_diagnostic_button.grid(
-            row=3, column=0, columnspan=2, sticky="ew", pady=(6, 0)
+            row=4, column=0, columnspan=2, sticky="ew", pady=(6, 0)
         )
         ttk.Button(action_bar, text="提取单张区域", command=self.open_roi_window).grid(
-            row=4, column=0, columnspan=2, sticky="ew", pady=(6, 0)
+            row=5, column=0, columnspan=2, sticky="ew", pady=(6, 0)
         )
         self.batch_button = ttk.Button(
             action_bar,
             text="批量验证分类目录",
             command=self.start_classified_batch,
         )
-        self.batch_button.grid(row=5, column=0, columnspan=2, sticky="ew", pady=(6, 0))
+        self.batch_button.grid(row=6, column=0, columnspan=2, sticky="ew", pady=(6, 0))
         self.folder_check_button = ttk.Button(
             action_bar,
             text="一键检查文件夹",
             command=self.start_folder_check,
         )
         self.folder_check_button.grid(
-            row=6, column=0, columnspan=2, sticky="ew", pady=(6, 0)
+            row=7, column=0, columnspan=2, sticky="ew", pady=(6, 0)
         )
 
         capture_tab.columnconfigure(0, weight=1)
@@ -928,6 +1236,7 @@ class VisionToolApp:
         self.close_roi_window()
         self.current_source_image = image
         self.current_undistorted_image = None
+        self.current_undistorted_gray_image = None
         self.current_birdview_image = None
         self.current_undistorted_mask = None
         self.current_birdview_mask = None
@@ -937,10 +1246,14 @@ class VisionToolApp:
         self.current_candidate_coarse_binary = None
         self.current_candidate_diagnostics = []
         self.current_result = None
+        self.ideal_arrow_center = ((FINE_WIDTH - 1.0) * 0.5,
+                                   (FINE_HEIGHT - 1.0) * 0.5)
         self.apply_frame_metadata(path)
+        self.load_ideal_arrow_yaw_metadata(path)
         self.frame_info_var.set(f"{path.name}  {image.width}×{image.height}")
         self.refresh_preview()
         self.refresh_processed_preview()
+        self.refresh_ideal_arrow_preview()
 
     def refresh_preview(self) -> None:
         if self.current_source_image is None:
@@ -1233,6 +1546,407 @@ class VisionToolApp:
         self.processed_window = None
         self.processed_label = None
         self.processed_photo = None
+
+    def request_ideal_arrow_window(self) -> None:
+        if self.ideal_arrow_window is not None and self.ideal_arrow_window.winfo_exists():
+            self.ideal_arrow_window.deiconify()
+            self.ideal_arrow_window.lift()
+            self.refresh_ideal_arrow_preview()
+            return
+        if self.current_frame is None:
+            messagebox.showerror("理想箭头投影", "请先选择一帧图像。")
+            return
+        if self.current_undistorted_gray_image is not None:
+            self.open_ideal_arrow_window()
+            return
+        if self.ideal_arrow_pending_open:
+            return
+        self.undistort_var.set(True)
+        self.ideal_arrow_pending_open = True
+        if not self.start_run():
+            self.ideal_arrow_pending_open = False
+            return
+        self.status_var.set("正在生成理想箭头背景")
+
+    def load_ideal_arrow_yaw_metadata(self, path: Path | None = None) -> None:
+        metadata_path = (path or self.current_frame).with_suffix(".json") if (path or self.current_frame) else None
+        if metadata_path is None:
+            return
+        try:
+            payload = read_json_compat(metadata_path)
+            telemetry = payload.get("telemetry", {})
+            if not isinstance(telemetry, dict):
+                raise ValueError("telemetry无效")
+            yaw_valid = telemetry.get(
+                "car_yaw_valid",
+                telemetry.get("direction_prior_valid", True),
+            )
+            if not bool(yaw_valid):
+                self.ideal_arrow_yaw_source_var.set("手动（JSON小车Yaw无效）")
+                return
+            if telemetry.get("car_yaw_rel_uav_deg") is not None:
+                value = float(telemetry["car_yaw_rel_uav_deg"])
+                self.ideal_arrow_car_yaw_var.set(f"{value:.6f}")
+                self.ideal_arrow_yaw_relative_var.set(True)
+                self.ideal_arrow_yaw_source_var.set("同名JSON：车相对机Yaw")
+                return
+            absolute_yaw = telemetry.get("car_yaw_deg", telemetry.get("vehicle_yaw_deg"))
+            if absolute_yaw is not None:
+                self.ideal_arrow_car_yaw_var.set(f"{float(absolute_yaw):.6f}")
+                self.ideal_arrow_yaw_relative_var.set(False)
+                self.ideal_arrow_yaw_source_var.set("同名JSON：小车绝对Yaw")
+                return
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            pass
+        self.ideal_arrow_yaw_source_var.set("手动（JSON无小车Yaw）")
+
+    def mark_ideal_arrow_yaw_manual(self, _event: object = None) -> None:
+        self.ideal_arrow_yaw_source_var.set("手动")
+        self.refresh_ideal_arrow_preview()
+
+    def open_ideal_arrow_window(self) -> None:
+        if self.current_undistorted_gray_image is None:
+            messagebox.showinfo("理想箭头投影", "请先生成当前帧的去畸变图。")
+            return
+        if self.ideal_arrow_window is not None and self.ideal_arrow_window.winfo_exists():
+            self.ideal_arrow_window.deiconify()
+            self.ideal_arrow_window.lift()
+            self.refresh_ideal_arrow_preview()
+            return
+        try:
+            calibration_path = Path(self.source_var.get()) / "camera_calibration_params.h"
+            self.ideal_arrow_projector = IdealArrowProjector(
+                IdealArrowCalibration.from_header(calibration_path)
+            )
+        except (OSError, ValueError) as exc:
+            messagebox.showerror("理想箭头投影", str(exc))
+            return
+
+        window = tk.Toplevel(self.root)
+        self.ideal_arrow_window = window
+        window.title("理想箭头投影")
+        window.geometry("1080x760")
+        window.minsize(760, 560)
+        window.rowconfigure(1, weight=1)
+        window.columnconfigure(0, weight=1)
+
+        controls = ttk.Frame(window, padding=8)
+        controls.grid(row=0, column=0, sticky="ew")
+        controls.columnconfigure(0, weight=1)
+        controls.columnconfigure(1, weight=1)
+        controls.columnconfigure(2, weight=1)
+
+        pose = ttk.LabelFrame(controls, text="无人机姿态", padding=6)
+        pose.grid(row=0, column=0, sticky="nsew", padx=(0, 4))
+        arrow = ttk.LabelFrame(controls, text="箭头物理参数", padding=6)
+        arrow.grid(row=0, column=1, sticky="nsew", padx=4)
+        view = ttk.LabelFrame(controls, text="显示", padding=6)
+        view.grid(row=0, column=2, sticky="nsew", padx=(4, 0))
+
+        def add_entry(
+            parent: ttk.LabelFrame,
+            row: int,
+            label: str,
+            variable: tk.Variable,
+            callback: object = None,
+        ) -> ttk.Entry:
+            ttk.Label(parent, text=label).grid(row=row, column=0, sticky="w", pady=2)
+            entry = ttk.Entry(parent, textvariable=variable, width=11)
+            entry.grid(row=row, column=1, sticky="ew", padx=(6, 0), pady=2)
+            entry.bind("<KeyRelease>", callback or (lambda _event: self.refresh_ideal_arrow_preview()))
+            return entry
+
+        pose.columnconfigure(1, weight=1)
+        add_entry(pose, 0, "Roll (deg)", self.roll_var)
+        add_entry(pose, 1, "Pitch (deg)", self.pitch_var)
+        add_entry(pose, 2, "无人机Yaw (deg)", self.yaw_var)
+        add_entry(pose, 3, "ToF高度 (cm)", self.height_var)
+        add_entry(
+            pose, 4, "小车Yaw (deg)", self.ideal_arrow_car_yaw_var,
+            self.mark_ideal_arrow_yaw_manual,
+        )
+        ttk.Checkbutton(
+            pose,
+            text="输入为车相对机Yaw",
+            variable=self.ideal_arrow_yaw_relative_var,
+            command=self.mark_ideal_arrow_yaw_manual,
+        ).grid(row=5, column=0, columnspan=2, sticky="w", pady=(3, 0))
+        ttk.Label(pose, textvariable=self.ideal_arrow_yaw_source_var).grid(
+            row=6, column=0, columnspan=2, sticky="w", pady=(3, 0)
+        )
+
+        arrow.columnconfigure(1, weight=1)
+        add_entry(arrow, 0, "单臂长度 (cm)", self.ideal_arrow_arm_length_var)
+        add_entry(arrow, 1, "夹角 (deg)", self.ideal_arrow_angle_var)
+        add_entry(arrow, 2, "平面高度 (cm)", self.ideal_arrow_plane_height_var)
+        add_entry(arrow, 3, "开口相对车头 (deg)", self.ideal_arrow_opening_offset_var)
+
+        ttk.Radiobutton(
+            view,
+            text="去畸变灰度图",
+            value="gray",
+            variable=self.ideal_arrow_background_var,
+            command=self.refresh_ideal_arrow_preview,
+        ).grid(row=0, column=0, columnspan=2, sticky="w")
+        ttk.Radiobutton(
+            view,
+            text="单阈值二值图",
+            value="binary",
+            variable=self.ideal_arrow_background_var,
+            command=self.refresh_ideal_arrow_preview,
+        ).grid(row=1, column=0, columnspan=2, sticky="w", pady=(3, 0))
+        add_entry(view, 2, "二值阈值", self.ideal_arrow_threshold_var)
+        ttk.Button(view, text="重新读取Yaw", command=self.reload_ideal_arrow_yaw).grid(
+            row=3, column=0, columnspan=2, sticky="ew", pady=(8, 0)
+        )
+        ttk.Button(view, text="重置中心", command=self.reset_ideal_arrow_center).grid(
+            row=4, column=0, sticky="ew", pady=(4, 0), padx=(0, 2)
+        )
+        ttk.Button(view, text="适应窗口", command=self.fit_ideal_arrow_canvas).grid(
+            row=4, column=1, sticky="ew", pady=(4, 0), padx=(2, 0)
+        )
+
+        self.ideal_arrow_canvas = tk.Canvas(
+            window,
+            background="#202124",
+            highlightthickness=0,
+        )
+        self.ideal_arrow_canvas.grid(row=1, column=0, sticky="nsew")
+        ttk.Label(
+            window,
+            textvariable=self.ideal_arrow_status_var,
+            anchor="w",
+            padding=(8, 5),
+        ).grid(row=2, column=0, sticky="ew")
+        self.ideal_arrow_canvas.bind("<Configure>", self.ideal_arrow_canvas_configured)
+        self.ideal_arrow_canvas.bind("<Button-1>", self.move_ideal_arrow_center)
+        self.ideal_arrow_canvas.bind("<B1-Motion>", self.move_ideal_arrow_center)
+        self.ideal_arrow_canvas.bind("<ButtonPress-3>", self.start_ideal_arrow_pan)
+        self.ideal_arrow_canvas.bind("<B3-Motion>", self.move_ideal_arrow_pan)
+        self.ideal_arrow_canvas.bind("<ButtonRelease-3>", self.stop_ideal_arrow_pan)
+        self.ideal_arrow_canvas.bind("<MouseWheel>", self.zoom_ideal_arrow_canvas)
+        window.protocol("WM_DELETE_WINDOW", self.close_ideal_arrow_window)
+        self.ideal_arrow_fitted = False
+        self.ideal_arrow_background_cache_key = None
+        window.after_idle(self.fit_ideal_arrow_canvas)
+
+    def close_ideal_arrow_window(self) -> None:
+        if self.ideal_arrow_window is not None and self.ideal_arrow_window.winfo_exists():
+            self.ideal_arrow_window.destroy()
+        self.ideal_arrow_window = None
+        self.ideal_arrow_canvas = None
+        self.ideal_arrow_photo = None
+        self.ideal_arrow_background_cache_key = None
+        self.ideal_arrow_pan_start = None
+
+    def reload_ideal_arrow_yaw(self) -> None:
+        self.load_ideal_arrow_yaw_metadata()
+        self.refresh_ideal_arrow_preview()
+
+    def reset_ideal_arrow_center(self) -> None:
+        self.ideal_arrow_center = ((FINE_WIDTH - 1.0) * 0.5,
+                                   (FINE_HEIGHT - 1.0) * 0.5)
+        self.refresh_ideal_arrow_preview()
+
+    def ideal_arrow_canvas_configured(self, _event: object = None) -> None:
+        if not self.ideal_arrow_fitted:
+            self.fit_ideal_arrow_canvas()
+
+    def fit_ideal_arrow_canvas(self) -> None:
+        if self.ideal_arrow_canvas is None or self.current_undistorted_gray_image is None:
+            return
+        self.ideal_arrow_canvas.update_idletasks()
+        width = max(1, self.ideal_arrow_canvas.winfo_width())
+        height = max(1, self.ideal_arrow_canvas.winfo_height())
+        image = self.current_undistorted_gray_image
+        self.ideal_arrow_zoom = max(
+            0.25,
+            min(8.0, min((width - 20) / image.width, (height - 20) / image.height)),
+        )
+        self.ideal_arrow_offset = (
+            (width - image.width * self.ideal_arrow_zoom) * 0.5,
+            (height - image.height * self.ideal_arrow_zoom) * 0.5,
+        )
+        self.ideal_arrow_fitted = True
+        self.refresh_ideal_arrow_preview()
+
+    def move_ideal_arrow_center(self, event: tk.Event) -> None:
+        if self.ideal_arrow_canvas is None:
+            return
+        offset_x, offset_y = self.ideal_arrow_offset
+        image_x = (float(event.x) - offset_x) / self.ideal_arrow_zoom
+        image_y = (float(event.y) - offset_y) / self.ideal_arrow_zoom
+        self.ideal_arrow_center = (
+            max(0.0, min(FINE_WIDTH - 1.0, image_x)),
+            max(0.0, min(FINE_HEIGHT - 1.0, image_y)),
+        )
+        self.refresh_ideal_arrow_preview()
+
+    def start_ideal_arrow_pan(self, event: tk.Event) -> None:
+        self.ideal_arrow_pan_start = (
+            float(event.x), float(event.y),
+            self.ideal_arrow_offset[0], self.ideal_arrow_offset[1],
+        )
+
+    def move_ideal_arrow_pan(self, event: tk.Event) -> None:
+        if self.ideal_arrow_pan_start is None:
+            return
+        start_x, start_y, offset_x, offset_y = self.ideal_arrow_pan_start
+        self.ideal_arrow_offset = (
+            offset_x + float(event.x) - start_x,
+            offset_y + float(event.y) - start_y,
+        )
+        self.refresh_ideal_arrow_preview()
+
+    def stop_ideal_arrow_pan(self, _event: object = None) -> None:
+        self.ideal_arrow_pan_start = None
+
+    def zoom_ideal_arrow_canvas(self, event: tk.Event) -> None:
+        if self.ideal_arrow_canvas is None or event.delta == 0:
+            return
+        old_zoom = self.ideal_arrow_zoom
+        new_zoom = max(0.25, min(8.0, old_zoom * (1.25 if event.delta > 0 else 0.8)))
+        if abs(new_zoom - old_zoom) < 1e-9:
+            return
+        offset_x, offset_y = self.ideal_arrow_offset
+        image_x = (float(event.x) - offset_x) / old_zoom
+        image_y = (float(event.y) - offset_y) / old_zoom
+        self.ideal_arrow_zoom = new_zoom
+        self.ideal_arrow_offset = (
+            float(event.x) - image_x * new_zoom,
+            float(event.y) - image_y * new_zoom,
+        )
+        self.refresh_ideal_arrow_preview()
+
+    def ideal_arrow_mask_valid(self, point: tuple[float, float]) -> bool:
+        mask = self.current_undistorted_mask
+        if mask is None or mask.size != (FINE_WIDTH, FINE_HEIGHT):
+            return True
+        x = max(0, min(FINE_WIDTH - 1, int(round(point[0]))))
+        y = max(0, min(FINE_HEIGHT - 1, int(round(point[1]))))
+        return int(mask.getpixel((x, y))) != 0
+
+    def refresh_ideal_arrow_preview(self) -> None:
+        canvas = self.ideal_arrow_canvas
+        image = self.current_undistorted_gray_image
+        if canvas is None or self.ideal_arrow_window is None or not self.ideal_arrow_window.winfo_exists():
+            return
+        canvas.delete("all")
+        if image is None:
+            canvas.create_text(
+                max(1, canvas.winfo_width()) * 0.5,
+                max(1, canvas.winfo_height()) * 0.5,
+                text="当前帧尚未生成去畸变图",
+                fill="#f1f3f4",
+            )
+            self.ideal_arrow_status_var.set("请重新运行当前帧")
+            return
+        try:
+            threshold = int(self.ideal_arrow_threshold_var.get())
+            arm_length = float(self.ideal_arrow_arm_length_var.get())
+            opening_angle = float(self.ideal_arrow_angle_var.get())
+            plane_height = float(self.ideal_arrow_plane_height_var.get())
+            opening_offset = float(self.ideal_arrow_opening_offset_var.get())
+            roll = float(self.roll_var.get())
+            pitch = float(self.pitch_var.get())
+            uav_yaw = float(self.yaw_var.get())
+            height = float(self.height_var.get())
+            car_yaw = float(self.ideal_arrow_car_yaw_var.get())
+            if not 0 <= threshold <= 255:
+                raise ValueError("二值阈值必须为0到255")
+            if arm_length <= 0.0:
+                raise ValueError("单臂长度必须大于0")
+            if not 1.0 <= opening_angle < 180.0:
+                raise ValueError("夹角必须在1到180度之间")
+            if plane_height < 0.0:
+                raise ValueError("平面高度不能为负数")
+        except ValueError as exc:
+            self.ideal_arrow_status_var.set(f"参数错误：{exc}")
+            return
+
+        base = image.convert("L")
+        background_mode = self.ideal_arrow_background_var.get()
+        if background_mode == "binary":
+            base = base.point([0] * threshold + [255] * (256 - threshold))
+        display_size = (
+            max(1, int(round(base.width * self.ideal_arrow_zoom))),
+            max(1, int(round(base.height * self.ideal_arrow_zoom))),
+        )
+        cache_key = (id(image), background_mode, threshold, display_size)
+        if cache_key != self.ideal_arrow_background_cache_key:
+            resized = base.resize(display_size, Image.Resampling.NEAREST)
+            self.ideal_arrow_photo = ImageTk.PhotoImage(resized)
+            self.ideal_arrow_background_cache_key = cache_key
+        canvas.create_image(
+            self.ideal_arrow_offset[0],
+            self.ideal_arrow_offset[1],
+            anchor=tk.NW,
+            image=self.ideal_arrow_photo,
+        )
+
+        projector = self.ideal_arrow_projector
+        if projector is None:
+            self.ideal_arrow_status_var.set("投影器未初始化")
+            return
+        if not self.ideal_arrow_mask_valid(self.ideal_arrow_center):
+            self.ideal_arrow_status_var.set("箭头中心位于去畸变无效区")
+            return
+        center_world = projector.image_to_plane(
+            self.ideal_arrow_center, roll, pitch, height, plane_height,
+        )
+        if center_world is None:
+            self.ideal_arrow_status_var.set("箭头中心无法投影到目标平面")
+            return
+        relative_yaw = car_yaw if self.ideal_arrow_yaw_relative_var.get() else car_yaw - uav_yaw
+        relative_yaw = wrap_degrees(relative_yaw)
+        opening_direction = wrap_degrees(relative_yaw + opening_offset)
+        world_points = build_ideal_chevron_points(
+            center_world, arm_length, opening_angle, opening_direction,
+        )
+        image_points: dict[str, tuple[float, float]] = {}
+        for name, world_point in world_points.items():
+            projected = projector.plane_to_image(
+                world_point, roll, pitch, height, plane_height,
+            )
+            if projected is None or not self.ideal_arrow_mask_valid(projected):
+                self.ideal_arrow_status_var.set(f"{name}超出去畸变有效画布")
+                return
+            image_points[name] = projected
+
+        def canvas_point(point: tuple[float, float]) -> tuple[float, float]:
+            return (
+                self.ideal_arrow_offset[0] + point[0] * self.ideal_arrow_zoom,
+                self.ideal_arrow_offset[1] + point[1] * self.ideal_arrow_zoom,
+            )
+
+        apex = canvas_point(image_points["apex"])
+        left_tip = canvas_point(image_points["left_tip"])
+        right_tip = canvas_point(image_points["right_tip"])
+        center = canvas_point(image_points["center"])
+        line_width = max(2, min(6, int(round(self.ideal_arrow_zoom))))
+        canvas.create_line(*apex, *left_tip, fill="#00d8ff", width=line_width)
+        canvas.create_line(*apex, *right_tip, fill="#00d8ff", width=line_width)
+        radius = max(3, min(7, int(round(2.0 * self.ideal_arrow_zoom))))
+        for label, point, color in (
+            ("A", apex, "#ff3b30"),
+            ("L", left_tip, "#39ff88"),
+            ("R", right_tip, "#39ff88"),
+            ("C", center, "#ffd60a"),
+        ):
+            canvas.create_oval(
+                point[0] - radius, point[1] - radius,
+                point[0] + radius, point[1] + radius,
+                outline=color, width=2,
+            )
+            canvas.create_text(
+                point[0] + radius + 4, point[1] - radius - 3,
+                text=label, fill=color, anchor=tk.SW,
+            )
+        self.ideal_arrow_status_var.set(
+            f"中心({self.ideal_arrow_center[0]:.1f}, {self.ideal_arrow_center[1]:.1f})  "
+            f"平面X/Y=({center_world[0]:.1f}, {center_world[1]:.1f})cm  "
+            f"相对Yaw={relative_yaw:.1f}°  开口方向={opening_direction:.1f}°"
+        )
 
     def close_candidate_window(self) -> None:
         if self.candidate_resize_job is not None and self.candidate_window is not None:
@@ -2056,10 +2770,10 @@ class VisionToolApp:
         ok, log = Simulator(source, threshold).build()
         self.ui_queue.put(("build", (ok, log)))
 
-    def start_run(self) -> None:
+    def start_run(self) -> bool:
         if self.current_frame is None:
             messagebox.showerror("无法运行", "请先选择一帧图像。")
-            return
+            return False
         try:
             roll = float(self.roll_var.get())
             pitch = float(self.pitch_var.get())
@@ -2080,7 +2794,7 @@ class VisionToolApp:
                 "参数错误",
                 str(exc) or "Roll、Pitch、高度必须是数字，阈值必须为 1 到 255。",
             )
-            return
+            return False
         self.status_var.set("运行中")
         undistort = bool(self.undistort_var.get())
         birdview = bool(self.birdview_var.get())
@@ -2092,6 +2806,7 @@ class VisionToolApp:
                   *thresholds, coarse_thresholds, binary_mode),
             daemon=True,
         ).start()
+        return True
 
     @staticmethod
     def classification_set_type(frame_path: Path, root: Path) -> str:
@@ -2657,7 +3372,7 @@ class VisionToolApp:
         binary_mode: str,
     ) -> None:
         source = Path(self.source_var.get())
-        run_dir = RUN_ROOT / time.strftime("run_%Y%m%d_%H%M%S")
+        run_dir = RUN_ROOT / datetime.now().strftime("run_%Y%m%d_%H%M%S_%f")
         run_dir.mkdir(parents=True, exist_ok=True)
         try:
             image = self.load_image(frame_path)
@@ -2671,6 +3386,27 @@ class VisionToolApp:
                 car_yaw_rel_uav_deg=car_yaw_rel_uav,
                 direction_prior_valid=direction_prior_valid,
             )
+            need_ideal_background = (
+                undistort and
+                (self.ideal_arrow_pending_open or self.ideal_arrow_window is not None)
+            )
+            if ok and need_ideal_background:
+                full_gray_available = False
+                if undistorted_path is not None:
+                    with Image.open(undistorted_path) as opened:
+                        full_gray_available = opened.size == (FINE_WIDTH, FINE_HEIGHT)
+                if not full_gray_available:
+                    try:
+                        calibration = IdealArrowCalibration.from_header(
+                            source / "camera_calibration_params.h"
+                        )
+                        ideal_gray, ideal_mask = IdealArrowProjector(
+                            calibration
+                        ).undistort_gray(image)
+                        ideal_gray.save(run_dir / "ideal_arrow_undistorted.pgm")
+                        ideal_mask.save(run_dir / "ideal_arrow_undistorted_mask.pgm")
+                    except (OSError, ValueError) as exc:
+                        log += f"\n理想箭头完整去畸变背景生成失败: {exc}"
             payload = read_json_compat(result_path) if result_path else None
             binary_enabled = binary_mode != "gray"
             undistorted_image_path = undistorted_binary_path if binary_enabled and undistorted_binary_path else undistorted_path
@@ -2792,6 +3528,9 @@ class VisionToolApp:
                         undistorted_mask,
                         birdview_mask,
                     )
+                elif self.ideal_arrow_pending_open:
+                    self.ideal_arrow_pending_open = False
+                    messagebox.showerror("理想箭头投影", "当前帧仿真失败，未能生成去畸变背景。")
         self.root.after(100, self.process_queue)
 
     def show_result(
@@ -2893,14 +3632,42 @@ class VisionToolApp:
             self.result_coarse_thresholds(result),
         )
         self.current_candidate_diagnostics = []
+        self.current_undistorted_gray_image = None
+        for undistorted_gray_path in (
+            binary_path.parent / "ideal_arrow_undistorted.pgm",
+            binary_path.parent / "undistorted.pgm",
+        ):
+            if not undistorted_gray_path.exists():
+                continue
+            with Image.open(undistorted_gray_path) as opened:
+                if opened.size == (FINE_WIDTH, FINE_HEIGHT):
+                    self.current_undistorted_gray_image = opened.convert("L").copy()
+                    break
         self.current_undistorted_image = undistorted_image.convert("RGB") if undistorted_image is not None else None
         self.current_birdview_image = birdview_image.convert("RGB") if birdview_image is not None else None
-        self.current_undistorted_mask = undistorted_mask.convert("L") if undistorted_mask is not None else None
+        self.current_undistorted_mask = (
+            undistorted_mask.convert("L")
+            if undistorted_mask is not None and undistorted_mask.size == (FINE_WIDTH, FINE_HEIGHT)
+            else None
+        )
+        ideal_mask_path = binary_path.parent / "ideal_arrow_undistorted_mask.pgm"
+        if ideal_mask_path.exists():
+            with Image.open(ideal_mask_path) as opened:
+                if opened.size == (FINE_WIDTH, FINE_HEIGHT):
+                    self.current_undistorted_mask = opened.convert("L").copy()
         self.current_birdview_mask = birdview_mask.convert("L") if birdview_mask is not None else None
         self.binary_image = ImageTk.PhotoImage(self.fit_image(binary, self.binary_label.winfo_width() or 560, self.binary_label.winfo_height() or 360))
         self.binary_label.configure(image=self.binary_image, text="")
         self.refresh_preview()
         self.refresh_processed_preview()
+        self.ideal_arrow_background_cache_key = None
+        self.refresh_ideal_arrow_preview()
+        if self.ideal_arrow_pending_open and self.current_undistorted_gray_image is not None:
+            self.ideal_arrow_pending_open = False
+            self.root.after_idle(self.open_ideal_arrow_window)
+        elif self.ideal_arrow_pending_open:
+            self.ideal_arrow_pending_open = False
+            messagebox.showerror("理想箭头投影", "未能生成376×240去畸变灰度背景。")
         undistorted_meta = result.get("undistorted")
         undistorted_info = ""
         if isinstance(undistorted_meta, dict):
@@ -3075,6 +3842,44 @@ class VisionToolApp:
 def self_test() -> int:
     assert WIDTH == 188 and HEIGHT == 120
     assert FINE_WIDTH == 376 and FINE_HEIGHT == 240 and FINE_STRIDE == 47
+    assert wrap_degrees(190.0) == -170.0
+    ideal_points = build_ideal_chevron_points((0.0, 0.0), 19.0, 70.0, 180.0)
+    left_arm = math.dist(ideal_points["apex"], ideal_points["left_tip"])
+    right_arm = math.dist(ideal_points["apex"], ideal_points["right_tip"])
+    assert abs(left_arm - 19.0) < 1e-6 and abs(right_arm - 19.0) < 1e-6
+    left_vector = tuple(ideal_points["left_tip"][index] - ideal_points["apex"][index]
+                        for index in range(2))
+    right_vector = tuple(ideal_points["right_tip"][index] - ideal_points["apex"][index]
+                         for index in range(2))
+    included_angle = math.degrees(math.acos(
+        sum(left_vector[index] * right_vector[index] for index in range(2)) /
+        (math.hypot(*left_vector) * math.hypot(*right_vector))
+    ))
+    assert abs(included_angle - 70.0) < 1e-6
+    assert ideal_points["apex"][0] > 0.0
+    ideal_calibration = IdealArrowCalibration.from_header(
+        DEFAULT_SOURCE / "camera_calibration_params.h"
+    )
+    assert (ideal_calibration.undistort_width, ideal_calibration.undistort_height) == (
+        FINE_WIDTH, FINE_HEIGHT,
+    )
+    ideal_projector = IdealArrowProjector(ideal_calibration)
+    test_image_point = (190.0, 125.0)
+    test_world_point = ideal_projector.image_to_plane(
+        test_image_point, 3.0, -2.0, 100.0, 17.0,
+    )
+    assert test_world_point is not None
+    test_reprojected = ideal_projector.plane_to_image(
+        test_world_point, 3.0, -2.0, 100.0, 17.0,
+    )
+    assert test_reprojected is not None
+    assert math.dist(test_image_point, test_reprojected) < 1e-6
+    ideal_gray, ideal_mask = ideal_projector.undistort_gray(
+        Image.new("L", (WIDTH, HEIGHT), 123)
+    )
+    assert ideal_gray.size == (FINE_WIDTH, FINE_HEIGHT)
+    assert ideal_gray.getpixel((FINE_WIDTH // 2, FINE_HEIGHT // 2)) == 123
+    assert ideal_mask.getpixel((FINE_WIDTH // 2, FINE_HEIGHT // 2)) == 255
     assert (SIM_ROOT / "vision_sim_main.c").exists()
     assert Simulator(DEFAULT_SOURCE).source_files()
     assert "recognition_thresholds" in VisionToolApp.show_result.__code__.co_varnames
