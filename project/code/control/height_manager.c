@@ -54,7 +54,7 @@ extern volatile uint8 armed;
  *   - T2 is at -Y and its beam tilts outward toward -Y by 15 degrees.
  *
  * The optical-flow installation remains at -Y.  The signs follow the
- * existing body-axis convention used by body_y_down_offset_cm().
+ * existing body-axis convention used by body_y_up_offset_cm().
  */
 #define TOF1_SENSOR_OFFSET_Y_CM           (+14.0f)
 #define TOF2_SENSOR_OFFSET_Y_CM           (-14.0f)
@@ -502,7 +502,7 @@ float HeightManager_GetAutoLandingTarget(void)
     return s_auto_landing_target_cm;
 }
 
-static float body_y_down_offset_cm(float offset_y_cm, float roll_deg, float pitch_deg)
+static float body_y_up_offset_cm(float offset_y_cm, float roll_deg, float pitch_deg)
 {
     float roll_rad = roll_deg * DEG2RAD;
     float pitch_rad = pitch_deg * DEG2RAD;
@@ -519,9 +519,11 @@ static float tof_beam_vertical_projection(float roll_deg,
     float tilt_rad = beam_tilt_y_deg * DEG2RAD;
     float projection;
 
+    /* Positive beam tilt points toward +Y.  A positive roll tilts the body
+     * downward axis toward the same side, so the two angles add. */
     projection = cosf(pitch_rad) *
-                 (sinf(roll_rad) * sinf(tilt_rad) +
-                  cosf(roll_rad) * cosf(tilt_rad));
+                 (cosf(roll_rad) * cosf(tilt_rad) -
+                  sinf(roll_rad) * sinf(tilt_rad));
 
     if(projection < TOF_BEAM_VERTICAL_COS_MIN)
     {
@@ -538,7 +540,7 @@ static float height_get_center_height_from_tof_cm(float tof_los_cm,
                                                   float beam_tilt_y_deg)
 {
     float tof_vertical_cm;
-    float tof_down_offset_cm;
+    float sensor_up_offset_cm;
     float center_height_cm;
 
     if(tof_los_cm <= 0.0f)
@@ -549,10 +551,10 @@ static float height_get_center_height_from_tof_cm(float tof_los_cm,
     tof_vertical_cm = tof_los_cm * tof_beam_vertical_projection(roll_deg,
                                                                 pitch_deg,
                                                                 beam_tilt_y_deg);
-    tof_down_offset_cm = body_y_down_offset_cm(sensor_offset_y_cm,
-                                               roll_deg,
-                                               pitch_deg);
-    center_height_cm = tof_vertical_cm + tof_down_offset_cm;
+    sensor_up_offset_cm = body_y_up_offset_cm(sensor_offset_y_cm,
+                                              roll_deg,
+                                              pitch_deg);
+    center_height_cm = tof_vertical_cm - sensor_up_offset_cm;
 
     return center_height_cm > 0.0f ? center_height_cm : 0.0f;
 }
@@ -561,13 +563,14 @@ static float height_get_flow_height_from_center_cm(float center_height_cm,
                                                    float roll_deg,
                                                    float pitch_deg)
 {
-    float flow_down_offset_cm;
+    float flow_up_offset_cm;
+    float flow_height_cm;
 
-    flow_down_offset_cm = body_y_down_offset_cm(FLOW_SENSOR_OFFSET_Y_CM,
-                                                 roll_deg,
-                                                 pitch_deg);
-    return (center_height_cm - flow_down_offset_cm) > 0.0f ?
-           (center_height_cm - flow_down_offset_cm) : 0.0f;
+    flow_up_offset_cm = body_y_up_offset_cm(FLOW_SENSOR_OFFSET_Y_CM,
+                                            roll_deg,
+                                            pitch_deg);
+    flow_height_cm = center_height_cm + flow_up_offset_cm;
+    return flow_height_cm > 0.0f ? flow_height_cm : 0.0f;
 }
 
 /* Public helper retained for callers that use the T1 installation geometry. */

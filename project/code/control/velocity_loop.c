@@ -6,7 +6,7 @@
 #define VELOCITY_LOOP_GRAVITY_CMS2        (981.0f) /* 重力加速度，单位cm/s2 */
 #define VELOCITY_LOOP_MAX_TILT_DEG        (25.0f)  /* 速度环允许叠加的最大倾角 */
 #define VELOCITY_LOOP_RATE_FF_LPF_HZ      (15.0f)  /* 目标角速度前馈低通截止频率 */
-#define VELOCITY_LOOP_RATE_FF_GAIN_DEFAULT (0.2f)  /* 目标角速度前馈默认增益 */
+#define VELOCITY_LOOP_RATE_FF_GAIN_DEFAULT (0.0f)  /* 目标角速度前馈默认增益 */
 #define VELOCITY_LOOP_RATE_FF_GAIN_MAX    (2.0f)   /* VOFA允许设置的最大前馈增益 */
 #define VELOCITY_LOOP_RATE_FF_LIMIT_DEFAULT (60.0f)/* 目标角速度前馈默认限幅，单位deg/s */
 #define VELOCITY_LOOP_RATE_FF_LIMIT_MAX   (350.0f) /* VOFA允许设置的最大前馈限幅 */
