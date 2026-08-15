@@ -19,6 +19,14 @@ from image_analysis import (
     self_test as analysis_self_test,
     threshold_image,
 )
+from ideal_projection import (
+    ProjectionCalibration,
+    TargetPlaneProjector,
+    build_ideal_beacon_points,
+    build_ideal_chevron_points,
+    self_test as projection_self_test,
+    wrap_degrees,
+)
 
 
 APP_DIR = Path(__file__).resolve().parent
@@ -29,6 +37,11 @@ CALIBRATION_HEADER = REPO_ROOT / "project" / "code" / "vision" / "camera_calibra
 SETTINGS_PATH = APP_DIR / "viewer_settings.json"
 SUPPORTED_SUFFIXES = {".png", ".pgm", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".raw"}
 VIEW_NAMES = ("原始灰度图", "去畸变灰度图", "单阈值二值图", "连通域候选")
+IDEAL_TARGET_NONE = "不显示"
+IDEAL_TARGET_ARROW = "理想箭头"
+IDEAL_TARGET_BEACON = "理想信标"
+IDEAL_TARGET_NAMES = (IDEAL_TARGET_NONE, IDEAL_TARGET_ARROW, IDEAL_TARGET_BEACON)
+IDEAL_BACKGROUND_NAMES = ("去畸变灰度图", "单阈值二值图")
 
 
 class PictureViewerApp:
@@ -40,19 +53,79 @@ class PictureViewerApp:
 
         self.calibration = CameraCalibration.from_header(CALIBRATION_HEADER)
         self.undistorter = FisheyeUndistorter(self.calibration)
+        self.projection_calibration = ProjectionCalibration.from_header(CALIBRATION_HEADER)
         settings = self._load_settings()
+        ideal_settings = settings.get("ideal_target", {})
+        if not isinstance(ideal_settings, dict):
+            ideal_settings = {}
+        ideal_target = str(ideal_settings.get("type", IDEAL_TARGET_NONE))
+        if ideal_target not in IDEAL_TARGET_NAMES:
+            ideal_target = IDEAL_TARGET_NONE
+        ideal_background = str(ideal_settings.get("background", "去畸变灰度图"))
+        if ideal_background not in IDEAL_BACKGROUND_NAMES:
+            ideal_background = "去畸变灰度图"
 
         self.folder_var = tk.StringVar(
             value=str(Path(settings.get("folder", DEFAULT_CAPTURE_DIR)))
         )
         self.filter_var = tk.StringVar()
-        self.view_var = tk.StringVar(value="去畸变灰度图")
+        initial_view = (
+            ideal_background if ideal_target != IDEAL_TARGET_NONE else "去畸变灰度图"
+        )
+        self.view_var = tk.StringVar(value=initial_view)
         self.threshold_var = tk.IntVar(value=int(settings.get("threshold", 50)))
         self.min_area_var = tk.IntVar(value=int(settings.get("min_area", 6)))
         self.connectivity_var = tk.IntVar(value=int(settings.get("connectivity", 8)))
         self.status_var = tk.StringVar(value="就绪")
         self.pixel_var = tk.StringVar(value="移动鼠标查看坐标和灰度")
         self.metadata_var = tk.StringVar(value="尚未加载图像")
+        self.ideal_target_var = tk.StringVar(value=ideal_target)
+        self.ideal_background_var = tk.StringVar(value=ideal_background)
+        self.roll_var = tk.StringVar(value=str(ideal_settings.get("roll_deg", "0")))
+        self.pitch_var = tk.StringVar(value=str(ideal_settings.get("pitch_deg", "0")))
+        self.uav_yaw_var = tk.StringVar(value=str(ideal_settings.get("uav_yaw_deg", "0")))
+        self.height_var = tk.StringVar(value=str(ideal_settings.get("height_cm", "100")))
+        self.car_yaw_var = tk.StringVar(value=str(ideal_settings.get("car_yaw_deg", "0")))
+        self.car_yaw_relative_var = tk.BooleanVar(
+            value=bool(ideal_settings.get("car_yaw_relative", False))
+        )
+        self.mount_roll_var = tk.StringVar(
+            value=str(ideal_settings.get("mount_roll_deg", "0"))
+        )
+        self.mount_pitch_var = tk.StringVar(
+            value=str(ideal_settings.get("mount_pitch_deg", "0"))
+        )
+        self.mount_yaw_var = tk.StringVar(
+            value=str(ideal_settings.get("mount_yaw_deg", "0"))
+        )
+        self.target_projector = TargetPlaneProjector(
+            self.projection_calibration,
+            self.safe_float(self.mount_roll_var, 0.0),
+            self.safe_float(self.mount_pitch_var, 0.0),
+            self.safe_float(self.mount_yaw_var, 0.0),
+        )
+        self.arrow_arm_length_var = tk.StringVar(
+            value=str(ideal_settings.get("arrow_arm_length_cm", "19"))
+        )
+        self.arrow_angle_var = tk.StringVar(
+            value=str(ideal_settings.get("arrow_angle_deg", "70"))
+        )
+        self.arrow_plane_height_var = tk.StringVar(
+            value=str(ideal_settings.get("arrow_plane_height_cm", "17"))
+        )
+        self.arrow_opening_offset_var = tk.StringVar(
+            value=str(ideal_settings.get("arrow_opening_offset_deg", "180"))
+        )
+        self.beacon_diameter_var = tk.StringVar(
+            value=str(ideal_settings.get("beacon_diameter_cm", "10"))
+        )
+        self.beacon_plane_height_var = tk.StringVar(
+            value=str(ideal_settings.get("beacon_plane_height_cm", "0"))
+        )
+        self.ideal_source_var = tk.StringVar(value="姿态：手动；小车Yaw：手动")
+        self.ideal_status_var = tk.StringVar(value="选择目标后可在图像中左键拖动")
+        self._ideal_pose_source = "手动"
+        self._ideal_car_yaw_source = "手动"
 
         self.all_files: list[Path] = []
         self.visible_files: list[Path] = []
@@ -62,6 +135,7 @@ class PictureViewerApp:
         self.binary: Image.Image | None = None
         self.components: list[ConnectedComponent] = []
         self.selected_component: int | None = None
+        self.current_telemetry: dict = {}
 
         self.canvas_photo: ImageTk.PhotoImage | None = None
         self.magnifier_photo: ImageTk.PhotoImage | None = None
@@ -71,6 +145,15 @@ class PictureViewerApp:
         self._fit_pending = False
         self._pan_anchor: tuple[int, int, float, float] | None = None
         self._threshold_job: str | None = None
+        ideal_center = (
+            (self.calibration.output_width - 1.0) * 0.5,
+            (self.calibration.output_height - 1.0) * 0.5,
+        )
+        self.ideal_centers = {
+            IDEAL_TARGET_ARROW: ideal_center,
+            IDEAL_TARGET_BEACON: ideal_center,
+        }
+        self._ideal_drag_active = False
 
         self._build_ui()
         self._bind_events()
@@ -131,7 +214,7 @@ class PictureViewerApp:
         side = ttk.Frame(self.root, padding=(4, 0, 8, 7), width=360)
         side.grid(row=1, column=2, sticky="nsew")
         side.columnconfigure(0, weight=1)
-        side.rowconfigure(4, weight=1)
+        side.rowconfigure(5, weight=1)
 
         binary_controls = ttk.LabelFrame(side, text="单阈值二值化", padding=8)
         binary_controls.grid(row=0, column=0, sticky="ew")
@@ -195,8 +278,111 @@ class PictureViewerApp:
         metadata_frame.grid(row=2, column=0, sticky="ew", pady=(7, 0))
         ttk.Label(metadata_frame, textvariable=self.metadata_var, justify=tk.LEFT).pack(anchor="w")
 
+        ideal_controls = ttk.LabelFrame(side, text="理想目标投影", padding=8)
+        ideal_controls.grid(row=3, column=0, sticky="ew", pady=(7, 0))
+        ideal_controls.columnconfigure(1, weight=1)
+        ideal_controls.columnconfigure(3, weight=1)
+
+        ttk.Label(ideal_controls, text="目标").grid(row=0, column=0, sticky="w")
+        target_box = ttk.Combobox(
+            ideal_controls,
+            textvariable=self.ideal_target_var,
+            values=IDEAL_TARGET_NAMES,
+            state="readonly",
+            width=9,
+        )
+        target_box.grid(row=0, column=1, sticky="ew", padx=(4, 8))
+        target_box.bind("<<ComboboxSelected>>", self.ideal_target_changed)
+        ttk.Label(ideal_controls, text="背景").grid(row=0, column=2, sticky="w")
+        background_box = ttk.Combobox(
+            ideal_controls,
+            textvariable=self.ideal_background_var,
+            values=IDEAL_BACKGROUND_NAMES,
+            state="readonly",
+            width=12,
+        )
+        background_box.grid(row=0, column=3, sticky="ew", padx=(4, 0))
+        background_box.bind("<<ComboboxSelected>>", self.ideal_background_changed)
+
+        ttk.Button(
+            ideal_controls,
+            text="重读JSON",
+            command=self.reload_ideal_telemetry,
+        ).grid(row=1, column=0, sticky="w", pady=(5, 0))
+        ttk.Label(
+            ideal_controls,
+            textvariable=self.ideal_source_var,
+            justify=tk.LEFT,
+            wraplength=255,
+        ).grid(row=1, column=1, columnspan=3, sticky="w", padx=(4, 0), pady=(5, 0))
+
+        def parameter_entry(
+            row: int,
+            column: int,
+            label: str,
+            variable: tk.StringVar,
+            callback,
+        ) -> ttk.Entry:
+            ttk.Label(ideal_controls, text=label).grid(
+                row=row, column=column, sticky="w", pady=(4, 0)
+            )
+            entry = ttk.Entry(ideal_controls, textvariable=variable, width=8)
+            entry.grid(
+                row=row, column=column + 1, sticky="ew", padx=(4, 8 if column == 0 else 0),
+                pady=(4, 0),
+            )
+            entry.bind("<KeyRelease>", callback)
+            return entry
+
+        parameter_entry(2, 0, "Roll°", self.roll_var, self.ideal_pose_edited)
+        parameter_entry(2, 2, "Pitch°", self.pitch_var, self.ideal_pose_edited)
+        parameter_entry(3, 0, "机Yaw°", self.uav_yaw_var, self.ideal_pose_edited)
+        parameter_entry(3, 2, "高度cm", self.height_var, self.ideal_pose_edited)
+        parameter_entry(4, 0, "车Yaw°", self.car_yaw_var, self.ideal_car_yaw_edited)
+        ttk.Checkbutton(
+            ideal_controls,
+            text="相对机Yaw",
+            variable=self.car_yaw_relative_var,
+            command=self.ideal_car_yaw_edited,
+        ).grid(row=4, column=2, columnspan=2, sticky="w", pady=(4, 0))
+        ttk.Separator(ideal_controls).grid(
+            row=5, column=0, columnspan=4, sticky="ew", pady=(6, 1)
+        )
+        mount_controls = ttk.Frame(ideal_controls)
+        mount_controls.grid(row=6, column=0, columnspan=4, sticky="ew", pady=(4, 0))
+        ttk.Label(mount_controls, text="安装外参°").pack(side=tk.LEFT)
+        for label, variable in (
+            ("R", self.mount_roll_var),
+            ("P", self.mount_pitch_var),
+            ("Y", self.mount_yaw_var),
+        ):
+            ttk.Label(mount_controls, text=label).pack(side=tk.LEFT, padx=(6, 2))
+            entry = ttk.Entry(mount_controls, textvariable=variable, width=6)
+            entry.pack(side=tk.LEFT)
+            entry.bind("<KeyRelease>", self.ideal_mount_angles_changed)
+        ttk.Button(
+            mount_controls,
+            text="归零",
+            command=self.reset_mount_angles,
+        ).pack(side=tk.RIGHT, padx=(6, 0))
+        ttk.Separator(ideal_controls).grid(
+            row=7, column=0, columnspan=4, sticky="ew", pady=(6, 1)
+        )
+        parameter_entry(8, 0, "箭头臂cm", self.arrow_arm_length_var, self.ideal_parameter_changed)
+        parameter_entry(8, 2, "夹角°", self.arrow_angle_var, self.ideal_parameter_changed)
+        parameter_entry(9, 0, "箭头高cm", self.arrow_plane_height_var, self.ideal_parameter_changed)
+        parameter_entry(9, 2, "开口偏移°", self.arrow_opening_offset_var, self.ideal_parameter_changed)
+        parameter_entry(10, 0, "信标直径cm", self.beacon_diameter_var, self.ideal_parameter_changed)
+        parameter_entry(10, 2, "信标高cm", self.beacon_plane_height_var, self.ideal_parameter_changed)
+        ttk.Label(
+            ideal_controls,
+            textvariable=self.ideal_status_var,
+            justify=tk.LEFT,
+            wraplength=330,
+        ).grid(row=11, column=0, columnspan=4, sticky="w", pady=(5, 0))
+
         candidate_bar = ttk.Frame(side)
-        candidate_bar.grid(row=3, column=0, sticky="ew", pady=(8, 4))
+        candidate_bar.grid(row=4, column=0, sticky="ew", pady=(8, 4))
         ttk.Label(candidate_bar, text="连通域候选").pack(side=tk.LEFT)
         ttk.Button(candidate_bar, text="打开候选", command=self.open_selected_component).pack(side=tk.RIGHT)
 
@@ -216,8 +402,8 @@ class PictureViewerApp:
             self.component_tree.column(name, width=width, anchor="center")
         component_scroll = ttk.Scrollbar(side, orient=tk.VERTICAL, command=self.component_tree.yview)
         self.component_tree.configure(yscrollcommand=component_scroll.set)
-        self.component_tree.grid(row=4, column=0, sticky="nsew")
-        component_scroll.grid(row=4, column=1, sticky="ns")
+        self.component_tree.grid(row=5, column=0, sticky="nsew")
+        component_scroll.grid(row=5, column=1, sticky="ns")
 
         status = ttk.Label(self.root, textvariable=self.status_var, relief=tk.SUNKEN, anchor="w", padding=(6, 3))
         status.grid(row=2, column=0, columnspan=3, sticky="ew")
@@ -225,7 +411,7 @@ class PictureViewerApp:
     def _bind_events(self) -> None:
         self.file_list.bind("<<ListboxSelect>>", self.file_selected)
         self.filter_var.trace_add("write", lambda *_: self.apply_filter())
-        self.view_var.trace_add("write", lambda *_: self.redraw_canvas())
+        self.view_var.trace_add("write", self.view_changed)
         self.threshold_var.trace_add("write", lambda *_: self.threshold_entry_changed())
         self.min_area_var.trace_add("write", lambda *_: self.schedule_analysis())
         self.canvas.bind("<Configure>", self.canvas_configured)
@@ -235,6 +421,9 @@ class PictureViewerApp:
         self.canvas.bind("<Button-5>", lambda event: self.zoom_at(event.x, event.y, 0.8))
         self.canvas.bind("<ButtonPress-3>", self.pan_start)
         self.canvas.bind("<B3-Motion>", self.pan_move)
+        self.canvas.bind("<ButtonPress-1>", self.ideal_drag_start)
+        self.canvas.bind("<B1-Motion>", self.ideal_drag_move)
+        self.canvas.bind("<ButtonRelease-1>", self.ideal_drag_stop)
         self.component_tree.bind("<<TreeviewSelect>>", self.component_selected)
         self.component_tree.bind("<Double-1>", lambda _event: self.open_selected_component())
         self.root.bind("<Left>", lambda _event: self.move_file(-1))
@@ -254,6 +443,29 @@ class PictureViewerApp:
             "threshold": self.safe_int(self.threshold_var, 50, 0, 255),
             "min_area": self.safe_int(self.min_area_var, 6, 1, 90240),
             "connectivity": 8 if self.connectivity_var.get() == 8 else 4,
+            "ideal_target": {
+                "type": self.ideal_target_var.get(),
+                "background": self.ideal_background_var.get(),
+                "roll_deg": self.safe_float(self.roll_var, 0.0),
+                "pitch_deg": self.safe_float(self.pitch_var, 0.0),
+                "uav_yaw_deg": self.safe_float(self.uav_yaw_var, 0.0),
+                "height_cm": self.safe_float(self.height_var, 100.0),
+                "car_yaw_deg": self.safe_float(self.car_yaw_var, 0.0),
+                "car_yaw_relative": bool(self.car_yaw_relative_var.get()),
+                "mount_roll_deg": self.safe_float(self.mount_roll_var, 0.0),
+                "mount_pitch_deg": self.safe_float(self.mount_pitch_var, 0.0),
+                "mount_yaw_deg": self.safe_float(self.mount_yaw_var, 0.0),
+                "arrow_arm_length_cm": self.safe_float(self.arrow_arm_length_var, 19.0),
+                "arrow_angle_deg": self.safe_float(self.arrow_angle_var, 70.0),
+                "arrow_plane_height_cm": self.safe_float(self.arrow_plane_height_var, 17.0),
+                "arrow_opening_offset_deg": self.safe_float(
+                    self.arrow_opening_offset_var, 180.0
+                ),
+                "beacon_diameter_cm": self.safe_float(self.beacon_diameter_var, 10.0),
+                "beacon_plane_height_cm": self.safe_float(
+                    self.beacon_plane_height_var, 0.0
+                ),
+            },
         }
         try:
             SETTINGS_PATH.write_text(
@@ -271,6 +483,13 @@ class PictureViewerApp:
         except (TypeError, ValueError, tk.TclError):
             value = default
         return max(minimum, min(maximum, value))
+
+    @staticmethod
+    def safe_float(variable: tk.Variable, default: float) -> float:
+        try:
+            return float(variable.get())
+        except (TypeError, ValueError, tk.TclError):
+            return default
 
     def choose_folder(self) -> None:
         selected = filedialog.askdirectory(
@@ -353,6 +572,12 @@ class PictureViewerApp:
         self.original = image
         self.undistorted = undistorted
         self.selected_component = None
+        ideal_center = (
+            (self.calibration.output_width - 1.0) * 0.5,
+            (self.calibration.output_height - 1.0) * 0.5,
+        )
+        self.ideal_centers[IDEAL_TARGET_ARROW] = ideal_center
+        self.ideal_centers[IDEAL_TARGET_BEACON] = ideal_center
         self.update_metadata(path)
         self.run_analysis()
         self._fit_pending = True
@@ -379,21 +604,145 @@ class PictureViewerApp:
     def update_metadata(self, path: Path) -> None:
         metadata_path = path.with_suffix(".json")
         lines = [path.name]
+        telemetry: dict = {}
         try:
             metadata = json.loads(metadata_path.read_text(encoding="utf-8-sig"))
-            telemetry = metadata.get("telemetry", {})
+            if not isinstance(metadata, dict):
+                raise TypeError("JSON根节点不是对象")
+            raw_telemetry = metadata.get("telemetry", metadata)
+            if not isinstance(raw_telemetry, dict):
+                raise TypeError("telemetry节点不是对象")
+            telemetry = raw_telemetry
             if telemetry:
-                lines.extend(
-                    (
-                        f"Roll {telemetry.get('roll_deg', 0.0):.2f}°  "
-                        f"Pitch {telemetry.get('pitch_deg', 0.0):.2f}°",
-                        f"Yaw {telemetry.get('yaw_deg', 0.0):.2f}°  "
-                        f"ToF {telemetry.get('tof_height_cm', 0.0):.2f} cm",
-                    )
+                roll_value = self.telemetry_number(telemetry, "roll_deg")
+                pitch_value = self.telemetry_number(telemetry, "pitch_deg")
+                yaw_value = self.telemetry_number(telemetry, "yaw_deg")
+                height_value = self.telemetry_number(
+                    telemetry, "tof_height_cm", "vision_tof_height_cm", "fused_height_cm"
                 )
+                if any(
+                    value is not None
+                    for value in (roll_value, pitch_value, yaw_value, height_value)
+                ):
+                    lines.extend(
+                        (
+                            f"Roll {(roll_value or 0.0):.2f}°  "
+                            f"Pitch {(pitch_value or 0.0):.2f}°",
+                            f"Yaw {(yaw_value or 0.0):.2f}°  "
+                            f"ToF {(height_value or 0.0):.2f} cm",
+                        )
+                    )
+                else:
+                    lines.append("无有效遥测元数据")
+            else:
+                lines.append("无有效遥测元数据")
         except (OSError, UnicodeError, json.JSONDecodeError, TypeError, ValueError):
             lines.append("无有效遥测元数据")
+        self.current_telemetry = telemetry
+        self.apply_ideal_telemetry(telemetry)
         self.metadata_var.set("\n".join(lines))
+
+    @staticmethod
+    def telemetry_number(telemetry: dict, *names: str) -> float | None:
+        for name in names:
+            value = telemetry.get(name)
+            if value is None:
+                continue
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                continue
+        return None
+
+    def apply_ideal_telemetry(self, telemetry: dict) -> None:
+        pose_fields = (
+            (self.roll_var, ("roll_deg",)),
+            (self.pitch_var, ("pitch_deg",)),
+            (self.uav_yaw_var, ("yaw_deg",)),
+            (
+                self.height_var,
+                ("tof_height_cm", "vision_tof_height_cm", "fused_height_cm"),
+            ),
+        )
+        pose_loaded = False
+        for variable, names in pose_fields:
+            value = self.telemetry_number(telemetry, *names)
+            if value is not None:
+                variable.set(f"{value:.6f}")
+                pose_loaded = True
+        self._ideal_pose_source = "同名JSON" if pose_loaded else "手动（JSON无姿态）"
+
+        yaw_valid = telemetry.get(
+            "car_yaw_valid", telemetry.get("vehicle_yaw_valid", True)
+        )
+        relative_yaw = self.telemetry_number(telemetry, "car_yaw_rel_uav_deg")
+        absolute_yaw = self.telemetry_number(
+            telemetry, "car_yaw_deg", "vehicle_yaw_deg"
+        )
+        if not bool(yaw_valid):
+            self._ideal_car_yaw_source = "手动（JSON标记无效）"
+        elif relative_yaw is not None:
+            self.car_yaw_var.set(f"{relative_yaw:.6f}")
+            self.car_yaw_relative_var.set(True)
+            self._ideal_car_yaw_source = "同名JSON相对Yaw"
+        elif absolute_yaw is not None:
+            self.car_yaw_var.set(f"{absolute_yaw:.6f}")
+            self.car_yaw_relative_var.set(False)
+            self._ideal_car_yaw_source = "同名JSON绝对Yaw"
+        else:
+            self._ideal_car_yaw_source = "手动（JSON无小车Yaw）"
+        self.update_ideal_source_text()
+
+    def update_ideal_source_text(self) -> None:
+        self.ideal_source_var.set(
+            f"姿态：{self._ideal_pose_source}；小车Yaw：{self._ideal_car_yaw_source}"
+        )
+
+    def reload_ideal_telemetry(self) -> None:
+        if self.current_path is None:
+            self.ideal_status_var.set("尚未加载图像")
+            return
+        self.update_metadata(self.current_path)
+        self.redraw_canvas()
+
+    def ideal_pose_edited(self, _event: object = None) -> None:
+        self._ideal_pose_source = "手动"
+        self.update_ideal_source_text()
+        self.redraw_canvas()
+
+    def ideal_car_yaw_edited(self, _event: object = None) -> None:
+        self._ideal_car_yaw_source = "手动"
+        self.update_ideal_source_text()
+        self.redraw_canvas()
+
+    def ideal_parameter_changed(self, _event: object = None) -> None:
+        self.redraw_canvas()
+
+    def ideal_mount_angles_changed(self, _event: object = None) -> None:
+        self.redraw_canvas()
+
+    def reset_mount_angles(self) -> None:
+        self.mount_roll_var.set("0")
+        self.mount_pitch_var.set("0")
+        self.mount_yaw_var.set("0")
+        self.target_projector.set_mount_angles(0.0, 0.0, 0.0)
+        self.redraw_canvas()
+
+    def ideal_target_changed(self, _event: object = None) -> None:
+        if self.ideal_target_var.get() != IDEAL_TARGET_NONE:
+            self.view_var.set(self.ideal_background_var.get())
+        self.redraw_canvas()
+
+    def ideal_background_changed(self, _event: object = None) -> None:
+        if self.ideal_target_var.get() != IDEAL_TARGET_NONE:
+            self.view_var.set(self.ideal_background_var.get())
+        self.redraw_canvas()
+
+    def view_changed(self, *_args: object) -> None:
+        view = self.view_var.get()
+        if view in IDEAL_BACKGROUND_NAMES:
+            self.ideal_background_var.set(view)
+        self.redraw_canvas()
 
     def threshold_scale_changed(self, value: str) -> None:
         self.threshold_var.set(int(round(float(value))))
@@ -564,6 +913,204 @@ class PictureViewerApp:
             image=self.canvas_photo,
             tags="frame",
         )
+        self.draw_ideal_target_overlay(image)
+
+    def draw_ideal_target_overlay(self, background: Image.Image) -> None:
+        target = self.ideal_target_var.get()
+        if target == IDEAL_TARGET_NONE:
+            self.ideal_status_var.set("选择目标后可在图像中左键拖动")
+            return
+        if self.view_var.get() not in IDEAL_BACKGROUND_NAMES:
+            self.ideal_status_var.set("理想目标仅叠加在去畸变灰度图或单阈值二值图")
+            return
+        calibration = self.projection_calibration
+        if background.size != (calibration.output_width, calibration.output_height):
+            self.ideal_status_var.set("当前背景不是376x240去畸变图")
+            return
+
+        try:
+            roll = float(self.roll_var.get())
+            pitch = float(self.pitch_var.get())
+            height = float(self.height_var.get())
+            mount_roll = float(self.mount_roll_var.get())
+            mount_pitch = float(self.mount_pitch_var.get())
+            mount_yaw = float(self.mount_yaw_var.get())
+            self.target_projector.set_mount_angles(
+                mount_roll, mount_pitch, mount_yaw
+            )
+            if height <= 0.0:
+                raise ValueError("无人机高度必须大于0")
+            if target == IDEAL_TARGET_ARROW:
+                plane_height = float(self.arrow_plane_height_var.get())
+            elif target == IDEAL_TARGET_BEACON:
+                plane_height = float(self.beacon_plane_height_var.get())
+            else:
+                raise ValueError("目标类型无效")
+            if plane_height < 0.0:
+                raise ValueError("目标平面高度不能小于0")
+            if plane_height >= height - calibration.offset_z_cm:
+                raise ValueError("目标平面必须低于相机")
+        except ValueError as exc:
+            self.ideal_status_var.set(f"参数错误：{exc}")
+            return
+
+        center_image = self.ideal_centers[target]
+        center_plane = self.target_projector.image_to_plane(
+            center_image, roll, pitch, height, plane_height
+        )
+        if center_plane is None:
+            self.ideal_status_var.set("目标中心无法投影到物理平面")
+            return
+
+        projected_points: list[tuple[float, float]] = []
+        status_detail = ""
+        color = "#00e5ff"
+        try:
+            if target == IDEAL_TARGET_ARROW:
+                arm_length = float(self.arrow_arm_length_var.get())
+                opening_angle = float(self.arrow_angle_var.get())
+                opening_offset = float(self.arrow_opening_offset_var.get())
+                uav_yaw = float(self.uav_yaw_var.get())
+                car_yaw = float(self.car_yaw_var.get())
+                relative_yaw = (
+                    car_yaw if self.car_yaw_relative_var.get() else car_yaw - uav_yaw
+                )
+                relative_yaw = wrap_degrees(relative_yaw)
+                opening_direction = wrap_degrees(relative_yaw + opening_offset)
+                points = build_ideal_chevron_points(
+                    center_plane, arm_length, opening_angle, opening_direction
+                )
+                for name in ("left_tip", "apex", "right_tip"):
+                    projected = self.target_projector.plane_to_image(
+                        points[name], roll, pitch, height, plane_height
+                    )
+                    if projected is None:
+                        raise ValueError("箭头端点位于相机后方")
+                    projected_points.append(projected)
+                status_detail = (
+                    f"臂长 {arm_length:.1f}cm，夹角 {opening_angle:.1f}°，"
+                    f"相对Yaw {relative_yaw:.1f}°"
+                )
+                color = "#ffb000"
+            else:
+                diameter = float(self.beacon_diameter_var.get())
+                points = build_ideal_beacon_points(center_plane, diameter)
+                for point in points:
+                    projected = self.target_projector.plane_to_image(
+                        point, roll, pitch, height, plane_height
+                    )
+                    if projected is None:
+                        raise ValueError("信标轮廓位于相机后方")
+                    projected_points.append(projected)
+                projected_points.append(projected_points[0])
+                status_detail = f"直径 {diameter:.1f}cm"
+        except ValueError as exc:
+            self.ideal_status_var.set(f"参数错误：{exc}")
+            return
+
+        canvas_points = [
+            (
+                self.offset_x + point[0] * self.zoom,
+                self.offset_y + point[1] * self.zoom,
+            )
+            for point in projected_points
+        ]
+        flat_points = [coordinate for point in canvas_points for coordinate in point]
+        self.canvas.create_line(
+            *flat_points,
+            fill=color,
+            width=3,
+            tags="ideal_target",
+        )
+        if target == IDEAL_TARGET_ARROW:
+            for point_x, point_y in canvas_points:
+                self.canvas.create_oval(
+                    point_x - 4,
+                    point_y - 4,
+                    point_x + 4,
+                    point_y + 4,
+                    outline=color,
+                    width=2,
+                    tags="ideal_target",
+                )
+
+        center_canvas = (
+            self.offset_x + center_image[0] * self.zoom,
+            self.offset_y + center_image[1] * self.zoom,
+        )
+        self.canvas.create_line(
+            center_canvas[0] - 6,
+            center_canvas[1],
+            center_canvas[0] + 6,
+            center_canvas[1],
+            fill=color,
+            width=2,
+            tags="ideal_target",
+        )
+        self.canvas.create_line(
+            center_canvas[0],
+            center_canvas[1] - 6,
+            center_canvas[0],
+            center_canvas[1] + 6,
+            fill=color,
+            width=2,
+            tags="ideal_target",
+        )
+        self.canvas.create_text(
+            center_canvas[0] + 8,
+            center_canvas[1] - 8,
+            text=target,
+            fill=color,
+            anchor=tk.SW,
+            tags="ideal_target",
+        )
+
+        checked_points = (
+            projected_points if target == IDEAL_TARGET_ARROW else projected_points[:-1]
+        )
+        outside_count = sum(
+            not self.target_projector.is_inside_image(point)
+            for point in checked_points
+        )
+        outside_text = f"，{outside_count}个轮廓点在画面外" if outside_count else ""
+        self.ideal_status_var.set(
+            f"中心物理坐标 ({center_plane[0]:.1f}, {center_plane[1]:.1f})cm；"
+            f"{status_detail}；安装RPY "
+            f"({mount_roll:.1f}°, {mount_pitch:.1f}°, {mount_yaw:.1f}°)"
+            f"{outside_text}"
+        )
+
+    def ideal_drag_start(self, event: tk.Event) -> None:
+        target = self.ideal_target_var.get()
+        if target == IDEAL_TARGET_NONE or self.view_var.get() not in IDEAL_BACKGROUND_NAMES:
+            return
+        image_x = (float(event.x) - self.offset_x) / self.zoom
+        image_y = (float(event.y) - self.offset_y) / self.zoom
+        if not (
+            0.0 <= image_x < self.calibration.output_width
+            and 0.0 <= image_y < self.calibration.output_height
+        ):
+            return
+        self._ideal_drag_active = True
+        self.ideal_centers[target] = (image_x, image_y)
+        self.redraw_canvas()
+
+    def ideal_drag_move(self, event: tk.Event) -> None:
+        if not self._ideal_drag_active:
+            return
+        target = self.ideal_target_var.get()
+        if target not in (IDEAL_TARGET_ARROW, IDEAL_TARGET_BEACON):
+            return
+        image_x = (float(event.x) - self.offset_x) / self.zoom
+        image_y = (float(event.y) - self.offset_y) / self.zoom
+        self.ideal_centers[target] = (
+            max(0.0, min(self.calibration.output_width - 1.0, image_x)),
+            max(0.0, min(self.calibration.output_height - 1.0, image_y)),
+        )
+        self.redraw_canvas()
+
+    def ideal_drag_stop(self, _event: object = None) -> None:
+        self._ideal_drag_active = False
 
     def fit_image(self) -> None:
         image = self.get_view_image()
@@ -638,6 +1185,7 @@ class PictureViewerApp:
 
 def self_test() -> int:
     analysis_self_test()
+    projection_self_test(CALIBRATION_HEADER)
     calibration = CameraCalibration.from_header(CALIBRATION_HEADER)
     assert (calibration.image_width, calibration.image_height) == (188, 120)
     assert (calibration.output_width, calibration.output_height) == (376, 240)
