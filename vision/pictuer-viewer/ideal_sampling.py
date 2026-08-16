@@ -89,6 +89,24 @@ def _point_outline_distance_sq(
     )
 
 
+def point_segment_distance_sq(
+    point: Point2D,
+    start: Point2D,
+    end: Point2D,
+) -> float:
+    """Public geometry helper used by the independent matcher."""
+    return _point_segment_distance_sq(point, start, end)
+
+
+def point_outline_distance_sq(
+    point: Point2D,
+    outline: Sequence[Point2D],
+    closed: bool,
+) -> float:
+    """Public geometry helper used by the independent matcher."""
+    return _point_outline_distance_sq(point, outline, closed)
+
+
 def _point_in_polygon(point: Point2D, polygon: Sequence[Point2D]) -> bool:
     inside = False
     previous = polygon[-1]

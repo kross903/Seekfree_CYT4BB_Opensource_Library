@@ -33,6 +33,28 @@ from ideal_sampling import (
     sample_projected_shape,
     self_test as sampling_self_test,
 )
+from ideal_matching import (
+    ARROW_DEFAULT_THRESHOLDS,
+    BEACON_DEFAULT_THRESHOLDS,
+    BINARY_CONSISTENCY,
+    COMPLETENESS,
+    FAR_DIFFERENCE,
+    GRAY_DIFFERENCE,
+    MatchingThresholds,
+    NEAR_DIFFERENCE,
+    NEGATIVE_HIT_RATE,
+    NEGATIVE_POINTS,
+    POSITIVE_HIT_RATE,
+    POSITIVE_POINTS,
+    STANDARDIZED_SEPARATION,
+    TARGET_ARROW,
+    TARGET_BEACON,
+    THRESHOLD_ATTRIBUTES,
+    THRESHOLD_KEYS,
+    calculate_matching_metrics,
+    evaluate_matching_metrics,
+    self_test as matching_self_test,
+)
 
 
 APP_DIR = Path(__file__).resolve().parent
@@ -48,6 +70,23 @@ IDEAL_TARGET_ARROW = "理想箭头"
 IDEAL_TARGET_BEACON = "理想信标"
 IDEAL_TARGET_NAMES = (IDEAL_TARGET_NONE, IDEAL_TARGET_ARROW, IDEAL_TARGET_BEACON)
 IDEAL_BACKGROUND_NAMES = ("去畸变灰度图", "单阈值二值图")
+MATCHING_TARGET_KINDS = (TARGET_ARROW, TARGET_BEACON)
+MATCHING_TARGET_NAMES = {
+    TARGET_ARROW: IDEAL_TARGET_ARROW,
+    TARGET_BEACON: IDEAL_TARGET_BEACON,
+}
+MATCHING_FIELD_LABELS = {
+    GRAY_DIFFERENCE: "正负形灰度差",
+    STANDARDIZED_SEPARATION: "标准化分离度",
+    POSITIVE_HIT_RATE: "正形命中率",
+    NEGATIVE_HIT_RATE: "负形命中率",
+    BINARY_CONSISTENCY: "固定阈值一致率",
+    COMPLETENESS: "完整度",
+    NEAR_DIFFERENCE: "近负形灰度差",
+    FAR_DIFFERENCE: "远背景灰度差",
+    POSITIVE_POINTS: "最少正形点",
+    NEGATIVE_POINTS: "最少负形点",
+}
 
 
 class PictureViewerApp:
@@ -70,6 +109,9 @@ class PictureViewerApp:
         ideal_background = str(ideal_settings.get("background", "去畸变灰度图"))
         if ideal_background not in IDEAL_BACKGROUND_NAMES:
             ideal_background = "去畸变灰度图"
+        matching_settings = settings.get("matching_thresholds", {})
+        if not isinstance(matching_settings, dict):
+            matching_settings = {}
 
         self.folder_var = tk.StringVar(
             value=str(Path(settings.get("folder", DEFAULT_CAPTURE_DIR)))
@@ -140,6 +182,28 @@ class PictureViewerApp:
         self.sampling_negative_guard_var = tk.StringVar(
             value=str(ideal_settings.get("sampling_negative_guard_px", "3"))
         )
+        self.near_negative_width_var = tk.StringVar(
+            value=str(matching_settings.get("near_negative_width_px", "2"))
+        )
+        self.matching_defaults = {
+            TARGET_ARROW: ARROW_DEFAULT_THRESHOLDS,
+            TARGET_BEACON: BEACON_DEFAULT_THRESHOLDS,
+        }
+        self.matching_enabled_vars: dict[str, dict[str, tk.BooleanVar]] = {}
+        self.matching_value_vars: dict[str, dict[str, tk.StringVar]] = {}
+        for target_kind in MATCHING_TARGET_KINDS:
+            config = MatchingThresholds.from_mapping(
+                matching_settings.get(target_kind),
+                self.matching_defaults[target_kind],
+            )
+            self.matching_enabled_vars[target_kind] = {
+                key: tk.BooleanVar(value=key in config.enabled)
+                for key in THRESHOLD_KEYS
+            }
+            self.matching_value_vars[target_kind] = {
+                key: tk.StringVar(value=str(getattr(config, THRESHOLD_ATTRIBUTES[key])))
+                for key in THRESHOLD_KEYS
+            }
         self.ideal_source_var = tk.StringVar(value="姿态：手动；小车Yaw：手动")
         self.ideal_status_var = tk.StringVar(value="选择目标后可在图像中左键拖动")
         self.sampling_summary_var = tk.StringVar(
@@ -148,6 +212,7 @@ class PictureViewerApp:
         self._ideal_pose_source = "手动"
         self._ideal_car_yaw_source = "手动"
         self.sampling_window: tk.Toplevel | None = None
+        self.matching_window: tk.Toplevel | None = None
 
         self.all_files: list[Path] = []
         self.visible_files: list[Path] = []
@@ -419,6 +484,11 @@ class PictureViewerApp:
         ).pack(side=tk.LEFT)
         ttk.Button(
             sampling_actions,
+            text="识别阈值",
+            command=self.open_matching_window,
+        ).pack(side=tk.LEFT, padx=(6, 0))
+        ttk.Button(
+            sampling_actions,
             text="对齐候选质心",
             command=self.align_ideal_to_selected_component,
         ).pack(side=tk.LEFT, padx=(6, 0))
@@ -501,6 +571,17 @@ class PictureViewerApp:
             return {}
 
     def close(self) -> None:
+        matching_settings = {
+            "near_negative_width_px": self.safe_float(
+                self.near_negative_width_var, 2.0
+            ),
+        }
+        for target_kind in MATCHING_TARGET_KINDS:
+            try:
+                thresholds = self.current_matching_thresholds(target_kind)
+            except ValueError:
+                thresholds = self.matching_defaults[target_kind]
+            matching_settings[target_kind] = thresholds.to_mapping()
         settings = {
             "folder": self.folder_var.get(),
             "threshold": self.safe_int(self.threshold_var, 50, 0, 255),
@@ -541,6 +622,7 @@ class PictureViewerApp:
                     self.sampling_negative_guard_var, 3.0
                 ),
             },
+            "matching_thresholds": matching_settings,
         }
         try:
             SETTINGS_PATH.write_text(
@@ -865,6 +947,146 @@ class PictureViewerApp:
         self.redraw_canvas()
 
     def sampling_parameter_changed(self, _event: object = None) -> None:
+        self.redraw_canvas()
+
+    def current_matching_thresholds(self, target_kind: str) -> MatchingThresholds:
+        if target_kind not in MATCHING_TARGET_KINDS:
+            raise ValueError("识别目标类型无效")
+        values: dict[str, object] = {}
+        try:
+            for key, attribute in THRESHOLD_ATTRIBUTES.items():
+                raw_value = self.matching_value_vars[target_kind][key].get()
+                values[attribute] = (
+                    int(raw_value)
+                    if key in (POSITIVE_POINTS, NEGATIVE_POINTS)
+                    else float(raw_value)
+                )
+        except (TypeError, ValueError, tk.TclError) as exc:
+            raise ValueError("识别门槛必须是有效数字") from exc
+        values["enabled"] = tuple(
+            key
+            for key in THRESHOLD_KEYS
+            if self.matching_enabled_vars[target_kind][key].get()
+        )
+        thresholds = MatchingThresholds(**values)
+        thresholds.validate()
+        return thresholds
+
+    def current_near_negative_width(self) -> float:
+        try:
+            value = float(self.near_negative_width_var.get())
+        except (TypeError, ValueError, tk.TclError) as exc:
+            raise ValueError("近负形环宽度必须是数字") from exc
+        if not 0.1 <= value <= 32.0:
+            raise ValueError("近负形环宽度必须在0.1到32像素之间")
+        return value
+
+    def open_matching_window(self) -> None:
+        if self.matching_window is not None and self.matching_window.winfo_exists():
+            self.matching_window.deiconify()
+            self.matching_window.lift()
+            return
+
+        window = tk.Toplevel(self.root)
+        window.title("理想目标识别阈值")
+        window.resizable(False, False)
+        self.matching_window = window
+        content = ttk.Frame(window, padding=10)
+        content.grid(row=0, column=0, sticky="nsew")
+
+        common = ttk.Frame(content)
+        common.grid(row=0, column=0, sticky="ew", pady=(0, 7))
+        ttk.Label(common, text="近负形环宽度 (px)").pack(side=tk.LEFT)
+        near_entry = ttk.Entry(
+            common,
+            width=8,
+            textvariable=self.near_negative_width_var,
+        )
+        near_entry.pack(side=tk.LEFT, padx=(7, 0))
+        near_entry.bind("<KeyRelease>", self.matching_parameter_changed)
+        ttk.Label(
+            common,
+            text="勾选表示该项参与试判",
+        ).pack(side=tk.RIGHT, padx=(18, 0))
+
+        notebook = ttk.Notebook(content)
+        notebook.grid(row=1, column=0, sticky="nsew")
+        for target_kind in MATCHING_TARGET_KINDS:
+            tab = ttk.Frame(notebook, padding=8)
+            notebook.add(tab, text=MATCHING_TARGET_NAMES[target_kind])
+            tab.columnconfigure(1, weight=1)
+            for row, key in enumerate(THRESHOLD_KEYS):
+                label = MATCHING_FIELD_LABELS[key]
+                if key == COMPLETENESS:
+                    label = (
+                        "左右臂最低完整度"
+                        if target_kind == TARGET_ARROW
+                        else "四象限最低完整度"
+                    )
+                ttk.Checkbutton(
+                    tab,
+                    variable=self.matching_enabled_vars[target_kind][key],
+                    command=self.matching_parameter_changed,
+                ).grid(row=row, column=0, sticky="w", pady=2)
+                ttk.Label(tab, text=label).grid(
+                    row=row, column=1, sticky="w", padx=(2, 16), pady=2
+                )
+                entry = ttk.Entry(
+                    tab,
+                    width=10,
+                    textvariable=self.matching_value_vars[target_kind][key],
+                )
+                entry.grid(row=row, column=2, sticky="e", pady=2)
+                entry.bind("<KeyRelease>", self.matching_parameter_changed)
+
+        ttk.Label(
+            content,
+            text=(
+                "初值由旧图像/2灯的6帧箭头和12个信标候选粗略拟合；"
+                "远背景门槛默认不参与试判。"
+            ),
+            justify=tk.LEFT,
+            wraplength=430,
+        ).grid(row=2, column=0, sticky="w", pady=(7, 0))
+        ttk.Label(
+            content,
+            textvariable=self.sampling_summary_var,
+            justify=tk.LEFT,
+            wraplength=430,
+        ).grid(row=3, column=0, sticky="w", pady=(7, 0))
+        actions = ttk.Frame(content)
+        actions.grid(row=4, column=0, sticky="e", pady=(9, 0))
+        ttk.Button(
+            actions,
+            text="恢复推荐初值",
+            command=self.reset_matching_thresholds,
+        ).pack(side=tk.LEFT)
+        ttk.Button(
+            actions,
+            text="关闭",
+            command=self.close_matching_window,
+        ).pack(side=tk.LEFT, padx=(6, 0))
+        window.protocol("WM_DELETE_WINDOW", self.close_matching_window)
+
+    def close_matching_window(self) -> None:
+        if self.matching_window is not None and self.matching_window.winfo_exists():
+            self.matching_window.destroy()
+        self.matching_window = None
+
+    def reset_matching_thresholds(self) -> None:
+        self.near_negative_width_var.set("2")
+        for target_kind in MATCHING_TARGET_KINDS:
+            config = self.matching_defaults[target_kind]
+            for key, attribute in THRESHOLD_ATTRIBUTES.items():
+                self.matching_value_vars[target_kind][key].set(
+                    str(getattr(config, attribute))
+                )
+                self.matching_enabled_vars[target_kind][key].set(
+                    key in config.enabled
+                )
+        self.redraw_canvas()
+
+    def matching_parameter_changed(self, _event: object = None) -> None:
         self.redraw_canvas()
 
     def ideal_mount_angles_changed(self, _event: object = None) -> None:
@@ -1276,34 +1498,72 @@ class PictureViewerApp:
             self.sampling_summary_var.set("尚未生成去畸变灰度图")
             return
         try:
+            sampling_config = self.current_sampling_config()
             result = sample_projected_shape(
                 self.undistorted,
                 outline,
                 closed=target == IDEAL_TARGET_BEACON,
                 filled_positive=target == IDEAL_TARGET_BEACON,
-                config=self.current_sampling_config(),
+                config=sampling_config,
                 is_valid_pixel=self.undistorter.is_valid_output_pixel,
             )
         except ValueError as exc:
             self.sampling_summary_var.set(f"采样参数错误：{exc}")
             return
         self.draw_sampling_result(result)
-        positive_text = (
-            f"{result.positive_mean:.1f}"
-            if result.positive_mean is not None else "--"
-        )
-        negative_text = (
-            f"{result.negative_mean:.1f}"
-            if result.negative_mean is not None else "--"
-        )
+
+        target_kind = TARGET_ARROW if target == IDEAL_TARGET_ARROW else TARGET_BEACON
+        try:
+            metrics = calculate_matching_metrics(
+                self.undistorted,
+                outline,
+                result,
+                target_kind=target_kind,
+                center=self.ideal_centers[target],
+                binary_threshold=self.safe_int(self.threshold_var, 50, 0, 255),
+                negative_guard_px=sampling_config.negative_guard_px,
+                near_negative_width_px=self.current_near_negative_width(),
+            )
+            decision = evaluate_matching_metrics(
+                metrics,
+                self.current_matching_thresholds(target_kind),
+                target_kind=target_kind,
+            )
+        except ValueError as exc:
+            self.sampling_summary_var.set(f"识别参数错误：{exc}")
+            return
+
+        def metric_text(value: float | None, digits: int = 2) -> str:
+            return f"{value:.{digits}f}" if value is not None else "--"
+
+        if decision.passed:
+            decision_text = "试判：通过"
+        else:
+            shown_failures = "；".join(decision.failures[:2])
+            remaining = len(decision.failures) - 2
+            suffix = f"；另{remaining}项" if remaining > 0 else ""
+            decision_text = f"试判：未通过（{shown_failures}{suffix}）"
+        completeness_name = "双臂" if target_kind == TARGET_ARROW else "四象限"
         extras = [f"忽略{result.ignored_count}点"]
         if result.invalid_count:
             extras.append(f"无效区{result.invalid_count}点")
         if result.box_clipped:
             extras.append("采样框已裁边")
         self.sampling_summary_var.set(
-            f"正形灰度 {positive_text}（{len(result.positive_points)}点） | "
-            f"负形灰度 {negative_text}（{len(result.negative_points)}点） | "
+            f"{decision_text}\n"
+            f"灰差 {metric_text(metrics.gray_difference, 1)} | "
+            f"分离度 {metric_text(metrics.standardized_separation)} | "
+            f"固定一致 {metric_text(metrics.binary_consistency)}\n"
+            f"正/负命中 {metric_text(metrics.positive_hit_rate)}/"
+            f"{metric_text(metrics.negative_hit_rate)} | "
+            f"{completeness_name} {metric_text(metrics.completeness)} | "
+            f"近/远差 {metric_text(metrics.near_difference, 1)}/"
+            f"{metric_text(metrics.far_difference, 1)}\n"
+            f"正/负形 {metric_text(metrics.positive_mean, 1)}/"
+            f"{metric_text(metrics.negative_mean, 1)} | "
+            f"近/远负形 {metric_text(metrics.near_negative_mean, 1)}/"
+            f"{metric_text(metrics.far_negative_mean, 1)} | "
+            f"P/N {metrics.positive_count}/{metrics.negative_count} | "
             + "，".join(extras)
         )
 
@@ -1447,6 +1707,7 @@ def self_test() -> int:
     analysis_self_test()
     projection_self_test(CALIBRATION_HEADER)
     sampling_self_test()
+    matching_self_test()
     calibration = CameraCalibration.from_header(CALIBRATION_HEADER)
     assert (calibration.image_width, calibration.image_height) == (188, 120)
     assert (calibration.output_width, calibration.output_height) == (376, 240)
