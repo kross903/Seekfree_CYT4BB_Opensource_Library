@@ -1,0 +1,222 @@
+\NeedsTeXFormat{LaTeX2e}
+\ProvidesPackage{config/report_style}[2026/08/15 Smart car competition report style]
+
+\RequirePackage{geometry}
+\geometry{
+  a4paper,
+  top=4.0cm,
+  bottom=3.2cm,
+  left=3.2cm,
+  right=3.2cm,
+  headheight=15pt,
+  headsep=0.70cm,
+  footskip=1.0cm
+}
+
+\RequirePackage{fontspec}
+\RequirePackage{xeCJK}
+\IfFontExistsTF{Times New Roman}
+  {\setmainfont{Times New Roman}}
+  {\setmainfont{TeX Gyre Termes}}
+\IfFontExistsTF{Arial}
+  {\setsansfont{Arial}}
+  {\setsansfont{TeX Gyre Heros}}
+\IfFontExistsTF{SimSun}
+  {\setCJKmainfont[AutoFakeBold=2]{SimSun}}
+  {\setCJKmainfont{FandolSong-Regular}}
+\IfFontExistsTF{SimHei}
+  {\setCJKsansfont[AutoFakeBold=2]{SimHei}}
+  {\setCJKsansfont{FandolHei-Regular}}
+\IfFontExistsTF{FangSong}
+  {\setCJKmonofont{FangSong}}
+  {\setCJKmonofont{FandolFang-Regular}}
+\IfFontExistsTF{SimSun}{\setCJKfamilyfont{zhsong}[AutoFakeBold=2]{SimSun}}{}
+\IfFontExistsTF{SimHei}{\setCJKfamilyfont{zhhei}[AutoFakeBold=2]{SimHei}}{}
+
+\RequirePackage{setspace}
+\setstretch{1.38}
+\setlength{\parindent}{2em}
+\setlength{\parskip}{6pt}
+% 为较长的罗马数字页码预留足够宽度，避免目录页码越界。
+\makeatletter
+\renewcommand{\@pnumwidth}{2.4em}
+\makeatother
+
+\ctexset{
+  chapter={
+    format=\centering\heiti\zihao{-3},
+    beforeskip=20pt,
+    afterskip=20pt,
+    pagestyle=plain
+  },
+  section={
+    format=\heiti\zihao{4},
+    afterskip=12pt
+  },
+  subsection={
+    format=\heiti\zihao{-4},
+    afterskip=6pt
+  },
+  subsubsection={
+    format=\heiti\zihao{-4},
+    afterskip=6pt
+  }
+}
+
+\RequirePackage{amsmath,amssymb,bm}
+\RequirePackage{chngcntr}
+\counterwithout{equation}{chapter}
+\renewcommand{\theequation}{\arabic{equation}}
+\makeatletter
+\renewcommand{\tagform@}[1]{\maketag@@@{公式~#1}}
+\makeatother
+
+\RequirePackage{graphicx}
+\graphicspath{{figures/}}
+\RequirePackage{booktabs,longtable,tabularx,array,multirow,makecell}
+\RequirePackage[table]{xcolor}
+\definecolor{BoschRed}{RGB}{188,25,35}
+\definecolor{ReportBlue}{RGB}{25,72,120}
+\definecolor{TodoBackground}{RGB}{255,249,225}
+\definecolor{TodoFrame}{RGB}{201,142,0}
+\renewcommand{\arraystretch}{1.25}
+
+\RequirePackage{caption}
+\captionsetup{
+  font={small},
+  labelfont={bf},
+  labelsep=quad,
+  skip=6pt
+}
+
+\RequirePackage{fancyhdr}
+\RequirePackage{emptypage}
+\fancypagestyle{reportstyle}{
+  \fancyhf{}
+  \fancyhead[LE]{\songti\zihao{5}\CompetitionName 技术报告}
+  \fancyhead[RO]{\songti\zihao{5}\nouppercase{\leftmark}}
+  \fancyfoot[C]{\thepage}
+  \renewcommand{\headrulewidth}{0.4pt}
+  \renewcommand{\footrulewidth}{0pt}
+}
+\fancypagestyle{frontmatterstyle}{
+  \fancyhf{}
+  \fancyfoot[C]{\thepage}
+  \renewcommand{\headrulewidth}{0pt}
+  \renewcommand{\footrulewidth}{0pt}
+}
+\fancypagestyle{plain}{
+  \fancyhf{}
+  \fancyfoot[C]{\thepage}
+  \renewcommand{\headrulewidth}{0pt}
+  \renewcommand{\footrulewidth}{0pt}
+}
+\renewcommand{\chaptermark}[1]{\markboth{第\thechapter 章\quad #1}{}}
+
+\RequirePackage{tikz}
+\usetikzlibrary{arrows.meta,positioning,calc,fit,shapes.geometric}
+\RequirePackage[most]{tcolorbox}
+\newtcolorbox{todobox}{
+  colback=TodoBackground,
+  colframe=TodoFrame,
+  boxrule=0.6pt,
+  arc=1mm,
+  left=2mm,right=2mm,top=1mm,bottom=1mm,
+  before skip=6pt,after skip=6pt
+}
+\newcommand{\todoitem}[1]{\begin{todobox}\textbf{待补充/核验：}#1\end{todobox}}
+
+\newcommand{\placeholderfigure}[3][0.28\textheight]{%
+  \begin{figure}[htbp]
+    \centering
+    \fbox{\begin{minipage}[c][#1][c]{0.88\textwidth}
+      \centering\color{gray}\textbf{图片占位：#2}\\[6pt]
+      请将正式图片放入 \texttt{technical\_report/figures/}
+    \end{minipage}}
+    \caption{#3}
+  \end{figure}
+}
+
+\RequirePackage{listings}
+\lstdefinestyle{csource}{
+  language=C,
+  basicstyle=\ttfamily\zihao{5},
+  numbers=left,
+  numberstyle=\tiny\color{gray},
+  frame=single,
+  breaklines=true,
+  columns=fullflexible,
+  showstringspaces=false,
+  keywordstyle=\color{ReportBlue}\bfseries,
+  commentstyle=\color{green!45!black},
+  captionpos=b
+}
+\lstset{style=csource}
+
+\RequirePackage{url}
+\RequirePackage{hyperref}
+\hypersetup{
+  colorlinks=true,
+  linkcolor=black,
+  citecolor=ReportBlue,
+  urlcolor=ReportBlue,
+  hypertexnames=false,
+  pdfauthor={\UniversityName\space\TeamName},
+  pdftitle={\ReportTitle}
+}
+\newcommand{\codepath}[1]{\texttt{\path{#1}}}
+
+\RequirePackage[backend=biber,style=gb7714-2015,sorting=none]{biblatex}
+
+\newcommand{\makecompetitioncover}{
+  \thispagestyle{empty}
+  \begin{center}
+    \vspace*{1.1cm}
+    {\heiti\zihao{-2}\CompetitionName\par}
+    \vspace{2.2cm}
+    {\heiti\zihao{1}\textbf{技\quad 术\quad 报\quad 告}\par}
+    \vspace{1.4cm}
+    {\heiti\zihao{2}\ReportTitle\par}
+    \vfill
+    {\fangsong\zihao{3}
+    \renewcommand{\arraystretch}{1.55}
+    \begin{tabular}{>{\raggedleft\arraybackslash}p{3.2cm}p{8.2cm}}
+      学校： & \UniversityName \\
+      队伍名称： & \TeamName \\
+      比赛组别： & \CompetitionGroup \\
+      参赛队员： & \TeamMembers \\
+      指导教师： & \Advisers \\
+    \end{tabular}\par}
+    \vfill
+    {\fangsong\zihao{3}\ReportDate\par}
+    \vspace*{1cm}
+  \end{center}
+}
+
+\newcommand{\makeauthorizationpage}{
+  \thispagestyle{empty}
+  \begin{center}
+    {\heiti\zihao{2}关于技术报告和研究论文使用授权的说明\par}
+  \end{center}
+  \vspace{1.5cm}
+  {\songti\zihao{-4}
+  本队完全了解全国大学生智能汽车竞赛关于保留、使用技术报告和研究论文的规定，
+  即：参赛作品著作权归参赛者本人，比赛组委会可以在相关主页上收录并公开参赛作品的
+  设计方案、技术报告以及参赛模型车的视频、图像资料，并将相关内容编纂收录在组委会
+  出版的论文集中。\par}
+  \vspace{2.5cm}
+  \begin{flushright}
+    参赛队员签名：\rule{6.2cm}{0.4pt}\\[1.2cm]
+    带队教师签名：\rule{6.2cm}{0.4pt}\\[1.2cm]
+    日期：\rule{1.2cm}{0.4pt}年\rule{1.0cm}{0.4pt}月\rule{1.0cm}{0.4pt}日
+  \end{flushright}
+}
+
+\newcommand{\beginreportappendices}{
+  \cleardoublepage
+  \appendix
+  \counterwithin{equation}{chapter}
+  \renewcommand{\thefigure}{\thechapter-\arabic{figure}}
+  \renewcommand{\thetable}{\thechapter-\arabic{table}}
+  \renewcommand{\theequation}{\thechapter-\arabic{equation}}
+}

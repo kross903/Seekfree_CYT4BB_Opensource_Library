@@ -1,0 +1,68 @@
+\chapter{系统概述与总体方案}
+
+\section{赛题任务与设计目标}
+
+本项目面向飞跃雷区组空地协同任务。无人机承担环境感知、相对定位、稳定飞行及任务协调，
+地面车模完成地面运动与指定目标交互。系统设计目标包括：在限定场地和硬件规则内完成可靠起降，
+稳定获取无人机、车模与信标的相对状态，通过低延迟通信形成闭环，并在异常状态下保持可诊断、可急停。
+
+\todoitem{引用正式比赛规则，逐条写清起点、雷区/信标布置、任务顺序、尺寸与芯片约束、计分方法及安全要求。不要仅描述“完成任务”。}
+
+\section{系统总体架构}
+
+当前仓库的主要实现集中于无人机端，其软件架构如图\ref{fig:system-architecture}所示。
+
+\begin{figure}[htbp]
+  \centering
+  \begin{tikzpicture}[
+    node distance=7mm and 9mm,
+    box/.style={draw,rounded corners,align=center,minimum height=10mm,minimum width=30mm,fill=blue!4},
+    core/.style={box,fill=red!6,draw=BoschRed},
+    line/.style={-{Latex[length=2mm]},thick}
+  ]
+    \node[box] (camera) {双摄像头\\红外/车标图像};
+    \node[box,right=of camera] (imu) {ICM42688\\姿态观测};
+    \node[box,right=of imu] (range) {双ToF/光流\\高度与速度};
+
+    \node[core,below=of camera] (cm71) {CM7\_1 相机核\\采集与视觉前处理};
+    \node[core,below=of imu] (cm70) {CM7\_0 控制核\\估计、控制与任务管理};
+    \node[box,below=of range] (carlink) {地面车模链路\\位置、航向与速度};
+
+    \node[box,below=of cm71] (vision) {标志检测、IPM\\双相机融合};
+    \node[box,below=of cm70] (control) {位置→速度→姿态\\→角速度级联控制};
+    \node[box,below=of carlink] (safety) {安全状态机\\VOFA诊断与遥测};
+
+    \node[box,below=of control,minimum width=42mm] (motor) {姿态优先混控\\DShot600电机输出};
+
+    \draw[line] (camera) -- (cm71);
+    \draw[line] (imu) -- (cm70);
+    \draw[line] (range) -- (cm70);
+    \draw[line] (cm71) -- node[left,font=\small]{跨核数据} (vision);
+    \draw[line] (vision) -- (control);
+    \draw[line] (cm70) -- (control);
+    \draw[line] (carlink) -- (cm70);
+    \draw[line] (control) -- (motor);
+    \draw[line] (safety) -- (control);
+  \end{tikzpicture}
+  \caption{基于当前仓库实现整理的系统总体架构}
+  \label{fig:system-architecture}
+\end{figure}
+
+\section{双核软件分工}
+
+控制核入口为\codepath{project/user/main_cm7_0.c}，负责初始化、菜单与监视、状态管理以及实时控制链路；
+相机核入口为\codepath{project/user/main_cm7_1.c}，通过
+\codepath{project/code/communication/cross_core_camera.c}承担摄像头任务和跨核传输。
+高频控制主要由定时中断驱动，核心调度位于\codepath{project/code/common/PIT_Demo.c}，不能仅以主循环调用顺序描述系统实时性。
+
+\section{项目特色与拟突出创新点}
+
+\begin{enumerate}
+  \item \textbf{双核异构分工：}视觉采集与飞行控制分核执行，降低图像任务对高频控制周期的干扰。
+  \item \textbf{多源定位链路：}摄像头标定、IPM、红外信标、车标方向识别、光流和ToF共同提供位置、速度与高度信息。
+  \item \textbf{分层闭环：}位置环输出目标速度，速度环输出目标加速度/姿态，姿态环和角速度环最终驱动电机。
+  \item \textbf{连续轨迹与制动：}位置控制包含P/Sqrt纠偏、速度/加速度/Jerk整形、动态停车距离和快速反向处理。
+  \item \textbf{工程诊断与安全：}VOFA多模式观测、控制实时性统计、电池和电调遥测、缓启动及急停锁存形成完整调试闭环。
+\end{enumerate}
+
+\todoitem{创新点最终必须由对比试验支撑。为每项创新安排基线、评价指标和消融实验，不使用“零延迟”“完全消除”等绝对表述。}

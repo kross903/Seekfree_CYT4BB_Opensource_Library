@@ -1,0 +1,9 @@
+%%{init: {"theme": "base", "themeVariables": {"fontFamily": "Microsoft YaHei, Noto Sans CJK SC, sans-serif", "fontSize": "18px"}, "flowchart": {"curve": "stepAfter", "nodeSpacing": 40, "rankSpacing": 50}}}%%
+flowchart TB
+    A[main函数启动] --> B[设置系统时钟并初始化板级寄存器]
+    B --> C[初始化电池检测与状态指示灯]
+    C --> D[初始化PWM输入捕获与比较器]
+    D --> E[初始化电机参数和运行状态]
+    E --> F[初始化中心对齐功率PWM]
+    F --> G[初始化周期定时器并开启总中断]
+    G --> H[主循环等待中断事件]

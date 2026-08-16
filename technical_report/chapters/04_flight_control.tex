@@ -1,0 +1,69 @@
+\chapter{飞行控制与状态估计软件}
+
+\section{实时调度与数据流}
+
+控制核启动由\codepath{main_cm7_0.c}进入，初始化集中在\codepath{All_Init.c}；
+高频任务由\codepath{PIT_Demo.c}中的周期中断调度。建议用表格列出任务周期、优先级、输入输出和实测执行时间。
+
+\begin{table}[htbp]
+  \centering
+  \caption{控制任务频率框架}
+  \begin{tabularx}{\textwidth}{p{3.2cm}p{2.3cm}p{3.0cm}X}
+    \toprule
+    任务 & 当前基线 & 核心文件 & 定稿需补充 \\
+    \midrule
+    IMU采样 & 4 kHz & \codepath{icm42688.c} & 抖动、丢样率、执行时间 \\
+    角速度环 & 1 kHz & \codepath{rate_loop.c} & 三轴参数与带宽 \\
+    姿态角环 & 500 Hz & \codepath{angle_loop.c} & 参数、目标限幅与前馈 \\
+    高度环 & 待核验 & \codepath{height_manager.c} & ToF周期及累计延迟 \\
+    水平速度环 & 待核验 & \codepath{velocity_loop.c} & 光流反馈频率与延迟 \\
+    水平位置环 & 待核验 & \codepath{position_loop.c} & 视觉更新周期与超时策略 \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+\section{姿态解算与IMU标定}
+
+ICM42688安装矩阵通过六面静止数据标定。当前实机标定得到最大姿态残差$0.5552^{\circ}$、
+RMS残差$0.3679^{\circ}$且$\det(\bm{R})=1.0$。姿态解算采用四元数/互补滤波路径，
+应说明陀螺零偏、加速度归一化、异常检测和上电初始姿态的处理。
+
+\section{级联控制结构}
+
+水平控制链为
+\begin{align*}
+  \text{位置观测}&\rightarrow\text{位置环}\rightarrow\text{目标速度}
+  \rightarrow\text{速度环}\rightarrow\text{目标姿态},\\
+  \text{目标姿态}&\rightarrow\text{姿态环}\rightarrow\text{目标角速度}
+  \rightarrow\text{角速度环}\rightarrow\text{电机输出}.
+\end{align*}
+
+离散PID可统一写为
+\begin{equation}
+u_k=K_p e_k+K_i\sum_{i=0}^{k}e_iT_s+K_d\frac{e_k-e_{k-1}}{T_s}.
+\end{equation}
+正文需分别说明积分限幅、微分滤波、输出限幅、抗饱和和目标变化率前馈。
+
+\section{水平位置与速度控制}
+
+当前位置控制采用真实二维位置误差生成P/Sqrt纠偏速度，并与地面车速度前馈合成；
+目标速度经过速度、加速度和Jerk约束的连续轨迹整形。动态停车距离只参与制动余量评估，
+不直接修改位置误差。快速反向通过期望速度与实测速度的点积判断。
+
+\begin{equation}
+  d_{\mathrm{stop}}=f(v_{\mathrm{close}},a_{\mathrm{eff}},j_{\mathrm{eff}}),\qquad
+  m=d-d_{\mathrm{stop}}-v_{\mathrm{close}}T_d-d_s .
+\end{equation}
+
+\todoitem{把代码中的M1--M8、N1--N7参数整理成正式表格，给出单位、来源和实飞标定结果；当前默认值只能作为调试起点。}
+
+\section{高度控制与双ToF管理}
+
+说明ToF有效性、跳变拒绝、重捕获、目标高度斜坡和高度/垂直速度闭环。特别分析多级中值、低通、差分与速度滤波的累计延迟。
+
+\section{混控、电机输出与安全机制}
+
+混控模块位于\codepath{motor_mixer.c}，底层输出位于\codepath{motor_hardware.c}。
+应说明姿态优先级、油门余量、限幅反馈、非有限数保护、缓启动状态机、按键急停和重新解锁禁止期。
+
+\placeholderfigure{control-flow.pdf}{飞行控制状态机与多级闭环流程}

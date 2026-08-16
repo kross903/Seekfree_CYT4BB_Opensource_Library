@@ -1,0 +1,10 @@
+%%{init: {"theme": "base", "themeVariables": {"fontFamily": "Microsoft YaHei, Noto Sans CJK SC, sans-serif", "fontSize": "18px"}, "flowchart": {"curve": "stepAfter", "nodeSpacing": 45, "rankSpacing": 50}}}%%
+flowchart TB
+    A[视觉系统启动] --> B[初始化红外相机与PWM输出]
+    B --> C[采集红外图像]
+    C --> D[读取当前任务模式与补光设置]
+    D --> E{是否启用红外补光}
+    E -- 否 --> F[输出0%占空比]
+    E -- 是 --> G[输出设定PWM占空比]
+    F --> H[进入下一控制周期]
+    G --> H

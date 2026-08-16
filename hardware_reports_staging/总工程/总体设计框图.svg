@@ -1,0 +1,144 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="820" viewBox="0 0 1400 820">
+  <defs>
+    <style>
+      .text{font-family:"Microsoft YaHei","Noto Sans CJK SC",sans-serif;fill:#17324d}
+      .title{font-size:30px;font-weight:700}
+      .section{font-size:20px;font-weight:700}
+      .label{font-size:17px}
+      .small{font-size:14px}
+      .ground-frame{fill:#f8fbfd;stroke:#2f6f9f;stroke-width:2.5}
+      .air-frame{fill:#f7fbf7;stroke:#2f855a;stroke-width:2.5}
+      .power-node{fill:#fff4df;stroke:#d97706;stroke-width:2}
+      .module{fill:#f7fbff;stroke:#2f6f9f;stroke-width:2}
+      .core{fill:#edf8ef;stroke:#2f855a;stroke-width:2.5}
+      .actuator{fill:#f4efff;stroke:#7653a6;stroke-width:2}
+      .link-node{fill:#fafafa;stroke:#7b8794;stroke-width:2.5}
+      .mechanical{fill:#fafafa;stroke:#7b8794;stroke-width:2}
+      .power-line{stroke:#d97706;stroke-width:3;fill:none;marker-end:url(#power-arrow)}
+      .power-bus{stroke:#d97706;stroke-width:3;fill:none}
+      .control-line{stroke:#355a76;stroke-width:2.5;fill:none;marker-end:url(#signal-arrow)}
+      .signal-line{stroke:#355a76;stroke-width:2.5;fill:none;marker-start:url(#signal-arrow-start);marker-end:url(#signal-arrow)}
+      .mechanical-line{stroke:#65758b;stroke-width:2.5;stroke-dasharray:8 6;fill:none}
+    </style>
+    <marker id="power-arrow" markerUnits="userSpaceOnUse" markerWidth="12" markerHeight="8" refX="11" refY="4" orient="auto" viewBox="0 0 12 8">
+      <path d="M0,0 L12,4 L0,8 Z" fill="#d97706"/>
+    </marker>
+    <marker id="signal-arrow" markerUnits="userSpaceOnUse" markerWidth="12" markerHeight="8" refX="11" refY="4" orient="auto" viewBox="0 0 12 8">
+      <path d="M0,0 L12,4 L0,8 Z" fill="#355a76"/>
+    </marker>
+    <marker id="signal-arrow-start" markerUnits="userSpaceOnUse" markerWidth="12" markerHeight="8" refX="1" refY="4" orient="auto" viewBox="0 0 12 8">
+      <path d="M12,0 L0,4 L12,8 Z" fill="#355a76"/>
+    </marker>
+  </defs>
+
+  <rect width="1400" height="820" fill="#fff"/>
+  <text x="700" y="44" text-anchor="middle" class="text title">飞跃雷区空地协同系统总体设计框图</text>
+
+  <!-- Ground vehicle subsystem -->
+  <rect x="25" y="90" width="500" height="480" rx="8" class="ground-frame"/>
+  <text x="275" y="126" text-anchor="middle" class="text section">地面车执行端</text>
+
+  <rect x="50" y="150" width="170" height="90" rx="8" class="power-node"/>
+  <text x="135" y="184" text-anchor="middle" class="text label">
+    <tspan x="135">4S 动力电池</tspan>
+    <tspan x="135" dy="27">整机供电</tspan>
+  </text>
+
+  <rect x="300" y="150" width="195" height="110" rx="8" class="core"/>
+  <text x="397" y="186" text-anchor="middle" class="text label">
+    <tspan x="397" font-size="20" font-weight="700">CYT4BB7 小车主控</tspan>
+    <tspan x="397" dy="32">轨迹规划 / 运动控制</tspan>
+    <tspan x="397" dy="27">地空通信 / 状态管理</tspan>
+  </text>
+
+  <rect x="50" y="355" width="190" height="105" rx="8" class="module"/>
+  <text x="145" y="391" text-anchor="middle" class="text label">
+    <tspan x="145">LEDV4.1 红外灯板</tspan>
+    <tspan x="145" dy="27">5 V / PWM 调光</tspan>
+  </text>
+
+  <rect x="300" y="355" width="195" height="105" rx="8" class="actuator"/>
+  <text x="397" y="391" text-anchor="middle" class="text label">
+    <tspan x="397">四麦克纳姆轮底盘</tspan>
+    <tspan x="397" dy="27">全向运动 / 信标跨越</tspan>
+  </text>
+
+  <path d="M220 185 H300" class="power-line"/>
+  <path d="M397 260 V355" class="control-line"/>
+  <path d="M300 205 H270 V407 H240" class="control-line"/>
+
+  <!-- Tether link -->
+  <rect x="580" y="220" width="160" height="150" rx="8" class="link-node"/>
+  <text x="660" y="258" text-anchor="middle" class="text label">
+    <tspan x="660" font-weight="700">系留线缆</tspan>
+    <tspan x="660" dy="30">长度不超过 1.5 m</tspan>
+    <tspan x="660" dy="27">VBAT / GND</tspan>
+    <tspan x="660" dy="27">有线数据通信</tspan>
+  </text>
+
+  <path d="M495 205 H545 V275 H580" class="signal-line"/>
+  <path d="M350 260 V320 H580" class="power-line"/>
+
+  <!-- UAV subsystem -->
+  <rect x="775" y="90" width="600" height="480" rx="8" class="air-frame"/>
+  <text x="1075" y="126" text-anchor="middle" class="text section">无人机感知与控制端</text>
+
+  <rect x="800" y="150" width="230" height="130" rx="8" class="core"/>
+  <text x="915" y="185" text-anchor="middle" class="text label">
+    <tspan x="915" font-size="20" font-weight="700">飞控 V2.4</tspan>
+    <tspan x="915" dy="32">姿态控制 / 任务决策</tspan>
+    <tspan x="915" dy="27">视觉处理 / 地空协同</tspan>
+  </text>
+
+  <rect x="800" y="355" width="230" height="105" rx="8" class="module"/>
+  <text x="915" y="390" text-anchor="middle" class="text label">
+    <tspan x="915">感知与视觉接口</tspan>
+    <tspan x="915" dy="27">红外相机 / IMU / 光流 / TOF</tspan>
+  </text>
+
+  <rect x="1090" y="150" width="250" height="130" rx="8" class="power-node"/>
+  <text x="1215" y="184" text-anchor="middle" class="text label">
+    <tspan x="1215" font-weight="700">四合一无刷电调（择一）</tspan>
+    <tspan x="1215" dy="31">CYT2BL3 四合一</tspan>
+    <tspan x="1215" dy="27">或 STC32G 四合一</tspan>
+  </text>
+
+  <rect x="1090" y="355" width="250" height="105" rx="8" class="actuator"/>
+  <text x="1215" y="390" text-anchor="middle" class="text label">
+    <tspan x="1215">四台无刷电机</tspan>
+    <tspan x="1215" dy="27">M1～M4</tspan>
+  </text>
+
+  <path d="M740 275 H760 V215 H800" class="signal-line"/>
+  <path d="M915 355 V280" class="control-line"/>
+  <path d="M1030 215 H1090" class="control-line"/>
+  <path d="M1215 280 V355" class="control-line"/>
+
+  <!-- Power enters the flight controller through the tether, then the flight controller supplies the ESC. -->
+  <path d="M740 245 H800" class="power-line"/>
+  <path d="M1030 180 H1090" class="power-line"/>
+
+  <!-- Mechanical structures -->
+  <rect x="25" y="630" width="500" height="100" rx="8" class="mechanical"/>
+  <text x="275" y="665" text-anchor="middle" class="text label">
+    <tspan x="275" font-weight="700">地面车机械结构</tspan>
+    <tspan x="275" dy="28">低刚度避震 / 四周低位延伸 / 电池与灯架安装</tspan>
+  </text>
+
+  <rect x="775" y="630" width="600" height="100" rx="8" class="mechanical"/>
+  <text x="1075" y="665" text-anchor="middle" class="text label">
+    <tspan x="1075" font-weight="700">无人机机械结构</tspan>
+    <tspan x="1075" dy="28">四涵道防护 / 板卡分层安装 / 摄像头与传感器支架</tspan>
+  </text>
+
+  <path d="M275 570 V630" class="mechanical-line"/>
+  <path d="M1075 570 V630" class="mechanical-line"/>
+
+  <!-- Legend -->
+  <path d="M700 785 H755" class="power-line"/>
+  <text x="765" y="791" class="text small">供电路径</text>
+  <path d="M870 785 H925" class="control-line"/>
+  <text x="935" y="791" class="text small">数据 / 控制</text>
+  <path d="M1055 785 H1110" class="mechanical-line"/>
+  <text x="1120" y="791" class="text small">机械安装关系</text>
+</svg>

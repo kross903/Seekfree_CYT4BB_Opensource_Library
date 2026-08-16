@@ -1,0 +1,34 @@
+\chapter{标定数据、实验记录与复现说明}
+
+\section{摄像头标定数据}
+
+当前标定报告位于\codepath{vision/}下的“摄像头标定”目录，文件名为
+\codepath{output/calibration_report.md}；生成的固件参数与查表文件位于同目录及
+\codepath{project/code/vision}。定稿时记录数据集哈希、工具版本和被拒绝图像原因。
+
+\section{IMU安装矩阵数据}
+
+六面标定流程和当前结果记录于\codepath{project/code/docs/}下的
+\codepath{IMU_ATTITUDE_CALIBRATION.md}。
+原始六面CSV、标定脚本输出和写入固件的矩阵应随开源版本保存。
+
+\section{控制与通信日志}
+
+VOFA通道定义位于\codepath{project/code/docs/VOFA_MANUAL.md}。所有用于正文图表的CSV应包含：
+\begin{itemize}
+  \item 固件提交哈希与参数快照；
+  \item 测试日期、电池电压、机械配置与环境条件；
+  \item 采样频率、通道名称、单位和有效区间；
+  \item 数据处理脚本与生成图像的命令。
+\end{itemize}
+
+\section{提交前复现清单}
+
+\begin{enumerate}
+  \item 在全新目录克隆仓库并检出报告指定提交；
+  \item 按README安装工具链并编译两核IAR工程；
+  \item 运行视觉上位机自检与标定参数校验；
+  \item 运行可离线复现的控制/视觉测试；
+  \item 核对报告表格、图像、源码路径和最终固件版本一致；
+  \item 清除报告中全部“待补充/核验”框后再提交。
+\end{enumerate}

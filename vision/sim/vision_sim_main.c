@@ -36,6 +36,51 @@ static float parse_float(const char *text, float fallback)
     return (end == text) ? fallback : value;
 }
 
+/* 顺序与桌面工具 CHEVRON_TUNING_SPECS 一致，共18项。 */
+static int parse_chevron_score_config(
+    const char *text, VehicleMarkerChevronScoreConfig_t *config)
+{
+    float values[18];
+    const char *cursor = text;
+    char *end = NULL;
+    int i;
+
+    if(text == NULL || config == NULL) return 0;
+    for(i = 0; i < 18; ++i)
+    {
+        values[i] = (float)strtod(cursor, &end);
+        if(end == cursor) return 0;
+        if(i < 17)
+        {
+            if(*end != ',') return 0;
+            cursor = end + 1;
+        }
+        else if(*end != '\0')
+        {
+            return 0;
+        }
+    }
+    config->mean_arm_min_cm = values[0];
+    config->mean_arm_max_cm = values[1];
+    config->min_arm_symmetry = values[2];
+    config->opening_ratio_min = values[3];
+    config->opening_ratio_max = values[4];
+    config->concavity_ratio_low = values[5];
+    config->concavity_ratio_good = values[6];
+    config->concavity_ratio_high = values[7];
+    config->concavity_ratio_max = values[8];
+    config->geometry_score_min = values[9];
+    config->opening_to_car_yaw_deg = values[10];
+    config->direction_full_error_deg = values[11];
+    config->direction_zero_error_deg = values[12];
+    config->direction_weight = values[13];
+    config->symmetry_weight = values[14];
+    config->opening_weight = values[15];
+    config->concavity_weight = values[16];
+    config->blob_weight = values[17];
+    return 1;
+}
+
 static const char *get_option(int argc, char **argv, const char *name)
 {
     int i;
@@ -283,6 +328,8 @@ static void full_rectified_box_to_raw(const VisionRuntimeBeaconSlot_t *slot,
 
 static int write_result(const char *path, const char *binary_path,
                         float roll_deg, float pitch_deg, float height_cm,
+                        float car_yaw_relative_deg,
+                        uint8 car_yaw_relative_valid,
                         uint8 vehicle_threshold, uint8 beacon_threshold,
                         uint8 vehicle_fallback_threshold,
                         uint8 vehicle_fallback_enabled,
@@ -295,6 +342,7 @@ static int write_result(const char *path, const char *binary_path,
     VisionRuntimeBeaconSlot_t slots[VISION_RUNTIME_BEACON_SLOT_COUNT] = {0};
     VisionRuntimeCandidateBox_t candidates[16U] = {0};
     VehicleMarkerChevronDebug_t chevron = {0};
+    VehicleMarkerChevronScoreConfig_t score_config = {0};
     uint8 coarse_thresholds[VISION_RUNTIME_COARSE_ZONE_COUNT] = {0};
     float apex_raw_u = 0.0f;
     float apex_raw_v = 0.0f;
@@ -321,6 +369,7 @@ static int write_result(const char *path, const char *binary_path,
     candidate_count = VisionRuntime_GetCandidateBoxes(
         candidates, 16U);
     VehicleMarkerLocalization_GetChevronDebug(&chevron);
+    VehicleMarkerLocalization_GetChevronScoreConfig(&score_config);
     VisionRuntime_GetCoarseZoneThresholds(coarse_thresholds);
     file = fopen(path, "w");
     if(file == NULL)
@@ -331,6 +380,9 @@ static int write_result(const char *path, const char *binary_path,
     fprintf(file, "  \"width\":%d,\n  \"height\":%d,\n", MT9V03X_W, MT9V03X_H);
     fprintf(file, "  \"roll_deg\":%.6f,\n  \"pitch_deg\":%.6f,\n  \"height_cm\":%.6f,\n",
             roll_deg, pitch_deg, height_cm);
+    fprintf(file,
+            "  \"car_yaw_relative_prior\":{\"valid\":%u,\"deg\":%.6f},\n",
+            (unsigned)car_yaw_relative_valid, car_yaw_relative_deg);
     if(birdview_bounds != NULL)
     {
         fprintf(file,
@@ -416,6 +468,40 @@ static int write_result(const char *path, const char *binary_path,
             vehicle_fallback_enabled ?
                 "vehicle_first_fallback_threshold_short_circuit" :
                 "vehicle_first_single_threshold_short_circuit");
+    fprintf(file,
+            "  \"chevron_score_config\":{"
+            "\"mean_arm_cm\":[%.6f,%.6f],\"min_arm_symmetry\":%.6f,"
+            "\"opening_ratio\":[%.6f,%.6f],"
+            "\"concavity_ratio\":{\"low\":%.6f,\"good\":%.6f,"
+            "\"high\":%.6f,\"max\":%.6f},"
+            "\"geometry_score_min\":%.6f,"
+            "\"weights\":{\"symmetry\":%.6f,\"opening\":%.6f,"
+            "\"concavity\":%.6f,\"blob\":%.6f,\"direction\":%.6f},"
+            "\"direction\":{\"opening_to_car_yaw_deg\":%.6f,"
+            "\"full_error_deg\":%.6f,\"zero_error_deg\":%.6f},"
+            "\"candidate_prefilter_error_weights\":{\"area\":%.6f,"
+            "\"occupancy\":%.6f,\"circularity\":%.6f},"
+            "\"behavior\":{\"opening_score_is_binary\":%u,"
+            "\"open_v_in_final_score\":%u,"
+            "\"candidate_prefilter_lower_is_better\":%u}},\n",
+            score_config.mean_arm_min_cm, score_config.mean_arm_max_cm,
+            score_config.min_arm_symmetry,
+            score_config.opening_ratio_min, score_config.opening_ratio_max,
+            score_config.concavity_ratio_low, score_config.concavity_ratio_good,
+            score_config.concavity_ratio_high, score_config.concavity_ratio_max,
+            score_config.geometry_score_min,
+            score_config.symmetry_weight, score_config.opening_weight,
+            score_config.concavity_weight, score_config.blob_weight,
+            score_config.direction_weight,
+            score_config.opening_to_car_yaw_deg,
+            score_config.direction_full_error_deg,
+            score_config.direction_zero_error_deg,
+            score_config.candidate_area_error_weight,
+            score_config.candidate_occupancy_error_weight,
+            score_config.candidate_circularity_error_weight,
+            (unsigned)score_config.opening_score_is_binary,
+            (unsigned)score_config.open_v_in_final_score,
+            (unsigned)score_config.candidate_prefilter_lower_is_better);
     fprintf(file, "  \"physical_grid_enabled\":%u,\n",
             (unsigned)VISION_RUNTIME_PHYSICAL_GRID_ENABLE);
     fprintf(file, "  \"binary_mode\":\"%s\",\n",
@@ -595,16 +681,99 @@ static int write_result(const char *path, const char *binary_path,
             right_line_end_raw_u, right_line_end_raw_v);
     fprintf(file,
             "\"physical\":{\"area_cm2\":%.6f,\"occupancy\":%.6f,\"circularity\":%.6f,"
-            "\"left_arm_cm\":%.6f,\"right_arm_cm\":%.6f,\"arm_angle_deg\":%.6f,"
-            "\"base_cm\":%.6f,\"triangle_height_cm\":%.6f},",
+            "\"left_arm_cm\":%.6f,\"right_arm_cm\":%.6f,\"mean_arm_cm\":%.6f,"
+            "\"arm_symmetry\":%.6f,\"opening_ratio\":%.6f,"
+            "\"concavity_depth_px\":%.6f,\"concavity_ratio\":%.6f,"
+            "\"arm_angle_deg\":%.6f,\"base_cm\":%.6f,\"triangle_height_cm\":%.6f},",
             chevron.physical_area_cm2,
             chevron.physical_occupancy_ratio,
             chevron.physical_circularity,
             chevron.left_arm_cm,
             chevron.right_arm_cm,
+            chevron.mean_arm_cm,
+            chevron.arm_symmetry,
+            chevron.opening_ratio,
+            chevron.concavity_depth_px,
+            chevron.concavity_ratio,
             chevron.arm_angle_deg,
             chevron.base_cm,
             chevron.triangle_height_cm);
+    fprintf(file,
+            "\"scores\":{\"arm_symmetry\":%.6f,\"opening_ratio\":%.6f,"
+            "\"concavity\":%.6f,\"basic_blob\":%.6f,"
+            "\"base_geometry\":%.6f,\"geometry\":%.6f,"
+            "\"weighted\":{\"symmetry\":%.6f,\"opening\":%.6f,"
+            "\"concavity\":%.6f,\"blob\":%.6f,"
+            "\"base_after_direction_mix\":%.6f,\"direction\":%.6f}},",
+            chevron.arm_symmetry_score,
+            chevron.opening_ratio_score,
+            chevron.concavity_score,
+            chevron.basic_blob_score,
+            chevron.base_geometry_score,
+            chevron.geometry_score,
+            chevron.arm_symmetry_score * score_config.symmetry_weight,
+            chevron.opening_ratio_score * score_config.opening_weight,
+            chevron.concavity_score * score_config.concavity_weight,
+            chevron.basic_blob_score * score_config.blob_weight,
+            chevron.base_geometry_score *
+                (chevron.direction_prior_valid ?
+                 (1.0f - score_config.direction_weight) : 1.0f),
+            chevron.direction_prior_valid ?
+                chevron.direction_score * score_config.direction_weight : 0.0f);
+    fprintf(file,
+            "\"hard_gates\":{\"mean_arm\":%u,\"arm_symmetry\":%u,"
+            "\"opening_ratio\":%u,\"concavity_ratio\":%u,"
+            "\"geometry_score\":%u},",
+            (unsigned)(chevron.mean_arm_cm >= score_config.mean_arm_min_cm &&
+                       chevron.mean_arm_cm <= score_config.mean_arm_max_cm),
+            (unsigned)(chevron.arm_symmetry >= score_config.min_arm_symmetry),
+            (unsigned)(chevron.opening_ratio >= score_config.opening_ratio_min &&
+                       chevron.opening_ratio <= score_config.opening_ratio_max),
+            (unsigned)(chevron.concavity_ratio > score_config.concavity_ratio_low &&
+                       chevron.concavity_ratio < score_config.concavity_ratio_max),
+            (unsigned)(chevron.geometry_score >= score_config.geometry_score_min));
+    fprintf(file,
+            "\"blob_gate\":{\"physical\":%u,\"area\":%.6f,"
+            "\"min_area\":%.6f,\"max_area\":%.6f,\"expected_area\":%.6f,"
+            "\"occupancy\":%.6f,\"min_occupancy\":%.6f,"
+            "\"max_occupancy\":%.6f,\"circularity\":%.6f,"
+            "\"max_circularity\":%.6f,\"candidate_error_score\":%.6f},",
+            (unsigned)chevron.blob_gate_physical,
+            chevron.blob_area,
+            chevron.blob_gate_min_area,
+            chevron.blob_gate_max_area,
+            chevron.blob_gate_expected_area,
+            chevron.blob_occupancy,
+            chevron.blob_gate_min_occupancy,
+            chevron.blob_gate_max_occupancy,
+            chevron.blob_circularity,
+            chevron.blob_gate_max_circularity,
+            chevron.candidate_blob_score);
+    fprintf(file,
+            "\"open_v\":{\"arm_support\":%.6f,\"center_gap\":%.6f,"
+            "\"arm_continuity\":%.6f,\"score\":%.6f,"
+            "\"hypothesis_score\":%.6f,\"hypothesis_second_score\":%.6f,"
+            "\"hypothesis_margin\":%.6f,\"apex_index\":%u,"
+            "\"gate_score\":%.6f,\"gate_center_gap\":%.6f,"
+            "\"gate_from_primary\":%u},",
+            chevron.open_v_arm_support,
+            chevron.open_v_center_gap,
+            chevron.open_v_arm_continuity,
+            chevron.open_v_score,
+            chevron.open_v_hypothesis_score,
+            chevron.open_v_hypothesis_second_score,
+            chevron.open_v_hypothesis_margin,
+            (unsigned)chevron.open_v_apex_index,
+            chevron.open_v_gate_score,
+            chevron.open_v_gate_center_gap,
+            (unsigned)chevron.open_v_gate_from_primary);
+    fprintf(file,
+            "\"direction_prior\":{\"valid\":%u,\"expected_deg\":%.6f,"
+            "\"error_deg\":%.6f,\"score\":%.6f},",
+            (unsigned)chevron.direction_prior_valid,
+            chevron.direction_expected_deg,
+            chevron.direction_error_deg,
+            chevron.direction_score);
     fprintf(file,
             "\"candidate_count\":%u,\"geometry_reject_count\":%u,\"reject_reason\":%u}\n",
             (unsigned)chevron.candidate_count,
@@ -630,6 +799,10 @@ int main(int argc, char **argv)
     float roll_deg = parse_float(get_option(argc, argv, "--roll"), 0.0f);
     float pitch_deg = parse_float(get_option(argc, argv, "--pitch"), 0.0f);
     float height_cm = parse_float(get_option(argc, argv, "--height"), 100.0f);
+    const char *car_yaw_relative_text = get_option(argc, argv, "--car-yaw-relative");
+    const char *chevron_config_text = get_option(argc, argv, "--chevron-config");
+    float car_yaw_relative_deg = parse_float(car_yaw_relative_text, 0.0f);
+    uint8 car_yaw_relative_valid = (car_yaw_relative_text != NULL) ? 1U : 0U;
     const char *binary_mode_text = get_option(argc, argv, "--binary-mode");
     int threshold_value = parse_int(get_option(argc, argv, "--threshold"),
                                     (int)VISION_BINARY_THRESHOLD_BEACON);
@@ -686,10 +859,11 @@ int main(int argc, char **argv)
     IPM_BirdViewBounds_t *birdview_bounds_ptr = NULL;
     size_t undistorted_pixels = 0U;
     size_t birdview_pixels = 0U;
+    VehicleMarkerChevronScoreConfig_t chevron_score_config = {0};
 
     if(input_path == NULL || output_path == NULL || !read_raw(input_path))
     {
-        fprintf(stderr, "usage: vision_sim --input frame.raw --output result.json [--binary binary.pgm] [--vehicle-binary vehicle_binary.pgm] [--disable-vehicle-fallback] [--vehicle-threshold 145] [--vehicle-fallback-threshold 50] [--beacon-threshold 50] [--coarse-center-threshold 150] [--coarse-near-threshold 60] [--coarse-middle-threshold 50] [--coarse-far-threshold 50] [--coarse-edge-threshold 40] [--binary-mode gray|pre_transform|undistort_binary_ipm|post_transform]\n");
+        fprintf(stderr, "usage: vision_sim --input frame.raw --output result.json [--car-yaw-relative deg] [--chevron-config 18-comma-separated-values] [--binary binary.pgm] [--vehicle-binary vehicle_binary.pgm] [--disable-vehicle-fallback] [--vehicle-threshold 145] [--vehicle-fallback-threshold 50] [--beacon-threshold 50] [--coarse-center-threshold 150] [--coarse-near-threshold 60] [--coarse-middle-threshold 50] [--coarse-far-threshold 50] [--coarse-edge-threshold 40] [--binary-mode gray|pre_transform|undistort_binary_ipm|post_transform]\n");
         return 2;
     }
 
@@ -740,6 +914,20 @@ int main(int argc, char **argv)
 
     IPM_Interface_Init();
     VehicleMarkerLocalization_Init();
+    if(chevron_config_text != NULL)
+    {
+        VehicleMarkerLocalization_GetChevronScoreConfig(&chevron_score_config);
+        if(!parse_chevron_score_config(chevron_config_text,
+                                       &chevron_score_config) ||
+           !VehicleMarkerLocalization_SetChevronScoreConfig(
+               &chevron_score_config))
+        {
+            fprintf(stderr, "invalid --chevron-config parameter combination\n");
+            return 2;
+        }
+    }
+    VehicleMarkerLocalization_SetOpeningDirectionPrior(
+        car_yaw_relative_deg, car_yaw_relative_valid);
     BeaconDetect_Init();
     VisionRuntime_SetRecognitionThresholds(vehicle_threshold,
                                            beacon_threshold);
@@ -978,6 +1166,7 @@ int main(int argc, char **argv)
         birdview_bounds_ptr = &birdview_bounds;
     }
     if(!write_result(output_path, binary_path, roll_deg, pitch_deg, height_cm,
+                     car_yaw_relative_deg, car_yaw_relative_valid,
                      vehicle_threshold, beacon_threshold,
                      vehicle_fallback_threshold,
                      vehicle_fallback_enabled, binary_mode, &diag,

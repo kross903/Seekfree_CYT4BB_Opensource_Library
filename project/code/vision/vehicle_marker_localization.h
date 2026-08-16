@@ -79,6 +79,16 @@ typedef struct
     float physical_area_cm2;
     float physical_occupancy_ratio;
     float physical_circularity;
+    float blob_area;
+    float blob_occupancy;
+    float blob_circularity;
+    float blob_gate_min_area;
+    float blob_gate_max_area;
+    float blob_gate_expected_area;
+    float blob_gate_min_occupancy;
+    float blob_gate_max_occupancy;
+    float blob_gate_max_circularity;
+    float candidate_blob_score;
     float left_arm_cm;
     float right_arm_cm;
     float mean_arm_cm;
@@ -90,6 +100,7 @@ typedef struct
     float opening_ratio_score;
     float concavity_score;
     float basic_blob_score;
+    float base_geometry_score;
     float direction_expected_deg;            /* 通信Yaw给出的期望开口方向。 */
     float direction_error_deg;               /* 视觉开口方向与期望方向的夹角。 */
     float direction_score;                   /* 开口方向一致性软评分。 */
@@ -109,10 +120,39 @@ typedef struct
     uint8 open_v_apex_index;
     uint8 open_v_gate_from_primary;
     uint8 direction_prior_valid;
+    uint8 blob_gate_physical;
     uint8 candidate_count;
     uint8 geometry_reject_count;
     uint8 reject_reason;
 } VehicleMarkerChevronDebug_t;
+
+typedef struct
+{
+    float mean_arm_min_cm;
+    float mean_arm_max_cm;
+    float min_arm_symmetry;
+    float opening_ratio_min;
+    float opening_ratio_max;
+    float concavity_ratio_low;
+    float concavity_ratio_good;
+    float concavity_ratio_high;
+    float concavity_ratio_max;
+    float geometry_score_min;
+    float symmetry_weight;
+    float opening_weight;
+    float concavity_weight;
+    float blob_weight;
+    float direction_weight;
+    float opening_to_car_yaw_deg;
+    float direction_full_error_deg;
+    float direction_zero_error_deg;
+    float candidate_area_error_weight;
+    float candidate_occupancy_error_weight;
+    float candidate_circularity_error_weight;
+    uint8 opening_score_is_binary;
+    uint8 open_v_in_final_score;
+    uint8 candidate_prefilter_lower_is_better;
+} VehicleMarkerChevronScoreConfig_t;
 
 typedef struct
 {
@@ -143,6 +183,13 @@ void VehicleMarkerLocalization_ServiceLostProtection(void);
 void VehicleMarkerLocalization_GetLossDebug(VehicleMarkerLossDebug_t *debug);
 void VehicleMarkerLocalization_SetLossDebug(const VehicleMarkerLossDebug_t *debug);
 void VehicleMarkerLocalization_GetChevronDebug(VehicleMarkerChevronDebug_t *debug);
+void VehicleMarkerLocalization_GetChevronScoreConfig(
+    VehicleMarkerChevronScoreConfig_t *config);
+/* PC仿真可覆盖车标评分参数；传入非法组合时返回0且保留原配置。 */
+uint8 VehicleMarkerLocalization_SetChevronScoreConfig(
+    const VehicleMarkerChevronScoreConfig_t *config);
+/* 恢复上方源码宏定义的默认评分参数。 */
+void VehicleMarkerLocalization_ResetChevronScoreConfig(void);
 /* 设置当前帧的小车相对机体Yaw；无效时方向项自动退出综合评分。 */
 void VehicleMarkerLocalization_SetOpeningDirectionPrior(float car_yaw_rel_uav_deg,
                                                         uint8 valid);

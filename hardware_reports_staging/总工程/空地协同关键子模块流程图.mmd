@@ -1,0 +1,10 @@
+%%{init: {"theme": "base", "themeVariables": {"fontFamily": "Microsoft YaHei, Noto Sans CJK SC, sans-serif", "fontSize": "18px"}, "flowchart": {"curve": "stepAfter", "nodeSpacing": 45, "rankSpacing": 50}}}%%
+flowchart TB
+    A[无人机双相机采集图像] --> B[目标提取与双相机融合]
+    B --> C[计算信标相对位置和有效状态]
+    C --> D[经系留线缆发送引导数据]
+    D --> E[小车接收并校验数据]
+    E --> F[融合信标信息与车辆运行状态]
+    F --> G[生成导航目标和运动控制量]
+    G --> H[驱动车模驶向信标]
+    H --> I[回传车辆状态并处理下一目标]

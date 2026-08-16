@@ -1,0 +1,10 @@
+%%{init: {"theme": "base", "themeVariables": {"fontFamily": "Microsoft YaHei, Noto Sans CJK SC, sans-serif", "fontSize": "18px"}, "flowchart": {"curve": "stepAfter", "nodeSpacing": 45, "rankSpacing": 50}}}%%
+flowchart TB
+    A[读取该通道目标占空比] --> B[检查启动、停机及故障条件]
+    B --> C[正弦牵引启动]
+    C --> D[进入六步开环换相]
+    D --> E[检测反电动势过零稳定性]
+    E --> F[切换至无感闭环]
+    F --> G[计算下一换相时刻]
+    G --> H[执行换相并更新功率PWM]
+    H --> I[进入下一控制周期或执行停机重启]

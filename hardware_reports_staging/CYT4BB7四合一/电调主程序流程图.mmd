@@ -1,0 +1,16 @@
+%%{init: {"theme": "base", "themeVariables": {"fontFamily": "Microsoft YaHei, Noto Sans CJK SC, sans-serif", "fontSize": "18px"}, "flowchart": {"curve": "stepAfter", "nodeSpacing": 45, "rankSpacing": 50}}}%%
+flowchart TB
+    A[上电复位] --> B[初始化时钟、功率PWM、ADC、串口和输入捕获]
+    B --> C[检测母线电压、电流和温度]
+    C --> D{状态是否正常}
+    D -- 否 --> E[关闭四路输出并上报故障]
+    D -- 是 --> F{控制输入模式}
+    F -- 比赛实际使用 --> G[接收并校验串口控制数据]
+    F -- PWM兼容模式 --> H[捕获4路外部PWM]
+    G --> I[获得四路电机目标量]
+    H --> I
+    I --> J[电机开环启动]
+    J --> K[采集三相反电动势]
+    K --> L[过零判断与换相]
+    L --> M[更新功率PWM占空比和换相时刻]
+    M --> N[进入下一控制周期]

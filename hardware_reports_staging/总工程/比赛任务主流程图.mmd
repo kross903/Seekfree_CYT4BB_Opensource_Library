@@ -1,0 +1,11 @@
+%%{init: {"theme": "base", "themeVariables": {"fontFamily": "Microsoft YaHei, Noto Sans CJK SC, sans-serif", "fontSize": "18px"}, "flowchart": {"curve": "stepAfter", "nodeSpacing": 40, "rankSpacing": 50}}}%%
+flowchart TB
+    A[选手遥控无人机起飞] --> B[无人机稳定悬停并完成系统检查]
+    B --> C[示意发车并等待首个信标点亮]
+    C --> D[无人机视觉识别信标位置]
+    D --> E[通过系留线缆向小车发送引导信息]
+    E --> F[小车规划运动并驶向目标信标]
+    F --> G[小车跨越灯罩并触发信标熄灭]
+    G --> H{是否为最后一个信标}
+    H -- 否 --> I[等待并搜索下一信标]
+    H -- 是 --> J[停止计时并由选手手动降落无人机]

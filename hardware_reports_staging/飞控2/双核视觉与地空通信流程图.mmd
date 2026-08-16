@@ -1,0 +1,9 @@
+%%{init: {"theme": "base", "themeVariables": {"fontFamily": "Microsoft YaHei, Noto Sans CJK SC, sans-serif", "fontSize": "18px"}, "flowchart": {"curve": "stepAfter", "nodeSpacing": 45, "rankSpacing": 50}}}%%
+flowchart TB
+    A[CM7_1采集双路相机图像] --> B[图像预处理与候选目标提取]
+    B --> C[双相机结果融合]
+    C --> D[生成信标相对位置与有效状态]
+    D --> E[跨核传递视觉快照至CM7_0]
+    E --> F[CM7_0结合姿态和高度更新定位结果]
+    F --> G[通过系留线缆向小车发送信标引导信息]
+    G --> H[接收小车状态并进入下一处理周期]

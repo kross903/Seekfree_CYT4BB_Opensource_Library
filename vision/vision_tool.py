@@ -62,6 +62,30 @@ RUNTIME_THRESHOLD_MACROS = (
     "VISION_RUNTIME_COARSE_THRESHOLD_EDGE",
 )
 
+# 顺序必须与 vision_sim_main.c 的 --chevron-config 解析顺序一致。
+# (key, 界面名称, 最小值, 最大值, 分辨率, 固件宏默认值)
+CHEVRON_TUNING_SPECS = (
+    ("mean_arm_min_cm", "平均臂长下限 (cm)", 0.0, 30.0, 0.5, 4.0),
+    ("mean_arm_max_cm", "平均臂长上限 (cm)", 10.0, 100.0, 0.5, 55.0),
+    ("min_arm_symmetry", "最低臂对称性", 0.0, 1.0, 0.01, 0.40),
+    ("opening_ratio_min", "开口比例下限", 0.0, 1.0, 0.01, 0.20),
+    ("opening_ratio_max", "开口比例上限", 0.0, 1.0, 0.01, 0.70),
+    ("concavity_ratio_low", "凹陷零分下界", 0.0, 0.8, 0.01, 0.08),
+    ("concavity_ratio_good", "凹陷满分下界", 0.0, 0.8, 0.01, 0.12),
+    ("concavity_ratio_high", "凹陷满分上界", 0.0, 0.8, 0.01, 0.35),
+    ("concavity_ratio_max", "凹陷拒绝上界", 0.0, 1.0, 0.01, 0.55),
+    ("geometry_score_min", "综合分通过门限", 0.0, 1.5, 0.01, 0.55),
+    ("opening_to_car_yaw_deg", "开口相对车头 Yaw (deg)", -180.0, 180.0, 1.0, 180.0),
+    ("direction_full_error_deg", "方向满分误差 (deg)", 0.0, 90.0, 1.0, 20.0),
+    ("direction_zero_error_deg", "方向零分误差 (deg)", 1.0, 180.0, 1.0, 70.0),
+    ("direction_weight", "方向先验权重", 0.0, 1.0, 0.01, 0.20),
+    ("symmetry_weight", "臂对称性权重", 0.0, 1.0, 0.01, 0.30),
+    ("opening_weight", "开口比例权重", 0.0, 1.0, 0.01, 0.25),
+    ("concavity_weight", "凸包凹陷权重", 0.0, 1.0, 0.01, 0.30),
+    ("blob_weight", "基础 Blob 权重", 0.0, 1.0, 0.01, 0.15),
+)
+CHEVRON_TUNING_DEFAULTS = {spec[0]: spec[5] for spec in CHEVRON_TUNING_SPECS}
+
 
 class Simulator:
     """Builds the selected firmware vision sources with the PC hardware shim."""
@@ -200,6 +224,8 @@ class Simulator:
         binary_mode: str = "gray",
         coarse_thresholds: tuple[int, int, int, int, int] | None = None,
         disable_vehicle_fallback: bool = False,
+        car_yaw_relative: float | None = None,
+        chevron_tuning: dict[str, float] | None = None,
     ) -> tuple[bool, str, Path | None, Path | None, Path | None, Path | None, Path | None, Path | None, Path | None]:
         self.pipeline_mode = 1 if binary_mode == "post_transform" else 0
         executable = self.output_path()
@@ -248,6 +274,11 @@ class Simulator:
         ]
         if disable_vehicle_fallback:
             command.append("--disable-vehicle-fallback")
+        if car_yaw_relative is not None:
+            command.extend(("--car-yaw-relative", str(car_yaw_relative)))
+        if chevron_tuning is not None:
+            values = [chevron_tuning[key] for key, *_rest in CHEVRON_TUNING_SPECS]
+            command.extend(("--chevron-config", ",".join(f"{value:.9g}" for value in values)))
         if undistort:
             command.extend(("--undistorted", str(undistorted_path)))
             command.extend(("--undistorted-mask", str(undistorted_mask_path)))
@@ -275,6 +306,188 @@ class Simulator:
         )
 
 
+class ZoomImageViewer(ttk.LabelFrame):
+    """Responsive, clipped image viewer with wheel zoom and drag panning."""
+
+    MIN_ZOOM = 0.25
+    MAX_ZOOM = 8.0
+    ZOOM_STEP = 1.20
+
+    def __init__(self, parent: tk.Widget, title: str) -> None:
+        super().__init__(parent, text=title, padding=2)
+        self.base_title = title
+        self.source_image: Image.Image | None = None
+        self.photo: ImageTk.PhotoImage | None = None
+        self.image_id: int | None = None
+        self.placeholder_id: int | None = None
+        self.zoom = 1.0
+        self.offset_x = 0.0
+        self.offset_y = 0.0
+        self._last_scale = 1.0
+        self._last_draw_x = 0.0
+        self._last_draw_y = 0.0
+        self._drag_origin: tuple[int, int, float, float] | None = None
+        self._resize_job: str | None = None
+
+        self.rowconfigure(0, weight=1)
+        self.columnconfigure(0, weight=1)
+        self.canvas = tk.Canvas(
+            self,
+            width=1,
+            height=1,
+            background="#111111",
+            highlightthickness=0,
+            borderwidth=0,
+            cursor="arrow",
+        )
+        self.canvas.grid(row=0, column=0, sticky="nsew")
+        self.canvas.bind("<Configure>", self._on_configure)
+        self.canvas.bind("<MouseWheel>", self._on_mousewheel)
+        self.canvas.bind("<Button-4>", self._on_mousewheel)
+        self.canvas.bind("<Button-5>", self._on_mousewheel)
+        self.canvas.bind("<ButtonPress-1>", self._on_drag_start)
+        self.canvas.bind("<B1-Motion>", self._on_drag_motion)
+        self.canvas.bind("<ButtonRelease-1>", self._on_drag_end)
+        self.canvas.bind("<Double-Button-1>", lambda _event: self.reset_view())
+        self.clear("等待图像 · 滚轮缩放 · 拖拽平移 · 双击适应")
+
+    def set_image(self, image: Image.Image, reset: bool = True) -> None:
+        self.source_image = image.copy()
+        if reset:
+            self.zoom = 1.0
+            self.offset_x = 0.0
+            self.offset_y = 0.0
+        self._render()
+
+    def clear(self, message: str = "等待图像") -> None:
+        self.source_image = None
+        self.photo = None
+        if self.image_id is not None:
+            self.canvas.delete(self.image_id)
+            self.image_id = None
+        width = max(1, self.canvas.winfo_width())
+        height = max(1, self.canvas.winfo_height())
+        if self.placeholder_id is None:
+            self.placeholder_id = self.canvas.create_text(
+                width / 2,
+                height / 2,
+                text=message,
+                fill="#c8c8c8",
+                justify=tk.CENTER,
+            )
+        else:
+            self.canvas.itemconfigure(self.placeholder_id, text=message, state=tk.NORMAL)
+            self.canvas.coords(self.placeholder_id, width / 2, height / 2)
+        self.configure(text=self.base_title)
+
+    def reset_view(self) -> None:
+        self.zoom = 1.0
+        self.offset_x = 0.0
+        self.offset_y = 0.0
+        self._render()
+
+    def _fit_scale(self) -> float:
+        if self.source_image is None:
+            return 1.0
+        width = max(1, self.canvas.winfo_width() - 8)
+        height = max(1, self.canvas.winfo_height() - 8)
+        return max(0.01, min(width / self.source_image.width,
+                             height / self.source_image.height))
+
+    def _clamp_offsets(self, rendered_width: int, rendered_height: int) -> None:
+        canvas_width = max(1, self.canvas.winfo_width())
+        canvas_height = max(1, self.canvas.winfo_height())
+        max_x = max(0.0, (rendered_width - canvas_width) / 2.0)
+        max_y = max(0.0, (rendered_height - canvas_height) / 2.0)
+        self.offset_x = max(-max_x, min(max_x, self.offset_x))
+        self.offset_y = max(-max_y, min(max_y, self.offset_y))
+
+    def _render(self) -> None:
+        self._resize_job = None
+        if self.source_image is None:
+            if self.placeholder_id is not None:
+                self.canvas.coords(
+                    self.placeholder_id,
+                    max(1, self.canvas.winfo_width()) / 2,
+                    max(1, self.canvas.winfo_height()) / 2,
+                )
+            return
+        fit_scale = self._fit_scale()
+        scale = fit_scale * self.zoom
+        rendered_width = max(1, int(round(self.source_image.width * scale)))
+        rendered_height = max(1, int(round(self.source_image.height * scale)))
+        self._clamp_offsets(rendered_width, rendered_height)
+        canvas_width = max(1, self.canvas.winfo_width())
+        canvas_height = max(1, self.canvas.winfo_height())
+        draw_x = (canvas_width - rendered_width) / 2.0 + self.offset_x
+        draw_y = (canvas_height - rendered_height) / 2.0 + self.offset_y
+        display = self.source_image.resize(
+            (rendered_width, rendered_height), Image.Resampling.NEAREST
+        )
+        self.photo = ImageTk.PhotoImage(display)
+        if self.placeholder_id is not None:
+            self.canvas.itemconfigure(self.placeholder_id, state=tk.HIDDEN)
+        if self.image_id is None:
+            self.image_id = self.canvas.create_image(
+                draw_x, draw_y, image=self.photo, anchor=tk.NW
+            )
+        else:
+            self.canvas.itemconfigure(self.image_id, image=self.photo)
+            self.canvas.coords(self.image_id, draw_x, draw_y)
+        self._last_scale = scale
+        self._last_draw_x = draw_x
+        self._last_draw_y = draw_y
+        self.canvas.configure(cursor="fleur" if self.zoom > 1.001 else "arrow")
+        self.configure(text=f"{self.base_title} · {self.zoom:.2f}×")
+
+    def _on_configure(self, _event: tk.Event) -> None:
+        if self._resize_job is not None:
+            self.after_cancel(self._resize_job)
+        self._resize_job = self.after(60, self._render)
+
+    def _on_mousewheel(self, event: tk.Event) -> str:
+        if self.source_image is None:
+            return "break"
+        if getattr(event, "num", None) == 4:
+            direction = 1
+        elif getattr(event, "num", None) == 5:
+            direction = -1
+        else:
+            direction = 1 if int(getattr(event, "delta", 0)) > 0 else -1
+        old_zoom = self.zoom
+        new_zoom = old_zoom * (self.ZOOM_STEP if direction > 0 else 1.0 / self.ZOOM_STEP)
+        new_zoom = max(self.MIN_ZOOM, min(self.MAX_ZOOM, new_zoom))
+        if abs(new_zoom - old_zoom) < 1e-6:
+            return "break"
+
+        image_x = (event.x - self._last_draw_x) / max(self._last_scale, 1e-6)
+        image_y = (event.y - self._last_draw_y) / max(self._last_scale, 1e-6)
+        self.zoom = new_zoom
+        new_scale = self._fit_scale() * new_zoom
+        new_width = self.source_image.width * new_scale
+        new_height = self.source_image.height * new_scale
+        canvas_width = max(1, self.canvas.winfo_width())
+        canvas_height = max(1, self.canvas.winfo_height())
+        self.offset_x = event.x - image_x * new_scale - (canvas_width - new_width) / 2.0
+        self.offset_y = event.y - image_y * new_scale - (canvas_height - new_height) / 2.0
+        self._render()
+        return "break"
+
+    def _on_drag_start(self, event: tk.Event) -> None:
+        self._drag_origin = (event.x, event.y, self.offset_x, self.offset_y)
+
+    def _on_drag_motion(self, event: tk.Event) -> None:
+        if self._drag_origin is None or self.source_image is None:
+            return
+        start_x, start_y, offset_x, offset_y = self._drag_origin
+        self.offset_x = offset_x + event.x - start_x
+        self.offset_y = offset_y + event.y - start_y
+        self._render()
+
+    def _on_drag_end(self, _event: tk.Event) -> None:
+        self._drag_origin = None
+
+
 class VisionToolApp:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
@@ -285,9 +498,15 @@ class VisionToolApp:
         self.source_var = tk.StringVar(value=str(DEFAULT_SOURCE))
         self.frames_var = tk.StringVar(value=str(DEFAULT_FRAMES))
         self.compiler_var = tk.StringVar(value="自动检测")
+        self.always_on_top_var = tk.BooleanVar(value=False)
+        self.pin_button: ttk.Button | None = None
+        self.candidate_always_on_top_var = tk.BooleanVar(value=False)
+        self.candidate_pin_button: ttk.Button | None = None
         self.roll_var = tk.StringVar(value="0")
         self.pitch_var = tk.StringVar(value="0")
         self.yaw_var = tk.StringVar(value="0")
+        self.car_yaw_relative_var = tk.StringVar(value="0")
+        self.car_yaw_prior_enabled_var = tk.BooleanVar(value=False)
         self.height_var = tk.StringVar(value="100")
         self.vehicle_threshold_var = tk.StringVar(value="145")
         self.vehicle_fallback_threshold_var = tk.StringVar(value="50")
@@ -295,6 +514,18 @@ class VisionToolApp:
         self.coarse_threshold_vars = [
             tk.StringVar(value=str(value)) for value in COARSE_THRESHOLDS
         ]
+        self.chevron_tuning_vars = {
+            key: tk.DoubleVar(value=default)
+            for key, _label, _minimum, _maximum, _resolution, default
+            in CHEVRON_TUNING_SPECS
+        }
+        self.chevron_tuning_value_vars = {
+            key: tk.StringVar(value=self.format_tuning_value(default, resolution))
+            for key, _label, _minimum, _maximum, resolution, default
+            in CHEVRON_TUNING_SPECS
+        }
+        self.chevron_weight_sum_var = tk.StringVar(value="基础权重总和: 1.00")
+        self.chevron_tuning_after_id: str | None = None
         self.undistort_var = tk.BooleanVar(value=False)
         self.birdview_var = tk.BooleanVar(value=False)
         self.binary_mode_var = tk.StringVar(value="undistort_binary_ipm")
@@ -305,6 +536,10 @@ class VisionToolApp:
         self.result_text: scrolledtext.ScrolledText | None = None
         self.preview_image: ImageTk.PhotoImage | None = None
         self.binary_image: ImageTk.PhotoImage | None = None
+        self.current_binary_display_image: Image.Image | None = None
+        self.preview_image_frame: ttk.Frame | None = None
+        self._preview_stacked: bool | None = None
+        self._preview_layout_job: str | None = None
         self.current_source_image: Image.Image | None = None
         self.current_undistorted_image: Image.Image | None = None
         self.current_birdview_image: Image.Image | None = None
@@ -339,7 +574,8 @@ class VisionToolApp:
         self.roi_save_button: ttk.Button | None = None
         self.ui_queue: queue.Queue[tuple[str, object]] = queue.Queue()
         self.simulation_queue: queue.Queue[
-            tuple[Path, float, float, float, bool, bool, int, int,
+            tuple[Path, float, float, float, float | None, dict[str, float], bool, bool,
+                  int, int, int,
                   tuple[int, int, int, int, int], str]
         ] = queue.Queue()
         self.capture_stop_event = threading.Event()
@@ -378,6 +614,13 @@ class VisionToolApp:
         ttk.Button(toolbar, text="重新扫描", command=self.refresh_sources).grid(row=0, column=4, padx=(6, 0))
         ttk.Label(toolbar, text="编译器").grid(row=0, column=5, padx=(18, 4))
         ttk.Label(toolbar, textvariable=self.compiler_var).grid(row=0, column=6, sticky="w")
+        self.pin_button = ttk.Button(
+            toolbar,
+            text="📌 置顶",
+            width=9,
+            command=self.toggle_always_on_top,
+        )
+        self.pin_button.grid(row=0, column=7, padx=(12, 0), sticky="e")
 
         main = ttk.PanedWindow(root_frame, orient=tk.HORIZONTAL)
         main.grid(row=1, column=0, sticky="nsew")
@@ -406,6 +649,56 @@ class VisionToolApp:
 
         self.log_text = scrolledtext.ScrolledText(log_frame, height=8, wrap=tk.NONE)
         self.log_text.pack(fill=tk.BOTH, expand=True)
+
+    def apply_always_on_top(self, window: tk.Toplevel | tk.Tk) -> None:
+        try:
+            window.attributes("-topmost", bool(self.always_on_top_var.get()))
+        except tk.TclError:
+            pass
+
+    def toggle_always_on_top(self) -> None:
+        enabled = not bool(self.always_on_top_var.get())
+        self.always_on_top_var.set(enabled)
+        self.apply_always_on_top(self.root)
+        for window in (self.processed_window, self.roi_window):
+            if window is not None and window.winfo_exists():
+                self.apply_always_on_top(window)
+        self.apply_candidate_always_on_top()
+        if self.pin_button is not None:
+            self.pin_button.configure(text="📌 已置顶" if enabled else "📌 置顶")
+        if enabled:
+            self.root.lift()
+        self.status_var.set("窗口已置顶" if enabled else "已取消窗口置顶")
+
+    def apply_candidate_always_on_top(self) -> None:
+        """候选窗口可跟随主窗口置顶，也可单独锁定在桌面最前方。"""
+        local_enabled = bool(self.candidate_always_on_top_var.get())
+        global_enabled = bool(self.always_on_top_var.get())
+        effective_enabled = local_enabled or global_enabled
+        window = self.candidate_window
+        if window is not None and window.winfo_exists():
+            try:
+                window.attributes("-topmost", effective_enabled)
+                if effective_enabled:
+                    window.lift()
+            except tk.TclError:
+                pass
+        if self.candidate_pin_button is not None:
+            if local_enabled:
+                text = "📌 已置顶"
+            elif global_enabled:
+                text = "📌 跟随主窗"
+            else:
+                text = "📌 置顶"
+            self.candidate_pin_button.configure(text=text)
+
+    def toggle_candidate_always_on_top(self) -> None:
+        enabled = not bool(self.candidate_always_on_top_var.get())
+        self.candidate_always_on_top_var.set(enabled)
+        self.apply_candidate_always_on_top()
+        self.status_var.set(
+            "候选区域已独立置顶" if enabled else "候选区域已取消独立置顶"
+        )
 
     def set_initial_pane_positions(self, pane: ttk.PanedWindow) -> None:
         width = pane.winfo_width()
@@ -440,13 +733,50 @@ class VisionToolApp:
         ttk.Label(parent, textvariable=self.frame_telemetry_var).grid(row=1, column=0, sticky="w", pady=(3, 0))
         image_frame = ttk.Frame(parent)
         image_frame.grid(row=2, column=0, sticky="nsew", pady=(6, 0))
+        self.preview_image_frame = image_frame
         image_frame.columnconfigure(0, weight=1)
-        image_frame.columnconfigure(1, weight=1)
         image_frame.rowconfigure(0, weight=1)
-        self.preview_label = ttk.Label(image_frame, text="原图", anchor="center")
-        self.preview_label.grid(row=0, column=0, sticky="nsew", padx=(0, 4))
-        self.binary_label = ttk.Label(image_frame, text="二值图", anchor="center")
-        self.binary_label.grid(row=0, column=1, sticky="nsew", padx=(4, 0))
+        image_frame.rowconfigure(1, weight=1)
+        self.preview_viewer = ZoomImageViewer(image_frame, "原图")
+        self.binary_viewer = ZoomImageViewer(image_frame, "二值图")
+        # 从紧凑的上下布局开始，获得实际宽度后再决定是否左右并排。
+        self.preview_viewer.grid(row=0, column=0, sticky="nsew", pady=(0, 3))
+        self.binary_viewer.grid(row=1, column=0, sticky="nsew", pady=(3, 0))
+        self._preview_stacked = True
+        image_frame.bind("<Configure>", self._schedule_preview_layout)
+
+    def _schedule_preview_layout(self, _event: tk.Event | None = None) -> None:
+        if self._preview_layout_job is not None:
+            self.root.after_cancel(self._preview_layout_job)
+        self._preview_layout_job = self.root.after(60, self._apply_preview_layout)
+
+    def _apply_preview_layout(self) -> None:
+        self._preview_layout_job = None
+        frame = self.preview_image_frame
+        if frame is None:
+            return
+        stacked = frame.winfo_width() < 680
+        if stacked == self._preview_stacked:
+            return
+        self._preview_stacked = stacked
+        self.preview_viewer.grid_forget()
+        self.binary_viewer.grid_forget()
+        if stacked:
+            frame.columnconfigure(0, weight=1)
+            frame.columnconfigure(1, weight=0)
+            frame.rowconfigure(0, weight=1)
+            frame.rowconfigure(1, weight=1)
+            self.preview_viewer.grid(row=0, column=0, sticky="nsew", pady=(0, 3))
+            self.binary_viewer.grid(row=1, column=0, sticky="nsew", pady=(3, 0))
+        else:
+            frame.columnconfigure(0, weight=1)
+            frame.columnconfigure(1, weight=1)
+            frame.rowconfigure(0, weight=1)
+            frame.rowconfigure(1, weight=0)
+            self.preview_viewer.grid(row=0, column=0, sticky="nsew", padx=(0, 3))
+            self.binary_viewer.grid(row=0, column=1, sticky="nsew", padx=(3, 0))
+        self.preview_viewer._render()
+        self.binary_viewer._render()
 
     def build_control_panel(self, parent: ttk.Frame) -> None:
         parent.rowconfigure(0, weight=1)
@@ -455,10 +785,16 @@ class VisionToolApp:
         notebook = ttk.Notebook(parent)
         notebook.grid(row=0, column=0, sticky="nsew")
         capture_tab = ttk.Frame(notebook, padding=6)
-        processing_tab = ttk.Frame(notebook, padding=6)
+        processing_tab = ttk.Frame(notebook)
+        score_tab = ttk.Frame(notebook, padding=4)
         notebook.add(capture_tab, text="抓图与帧")
         notebook.add(processing_tab, text="处理与结果")
+        notebook.add(score_tab, text="车标评分调参")
         notebook.select(processing_tab)
+
+        processing_body, self.processing_scroll_canvas = self.create_scrollable_panel(
+            processing_tab, padding=(6, 6, 4, 6)
+        )
 
         action_bar = ttk.Frame(parent)
         action_bar.grid(row=1, column=0, sticky="ew", pady=(8, 0))
@@ -548,8 +884,8 @@ class VisionToolApp:
             row=1, column=0, columnspan=2, sticky="ew", pady=(4, 0)
         )
 
-        processing_tab.columnconfigure(0, weight=1)
-        params = ttk.LabelFrame(processing_tab, text="仿真参数", padding=6)
+        processing_body.columnconfigure(0, weight=1)
+        params = ttk.LabelFrame(processing_body, text="仿真参数", padding=6)
         params.grid(row=0, column=0, sticky="ew")
         params.columnconfigure(1, weight=1)
         params.columnconfigure(3, weight=1)
@@ -561,8 +897,17 @@ class VisionToolApp:
             ttk.Entry(params, textvariable=left[1], width=10).grid(row=row, column=1, sticky="ew", padx=(5, 10), pady=3)
             ttk.Label(params, text=right[0]).grid(row=row, column=2, sticky="w", pady=3)
             ttk.Entry(params, textvariable=right[1], width=10).grid(row=row, column=3, sticky="ew", padx=(5, 0), pady=3)
+        ttk.Checkbutton(
+            params,
+            text="启用小车相对机体Yaw先验",
+            variable=self.car_yaw_prior_enabled_var,
+        ).grid(row=2, column=0, columnspan=2, sticky="w", pady=3)
+        ttk.Entry(params, textvariable=self.car_yaw_relative_var, width=10).grid(
+            row=2, column=2, sticky="ew", padx=(0, 5), pady=3
+        )
+        ttk.Label(params, text="deg").grid(row=2, column=3, sticky="w", pady=3)
 
-        processing = ttk.LabelFrame(processing_tab, text="图像处理", padding=6)
+        processing = ttk.LabelFrame(processing_body, text="图像处理", padding=6)
         processing.grid(row=1, column=0, sticky="ew", pady=(8, 0))
         processing.columnconfigure(1, weight=1)
         ttk.Checkbutton(
@@ -617,9 +962,187 @@ class VisionToolApp:
             ttk.Entry(processing, textvariable=variable, width=8).grid(
                 row=row, column=1, sticky="ew", padx=(8, 0), pady=(4, 0)
             )
-        ttk.Label(processing_tab, textvariable=self.status_var, foreground="#1b6e3a").grid(
+        ttk.Label(processing_body, textvariable=self.status_var, foreground="#1b6e3a").grid(
             row=2, column=0, sticky="w", pady=(8, 4)
         )
+        self.bind_vertical_mousewheel(self.processing_scroll_canvas, processing_body)
+        self.build_chevron_tuning_panel(score_tab)
+
+    def create_scrollable_panel(
+        self,
+        parent: ttk.Frame,
+        padding: tuple[int, int, int, int] = (0, 0, 0, 0),
+    ) -> tuple[ttk.Frame, tk.Canvas]:
+        """Create a vertically scrollable frame which remains width-responsive."""
+        parent.rowconfigure(0, weight=1)
+        parent.columnconfigure(0, weight=1)
+        background = ttk.Style().lookup("TFrame", "background") or self.root.cget("bg")
+        canvas = tk.Canvas(parent, highlightthickness=0, borderwidth=0, background=background)
+        scrollbar = ttk.Scrollbar(parent, orient=tk.VERTICAL, command=canvas.yview)
+        canvas.grid(row=0, column=0, sticky="nsew")
+        scrollbar.grid(row=0, column=1, sticky="ns")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        body = ttk.Frame(canvas, padding=padding)
+        window_id = canvas.create_window((0, 0), window=body, anchor="nw")
+
+        def update_scroll_region(_event: object = None) -> None:
+            canvas.configure(scrollregion=canvas.bbox("all"))
+
+        def fit_content_width(event: tk.Event) -> None:
+            canvas.itemconfigure(window_id, width=max(1, event.width))
+
+        body.bind("<Configure>", update_scroll_region)
+        canvas.bind("<Configure>", fit_content_width)
+        return body, canvas
+
+    @staticmethod
+    def bind_vertical_mousewheel(canvas: tk.Canvas, body: tk.Widget) -> None:
+        """Let the wheel scroll while the pointer is over any child control."""
+        def on_mousewheel(event: tk.Event) -> str:
+            if getattr(event, "num", None) == 4:
+                steps = -1
+            elif getattr(event, "num", None) == 5:
+                steps = 1
+            else:
+                delta = int(getattr(event, "delta", 0))
+                steps = -1 if delta > 0 else 1
+                if abs(delta) >= 120:
+                    steps = -int(delta / 120)
+            canvas.yview_scroll(steps, "units")
+            return "break"
+
+        pending = [canvas, body]
+        seen: set[str] = set()
+        while pending:
+            widget = pending.pop()
+            widget_name = str(widget)
+            if widget_name in seen:
+                continue
+            seen.add(widget_name)
+            widget.bind("<MouseWheel>", on_mousewheel, add="+")
+            widget.bind("<Button-4>", on_mousewheel, add="+")
+            widget.bind("<Button-5>", on_mousewheel, add="+")
+            pending.extend(widget.winfo_children())
+
+    @staticmethod
+    def format_tuning_value(value: float, resolution: float) -> str:
+        if resolution >= 1.0:
+            return f"{value:.0f}"
+        if resolution >= 0.1:
+            return f"{value:.1f}"
+        return f"{value:.2f}"
+
+    def build_chevron_tuning_panel(self, parent: ttk.Frame) -> None:
+        parent.rowconfigure(1, weight=1)
+        parent.columnconfigure(0, weight=1)
+        toolbar = ttk.Frame(parent)
+        toolbar.grid(row=0, column=0, sticky="ew", pady=(0, 4))
+        toolbar.columnconfigure(0, weight=1)
+        ttk.Label(
+            toolbar,
+            text="拖动后约 220 ms 自动用当前帧重跑；结果区同步显示实际评分与门限",
+        ).grid(row=0, column=0, sticky="w")
+        ttk.Button(toolbar, text="恢复固件默认值", command=self.reset_chevron_tuning).grid(
+            row=0, column=1, padx=(6, 0)
+        )
+
+        canvas = tk.Canvas(parent, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(parent, orient=tk.VERTICAL, command=canvas.yview)
+        canvas.grid(row=1, column=0, sticky="nsew")
+        scrollbar.grid(row=1, column=1, sticky="ns")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        body = ttk.Frame(canvas, padding=(2, 2, 8, 8))
+        body.columnconfigure(1, weight=1)
+        window_id = canvas.create_window((0, 0), window=body, anchor="nw")
+        body.bind("<Configure>", lambda _event: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.bind("<Configure>", lambda event: canvas.itemconfigure(window_id, width=event.width))
+
+        group_starts = {
+            0: "几何硬门限与评分区间",
+            10: "通信 Yaw 方向先验",
+            14: "基础几何分权重（源码约定总和为 1）",
+        }
+        row = 0
+        for index, (key, label, minimum, maximum, resolution, _default) in enumerate(
+            CHEVRON_TUNING_SPECS
+        ):
+            if index in group_starts:
+                ttk.Label(body, text=group_starts[index]).grid(
+                    row=row, column=0, columnspan=3, sticky="w", pady=(8 if row else 0, 2)
+                )
+                row += 1
+            ttk.Label(body, text=label).grid(row=row, column=0, sticky="w", padx=(0, 6))
+            scale = tk.Scale(
+                body, from_=minimum, to=maximum, resolution=resolution,
+                orient=tk.HORIZONTAL, showvalue=False,
+                variable=self.chevron_tuning_vars[key],
+                command=lambda value, tuning_key=key, step=resolution:
+                    self.on_chevron_tuning_changed(tuning_key, float(value), step),
+                highlightthickness=0, borderwidth=0,
+            )
+            scale.grid(row=row, column=1, sticky="ew", padx=(0, 6))
+            ttk.Label(
+                body, textvariable=self.chevron_tuning_value_vars[key], width=7, anchor="e"
+            ).grid(row=row, column=2, sticky="e")
+            row += 1
+        ttk.Label(body, textvariable=self.chevron_weight_sum_var).grid(
+            row=row, column=0, columnspan=3, sticky="w", pady=(6, 0)
+        )
+        self.bind_vertical_mousewheel(canvas, body)
+
+    def current_chevron_tuning(self) -> dict[str, float]:
+        values = {key: float(variable.get()) for key, variable in self.chevron_tuning_vars.items()}
+        if values["mean_arm_max_cm"] <= values["mean_arm_min_cm"]:
+            raise ValueError("平均臂长上限必须大于下限")
+        if values["opening_ratio_max"] <= values["opening_ratio_min"]:
+            raise ValueError("开口比例上限必须大于下限")
+        if not (values["concavity_ratio_low"] < values["concavity_ratio_good"] <=
+                values["concavity_ratio_high"] < values["concavity_ratio_max"]):
+            raise ValueError("凹陷比例必须满足 low < good ≤ high < max")
+        if values["direction_zero_error_deg"] <= values["direction_full_error_deg"]:
+            raise ValueError("方向零分误差必须大于满分误差")
+        if sum(values[key] for key in (
+            "symmetry_weight", "opening_weight", "concavity_weight", "blob_weight"
+        )) <= 0.0:
+            raise ValueError("四项基础权重不能全部为 0")
+        return values
+
+    def update_chevron_weight_sum(self) -> None:
+        total = sum(self.chevron_tuning_vars[key].get() for key in (
+            "symmetry_weight", "opening_weight", "concavity_weight", "blob_weight"
+        ))
+        suffix = "（建议保持 1.00）" if abs(total - 1.0) > 0.005 else ""
+        self.chevron_weight_sum_var.set(f"基础权重总和: {total:.2f}{suffix}")
+
+    def on_chevron_tuning_changed(self, key: str, value: float, resolution: float) -> None:
+        self.chevron_tuning_value_vars[key].set(self.format_tuning_value(value, resolution))
+        self.update_chevron_weight_sum()
+        if self.chevron_tuning_after_id is not None:
+            self.root.after_cancel(self.chevron_tuning_after_id)
+        self.chevron_tuning_after_id = self.root.after(220, self.run_chevron_tuning_preview)
+
+    def run_chevron_tuning_preview(self) -> None:
+        self.chevron_tuning_after_id = None
+        if self.current_frame is None or self.batch_running:
+            return
+        try:
+            self.current_chevron_tuning()
+        except ValueError as exc:
+            self.status_var.set(f"车标调参组合无效：{exc}")
+            return
+        self.status_var.set("车标参数已变化，正在自动重跑当前帧…")
+        self.start_run(show_errors=False)
+
+    def reset_chevron_tuning(self) -> None:
+        for key, _label, _minimum, _maximum, resolution, default in CHEVRON_TUNING_SPECS:
+            self.chevron_tuning_vars[key].set(default)
+            self.chevron_tuning_value_vars[key].set(
+                self.format_tuning_value(default, resolution)
+            )
+        self.update_chevron_weight_sum()
+        if self.chevron_tuning_after_id is not None:
+            self.root.after_cancel(self.chevron_tuning_after_id)
+        self.chevron_tuning_after_id = self.root.after(100, self.run_chevron_tuning_preview)
 
     def set_result_info(self, text: str) -> None:
         self.result_info_var.set(text)
@@ -716,6 +1239,11 @@ class VisionToolApp:
             roll = float(self.roll_var.get())
             pitch = float(self.pitch_var.get())
             height = float(self.height_var.get())
+            car_yaw_relative = (
+                float(self.car_yaw_relative_var.get())
+                if self.car_yaw_prior_enabled_var.get() else None
+            )
+            chevron_tuning = self.current_chevron_tuning()
             thresholds = (
                 int(self.vehicle_threshold_var.get()),
                 int(self.vehicle_fallback_threshold_var.get()),
@@ -735,6 +1263,8 @@ class VisionToolApp:
             roll,
             pitch,
             height,
+            car_yaw_relative,
+            chevron_tuning,
             bool(self.undistort_var.get()),
             bool(self.birdview_var.get()),
             *thresholds,
@@ -744,11 +1274,13 @@ class VisionToolApp:
 
     def simulation_worker(self) -> None:
         while True:
-            (frame_path, roll, pitch, height, undistort, birdview,
+            (frame_path, roll, pitch, height, car_yaw_relative, chevron_tuning,
+             undistort, birdview,
              vehicle_threshold, vehicle_fallback_threshold, beacon_threshold,
              coarse_thresholds, binary_mode) = self.simulation_queue.get()
             try:
-                self.run_worker(frame_path, roll, pitch, height, undistort, birdview,
+                self.run_worker(frame_path, roll, pitch, height, car_yaw_relative,
+                                chevron_tuning, undistort, birdview,
                                 vehicle_threshold, vehicle_fallback_threshold,
                                 beacon_threshold,
                                 coarse_thresholds, binary_mode)
@@ -848,6 +1380,7 @@ class VisionToolApp:
         self.current_birdview_image = None
         self.current_undistorted_mask = None
         self.current_birdview_mask = None
+        self.current_binary_display_image = None
         self.current_candidate_source = image.copy()
         self.current_candidate_binary = None
         self.current_candidate_vehicle_binary = None
@@ -857,16 +1390,14 @@ class VisionToolApp:
         self.apply_frame_metadata(path)
         self.frame_info_var.set(f"{path.name}  {image.width}×{image.height}")
         self.refresh_preview()
+        self.binary_viewer.clear("等待仿真 · 滚轮缩放 · 拖拽平移 · 双击适应")
         self.refresh_processed_preview()
 
     def refresh_preview(self) -> None:
         if self.current_source_image is None:
-            self.preview_label.configure(image="", text="未选择帧")
+            self.preview_viewer.clear("未选择帧")
             return
-        image = self.current_source_image
-        display = self.fit_image(image, self.preview_label.winfo_width() or 560, self.preview_label.winfo_height() or 360)
-        self.preview_image = ImageTk.PhotoImage(display)
-        self.preview_label.configure(image=self.preview_image, text="")
+        self.preview_viewer.set_image(self.current_source_image, reset=True)
 
     def open_roi_window(self) -> None:
         if self.current_frame is None or self.current_source_image is None:
@@ -889,6 +1420,7 @@ class VisionToolApp:
             self.roi_source_image.height * ROI_DISPLAY_SCALE,
         )
         self.roi_window = tk.Toplevel(self.root)
+        self.apply_always_on_top(self.roi_window)
         self.roi_window.title("单张区域提取")
         self.roi_window.resizable(False, False)
         body = ttk.Frame(self.roi_window, padding=8)
@@ -1130,6 +1662,7 @@ class VisionToolApp:
             return
 
         self.processed_window = tk.Toplevel(self.root)
+        self.apply_always_on_top(self.processed_window)
         self.processed_window.title("调整图像")
         self.root.update_idletasks()
         width = 720
@@ -1164,6 +1697,7 @@ class VisionToolApp:
             self.candidate_window.destroy()
         self.candidate_window = None
         self.candidate_notebook = None
+        self.candidate_pin_button = None
         self.candidate_photos = []
 
     def open_current_candidate_window(self) -> None:
@@ -1177,6 +1711,11 @@ class VisionToolApp:
         runtime_candidates = self.current_result.get("coarse_candidates")
         if isinstance(runtime_candidates, list) and runtime_candidates:
             candidates = runtime_candidates
+        if (runtime_candidates and not self.current_candidate_diagnostics and
+                not self.candidate_diagnostic_running):
+            self.status_var.set("正在用当前固件代码逐候选重跑并计算评分")
+            self.start_candidate_diagnostics()
+            return
         self.open_candidate_window(
             self.current_candidate_source,
             self.current_candidate_binary,
@@ -1207,6 +1746,11 @@ class VisionToolApp:
             roll = float(self.roll_var.get())
             pitch = float(self.pitch_var.get())
             height = float(self.height_var.get())
+            car_yaw_relative = (
+                float(self.car_yaw_relative_var.get())
+                if self.car_yaw_prior_enabled_var.get() else None
+            )
+            chevron_tuning = self.current_chevron_tuning()
             if any(
                 value < 1 or value > 255
                 for value in (
@@ -1240,10 +1784,13 @@ class VisionToolApp:
                 roll,
                 pitch,
                 height,
+                car_yaw_relative,
+                chevron_tuning,
                 primary_threshold,
                 fallback_threshold,
                 beacon_threshold,
                 coarse_thresholds,
+                self.binary_mode_var.get(),
             ),
             daemon=True,
         ).start()
@@ -1272,10 +1819,13 @@ class VisionToolApp:
         roll: float,
         pitch: float,
         height: float,
+        car_yaw_relative: float | None,
+        chevron_tuning: dict[str, float],
         primary_threshold: int,
         fallback_threshold: int,
         beacon_threshold: int,
         coarse_thresholds: tuple[int, int, int, int, int],
+        binary_mode: str,
     ) -> None:
         run_dir = RUN_ROOT / datetime.now().strftime("candidate_diag_%Y%m%d_%H%M%S_%f")
         diagnostics: list[dict] = []
@@ -1315,9 +1865,11 @@ class VisionToolApp:
                         fallback_threshold,
                         beacon_threshold,
                         coarse_thresholds[2],
-                        "gray",
+                        binary_mode,
                         coarse_thresholds,
                         disable_vehicle_fallback=disable_fallback,
+                        car_yaw_relative=car_yaw_relative,
+                        chevron_tuning=chevron_tuning,
                     )
                     results[mode_name], binaries[mode_name] = (
                         self.load_vehicle_diagnostic_result(simulation, mode_dir)
@@ -1512,39 +2064,92 @@ class VisionToolApp:
                     f"{name}{value:.2f}{unit}不在{minimum:g}~{maximum:g}{unit}"
                 )
 
-        left_arm = float(physical.get("left_arm_cm", 0.0))
-        right_arm = float(physical.get("right_arm_cm", 0.0))
-        angle = float(physical.get("arm_angle_deg", 0.0))
-        base = float(physical.get("base_cm", 0.0))
-        triangle_height = float(physical.get("triangle_height_cm", 0.0))
-        outside("左臂", left_arm, 10.5, 42.0, "cm")
-        outside("右臂", right_arm, 10.5, 42.0, "cm")
-        if right_arm > 0.0:
-            arm_ratio = left_arm / right_arm
-            outside("臂长比", arm_ratio, 0.55, 2.90)
-        outside("夹角", angle, 30.0, 90.0, "°")
-        outside("底边", base, 15.0, 46.0, "cm")
-        outside("三角高", triangle_height, 8.0, 24.0, "cm")
+        mean_arm = float(physical.get("mean_arm_cm", 0.0))
+        symmetry = float(physical.get("arm_symmetry", 0.0))
+        opening_ratio = float(physical.get("opening_ratio", 0.0))
+        concavity_ratio = float(physical.get("concavity_ratio", 0.0))
+        outside("平均臂长", mean_arm, 4.0, 55.0, "cm")
+        if symmetry < 0.40:
+            failures.append(f"臂对称性{symmetry:.2f}<0.40")
+        outside("开口比例", opening_ratio, 0.20, 0.70)
+        outside("凹陷比例", concavity_ratio, 0.08, 0.55)
         return failures
+
+    @staticmethod
+    def format_chevron_score_details(result: dict) -> str:
+        chevron = result.get("chevron", {}) if isinstance(result, dict) else {}
+        physical = chevron.get("physical", {}) if isinstance(chevron, dict) else {}
+        scores = chevron.get("scores", {}) if isinstance(chevron, dict) else {}
+        weighted = scores.get("weighted", {}) if isinstance(scores, dict) else {}
+        hard_gates = chevron.get("hard_gates", {}) if isinstance(chevron, dict) else {}
+        config = result.get("chevron_score_config", {}) if isinstance(result, dict) else {}
+        weights = config.get("weights", {}) if isinstance(config, dict) else {}
+        behavior = config.get("behavior", {}) if isinstance(config, dict) else {}
+        direction = chevron.get("direction_prior", {}) if isinstance(chevron, dict) else {}
+        blob_gate = chevron.get("blob_gate", {}) if isinstance(chevron, dict) else {}
+        threshold = float(config.get("geometry_score_min", 0.0))
+        return (
+            f"综合={float(scores.get('geometry', 0.0)):.3f}/门槛{threshold:.3f} "
+            f"(无方向基分{float(scores.get('base_geometry', 0.0)):.3f})\n"
+            f"对称 {float(physical.get('arm_symmetry', 0.0)):.3f} → "
+            f"子分{float(scores.get('arm_symmetry', 0.0)):.3f} × "
+            f"{float(weights.get('symmetry', 0.0)):.2f} = "
+            f"{float(weighted.get('symmetry', 0.0)):.3f}；"
+            f"开口比 {float(physical.get('opening_ratio', 0.0)):.3f} → "
+            f"{float(scores.get('opening_ratio', 0.0)):.3f} × "
+            f"{float(weights.get('opening', 0.0)):.2f} = "
+            f"{float(weighted.get('opening', 0.0)):.3f}\n"
+            f"凹陷比 {float(physical.get('concavity_ratio', 0.0)):.3f} → "
+            f"{float(scores.get('concavity', 0.0)):.3f} × "
+            f"{float(weights.get('concavity', 0.0)):.2f} = "
+            f"{float(weighted.get('concavity', 0.0)):.3f}；"
+            f"Blob {float(scores.get('basic_blob', 0.0)):.3f} × "
+            f"{float(weights.get('blob', 0.0)):.2f} = "
+            f"{float(weighted.get('blob', 0.0)):.3f}\n"
+            f"Blob门控: 面积{float(blob_gate.get('area', 0.0)):.2f}/"
+            f"{float(blob_gate.get('min_area', 0.0)):.2f}~"
+            f"{float(blob_gate.get('max_area', 0.0)):.2f}，"
+            f"占空比{float(blob_gate.get('occupancy', 0.0)):.3f}/"
+            f"{float(blob_gate.get('min_occupancy', 0.0)):.3f}~"
+            f"{float(blob_gate.get('max_occupancy', 0.0)):.3f}，"
+            f"圆度{float(blob_gate.get('circularity', 0.0)):.3f}≤"
+            f"{float(blob_gate.get('max_circularity', 0.0)):.3f}，"
+            f"候选误差分{float(blob_gate.get('candidate_error_score', 0.0)):.3f}\n"
+            f"方向先验: {'启用' if direction.get('valid', 0) else '关闭'}，"
+            f"误差{float(direction.get('error_deg', 0.0)):.1f}°，"
+            f"方向分{float(direction.get('score', 0.0)):.3f}，"
+            f"权重{float(weights.get('direction', 0.0)):.2f}；最终贡献=基分"
+            f"{float(weighted.get('base_after_direction_mix', 0.0)):.3f}+方向"
+            f"{float(weighted.get('direction', 0.0)):.3f}\n"
+            f"硬门槛: 平均臂长{'通过' if hard_gates.get('mean_arm', 0) else '失败'}，"
+            f"对称性{'通过' if hard_gates.get('arm_symmetry', 0) else '失败'}，"
+            f"开口比例{'通过' if hard_gates.get('opening_ratio', 0) else '失败'}，"
+            f"凹陷比例{'通过' if hard_gates.get('concavity_ratio', 0) else '失败'}，"
+            f"综合分{'通过' if hard_gates.get('geometry_score', 0) else '失败'}\n"
+            f"规则说明: 开口比例在有效区间内"
+            f"{'直接满分' if behavior.get('opening_score_is_binary', 0) else '连续计分'}；"
+            f"Open-V{'参与' if behavior.get('open_v_in_final_score', 0) else '不参与'}最终综合分；"
+            f"候选误差分{'越低越优先' if behavior.get('candidate_prefilter_lower_is_better', 0) else '越高越优先'}"
+        )
 
     @classmethod
     def format_threshold_diagnostic(cls, label: str, result: dict) -> str:
         chevron = result.get("chevron", {}) if isinstance(result, dict) else {}
         physical = chevron.get("physical", {}) if isinstance(chevron, dict) else {}
-        open_v = chevron.get("open_v", {}) if isinstance(chevron, dict) else {}
+        scores = chevron.get("scores", {}) if isinstance(chevron, dict) else {}
+        direction = chevron.get("direction_prior", {}) if isinstance(chevron, dict) else {}
         valid = bool(result.get("vehicle", {}).get("valid")) if isinstance(result, dict) else False
         reason = int(chevron.get("reject_reason", 0)) if isinstance(chevron, dict) else 0
         status = "通过" if valid else cls.chevron_reject_text(reason)
         details = cls.chevron_physical_failures(physical) if reason == 4 else []
         detail_text = f"[{'；'.join(details)}]" if details else ""
         return (
-            f"{label}: {status}{detail_text}，open-V={float(open_v.get('score', 0.0)):.3f}，"
-            f"空隙={float(open_v.get('center_gap', 0.0)):.3f}，"
-            f"夹角={float(physical.get('arm_angle_deg', 0.0)):.1f}°，"
-            f"臂={float(physical.get('left_arm_cm', 0.0)):.1f}/"
-            f"{float(physical.get('right_arm_cm', 0.0)):.1f}cm，"
-            f"底/高={float(physical.get('base_cm', 0.0)):.1f}/"
-            f"{float(physical.get('triangle_height_cm', 0.0)):.1f}cm"
+            f"{label}: {status}{detail_text}，综合分={float(scores.get('geometry', 0.0)):.3f}，"
+            f"对称={float(physical.get('arm_symmetry', 0.0)):.3f}，"
+            f"开口比={float(physical.get('opening_ratio', 0.0)):.3f}，"
+            f"凹陷比={float(physical.get('concavity_ratio', 0.0)):.3f}，"
+            f"方向={'启用' if direction.get('valid', 0) else '关闭'}"
+            f"\n{cls.format_chevron_score_details(result)}"
         )
 
     @classmethod
@@ -1603,16 +2208,44 @@ class VisionToolApp:
         window.title("候选区域")
         window.geometry("980x680")
         window.minsize(640, 420)
-        notebook = ttk.Notebook(window)
+        # 非模态从属关系保证调节主界面参数时，候选窗口不会沉到主界面后方。
+        # 独立 topmost 开关则用于把它锁定在其他应用窗口之上。
+        try:
+            window.transient(self.root)
+        except tk.TclError:
+            pass
+
+        candidate_root = ttk.Frame(window, padding=(8, 6, 8, 8))
+        candidate_root.pack(fill=tk.BOTH, expand=True)
+        candidate_toolbar = ttk.Frame(candidate_root)
+        candidate_toolbar.pack(fill=tk.X, pady=(0, 6))
+        ttk.Label(
+            candidate_toolbar,
+            text="候选区域（可返回主界面实时调参）",
+        ).pack(side=tk.LEFT)
+        self.candidate_pin_button = ttk.Button(
+            candidate_toolbar,
+            text="📌 置顶",
+            width=11,
+            command=self.toggle_candidate_always_on_top,
+        )
+        self.candidate_pin_button.pack(side=tk.RIGHT)
+        self.apply_candidate_always_on_top()
+
+        notebook = ttk.Notebook(candidate_root)
         self.candidate_notebook = notebook
-        notebook.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
+        notebook.pack(fill=tk.BOTH, expand=True)
         if candidates is None:
             candidates = [
                 item for item in result.get("beacons", [])
                 if item.get("valid") and item.get("max_col", -1) >= item.get("min_col", 0)
             ]
         if not candidates:
-            ttk.Label(window, text="当前帧没有有效候选区域").pack(pady=8)
+            notebook.destroy()
+            self.candidate_notebook = None
+            ttk.Label(candidate_root, text="当前帧没有有效候选区域").pack(
+                fill=tk.BOTH, expand=True, pady=8
+            )
             window.protocol("WM_DELETE_WINDOW", self.close_candidate_window)
             return
 
@@ -1873,14 +2506,20 @@ class VisionToolApp:
         ok, log = Simulator(source, threshold).build()
         self.ui_queue.put(("build", (ok, log)))
 
-    def start_run(self) -> None:
+    def start_run(self, show_errors: bool = True) -> None:
         if self.current_frame is None:
-            messagebox.showerror("无法运行", "请先选择一帧图像。")
+            if show_errors:
+                messagebox.showerror("无法运行", "请先选择一帧图像。")
             return
         try:
             roll = float(self.roll_var.get())
             pitch = float(self.pitch_var.get())
             height = float(self.height_var.get())
+            car_yaw_relative = (
+                float(self.car_yaw_relative_var.get())
+                if self.car_yaw_prior_enabled_var.get() else None
+            )
+            chevron_tuning = self.current_chevron_tuning()
             thresholds = (
                 int(self.vehicle_threshold_var.get()),
                 int(self.vehicle_fallback_threshold_var.get()),
@@ -1892,10 +2531,13 @@ class VisionToolApp:
             if thresholds[1] >= thresholds[0]:
                 raise ValueError("箭头回退阈值必须低于箭头精筛阈值")
         except ValueError as exc:
-            messagebox.showerror(
-                "参数错误",
-                str(exc) or "Roll、Pitch、高度必须是数字，阈值必须为 1 到 255。",
-            )
+            if show_errors:
+                messagebox.showerror(
+                    "参数错误",
+                    str(exc) or "Roll、Pitch、高度必须是数字，阈值必须为 1 到 255。",
+                )
+            else:
+                self.status_var.set(f"车标调参组合无效：{exc}")
             return
         self.status_var.set("运行中")
         undistort = bool(self.undistort_var.get())
@@ -1903,7 +2545,8 @@ class VisionToolApp:
         binary_mode = self.binary_mode_var.get()
         threading.Thread(
             target=self.run_worker,
-            args=(self.current_frame, roll, pitch, height, undistort, birdview,
+            args=(self.current_frame, roll, pitch, height, car_yaw_relative,
+                  chevron_tuning, undistort, birdview,
                   *thresholds, coarse_thresholds, binary_mode),
             daemon=True,
         ).start()
@@ -1949,6 +2592,11 @@ class VisionToolApp:
                 float(self.pitch_var.get()),
                 float(self.height_var.get()),
             )
+            car_yaw_relative = (
+                float(self.car_yaw_relative_var.get())
+                if self.car_yaw_prior_enabled_var.get() else None
+            )
+            chevron_tuning = self.current_chevron_tuning()
             recognition_thresholds = (
                 int(self.vehicle_threshold_var.get()),
                 int(self.vehicle_fallback_threshold_var.get()),
@@ -1974,6 +2622,7 @@ class VisionToolApp:
         threading.Thread(
             target=self.classified_batch_worker,
             args=(Path(self.source_var.get()), root, raw_files, fallback_pose,
+                  car_yaw_relative, chevron_tuning,
                   recognition_thresholds, coarse_thresholds,
                   self.binary_mode_var.get()),
             daemon=True,
@@ -1985,6 +2634,8 @@ class VisionToolApp:
         root: Path,
         raw_files: list[Path],
         fallback_pose: tuple[float, float, float],
+        car_yaw_relative: float | None,
+        chevron_tuning: dict[str, float],
         recognition_thresholds: tuple[int, int, int],
         coarse_thresholds: tuple[int, int, int, int, int],
         binary_mode: str,
@@ -2018,6 +2669,8 @@ class VisionToolApp:
                     coarse_thresholds[2],
                     binary_mode,
                     coarse_thresholds,
+                    car_yaw_relative=car_yaw_relative,
+                    chevron_tuning=chevron_tuning,
                 )
                 ok, log, result_path = result[0], result[1], result[2]
                 if not ok or result_path is None:
@@ -2065,6 +2718,11 @@ class VisionToolApp:
                     "open_v_gate_score": float(
                         open_v.get("gate_score", open_v.get("score", 0.0))
                     ),
+                    "chevron_scores": chevron.get("scores", {}),
+                    "chevron_physical": chevron.get("physical", {}),
+                    "chevron_blob_gate": chevron.get("blob_gate", {}),
+                    "chevron_direction_prior": chevron.get("direction_prior", {}),
+                    "chevron_score_config": payload.get("chevron_score_config", {}),
                     "pose_warning": self.pose_warning_text(roll, pitch),
                     "actual_thresholds": payload.get("recognition_thresholds", {}),
                     "beacon_count": beacon_count,
@@ -2180,6 +2838,11 @@ class VisionToolApp:
                 float(self.pitch_var.get()),
                 float(self.height_var.get()),
             )
+            car_yaw_relative = (
+                float(self.car_yaw_relative_var.get())
+                if self.car_yaw_prior_enabled_var.get() else None
+            )
+            chevron_tuning = self.current_chevron_tuning()
             recognition_thresholds = (
                 int(self.vehicle_threshold_var.get()),
                 int(self.vehicle_fallback_threshold_var.get()),
@@ -2211,6 +2874,8 @@ class VisionToolApp:
                 root,
                 image_files,
                 fallback_pose,
+                car_yaw_relative,
+                chevron_tuning,
                 recognition_thresholds,
                 coarse_thresholds,
                 self.binary_mode_var.get(),
@@ -2245,6 +2910,8 @@ class VisionToolApp:
         root: Path,
         image_files: list[Path],
         fallback_pose: tuple[float, float, float],
+        car_yaw_relative: float | None,
+        chevron_tuning: dict[str, float],
         recognition_thresholds: tuple[int, int, int],
         coarse_thresholds: tuple[int, int, int, int, int],
         binary_mode: str,
@@ -2287,6 +2954,8 @@ class VisionToolApp:
                         coarse_thresholds[2],
                         binary_mode,
                         coarse_thresholds,
+                        car_yaw_relative=car_yaw_relative,
+                        chevron_tuning=chevron_tuning,
                     )
                     ok, log, result_path = result[0], result[1], result[2]
                     if not ok or result_path is None:
@@ -2310,6 +2979,12 @@ class VisionToolApp:
                         "arrow_reject_text": self.chevron_reject_text(
                             int(chevron.get("reject_reason", 0))
                         ),
+                        "chevron_scores": chevron.get("scores", {}),
+                        "chevron_physical": chevron.get("physical", {}),
+                        "chevron_blob_gate": chevron.get("blob_gate", {}),
+                        "chevron_open_v": chevron.get("open_v", {}),
+                        "chevron_direction_prior": chevron.get("direction_prior", {}),
+                        "chevron_score_config": payload.get("chevron_score_config", {}),
                         "beacon_count": len(valid_beacons),
                         "beacons": [
                             {
@@ -2430,6 +3105,8 @@ class VisionToolApp:
         roll: float,
         pitch: float,
         height: float,
+        car_yaw_relative: float | None,
+        chevron_tuning: dict[str, float],
         undistort: bool,
         birdview: bool,
         vehicle_threshold: int,
@@ -2439,7 +3116,7 @@ class VisionToolApp:
         binary_mode: str,
     ) -> None:
         source = Path(self.source_var.get())
-        run_dir = RUN_ROOT / time.strftime("run_%Y%m%d_%H%M%S")
+        run_dir = RUN_ROOT / datetime.now().strftime("run_%Y%m%d_%H%M%S_%f")
         run_dir.mkdir(parents=True, exist_ok=True)
         try:
             image = self.load_image(frame_path)
@@ -2449,7 +3126,9 @@ class VisionToolApp:
             ok, log, result_path, undistorted_path, birdview_path, undistorted_mask_path, birdview_mask_path, undistorted_binary_path, birdview_binary_path = simulator.run(
                 raw_path, run_dir, roll, pitch, height, undistort, birdview,
                 vehicle_threshold, vehicle_fallback_threshold, beacon_threshold,
-                coarse_thresholds[2], binary_mode, coarse_thresholds
+                coarse_thresholds[2], binary_mode, coarse_thresholds,
+                car_yaw_relative=car_yaw_relative,
+                chevron_tuning=chevron_tuning,
             )
             payload = json.loads(result_path.read_text(encoding="utf-8")) if result_path else None
             binary_enabled = binary_mode != "gray"
@@ -2673,12 +3352,12 @@ class VisionToolApp:
             self.result_coarse_thresholds(result),
         )
         self.current_candidate_diagnostics = []
+        self.current_binary_display_image = binary.copy()
         self.current_undistorted_image = undistorted_image.convert("RGB") if undistorted_image is not None else None
         self.current_birdview_image = birdview_image.convert("RGB") if birdview_image is not None else None
         self.current_undistorted_mask = undistorted_mask.convert("L") if undistorted_mask is not None else None
         self.current_birdview_mask = birdview_mask.convert("L") if birdview_mask is not None else None
-        self.binary_image = ImageTk.PhotoImage(self.fit_image(binary, self.binary_label.winfo_width() or 560, self.binary_label.winfo_height() or 360))
-        self.binary_label.configure(image=self.binary_image, text="")
+        self.binary_viewer.set_image(binary, reset=True)
         self.refresh_preview()
         self.refresh_processed_preview()
         undistorted_meta = result.get("undistorted")
@@ -2711,6 +3390,8 @@ class VisionToolApp:
         chevron = result.get("chevron", {})
         physical = chevron.get("physical", {}) if isinstance(chevron, dict) else {}
         open_v = chevron.get("open_v", {}) if isinstance(chevron, dict) else {}
+        scores = chevron.get("scores", {}) if isinstance(chevron, dict) else {}
+        direction = chevron.get("direction_prior", {}) if isinstance(chevron, dict) else {}
         reject_reason = int(chevron.get("reject_reason", 0)) if isinstance(chevron, dict) else 0
         reject_text = self.chevron_reject_text(reject_reason)
         physical_failures = (
@@ -2724,6 +3405,13 @@ class VisionToolApp:
             f"{reject_text}{physical_failure_text}"
             f"\n物理面积: {physical.get('area_cm2', 0):.2f} cm²，圆度: {physical.get('circularity', 0):.3f}"
             f"\n两臂: {physical.get('left_arm_cm', 0):.2f}/{physical.get('right_arm_cm', 0):.2f} cm"
+            f"，对称性: {physical.get('arm_symmetry', 0):.3f}"
+            f"\n开口比例: {physical.get('opening_ratio', 0):.3f}，"
+            f"凹陷比例: {physical.get('concavity_ratio', 0):.3f}，"
+            f"综合分: {scores.get('geometry', 0):.3f}"
+            f"\n方向先验: {'启用' if direction.get('valid', 0) else '关闭'}，"
+            f"期望/误差/评分: {direction.get('expected_deg', 0):.1f}°/"
+            f"{direction.get('error_deg', 0):.1f}°/{direction.get('score', 0):.3f}"
             f"\nV形拟合: {open_v.get('score', 0):.3f}，顶点假设: {open_v.get('hypothesis_score', 0):.3f}/"
             f"{open_v.get('hypothesis_second_score', 0):.3f}，差值: {open_v.get('hypothesis_margin', 0):.3f}"
             f"，臂连续度: {open_v.get('arm_continuity', 0):.3f}"
@@ -2732,6 +3420,7 @@ class VisionToolApp:
             f"（{'首轮/当前取较大' if open_v.get('gate_from_primary', 0) else '当前位图'}）"
             f"，夹角: {physical.get('arm_angle_deg', 0):.2f}°"
             f"\n底边/高: {physical.get('base_cm', 0):.2f}/{physical.get('triangle_height_cm', 0):.2f} cm"
+            f"\n评分明细:\n{self.format_chevron_score_details(result)}"
         )
         beacon_lines = []
         for beacon_index, beacon in enumerate(result.get("beacons", []), start=1):
@@ -2924,15 +3613,11 @@ def self_test() -> int:
         "confidence_box_size": 0.2,
         "confidence_box_size_min": 0.3,
     })
-    assert "左臂9.00cm" in "；".join(VisionToolApp.chevron_physical_failures({
-        "area_cm2": 500.0,
-        "occupancy": 0.5,
-        "circularity": 0.3,
-        "left_arm_cm": 9.0,
-        "right_arm_cm": 18.0,
-        "arm_angle_deg": 70.0,
-        "base_cm": 28.0,
-        "triangle_height_cm": 14.0,
+    assert "平均臂长3.00cm" in "；".join(VisionToolApp.chevron_physical_failures({
+        "mean_arm_cm": 3.0,
+        "arm_symmetry": 0.8,
+        "opening_ratio": 0.4,
+        "concavity_ratio": 0.2,
     }))
     assert VisionToolApp.pose_warning_text(6.0, -7.0) == ""
     assert "姿态警告" in VisionToolApp.pose_warning_text(8.0, 0.0)

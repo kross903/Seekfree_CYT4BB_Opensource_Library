@@ -1,0 +1,207 @@
+% $ biblatex auxiliary file $
+% $ biblatex bbl format version 3.3 $
+% Do not modify the above lines!
+%
+% This is an auxiliary file used by the 'biblatex' package.
+% This file may safely be deleted. It will be recreated by
+% biber as required.
+%
+\begingroup
+\makeatletter
+\@ifundefined{ver@biblatex.sty}
+  {\@latex@error
+     {Missing 'biblatex' package}
+     {The bibliography requires the 'biblatex' package.}
+      \aftergroup\endinput}
+  {}
+\endgroup
+
+
+\refsection{0}
+  \datalist[entry]{none/global//global/global/global}
+    \entry{kalman1960}{article}{}{}
+      \name{author}{1}{}{%
+        {{hash=905a0fe021951b4ebc06e4e1bb70bd26}{%
+           family={Kalman},
+           familyi={K\bibinitperiod},
+           given={Rudolf\bibnamedelima E.},
+           giveni={R\bibinitperiod\bibinitdelim E\bibinitperiod}}}%
+      }
+      \name{namea}{1}{}{%
+        {{hash=905a0fe021951b4ebc06e4e1bb70bd26}{%
+           family={Kalman},
+           familyi={K\bibinitperiod},
+           given={Rudolf\bibnamedelima E.},
+           giveni={R\bibinitperiod\bibinitdelim E\bibinitperiod}}}%
+      }
+      \list{language}{1}{%
+        {english}%
+      }
+      \strng{namehash}{905a0fe021951b4ebc06e4e1bb70bd26}
+      \strng{fullhash}{905a0fe021951b4ebc06e4e1bb70bd26}
+      \strng{fullhashraw}{905a0fe021951b4ebc06e4e1bb70bd26}
+      \strng{bibnamehash}{905a0fe021951b4ebc06e4e1bb70bd26}
+      \strng{authorbibnamehash}{905a0fe021951b4ebc06e4e1bb70bd26}
+      \strng{authornamehash}{905a0fe021951b4ebc06e4e1bb70bd26}
+      \strng{authorfullhash}{905a0fe021951b4ebc06e4e1bb70bd26}
+      \strng{authorfullhashraw}{905a0fe021951b4ebc06e4e1bb70bd26}
+      \strng{nameabibnamehash}{905a0fe021951b4ebc06e4e1bb70bd26}
+      \strng{nameanamehash}{905a0fe021951b4ebc06e4e1bb70bd26}
+      \strng{nameafullhash}{905a0fe021951b4ebc06e4e1bb70bd26}
+      \strng{nameafullhashraw}{905a0fe021951b4ebc06e4e1bb70bd26}
+      \field{sortinit}{2}
+      \field{sortinithash}{8b555b3791beccb63322c22f3320aa9a}
+      \field{labelnamesource}{author}
+      \field{labeltitlesource}{title}
+      \field{journaltitle}{Journal of Basic Engineering}
+      \field{langid}{english}
+      \field{languageid}{english}
+      \field{lansortorder}{4}
+      \field{number}{1}
+      \field{title}{A New Approach to Linear Filtering and Prediction Problems}
+      \field{usera}{J}
+      \field{userd}{english}
+      \field{userf}{english}
+      \field{volume}{82}
+      \field{year}{1960}
+      \field{dateera}{ce}
+      \true{nocite}
+      \field{pages}{35\bibrangedash 45}
+      \range{pages}{11}
+      \verb{doi}
+      \verb 10.1115/1.3662552
+      \endverb
+      \keyw{kalman1960}
+    \endentry
+    \entry{mahony2008}{article}{}{}
+      \name{author}{3}{}{%
+        {{hash=523f1624940e07366b63a96872ddb4be}{%
+           family={Mahony},
+           familyi={M\bibinitperiod},
+           given={Robert},
+           giveni={R\bibinitperiod}}}%
+        {{hash=085f156bf924126cbb997134fb0c7f54}{%
+           family={Hamel},
+           familyi={H\bibinitperiod},
+           given={Tarek},
+           giveni={T\bibinitperiod}}}%
+        {{hash=6e7cd449cce530c9a0400d81aefd4fec}{%
+           family={Pflimlin},
+           familyi={P\bibinitperiod},
+           given={Jean-Michel},
+           giveni={J\bibinithyphendelim M\bibinitperiod}}}%
+      }
+      \name{namea}{3}{}{%
+        {{hash=523f1624940e07366b63a96872ddb4be}{%
+           family={Mahony},
+           familyi={M\bibinitperiod},
+           given={Robert},
+           giveni={R\bibinitperiod}}}%
+        {{hash=085f156bf924126cbb997134fb0c7f54}{%
+           family={Hamel},
+           familyi={H\bibinitperiod},
+           given={Tarek},
+           giveni={T\bibinitperiod}}}%
+        {{hash=6e7cd449cce530c9a0400d81aefd4fec}{%
+           family={Pflimlin},
+           familyi={P\bibinitperiod},
+           given={Jean-Michel},
+           giveni={J\bibinithyphendelim M\bibinitperiod}}}%
+      }
+      \list{language}{1}{%
+        {english}%
+      }
+      \strng{namehash}{5fc15c0964834184114b646ecf061c77}
+      \strng{fullhash}{023958d7a1f3d0f61634fe74b9b78c2a}
+      \strng{fullhashraw}{023958d7a1f3d0f61634fe74b9b78c2a}
+      \strng{bibnamehash}{023958d7a1f3d0f61634fe74b9b78c2a}
+      \strng{authorbibnamehash}{023958d7a1f3d0f61634fe74b9b78c2a}
+      \strng{authornamehash}{5fc15c0964834184114b646ecf061c77}
+      \strng{authorfullhash}{023958d7a1f3d0f61634fe74b9b78c2a}
+      \strng{authorfullhashraw}{023958d7a1f3d0f61634fe74b9b78c2a}
+      \strng{nameabibnamehash}{023958d7a1f3d0f61634fe74b9b78c2a}
+      \strng{nameanamehash}{5fc15c0964834184114b646ecf061c77}
+      \strng{nameafullhash}{023958d7a1f3d0f61634fe74b9b78c2a}
+      \strng{nameafullhashraw}{023958d7a1f3d0f61634fe74b9b78c2a}
+      \field{sortinit}{3}
+      \field{sortinithash}{ad6fe7482ffbd7b9f99c9e8b5dccd3d7}
+      \field{labelnamesource}{author}
+      \field{labeltitlesource}{title}
+      \field{journaltitle}{IEEE Transactions on Automatic Control}
+      \field{langid}{english}
+      \field{languageid}{english}
+      \field{lansortorder}{4}
+      \field{number}{5}
+      \field{title}{Nonlinear Complementary Filters on the Special Orthogonal Group}
+      \field{usera}{J}
+      \field{userd}{english}
+      \field{userf}{english}
+      \field{volume}{53}
+      \field{year}{2008}
+      \field{dateera}{ce}
+      \true{nocite}
+      \field{pages}{1203\bibrangedash 1218}
+      \range{pages}{16}
+      \verb{doi}
+      \verb 10.1109/TAC.2008.923738
+      \endverb
+      \keyw{mahony2008}
+    \endentry
+    \entry{zhang2000}{article}{}{}
+      \name{author}{1}{}{%
+        {{hash=bdc0f902bd5651d491e1d2e1f9b442fc}{%
+           family={Zhang},
+           familyi={Z\bibinitperiod},
+           given={Zhengyou},
+           giveni={Z\bibinitperiod}}}%
+      }
+      \name{namea}{1}{}{%
+        {{hash=bdc0f902bd5651d491e1d2e1f9b442fc}{%
+           family={Zhang},
+           familyi={Z\bibinitperiod},
+           given={Zhengyou},
+           giveni={Z\bibinitperiod}}}%
+      }
+      \list{language}{1}{%
+        {english}%
+      }
+      \strng{namehash}{bdc0f902bd5651d491e1d2e1f9b442fc}
+      \strng{fullhash}{bdc0f902bd5651d491e1d2e1f9b442fc}
+      \strng{fullhashraw}{bdc0f902bd5651d491e1d2e1f9b442fc}
+      \strng{bibnamehash}{bdc0f902bd5651d491e1d2e1f9b442fc}
+      \strng{authorbibnamehash}{bdc0f902bd5651d491e1d2e1f9b442fc}
+      \strng{authornamehash}{bdc0f902bd5651d491e1d2e1f9b442fc}
+      \strng{authorfullhash}{bdc0f902bd5651d491e1d2e1f9b442fc}
+      \strng{authorfullhashraw}{bdc0f902bd5651d491e1d2e1f9b442fc}
+      \strng{nameabibnamehash}{bdc0f902bd5651d491e1d2e1f9b442fc}
+      \strng{nameanamehash}{bdc0f902bd5651d491e1d2e1f9b442fc}
+      \strng{nameafullhash}{bdc0f902bd5651d491e1d2e1f9b442fc}
+      \strng{nameafullhashraw}{bdc0f902bd5651d491e1d2e1f9b442fc}
+      \field{sortinit}{4}
+      \field{sortinithash}{9381316451d1b9788675a07e972a12a7}
+      \field{labelnamesource}{author}
+      \field{labeltitlesource}{title}
+      \field{journaltitle}{IEEE Transactions on Pattern Analysis and Machine Intelligence}
+      \field{langid}{english}
+      \field{languageid}{english}
+      \field{lansortorder}{4}
+      \field{number}{11}
+      \field{title}{A Flexible New Technique for Camera Calibration}
+      \field{usera}{J}
+      \field{userd}{english}
+      \field{userf}{english}
+      \field{volume}{22}
+      \field{year}{2000}
+      \field{dateera}{ce}
+      \true{nocite}
+      \field{pages}{1330\bibrangedash 1334}
+      \range{pages}{5}
+      \verb{doi}
+      \verb 10.1109/34.888718
+      \endverb
+      \keyw{zhang2000}
+    \endentry
+  \enddatalist
+\endrefsection
+\endinput
+

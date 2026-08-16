@@ -1,0 +1,27 @@
+\chapter*{主要符号表}
+\addcontentsline{toc}{chapter}{主要符号表}
+
+\begin{longtable}{>{\centering\arraybackslash}p{2.6cm}p{5.0cm}p{5.1cm}}
+\toprule
+符号/缩写 & 含义 & 本报告中的约定 \\
+\midrule
+\endfirsthead
+\toprule
+符号/缩写 & 含义 & 本报告中的约定 \\
+\midrule
+\endhead
+CM7\_0 & CYT4BB7 控制核 & 飞控、估计、任务与安全逻辑 \\
+CM7\_1 & CYT4BB7 相机核 & 摄像头采集与跨核视觉任务 \\
+IMU & 惯性测量单元 & 当前工程采用 ICM42688 \\
+ToF & 飞行时间测距 & 高度观测与有效性管理 \\
+PID & 比例—积分—微分控制器 & 姿态、角速度、速度和高度闭环 \\
+IPM & 逆透视映射 & 图像坐标到地面/世界坐标转换 \\
+VOFA & 在线波形与调参工具 & JustFloat 协议，UART1，115200 bit/s \\
+$\bm{p}$ & 位置向量 & 统一注明采用世界系、机体系或小车系 \\
+$\bm{v}$ & 速度向量 & 正 X 向前、正 Y 向左时需在正文再次声明 \\
+$\phi,\theta,\psi$ & 横滚、俯仰、偏航角 & 角度制或弧度制不得混用 \\
+$T_s$ & 控制/采样周期 & 各闭环分别给出 \\
+\bottomrule
+\end{longtable}
+
+\todoitem{随公式完善符号表，确保每个自定义符号、缩写和坐标系首次出现时也在正文解释。}

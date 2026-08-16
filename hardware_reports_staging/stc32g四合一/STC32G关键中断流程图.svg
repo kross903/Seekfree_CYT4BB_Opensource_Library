@@ -1,0 +1,76 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="640" viewBox="0 0 1440 640">
+  <defs>
+    <style>
+      .text{font-family:"Microsoft YaHei","Noto Sans CJK SC",sans-serif;fill:#17324d}
+      .title{font-size:30px;font-weight:700}
+      .lane-title{font-size:19px;font-weight:700}
+      .label{font-size:17px}
+      .lane{fill:#f7fbff;stroke:#8fb6d1;stroke-width:2}
+      .node{fill:#ffffff;stroke:#2f6f9f;stroke-width:2}
+      .arrow{stroke:#355a76;stroke-width:2.5;fill:none;marker-end:url(#arrowhead)}
+    </style>
+    <marker id="arrowhead" markerUnits="userSpaceOnUse" markerWidth="12" markerHeight="8" refX="11" refY="4" orient="auto" viewBox="0 0 12 8">
+      <path d="M0,0 L12,4 L0,8 Z" fill="#355a76"/>
+    </marker>
+  </defs>
+
+  <rect width="1440" height="640" fill="#ffffff"/>
+  <text x="720" y="43" text-anchor="middle" class="text title">STC32G 关键中断流程</text>
+
+  <!-- PWMB / PWM input capture -->
+  <rect x="20" y="75" width="335" height="535" rx="8" class="lane"/>
+  <text x="187.5" y="112" text-anchor="middle" class="text lane-title">PWMB / PWM 输入捕获中断</text>
+  <rect x="40" y="140" width="295" height="72" rx="6" class="node"/>
+  <text x="187.5" y="183" text-anchor="middle" class="text label">判断周期、高电平或超时事件</text>
+  <rect x="40" y="260" width="295" height="72" rx="6" class="node"/>
+  <text x="187.5" y="303" text-anchor="middle" class="text label">记录输入周期和高电平时间</text>
+  <rect x="40" y="380" width="295" height="72" rx="6" class="node"/>
+  <text x="187.5" y="423" text-anchor="middle" class="text label">校验频率与占空比范围</text>
+  <rect x="40" y="500" width="295" height="72" rx="6" class="node"/>
+  <text x="187.5" y="543" text-anchor="middle" class="text label">计算油门并更新电机目标量</text>
+  <path d="M187.5 212 V260" class="arrow"/>
+  <path d="M187.5 332 V380" class="arrow"/>
+  <path d="M187.5 452 V500" class="arrow"/>
+
+  <!-- Comparator zero crossing -->
+  <rect x="375" y="75" width="335" height="535" rx="8" class="lane"/>
+  <text x="542.5" y="112" text-anchor="middle" class="text lane-title">比较器过零中断</text>
+  <rect x="395" y="140" width="295" height="72" rx="6" class="node"/>
+  <text x="542.5" y="183" text-anchor="middle" class="text label">检测悬空相反电动势过零</text>
+  <rect x="395" y="260" width="295" height="72" rx="6" class="node"/>
+  <text x="542.5" y="303" text-anchor="middle" class="text label">记录本次换相时间</text>
+  <rect x="395" y="380" width="295" height="72" rx="6" class="node"/>
+  <text x="542.5" y="423" text-anchor="middle" class="text label">滤波并统计换相误差</text>
+  <rect x="395" y="500" width="295" height="72" rx="6" class="node"/>
+  <text x="542.5" y="543" text-anchor="middle" class="text label">计算或修正下一换相时刻</text>
+  <path d="M542.5 212 V260" class="arrow"/>
+  <path d="M542.5 332 V380" class="arrow"/>
+  <path d="M542.5 452 V500" class="arrow"/>
+
+  <!-- PWMA commutation -->
+  <rect x="730" y="75" width="335" height="535" rx="8" class="lane"/>
+  <text x="897.5" y="112" text-anchor="middle" class="text lane-title">PWMA / 换相中断</text>
+  <rect x="750" y="140" width="295" height="72" rx="6" class="node"/>
+  <text x="897.5" y="183" text-anchor="middle" class="text label">读取比较器结果与运行状态</text>
+  <rect x="750" y="260" width="295" height="72" rx="6" class="node"/>
+  <text x="897.5" y="303" text-anchor="middle" class="text label">判断启动、等待或闭环阶段</text>
+  <rect x="750" y="380" width="295" height="72" rx="6" class="node"/>
+  <text x="897.5" y="423" text-anchor="middle" class="text label">执行六步换相</text>
+  <rect x="750" y="500" width="295" height="72" rx="6" class="node"/>
+  <text x="897.5" y="543" text-anchor="middle" class="text label">更新 PWM 并设置消磁等待</text>
+  <path d="M897.5 212 V260" class="arrow"/>
+  <path d="M897.5 332 V380" class="arrow"/>
+  <path d="M897.5 452 V500" class="arrow"/>
+
+  <!-- Periodic timer -->
+  <rect x="1085" y="75" width="335" height="535" rx="8" class="lane"/>
+  <text x="1252.5" y="112" text-anchor="middle" class="text lane-title">周期定时器中断</text>
+  <rect x="1105" y="165" width="295" height="72" rx="6" class="node"/>
+  <text x="1252.5" y="208" text-anchor="middle" class="text label">采集电池电压并更新 LED 状态</text>
+  <rect x="1105" y="320" width="295" height="72" rx="6" class="node"/>
+  <text x="1252.5" y="363" text-anchor="middle" class="text label">处理启动、停止与重启延时</text>
+  <rect x="1105" y="475" width="295" height="72" rx="6" class="node"/>
+  <text x="1252.5" y="518" text-anchor="middle" class="text label">维护强制换相和换相计时</text>
+  <path d="M1252.5 237 V320" class="arrow"/>
+  <path d="M1252.5 392 V475" class="arrow"/>
+</svg>

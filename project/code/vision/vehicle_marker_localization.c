@@ -217,6 +217,7 @@ void VehicleMarkerLocalization_SetOpeningDirectionPrior(float car_yaw_rel_uav_de
 
 void VehicleMarkerLocalization_Init(void)
 {
+    VehicleMarkerLocalization_ResetChevronScoreConfig();
     vehicle_marker_set_position_lost();
     g_vehicle_marker_pose_update_seq = 0U;
     vehicle_marker_reset_loss_debug();
@@ -321,6 +322,99 @@ void VehicleMarkerLocalization_ServiceLostProtection(void)
 #define VEHICLE_MARKER_CHEVRON_SCORE_CONCAVITY_WEIGHT        (0.30f) /* 凸包凹陷权重。 */
 #define VEHICLE_MARKER_CHEVRON_SCORE_BLOB_WEIGHT             (0.15f) /* 基础Blob权重。 */
 
+/*
+ * 默认值仍由上面的固件宏唯一决定。PC仿真通过公开setter覆盖这份运行时副本，
+ * 从而不需要为了每次拖动滑块重新编译；板端未调用setter时行为与宏完全一致。
+ */
+static VehicleMarkerChevronScoreConfig_t s_vehicle_marker_chevron_score_config;
+
+static void vehicle_marker_chevron_fill_default_score_config(
+    VehicleMarkerChevronScoreConfig_t *config)
+{
+    if(config == NULL) return;
+    config->mean_arm_min_cm = VEHICLE_MARKER_CHEVRON_MEAN_ARM_MIN_CM;
+    config->mean_arm_max_cm = VEHICLE_MARKER_CHEVRON_MEAN_ARM_MAX_CM;
+    config->min_arm_symmetry = VEHICLE_MARKER_CHEVRON_MIN_ARM_SYMMETRY;
+    config->opening_ratio_min = VEHICLE_MARKER_CHEVRON_OPENING_RATIO_MIN;
+    config->opening_ratio_max = VEHICLE_MARKER_CHEVRON_OPENING_RATIO_MAX;
+    config->concavity_ratio_low = VEHICLE_MARKER_CHEVRON_CONCAVITY_RATIO_LOW;
+    config->concavity_ratio_good = VEHICLE_MARKER_CHEVRON_CONCAVITY_RATIO_GOOD;
+    config->concavity_ratio_high = VEHICLE_MARKER_CHEVRON_CONCAVITY_RATIO_HIGH;
+    config->concavity_ratio_max = VEHICLE_MARKER_CHEVRON_CONCAVITY_RATIO_MAX;
+    config->geometry_score_min = VEHICLE_MARKER_CHEVRON_GEOMETRY_SCORE_MIN;
+    config->symmetry_weight = VEHICLE_MARKER_CHEVRON_SCORE_SYMMETRY_WEIGHT;
+    config->opening_weight = VEHICLE_MARKER_CHEVRON_SCORE_OPENING_WEIGHT;
+    config->concavity_weight = VEHICLE_MARKER_CHEVRON_SCORE_CONCAVITY_WEIGHT;
+    config->blob_weight = VEHICLE_MARKER_CHEVRON_SCORE_BLOB_WEIGHT;
+    config->direction_weight = VEHICLE_MARKER_CHEVRON_SCORE_DIRECTION_WEIGHT;
+    config->opening_to_car_yaw_deg = VEHICLE_MARKER_CHEVRON_OPENING_TO_CAR_YAW_DEG;
+    config->direction_full_error_deg = VEHICLE_MARKER_CHEVRON_DIRECTION_FULL_ERROR_DEG;
+    config->direction_zero_error_deg = VEHICLE_MARKER_CHEVRON_DIRECTION_ZERO_ERROR_DEG;
+    config->candidate_area_error_weight = VEHICLE_MARKER_CHEVRON_SCORE_AREA_WEIGHT;
+    config->candidate_occupancy_error_weight =
+        VEHICLE_MARKER_CHEVRON_SCORE_OCCUPANCY_WEIGHT;
+    config->candidate_circularity_error_weight =
+        VEHICLE_MARKER_CHEVRON_SCORE_CIRCULARITY_WEIGHT;
+    config->opening_score_is_binary = 1U;
+    config->open_v_in_final_score = 0U;
+    config->candidate_prefilter_lower_is_better = 1U;
+}
+
+void VehicleMarkerLocalization_ResetChevronScoreConfig(void)
+{
+    vehicle_marker_chevron_fill_default_score_config(
+        &s_vehicle_marker_chevron_score_config);
+}
+
+uint8 VehicleMarkerLocalization_SetChevronScoreConfig(
+    const VehicleMarkerChevronScoreConfig_t *config)
+{
+    float base_weight_sum;
+    if(config == NULL) return 0U;
+    base_weight_sum = config->symmetry_weight + config->opening_weight +
+                      config->concavity_weight + config->blob_weight;
+    if(!isfinite(config->mean_arm_min_cm) ||
+       !isfinite(config->mean_arm_max_cm) ||
+       !isfinite(config->min_arm_symmetry) ||
+       !isfinite(config->opening_ratio_min) ||
+       !isfinite(config->opening_ratio_max) ||
+       !isfinite(config->concavity_ratio_low) ||
+       !isfinite(config->concavity_ratio_good) ||
+       !isfinite(config->concavity_ratio_high) ||
+       !isfinite(config->concavity_ratio_max) ||
+       !isfinite(config->geometry_score_min) ||
+       !isfinite(config->symmetry_weight) ||
+       !isfinite(config->opening_weight) ||
+       !isfinite(config->concavity_weight) ||
+       !isfinite(config->blob_weight) ||
+       !isfinite(config->direction_weight) ||
+       !isfinite(config->opening_to_car_yaw_deg) ||
+       !isfinite(config->direction_full_error_deg) ||
+       !isfinite(config->direction_zero_error_deg) ||
+       config->mean_arm_min_cm < 0.0f ||
+       config->mean_arm_max_cm <= config->mean_arm_min_cm ||
+       config->min_arm_symmetry < 0.0f || config->min_arm_symmetry > 1.0f ||
+       config->opening_ratio_min < 0.0f ||
+       config->opening_ratio_max <= config->opening_ratio_min ||
+       config->concavity_ratio_low < 0.0f ||
+       config->concavity_ratio_good <= config->concavity_ratio_low ||
+       config->concavity_ratio_high < config->concavity_ratio_good ||
+       config->concavity_ratio_max <= config->concavity_ratio_high ||
+       config->geometry_score_min < 0.0f ||
+       config->symmetry_weight < 0.0f || config->opening_weight < 0.0f ||
+       config->concavity_weight < 0.0f || config->blob_weight < 0.0f ||
+       base_weight_sum <= 0.0f ||
+       config->direction_weight < 0.0f || config->direction_weight > 1.0f ||
+       config->direction_full_error_deg < 0.0f ||
+       config->direction_zero_error_deg <= config->direction_full_error_deg ||
+       config->direction_zero_error_deg > 180.0f)
+    {
+        return 0U;
+    }
+    s_vehicle_marker_chevron_score_config = *config;
+    return 1U;
+}
+
 /* 凸包计算最多使用的轮廓点，超过时均匀抽样以限制单帧计算量。 */
 #define VEHICLE_MARKER_CHEVRON_HULL_MAX_POINTS               (96U)
 
@@ -346,6 +440,13 @@ void VehicleMarkerLocalization_ServiceLostProtection(void)
     VEHICLE_MARKER_CHEVRON_HULL_MAX_POINTS > VISION_RUNTIME_CONTOUR_MAX_POINTS
 #error "Invalid chevron hull sample count"
 #endif
+
+void VehicleMarkerLocalization_GetChevronScoreConfig(
+    VehicleMarkerChevronScoreConfig_t *config)
+{
+    if(config == NULL) return;
+    *config = s_vehicle_marker_chevron_score_config;
+}
 
 typedef struct
 {
@@ -651,24 +752,25 @@ static float vehicle_marker_chevron_score_interval(float value,
 
 static float vehicle_marker_chevron_score_concavity(float ratio)
 {
-    if(!isfinite(ratio) || ratio <= VEHICLE_MARKER_CHEVRON_CONCAVITY_RATIO_LOW ||
-       ratio >= VEHICLE_MARKER_CHEVRON_CONCAVITY_RATIO_MAX)
+    if(!isfinite(ratio) ||
+       ratio <= s_vehicle_marker_chevron_score_config.concavity_ratio_low ||
+       ratio >= s_vehicle_marker_chevron_score_config.concavity_ratio_max)
     {
         return 0.0f;
     }
-    if(ratio < VEHICLE_MARKER_CHEVRON_CONCAVITY_RATIO_GOOD)
+    if(ratio < s_vehicle_marker_chevron_score_config.concavity_ratio_good)
     {
-        return (ratio - VEHICLE_MARKER_CHEVRON_CONCAVITY_RATIO_LOW) /
-               (VEHICLE_MARKER_CHEVRON_CONCAVITY_RATIO_GOOD -
-                VEHICLE_MARKER_CHEVRON_CONCAVITY_RATIO_LOW);
+        return (ratio - s_vehicle_marker_chevron_score_config.concavity_ratio_low) /
+               (s_vehicle_marker_chevron_score_config.concavity_ratio_good -
+                s_vehicle_marker_chevron_score_config.concavity_ratio_low);
     }
-    if(ratio <= VEHICLE_MARKER_CHEVRON_CONCAVITY_RATIO_HIGH)
+    if(ratio <= s_vehicle_marker_chevron_score_config.concavity_ratio_high)
     {
         return 1.0f;
     }
-    return (VEHICLE_MARKER_CHEVRON_CONCAVITY_RATIO_MAX - ratio) /
-           (VEHICLE_MARKER_CHEVRON_CONCAVITY_RATIO_MAX -
-            VEHICLE_MARKER_CHEVRON_CONCAVITY_RATIO_HIGH);
+    return (s_vehicle_marker_chevron_score_config.concavity_ratio_max - ratio) /
+           (s_vehicle_marker_chevron_score_config.concavity_ratio_max -
+            s_vehicle_marker_chevron_score_config.concavity_ratio_high);
 }
 
 static float vehicle_marker_chevron_wrap_deg(float angle_deg)
@@ -680,17 +782,17 @@ static float vehicle_marker_chevron_wrap_deg(float angle_deg)
 
 static float vehicle_marker_chevron_score_direction(float error_deg)
 {
-    if(error_deg <= VEHICLE_MARKER_CHEVRON_DIRECTION_FULL_ERROR_DEG)
+    if(error_deg <= s_vehicle_marker_chevron_score_config.direction_full_error_deg)
     {
         return 1.0f;
     }
-    if(error_deg >= VEHICLE_MARKER_CHEVRON_DIRECTION_ZERO_ERROR_DEG)
+    if(error_deg >= s_vehicle_marker_chevron_score_config.direction_zero_error_deg)
     {
         return 0.0f;
     }
-    return (VEHICLE_MARKER_CHEVRON_DIRECTION_ZERO_ERROR_DEG - error_deg) /
-           (VEHICLE_MARKER_CHEVRON_DIRECTION_ZERO_ERROR_DEG -
-            VEHICLE_MARKER_CHEVRON_DIRECTION_FULL_ERROR_DEG);
+    return (s_vehicle_marker_chevron_score_config.direction_zero_error_deg - error_deg) /
+           (s_vehicle_marker_chevron_score_config.direction_zero_error_deg -
+            s_vehicle_marker_chevron_score_config.direction_full_error_deg);
 }
 
 static float vehicle_marker_chevron_score_basic_blob(
@@ -1511,11 +1613,11 @@ static uint8 vehicle_marker_chevron_image_shape_projects_valid(
     opening_ratio = base / (left_span + right_span);
 
     return (uint8)(
-        mean_arm >= VEHICLE_MARKER_CHEVRON_MEAN_ARM_MIN_CM &&
-        mean_arm <= VEHICLE_MARKER_CHEVRON_MEAN_ARM_MAX_CM &&
-        arm_symmetry >= VEHICLE_MARKER_CHEVRON_MIN_ARM_SYMMETRY &&
-        opening_ratio >= VEHICLE_MARKER_CHEVRON_OPENING_RATIO_MIN &&
-        opening_ratio <= VEHICLE_MARKER_CHEVRON_OPENING_RATIO_MAX);
+        mean_arm >= s_vehicle_marker_chevron_score_config.mean_arm_min_cm &&
+        mean_arm <= s_vehicle_marker_chevron_score_config.mean_arm_max_cm &&
+        arm_symmetry >= s_vehicle_marker_chevron_score_config.min_arm_symmetry &&
+        opening_ratio >= s_vehicle_marker_chevron_score_config.opening_ratio_min &&
+        opening_ratio <= s_vehicle_marker_chevron_score_config.opening_ratio_max);
 }
 
 /* Build an extreme triangle and use two-arm evidence only to select its apex.
@@ -1773,6 +1875,12 @@ static uint8 vehicle_marker_chevron_process_candidate(
         candidate->blob.physical_occupancy_ratio;
     s_vehicle_marker_chevron_debug.physical_circularity =
         candidate->blob.physical_circularity;
+    s_vehicle_marker_chevron_debug.blob_area = candidate->blob.physical_valid ?
+        candidate->blob.physical_area_cm2 : (float)candidate->blob.area;
+    s_vehicle_marker_chevron_debug.blob_occupancy = candidate->blob.physical_valid ?
+        candidate->blob.physical_occupancy_ratio : candidate->blob.occupancy_ratio;
+    s_vehicle_marker_chevron_debug.blob_circularity = candidate->blob.physical_valid ?
+        candidate->blob.physical_circularity : candidate->blob.circularity;
     s_vehicle_marker_chevron_debug.reject_reason =
         VEHICLE_MARKER_CHEVRON_REJECT_IMAGE_GEOMETRY;
 
@@ -1882,33 +1990,43 @@ static uint8 vehicle_marker_chevron_process_candidate(
                                               &concavity_depth_px,
                                               &concavity_ratio);
     arm_symmetry_score = vehicle_marker_chevron_score_unit(
-        arm_symmetry, VEHICLE_MARKER_CHEVRON_MIN_ARM_SYMMETRY, 1.0f);
+        arm_symmetry, s_vehicle_marker_chevron_score_config.min_arm_symmetry, 1.0f);
     opening_ratio_score = vehicle_marker_chevron_score_interval(
-        opening_ratio, VEHICLE_MARKER_CHEVRON_OPENING_RATIO_MIN,
-        VEHICLE_MARKER_CHEVRON_OPENING_RATIO_MAX);
+        opening_ratio, s_vehicle_marker_chevron_score_config.opening_ratio_min,
+        s_vehicle_marker_chevron_score_config.opening_ratio_max);
     concavity_score = vehicle_marker_chevron_score_concavity(concavity_ratio);
     vehicle_marker_chevron_get_gate(&candidate->blob, &blob_gate);
+    s_vehicle_marker_chevron_debug.blob_gate_min_area = blob_gate.min_area;
+    s_vehicle_marker_chevron_debug.blob_gate_max_area = blob_gate.max_area;
+    s_vehicle_marker_chevron_debug.blob_gate_expected_area = blob_gate.expected_area;
+    s_vehicle_marker_chevron_debug.blob_gate_min_occupancy = blob_gate.min_occupancy;
+    s_vehicle_marker_chevron_debug.blob_gate_max_occupancy = blob_gate.max_occupancy;
+    s_vehicle_marker_chevron_debug.blob_gate_max_circularity =
+        blob_gate.max_circularity;
+    s_vehicle_marker_chevron_debug.blob_gate_physical = blob_gate.physical;
+    s_vehicle_marker_chevron_debug.candidate_blob_score =
+        vehicle_marker_chevron_score_blob(&candidate->blob, &blob_gate);
     basic_blob_score = vehicle_marker_chevron_score_basic_blob(
         &candidate->blob, &blob_gate);
     base_geometry_score =
-        arm_symmetry_score * VEHICLE_MARKER_CHEVRON_SCORE_SYMMETRY_WEIGHT +
-        opening_ratio_score * VEHICLE_MARKER_CHEVRON_SCORE_OPENING_WEIGHT +
-        concavity_score * VEHICLE_MARKER_CHEVRON_SCORE_CONCAVITY_WEIGHT +
-        basic_blob_score * VEHICLE_MARKER_CHEVRON_SCORE_BLOB_WEIGHT;
+        arm_symmetry_score * s_vehicle_marker_chevron_score_config.symmetry_weight +
+        opening_ratio_score * s_vehicle_marker_chevron_score_config.opening_weight +
+        concavity_score * s_vehicle_marker_chevron_score_config.concavity_weight +
+        basic_blob_score * s_vehicle_marker_chevron_score_config.blob_weight;
     geometry_score = base_geometry_score;
     if(s_vehicle_marker_opening_direction_prior_valid)
     {
         direction_expected_deg = vehicle_marker_chevron_wrap_deg(
             s_vehicle_marker_opening_direction_prior_deg +
-            VEHICLE_MARKER_CHEVRON_OPENING_TO_CAR_YAW_DEG);
+            s_vehicle_marker_chevron_score_config.opening_to_car_yaw_deg);
         direction_error_deg = fabsf(vehicle_marker_chevron_wrap_deg(
             heading_deg - direction_expected_deg));
         direction_score = vehicle_marker_chevron_score_direction(
             direction_error_deg);
         geometry_score =
             base_geometry_score *
-                (1.0f - VEHICLE_MARKER_CHEVRON_SCORE_DIRECTION_WEIGHT) +
-            direction_score * VEHICLE_MARKER_CHEVRON_SCORE_DIRECTION_WEIGHT;
+                (1.0f - s_vehicle_marker_chevron_score_config.direction_weight) +
+            direction_score * s_vehicle_marker_chevron_score_config.direction_weight;
     }
 
     s_vehicle_marker_chevron_debug.left_arm_cm = left_span_cm;
@@ -1922,6 +2040,7 @@ static uint8 vehicle_marker_chevron_process_candidate(
     s_vehicle_marker_chevron_debug.opening_ratio_score = opening_ratio_score;
     s_vehicle_marker_chevron_debug.concavity_score = concavity_score;
     s_vehicle_marker_chevron_debug.basic_blob_score = basic_blob_score;
+    s_vehicle_marker_chevron_debug.base_geometry_score = base_geometry_score;
     s_vehicle_marker_chevron_debug.direction_expected_deg =
         direction_expected_deg;
     s_vehicle_marker_chevron_debug.direction_error_deg = direction_error_deg;
@@ -1934,14 +2053,14 @@ static uint8 vehicle_marker_chevron_process_candidate(
     s_vehicle_marker_chevron_debug.base_cm = base_cm;
     s_vehicle_marker_chevron_debug.triangle_height_cm = triangle_height_cm;
 
-    if(mean_arm_cm < VEHICLE_MARKER_CHEVRON_MEAN_ARM_MIN_CM ||
-       mean_arm_cm > VEHICLE_MARKER_CHEVRON_MEAN_ARM_MAX_CM ||
-       arm_symmetry < VEHICLE_MARKER_CHEVRON_MIN_ARM_SYMMETRY ||
-       opening_ratio < VEHICLE_MARKER_CHEVRON_OPENING_RATIO_MIN ||
-       opening_ratio > VEHICLE_MARKER_CHEVRON_OPENING_RATIO_MAX ||
-       concavity_ratio <= VEHICLE_MARKER_CHEVRON_CONCAVITY_RATIO_LOW ||
-       concavity_ratio >= VEHICLE_MARKER_CHEVRON_CONCAVITY_RATIO_MAX ||
-       geometry_score < VEHICLE_MARKER_CHEVRON_GEOMETRY_SCORE_MIN)
+    if(mean_arm_cm < s_vehicle_marker_chevron_score_config.mean_arm_min_cm ||
+       mean_arm_cm > s_vehicle_marker_chevron_score_config.mean_arm_max_cm ||
+       arm_symmetry < s_vehicle_marker_chevron_score_config.min_arm_symmetry ||
+       opening_ratio < s_vehicle_marker_chevron_score_config.opening_ratio_min ||
+       opening_ratio > s_vehicle_marker_chevron_score_config.opening_ratio_max ||
+       concavity_ratio <= s_vehicle_marker_chevron_score_config.concavity_ratio_low ||
+       concavity_ratio >= s_vehicle_marker_chevron_score_config.concavity_ratio_max ||
+       geometry_score < s_vehicle_marker_chevron_score_config.geometry_score_min)
     {
         s_vehicle_marker_chevron_debug.reject_reason =
             VEHICLE_MARKER_CHEVRON_REJECT_PHYSICAL_GEOMETRY;

@@ -1,0 +1,54 @@
+\chapter{程序源代码与核心算法索引}
+
+项目源代码公开仓库地址：\texttt{\RepositoryURL}。定稿时应冻结一个提交哈希，并保证报告中的文件路径、参数和接口与该版本一致。
+
+\section{核心源代码索引}
+\begin{longtable}{p{3.1cm}p{6.2cm}p{3.7cm}}
+\caption{核心代码与报告章节映射}\label{tab:source-index}\\
+\toprule
+模块 & 主要文件 & 对应内容 \\
+\midrule
+\endfirsthead
+\toprule
+模块 & 主要文件 & 对应内容 \\
+\midrule
+\endhead
+双核入口 & \codepath{project/user/main_cm7_0.c}, \codepath{main_cm7_1.c} & 第一章、第四章 \\
+实时调度 & \codepath{project/code/common/PIT_Demo.c} & 第四章 \\
+姿态/速率控制 & \codepath{angle_loop.c}, \codepath{rate_loop.c} & 第四章 \\
+位置/速度控制 & \codepath{position_loop.c}, \codepath{velocity_loop.c} & 第四章 \\
+高度管理 & \codepath{height_manager.c}, \codepath{dual_tof_manager.c} & 第四章 \\
+混控与电机 & \codepath{motor_mixer.c}, \codepath{dshot600.c} & 第三、四章 \\
+视觉定位 & \codepath{beacon_detect.c}, \codepath{ir_localization.c} & 第五章 \\
+车标定位 & \codepath{vehicle_marker_localization.c} & 第五章 \\
+IPM与双相机 & \codepath{ipm_interface.c}, \codepath{dual_camera_fusion.c} & 第五章 \\
+空地协议 & \codepath{core_link.c}, \codepath{core_link_user.c} & 第六章 \\
+任务逻辑 & \codepath{beacon_search.c}, \codepath{blind_box_tasks.c} & 第六章 \\
+诊断与调参 & \codepath{vofa.c}, \codepath{screen_pages.c} & 第七章 \\
+\bottomrule
+\end{longtable}
+
+\section{核心子程序摘录要求}
+
+最终PDF至少摘录并解释下列核心子程序：
+\begin{enumerate}
+  \item 双核相机数据交换与有效性检查；
+  \item 姿态/角速度控制与姿态优先混控；
+  \item P/Sqrt位置纠偏、轨迹整形和动态制动；
+  \item ToF高度管理及失效重捕获；
+  \item 车标几何评分与世界坐标转换；
+  \item 地面车速度包解析、坐标旋转与超时降级。
+\end{enumerate}
+
+\begin{lstlisting}[caption={核心代码摘录格式示例（定稿时替换）}]
+/* File: project/code/xxx/module.c
+ * Commit: <public commit hash>
+ * Purpose: explain inputs, outputs, timing and failure handling.
+ */
+void CoreAlgorithm_Update(const SensorInput *in, ControlOutput *out)
+{
+    /* Keep only the key logic in the report; full source stays in repository. */
+}
+\end{lstlisting}
+
+\todoitem{定稿时替换示例代码，附完整仓库地址、许可证、构建步骤和提交哈希。若组委会要求PDF内包含全部源代码，应另行合并代码清单。}

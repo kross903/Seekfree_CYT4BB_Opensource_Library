@@ -1,0 +1,64 @@
+\contentsline {chapter}{摘要}{i}{chapter*.1}%
+\contentsline {chapter}{主要符号表}{vii}{chapter*.3}%
+\contentsline {chapter}{\numberline {第一章\hspace {.3em}}系统概述与总体方案}{1}{chapter.4}%
+\contentsline {section}{\numberline {1.1}赛题任务与设计目标}{1}{section.5}%
+\contentsline {section}{\numberline {1.2}系统总体架构}{1}{section.6}%
+\contentsline {section}{\numberline {1.3}双核软件分工}{2}{section.8}%
+\contentsline {section}{\numberline {1.4}项目特色与拟突出创新点}{2}{section.9}%
+\contentsline {chapter}{\numberline {第二章\hspace {.3em}}机械结构与整机安装}{3}{chapter.15}%
+\contentsline {section}{\numberline {2.1}无人机总体结构}{3}{section.16}%
+\contentsline {section}{\numberline {2.2}传感器与飞控板安装}{3}{section.18}%
+\contentsline {section}{\numberline {2.3}摄像头布局与视场覆盖}{4}{section.20}%
+\contentsline {section}{\numberline {2.4}线束、供电与空地连接}{4}{section.21}%
+\contentsline {section}{\numberline {2.5}地面车模接口}{4}{section.22}%
+\contentsline {section}{\numberline {2.6}机械参数与可靠性验证}{5}{section.24}%
+\contentsline {chapter}{\numberline {第三章\hspace {.3em}}硬件电路设计}{7}{chapter.26}%
+\contentsline {section}{\numberline {3.1}硬件总体组成}{7}{section.27}%
+\contentsline {section}{\numberline {3.2}主控与双核资源分配}{7}{section.29}%
+\contentsline {section}{\numberline {3.3}传感器接口}{8}{section.30}%
+\contentsline {section}{\numberline {3.4}电机、电调与输出链路}{8}{section.32}%
+\contentsline {section}{\numberline {3.5}电源与保护设计}{8}{section.33}%
+\contentsline {section}{\numberline {3.6}通信与调试接口}{8}{section.34}%
+\contentsline {section}{\numberline {3.7}PCB设计与实物验证}{9}{section.35}%
+\contentsline {chapter}{\numberline {第四章\hspace {.3em}}飞行控制与状态估计软件}{11}{chapter.38}%
+\contentsline {section}{\numberline {4.1}实时调度与数据流}{11}{section.39}%
+\contentsline {section}{\numberline {4.2}姿态解算与IMU标定}{11}{section.41}%
+\contentsline {section}{\numberline {4.3}级联控制结构}{12}{section.42}%
+\contentsline {section}{\numberline {4.4}水平位置与速度控制}{12}{section.44}%
+\contentsline {section}{\numberline {4.5}高度控制与双ToF管理}{12}{section.46}%
+\contentsline {section}{\numberline {4.6}混控、电机输出与安全机制}{13}{section.47}%
+\contentsline {chapter}{\numberline {第五章\hspace {.3em}}视觉定位与多传感器融合}{15}{chapter.49}%
+\contentsline {section}{\numberline {5.1}视觉处理总体流程}{15}{section.50}%
+\contentsline {section}{\numberline {5.2}摄像头标定}{15}{section.52}%
+\contentsline {section}{\numberline {5.3}信标与车标检测}{16}{section.54}%
+\contentsline {section}{\numberline {5.4}IPM与坐标变换}{16}{section.55}%
+\contentsline {section}{\numberline {5.5}双相机融合与失效处理}{16}{section.56}%
+\contentsline {section}{\numberline {5.6}光流、ToF与位置观测融合}{16}{section.57}%
+\contentsline {section}{\numberline {5.7}视觉性能实验}{16}{section.58}%
+\contentsline {chapter}{\numberline {第六章\hspace {.3em}}空地协同通信与任务控制}{19}{chapter.60}%
+\contentsline {section}{\numberline {6.1}空地协同信息流}{19}{section.61}%
+\contentsline {section}{\numberline {6.2}地面车模运动状态协议}{19}{section.63}%
+\contentsline {section}{\numberline {6.3}坐标转换与速度前馈}{19}{section.65}%
+\contentsline {section}{\numberline {6.4}任务状态机}{20}{section.66}%
+\contentsline {section}{\numberline {6.5}链路性能与容错实验}{20}{section.67}%
+\contentsline {chapter}{\numberline {第七章\hspace {.3em}}开发工具、调试过程与实验验证}{23}{chapter.69}%
+\contentsline {section}{\numberline {7.1}开发环境}{23}{section.70}%
+\contentsline {section}{\numberline {7.2}分层调试流程}{23}{section.72}%
+\contentsline {section}{\numberline {7.3}VOFA可观测性设计}{24}{section.80}%
+\contentsline {section}{\numberline {7.4}仿真与实机一致性}{24}{section.81}%
+\contentsline {section}{\numberline {7.5}核心实验与验收指标}{24}{section.82}%
+\contentsline {chapter}{\numberline {第八章\hspace {.3em}}系统主要技术参数}{27}{chapter.83}%
+\contentsline {chapter}{\numberline {第九章\hspace {.3em}}总结与展望}{29}{chapter.84}%
+\contentsline {chapter}{参考文献}{I}{chapter*.85}%
+\contentsline {chapter}{\numberline {附录 A\hspace {.3em}}完整原理图与连接表}{III}{appendix.86}%
+\contentsline {section}{\numberline {A.1}飞控板完整原理图}{III}{section.87}%
+\contentsline {section}{\numberline {A.2}电调与电源板原理图}{IV}{section.89}%
+\contentsline {section}{\numberline {A.3}接口与线束定义}{IV}{section.91}%
+\contentsline {chapter}{\numberline {附录 B\hspace {.3em}}程序源代码与核心算法索引}{VII}{appendix.92}%
+\contentsline {section}{\numberline {B.1}核心源代码索引}{VII}{section.93}%
+\contentsline {section}{\numberline {B.2}核心子程序摘录要求}{VIII}{section.94}%
+\contentsline {chapter}{\numberline {附录 C\hspace {.3em}}标定数据、实验记录与复现说明}{XI}{appendix.110}%
+\contentsline {section}{\numberline {C.1}摄像头标定数据}{XI}{section.111}%
+\contentsline {section}{\numberline {C.2}IMU安装矩阵数据}{XI}{section.112}%
+\contentsline {section}{\numberline {C.3}控制与通信日志}{XI}{section.113}%
+\contentsline {section}{\numberline {C.4}提交前复现清单}{XI}{section.114}%

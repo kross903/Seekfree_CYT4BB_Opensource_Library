@@ -1,0 +1,57 @@
+\chapter{空地协同通信与任务控制}
+
+\section{空地协同信息流}
+
+无人机接收地面车模位置、绝对Yaw、信标状态及车体系速度，并将其转换到无人机/世界坐标系，
+用于目标跟随和速度前馈。反向指令与任务状态需结合车模端项目补充。
+
+\placeholderfigure{air-ground-sequence.pdf}{无人机与地面车模任务时序图}
+
+\section{地面车模运动状态协议}
+
+当前速度上行协议ID为\texttt{0x13}，载荷固定43字节，每20 ms发送一次。无人机只接受长度严格匹配的帧；
+合法包年龄超过200 ms、速度有效位为0或坐标条件无效时，停用速度前馈但允许位置反馈继续工作。
+
+\begin{table}[htbp]
+  \centering
+  \caption{协议新增运动字段}
+  \begin{tabularx}{\textwidth}{>{\centering\arraybackslash}p{1.6cm}p{4.5cm}X}
+    \toprule
+    偏移/字节 & 字段 & 格式与单位 \\
+    \midrule
+    37 & \texttt{motion\_flags} & bit0速度有效，bit1疑似打滑，bit2已有导航目标 \\
+    38 & \texttt{motion\_sequence} & 8位递增序号，允许自然回绕 \\
+    39--40 & \makecell[l]{\texttt{car\_forward}\\\texttt{\_speed\_dcms}} & 小端有符号数，0.1 cm/s \\
+    41--42 & \makecell[l]{\texttt{car\_left}\\\texttt{\_speed\_dcms}} & 小端有符号数，0.1 cm/s \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+\section{坐标转换与速度前馈}
+
+小车速度以前向/左向车体系表示，通过小车Yaw与无人机Yaw之差旋转到无人机机体系，再进入水平位置控制器。
+前馈失效后经过5 Hz低通和目标速度变化率限制平滑回零，避免通信瞬断引起目标突变。
+
+\section{任务状态机}
+
+结合\codepath{beacon_search.c}和\codepath{blind_box_tasks.c}说明搜索、识别、接近、执行、确认、退出和异常恢复状态。
+
+\todoitem{补充真实赛题任务流程、无人机到车模的下行指令、应答/重传机制、各状态超时以及任务完成判据。}
+
+\section{链路性能与容错实验}
+
+\begin{table}[htbp]
+  \centering
+  \caption{空地通信测试计划}
+  \begin{tabularx}{\textwidth}{p{3.1cm}p{3.2cm}p{3.1cm}X}
+    \toprule
+    指标 & 测试方法 & 结果 & 要求 \\
+    \midrule
+    包周期与抖动 & 记录序号和时间戳 & 待测试 & 给出均值、最大值、99分位 \\
+    丢包率 & 固定时长/固定包数 & 待测试 & 不使用“无丢包”绝对表述 \\
+    端到端延迟 & 输入阶跃与接收时间 & 待测试 & 分解发送、传输、处理延迟 \\
+    超时降级 & 断开链路 & 待测试 & 目标平滑回零、系统保持安全 \\
+    坐标一致性 & 多航向定速运动 & 待测试 & 方向、尺度与符号全部正确 \\
+    \bottomrule
+  \end{tabularx}
+\end{table}

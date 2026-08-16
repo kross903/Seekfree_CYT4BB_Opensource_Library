@@ -1,0 +1,83 @@
+\chapter{视觉定位与多传感器融合}
+
+\section{视觉处理总体流程}
+
+当前视觉代码由业务层、项目接口层和底层几何层组成，覆盖摄像头采集、二值化、连通域、
+信标与车标识别、鱼眼射线查表、IPM、双相机融合和世界坐标输出。
+
+\begin{figure}[htbp]
+  \centering
+  \begin{tikzpicture}[node distance=7mm,box/.style={draw,rounded corners,align=center,minimum width=33mm,minimum height=9mm},line/.style={-{Latex},thick}]
+    \node[box] (raw) {188×120灰度图};
+    \node[box,right=of raw] (pre) {标定/阈值处理};
+    \node[box,right=of pre] (blob) {连通域与候选筛选};
+    \node[box,below=of blob] (marker) {信标/车标几何评分};
+    \node[box,left=of marker] (ray) {鱼眼射线与IPM};
+    \node[box,left=of ray] (fusion) {双相机融合与世界坐标};
+    \draw[line] (raw)--(pre);
+    \draw[line] (pre)--(blob);
+    \draw[line] (blob)--(marker);
+    \draw[line] (marker)--(ray);
+    \draw[line] (ray)--(fusion);
+  \end{tikzpicture}
+  \caption{视觉定位处理流程}
+\end{figure}
+
+\section{摄像头标定}
+
+仓库现有标定使用OpenCV鱼眼模型。33幅可读图像中16幅进入求解，当前RMS重投影误差为0.222251像素。
+
+\begin{table}[htbp]
+  \centering
+  \caption{当前摄像头标定参数（定稿前需确认与上场相机一致）}
+  \begin{tabular}{cccc}
+    \toprule
+    参数 & 数值 & 参数 & 数值 \\
+    \midrule
+    $f_x$ & 79.393980 & $f_y$ & 79.572640 \\
+    $c_x$ & 95.407813 & $c_y$ & 59.954799 \\
+    $k_1$ & -0.00872509 & $k_2$ & -0.02498306 \\
+    $k_3$ & 0.02068140 & $k_4$ & -0.00718848 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\todoitem{补充标定板规格、方格尺寸、采集距离/姿态范围、每视图误差分布、独立验证集误差和标定日期。}
+
+\section{信标与车标检测}
+
+说明动态Blob门限、几何精筛、臂长与对称性、开口比、凸包凹陷、方向先验和综合评分。
+对应实现位于\codepath{beacon_detect.c}、\codepath{vehicle_marker_localization.c}和
+\codepath{beacon_adaptive_threshold.c}。
+
+\section{IPM与坐标变换}
+
+像素通过鱼眼模型转换为相机射线，再结合相机外参、无人机姿态和高度求取地面交点。
+正文应明确世界系、机体系、相机系和车体系的轴向、旋转顺序及单位。
+
+\section{双相机融合与失效处理}
+
+说明双相机视场选择、重叠区域融合、时间同步、跨核传输、置信度以及单相机失效时的降级策略。
+
+\section{光流、ToF与位置观测融合}
+
+当前默认光流为UP-FLOW-302，更新周期25 ms（40 Hz），PMW3901作为兼容路径保留。
+位置环由视觉/红外定位输出目标速度，再由光流速度反馈闭环。应给出观测超时、尺度补偿、旋转补偿和滤波延迟。
+
+\section{视觉性能实验}
+
+\begin{table}[htbp]
+  \centering
+  \caption{视觉实验计划与待填写结果}
+  \begin{tabularx}{\textwidth}{p{3.1cm}p{3.3cm}p{3.1cm}X}
+    \toprule
+    指标 & 测试条件 & 结果 & 统计方式 \\
+    \midrule
+    信标检出率/误检率 & 光照、距离、姿态分组 & 待测试 & 每组样本数与混淆矩阵 \\
+    车标位置误差 & 标定点或动捕真值 & 待测试 & RMSE/最大误差/95分位 \\
+    车标航向误差 & 多角度静态与动态 & 待测试 & 平均绝对误差/最大误差 \\
+    单帧处理耗时 & CM7\_1实际运行 & 待测试 & 均值/最大值/超期次数 \\
+    双相机融合连续性 & 跨视场运动 & 待测试 & 跳变量与丢失时长 \\
+    \bottomrule
+  \end{tabularx}
+\end{table}

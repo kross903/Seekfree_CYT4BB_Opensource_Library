@@ -1,0 +1,131 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="850" viewBox="0 0 1400 850">
+  <defs>
+    <style>
+      .text{font-family:"Microsoft YaHei","Noto Sans CJK SC",sans-serif;fill:#17324d}
+      .title{font-size:30px;font-weight:700}
+      .section{font-size:19px;font-weight:700}
+      .label{font-size:17px}
+      .small{font-size:14px}
+      .power-frame{fill:#fffaf2;stroke:#d97706;stroke-width:2.5}
+      .power-node{fill:#fff4df;stroke:#d97706;stroke-width:2}
+      .core{fill:#edf8ef;stroke:#2f855a;stroke-width:2.5}
+      .module{fill:#f7fbff;stroke:#2f6f9f;stroke-width:2}
+      .actuator{fill:#f4efff;stroke:#7653a6;stroke-width:2}
+      .power-line{stroke:#d97706;stroke-width:3;fill:none;marker-end:url(#power-arrow)}
+      .control-line{stroke:#355a76;stroke-width:2.5;fill:none;marker-end:url(#signal-arrow)}
+      .monitor-line{stroke:#65758b;stroke-width:2.5;stroke-dasharray:8 6;fill:none;marker-end:url(#monitor-arrow)}
+    </style>
+    <marker id="power-arrow" markerUnits="userSpaceOnUse" markerWidth="12" markerHeight="8" refX="11" refY="4" orient="auto" viewBox="0 0 12 8">
+      <path d="M0,0 L12,4 L0,8 Z" fill="#d97706"/>
+    </marker>
+    <marker id="signal-arrow" markerUnits="userSpaceOnUse" markerWidth="12" markerHeight="8" refX="11" refY="4" orient="auto" viewBox="0 0 12 8">
+      <path d="M0,0 L12,4 L0,8 Z" fill="#355a76"/>
+    </marker>
+    <marker id="monitor-arrow" markerUnits="userSpaceOnUse" markerWidth="12" markerHeight="8" refX="11" refY="4" orient="auto" viewBox="0 0 12 8">
+      <path d="M0,0 L12,4 L0,8 Z" fill="#65758b"/>
+    </marker>
+  </defs>
+
+  <rect width="1400" height="850" fill="#fff"/>
+  <text x="700" y="44" text-anchor="middle" class="text title">CYT2BL3 四合一无刷电调总体设计框图</text>
+
+  <!-- 4S battery input -->
+  <rect x="20" y="330" width="170" height="90" rx="8" class="power-node"/>
+  <text x="105" y="364" text-anchor="middle" class="text label">
+    <tspan x="105">4S 动力电池</tspan>
+    <tspan x="105" dy="27">VBAT / GND</tspan>
+  </text>
+
+  <!-- Power and monitoring subsystem -->
+  <rect x="215" y="85" width="380" height="575" rx="8" class="power-frame"/>
+  <text x="405" y="120" text-anchor="middle" class="text section">电源与母线监测模块</text>
+
+  <rect x="430" y="140" width="135" height="75" rx="8" class="power-node"/>
+  <text x="497" y="184" text-anchor="middle" class="text label">12 V 电源</text>
+
+  <rect x="430" y="260" width="135" height="75" rx="8" class="power-node"/>
+  <text x="497" y="304" text-anchor="middle" class="text label">3.3 V 电源</text>
+
+  <rect x="250" y="335" width="145" height="80" rx="8" class="power-node"/>
+  <text x="322" y="366" text-anchor="middle" class="text label">
+    <tspan x="322">输入滤波</tspan>
+    <tspan x="322" dy="26">母线去耦</tspan>
+  </text>
+
+  <rect x="300" y="500" width="210" height="105" rx="8" class="module"/>
+  <text x="405" y="538" text-anchor="middle" class="text label">
+    <tspan x="405">母线与板温检测</tspan>
+    <tspan x="405" dy="28">电压 / 总电流 / 温度</tspan>
+  </text>
+
+  <path d="M190 375 H250" class="power-line"/>
+  <path d="M395 355 H410 V177 H430" class="power-line"/>
+  <path d="M497 215 V260" class="power-line"/>
+  <path d="M360 415 V500" class="monitor-line"/>
+
+  <!-- CYT2BL3 control core -->
+  <rect x="660" y="230" width="250" height="230" rx="8" class="core"/>
+  <text x="785" y="282" text-anchor="middle" class="text label">
+    <tspan x="785" font-size="22" font-weight="700">CYT2BL3 主控</tspan>
+    <tspan x="785" dy="42">串口接收 / 4 路 PWM</tspan>
+    <tspan x="785" dy="32">四通道无感控制</tspan>
+    <tspan x="785" dy="32">换相与故障管理</tspan>
+  </text>
+
+  <path d="M565 297 H625 V330 H660" class="power-line"/>
+  <path d="M510 552 H625 V405 H660" class="monitor-line"/>
+
+  <!-- Gate drivers, power bridges and motors -->
+  <rect x="975" y="140" width="250" height="110" rx="8" class="module"/>
+  <text x="1100" y="180" text-anchor="middle" class="text label">
+    <tspan x="1100">4×FD6288T 三相预驱</tspan>
+    <tspan x="1100" dy="28">逻辑 PWM → 高低边栅极驱动</tspan>
+  </text>
+
+  <rect x="975" y="330" width="250" height="140" rx="8" class="power-node"/>
+  <text x="1100" y="376" text-anchor="middle" class="text label">
+    <tspan x="1100">四组三相 MOS 功率桥</tspan>
+    <tspan x="1100" dy="31">每路 6 颗 MOSFET</tspan>
+    <tspan x="1100" dy="31">共 24 颗</tspan>
+  </text>
+
+  <rect x="1260" y="350" width="120" height="100" rx="8" class="actuator"/>
+  <text x="1320" y="386" text-anchor="middle" class="text label">
+    <tspan x="1320">四台无刷电机</tspan>
+    <tspan x="1320" dy="28">M1～M4</tspan>
+  </text>
+
+  <path d="M565 177 H940 V170 H975" class="power-line"/>
+  <path d="M910 285 H940 V220 H975" class="control-line"/>
+  <path d="M1100 250 V330" class="control-line"/>
+  <path d="M1225 400 H1260" class="control-line"/>
+
+  <!-- Main 4S power bus routed below the modules -->
+  <path d="M275 415 V450 H235 V705 H1240 V500 H1040 V470" class="power-line"/>
+
+  <!-- Flight-controller command input -->
+  <rect x="660" y="550" width="250" height="105" rx="8" class="module"/>
+  <text x="785" y="588" text-anchor="middle" class="text label">
+    <tspan x="785">飞控控制输入</tspan>
+    <tspan x="785" dy="28">串口（实际使用）</tspan>
+    <tspan x="785" dy="26">4 路 PWM（兼容）</tspan>
+  </text>
+  <path d="M785 550 V460" class="control-line"/>
+
+  <!-- Back-EMF sensing -->
+  <rect x="975" y="550" width="250" height="105" rx="8" class="module"/>
+  <text x="1100" y="588" text-anchor="middle" class="text label">
+    <tspan x="1100">四通道三相反电动势检测</tspan>
+    <tspan x="1100" dy="28">分压 / 滤波 / 过零判断</tspan>
+  </text>
+  <path d="M1160 470 V550" class="monitor-line"/>
+  <path d="M975 602 H940 V420 H910" class="monitor-line"/>
+
+  <!-- Legend -->
+  <path d="M735 810 H790" class="power-line"/>
+  <text x="800" y="816" class="text small">供电路径</text>
+  <path d="M905 810 H960" class="control-line"/>
+  <text x="970" y="816" class="text small">数据 / 控制</text>
+  <path d="M1090 810 H1145" class="monitor-line"/>
+  <text x="1155" y="816" class="text small">监测路径</text>
+</svg>

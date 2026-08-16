@@ -1,0 +1,57 @@
+\chapter{硬件电路设计}
+
+\section{硬件总体组成}
+
+硬件系统由 CYT4BB7 双核飞控、IMU、双摄像头、ToF/光流传感器、电机与电调、
+电池监测、串口调试接口及空地通信接口组成。定稿时应给出电源树、接口表和各板卡之间的连接关系。
+
+\placeholderfigure{hardware-block-diagram.pdf}{硬件系统框图与电源树}
+
+\section{主控与双核资源分配}
+
+主控采用 Infineon CYT4BB7。CM7\_0 运行飞控和实时任务，CM7\_1 运行相机链路；
+跨核共享数据由\codepath{project/code/communication}目录中的协议和共享模块管理。
+
+\todoitem{补充CYT4BB7具体料号、主频、Flash/RAM占用、两核时钟、共享RAM区域、中断优先级和最坏执行时间。}
+
+\section{传感器接口}
+
+\begin{table}[htbp]
+  \centering
+  \caption{当前已识别的传感器与用途}
+  \begin{tabularx}{\textwidth}{p{3.0cm}p{3.0cm}p{3.2cm}X}
+    \toprule
+    器件/模块 & 接口与频率 & 代码位置 & 用途 \\
+    \midrule
+    ICM42688 & 4 kHz采样基线 & \codepath{project/code/icm} & 角速度、加速度与姿态解算 \\
+    ToF测距 & 双路管理，频率待实测 & \codepath{dual_tof_manager.*} & 高度观测、跳变拒绝与重捕获 \\
+    UP-FLOW-302 & 当前默认40 Hz & \codepath{project/code/pmw} & 水平速度反馈 \\
+    PMW3901 & 兼容路径 & \codepath{project/code/pmw} & 备用光流方案 \\
+    灰度摄像头 & 188×120 & \codepath{project/code/vision} & 信标与车标检测 \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+\section{电机、电调与输出链路}
+
+飞控通过 DShot600 输出电机指令。相关实现见通信模块中的\codepath{dshot600.c}。
+电调状态通过 460800 bit/s、11字节定长串口帧回传，包含电压异常、堵转、启动失败、过温和过流等故障码，
+并以100 ms周期发送心跳。
+
+\todoitem{补充电机、桨叶、电调MOS管、额定/峰值电流、PWM或DShot定时配置以及台架测得的推力—油门曲线。}
+
+\section{电源与保护设计}
+
+结合实物原理图说明电池输入、稳压、电流路径、反接/浪涌/过流保护和模拟/数字地处理。
+现有\codepath{battery_monitor.*}和\codepath{flight_safety.*}可作为电压监测与安全逻辑的软件依据。
+
+\section{通信与调试接口}
+
+至少给出：双核通信、相机板链路、地面车模协议、VOFA串口、DShot600以及电调遥测接口。
+
+\section{PCB设计与实物验证}
+
+\placeholderfigure{flight-controller-pcb.pdf}{飞控板PCB正反面及关键布局}
+\placeholderfigure{schematic-overview.pdf}{飞控板完整分层原理图索引}
+
+\todoitem{官方要求附带详细原理图。正文可展示关键电路，完整原理图应放入附录A，并注明版本号、日期和页码。}

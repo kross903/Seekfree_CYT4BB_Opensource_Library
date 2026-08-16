@@ -1,0 +1,22 @@
+%%{init: {"theme": "base", "themeVariables": {"fontFamily": "Microsoft YaHei, Noto Sans CJK SC, sans-serif", "fontSize": "18px"}, "flowchart": {"curve": "stepAfter", "nodeSpacing": 45, "rankSpacing": 50}}}%%
+flowchart TD
+    A[飞控上电] --> B[初始化时钟、电源控制和通信接口]
+    B --> C[初始化陀螺仪、光流、TOF和红外相机]
+    C --> D[传感器校准与自检]
+    D --> E{自检是否通过}
+    E -- 否 --> F[禁止电机启动并蜂鸣报警]
+    F --> L
+    E -- 是 --> G[进入主控制循环]
+    G --> H[采集姿态、光流、距离和视觉信息]
+    H --> I[读取电池电压并检查通信、传感器和控制状态]
+    I --> J{电池与系统状态是否正常}
+    J -- 否 --> K[执行故障保护并蜂鸣报警]
+    K --> L[保持安全状态并等待人工复位]
+    J -- 是 --> M[姿态解算与任务状态判断]
+    M --> N[计算四电机控制量]
+    N --> O{电调控制方式}
+    O -- 比赛实际使用 --> P[串口发送四路电机控制量]
+    O -- PWM兼容模式 --> Q[输出4路独立PWM]
+    P --> R[经系留线缆与小车交换状态]
+    Q --> R
+    R --> G
