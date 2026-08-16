@@ -157,7 +157,7 @@ uint8 Flight_Control_Is_Throttle_Safe(float throttle);
 #define FLIGHT_TAKEOFF_HEIGHT_BLEND_S       3.0f
 #define FLIGHT_TAKEOFF_HEIGHT_OUTPUT_BLEND_S 1.0f
 #define FLIGHT_TAKEOFF_IDLE_THROTTLE        300.0f
-#define FLIGHT_TAKEOFF_RAMP_TARGET_THROTTLE 1050.0f   // 内部范围 [0,2000]，770≈38.5% 油门；根据悬停实际重量微调
+#define FLIGHT_TAKEOFF_RAMP_TARGET_THROTTLE 1030.0f   // 内部范围 [0,2000]，770≈38.5% 油门；根据悬停实际重量微调
 
 typedef enum
 {
