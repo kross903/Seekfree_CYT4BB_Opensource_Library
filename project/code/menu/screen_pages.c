@@ -47,12 +47,13 @@
 #define UI_MONITOR_DIAG_STATE_Y      274U
 #define UI_MONITOR_HINT_TOP_Y        288U
 #define UI_MONITOR_HINT_BOTTOM_Y     304U
-#define MONITOR_ARM_START_THROTTLE   400.0f
+#define MONITOR_MANUAL_THROTTLE_DEFAULT 400.0f
 #define UI_MONITOR_BAT_INVALID_BLINK_TICKS 4U
 
 static uint8 s_monitor_bat_invalid_active = 0U;
 static uint8 s_monitor_bat_invalid_red_phase = 0U;
 static uint8 s_monitor_bat_invalid_blink_ticks = 0U;
+static float s_monitor_manual_throttle_preset = MONITOR_MANUAL_THROTTLE_DEFAULT;
 
 static uint16 ui_origin_line_y(uint16 row)
 {
@@ -442,7 +443,8 @@ static const char *ui_monitor_takeoff_phase_text(uint8 takeoff_state)
     }
 }
 
-static const char *ui_monitor_hint_top_text(uint8 armed,
+static const char *ui_monitor_hint_top_text(uint8 control_mode,
+                                            uint8 armed,
                                             uint8 rearm_inhibit_active,
                                             uint8 takeoff_state,
                                             uint32 imu_fault_mask,
@@ -454,18 +456,21 @@ static const char *ui_monitor_hint_top_text(uint8 armed,
     if(armed) return ui_monitor_takeoff_phase_text(takeoff_state);
     if(rearm_inhibit_active) return "ESTOP LOCK - WAIT 2S";
     if((imu_fault_mask & ICM_HEALTH_CRITICAL_FAULT_MASK) != 0U) return "IMU FAULT - CHECK F4";
+    if(control_mode == CONTROL_MODE_MANUAL) return "K1:+THR K2:-THR K3:START";
     return "K3: START  K1/K2: PAGE";
 }
 
-static const char *ui_monitor_hint_bottom_text(uint8 armed,
-                                               uint8 rearm_inhibit_active,
-                                               uint32 imu_fault_mask,
-                                               const char *esc_report_text)
+static const char *ui_monitor_hint_bottom_text(uint8 control_mode,
+                                                uint8 armed,
+                                                uint8 rearm_inhibit_active,
+                                                uint32 imu_fault_mask,
+                                                const char *esc_report_text)
 {
     if(armed) return "ANY KEY = EMERGENCY STOP";
     if(esc_report_text != NULL) return "ESC REPORT - NO AUTO STOP";
     if(rearm_inhibit_active) return "KEY3 DISABLED TEMPORARILY";
     if((imu_fault_mask & ICM_HEALTH_CRITICAL_FAULT_MASK) != 0U) return "DO NOT ARM  HOLD K4:MENU";
+    if(control_mode == CONTROL_MODE_MANUAL) return "MANUAL PRESET - BENCH ONLY";
     return "HOLD K4:MENU WHEN STOPPED";
 }
 
@@ -503,13 +508,15 @@ static void ui_monitor_fill_view_hud(const MonitorRuntimeSnapshot *snapshot, Mon
     auto_land_text = ui_monitor_auto_land_text(&data->auto_land_diag);
 
     data->mode_text = ui_monitor_mode_text(snapshot->control_mode);
-    data->hint_top_text = ui_monitor_hint_top_text(snapshot->armed,
+    data->hint_top_text = ui_monitor_hint_top_text(snapshot->control_mode,
+                                                   snapshot->armed,
                                                    snapshot->rearm_inhibit_active,
                                                    snapshot->takeoff_state,
                                                    snapshot->imu_fault_mask,
                                                    data->esc_report_text,
                                                    auto_land_text);
-    data->hint_bottom_text = ui_monitor_hint_bottom_text(snapshot->armed,
+    data->hint_bottom_text = ui_monitor_hint_bottom_text(snapshot->control_mode,
+                                                         snapshot->armed,
                                                          snapshot->rearm_inhibit_active,
                                                          snapshot->imu_fault_mask,
                                                          data->esc_report_text);
@@ -523,7 +530,8 @@ static void ui_monitor_fill_view_hud(const MonitorRuntimeSnapshot *snapshot, Mon
     data->low_voltage = snapshot->low_voltage;
     data->has_nearest = snapshot->has_nearest;
     data->voltage = snapshot->voltage;
-    data->target_throttle = snapshot->target_throttle;
+    data->target_throttle = ((snapshot->control_mode == CONTROL_MODE_MANUAL) && !snapshot->armed) ?
+                            (int32)s_monitor_manual_throttle_preset : snapshot->target_throttle;
     data->base_throttle = snapshot->base_throttle;
     data->roll = snapshot->roll;
     data->pitch = snapshot->pitch;
@@ -815,7 +823,44 @@ static void screen_monitor_start_flight(void)
     Flight_Takeoff_Start();
     if(armed && control_mode != CONTROL_MODE_ANGLE)
     {
-        Flight_Control_Set_Throttle(MONITOR_ARM_START_THROTTLE);
+        Flight_Control_Set_Throttle(s_monitor_manual_throttle_preset);
+    }
+}
+
+static void screen_monitor_adjust_manual_throttle(float step)
+{
+    float throttle_max = Flight_Control_Get_Max_Throttle();
+
+    /* 0表示停转；正油门跳过不可用区间，避免显示值与实际最低输出不一致。 */
+    if(step > 0.0f)
+    {
+        if(s_monitor_manual_throttle_preset < SAFE_MIN_THROTTLE)
+        {
+            s_monitor_manual_throttle_preset = SAFE_MIN_THROTTLE;
+        }
+        else
+        {
+            s_monitor_manual_throttle_preset += step;
+            if(s_monitor_manual_throttle_preset > throttle_max)
+            {
+                s_monitor_manual_throttle_preset = throttle_max;
+            }
+        }
+    }
+    else if(step < 0.0f)
+    {
+        if(s_monitor_manual_throttle_preset <= SAFE_MIN_THROTTLE)
+        {
+            s_monitor_manual_throttle_preset = 0.0f;
+        }
+        else
+        {
+            s_monitor_manual_throttle_preset += step;
+            if(s_monitor_manual_throttle_preset < SAFE_MIN_THROTTLE)
+            {
+                s_monitor_manual_throttle_preset = SAFE_MIN_THROTTLE;
+            }
+        }
     }
 }
 
@@ -960,9 +1005,9 @@ uint8 screen_monitor_handle_input(monitor_page_enum *page,
 
     if(screen_consume_monitor_button_event(Button_1, KEY_1))
     {
-        if(armed)
+        if(!armed && snapshot != NULL && snapshot->control_mode == CONTROL_MODE_MANUAL)
         {
-            Flight_Control_Set_Throttle(Flight_Control_Get_Target_Throttle() + throttle_step);
+            screen_monitor_adjust_manual_throttle(throttle_step);
         }
         else
         {
@@ -973,9 +1018,9 @@ uint8 screen_monitor_handle_input(monitor_page_enum *page,
 
     if(screen_consume_monitor_button_event(Button_2, KEY_2))
     {
-        if(armed)
+        if(!armed && snapshot != NULL && snapshot->control_mode == CONTROL_MODE_MANUAL)
         {
-            Flight_Control_Set_Throttle(Flight_Control_Get_Target_Throttle() - throttle_step);
+            screen_monitor_adjust_manual_throttle(-throttle_step);
         }
         else
         {

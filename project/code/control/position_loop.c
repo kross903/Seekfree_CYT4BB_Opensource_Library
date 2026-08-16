@@ -1006,8 +1006,9 @@ void Position_Loop_Update_Velocity_Target(uint8 velocity_ready,
 
     if(!g_trajectory_initialized)
     {
-        g_target_vx_earth_cms = measured_vx_earth;
-        g_target_vy_earth_cms = measured_vy_earth;
+        /* 轨迹复位后从零目标开始，不再用实际速度初始化目标速度。 */
+        g_target_vx_earth_cms = 0.0f;
+        g_target_vy_earth_cms = 0.0f;
         g_target_ax_earth_cms2 = 0.0f;
         g_target_ay_earth_cms2 = 0.0f;
         g_trajectory_initialized = 1U;
