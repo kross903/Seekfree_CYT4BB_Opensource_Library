@@ -150,6 +150,17 @@ class FisheyeUndistorter:
 
         return Image.frombytes("L", (c.output_width, c.output_height), bytes(output))
 
+    def is_valid_output_pixel(self, x: int, y: int) -> bool:
+        """Return whether a rectified pixel has a valid bilinear source mapping."""
+        c = self.calibration
+        if x < 0 or y < 0 or x >= c.output_width or y >= c.output_height:
+            return False
+        index = y * c.output_width + x
+        return (
+            self.map_x_q8[index] != INVALID_Q8
+            and self.map_y_q8[index] != INVALID_Q8
+        )
+
 
 @dataclass
 class ConnectedComponent:

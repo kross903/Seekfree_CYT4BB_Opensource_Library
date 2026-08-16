@@ -27,6 +27,12 @@ from ideal_projection import (
     self_test as projection_self_test,
     wrap_degrees,
 )
+from ideal_sampling import (
+    SamplingConfig,
+    SamplingResult,
+    sample_projected_shape,
+    self_test as sampling_self_test,
+)
 
 
 APP_DIR = Path(__file__).resolve().parent
@@ -122,10 +128,26 @@ class PictureViewerApp:
         self.beacon_plane_height_var = tk.StringVar(
             value=str(ideal_settings.get("beacon_plane_height_cm", "0"))
         )
+        self.sampling_step_var = tk.StringVar(
+            value=str(ideal_settings.get("sampling_step_px", "2"))
+        )
+        self.sampling_margin_var = tk.StringVar(
+            value=str(ideal_settings.get("sampling_margin_px", "4"))
+        )
+        self.sampling_positive_band_var = tk.StringVar(
+            value=str(ideal_settings.get("sampling_positive_band_px", "1.5"))
+        )
+        self.sampling_negative_guard_var = tk.StringVar(
+            value=str(ideal_settings.get("sampling_negative_guard_px", "3"))
+        )
         self.ideal_source_var = tk.StringVar(value="姿态：手动；小车Yaw：手动")
         self.ideal_status_var = tk.StringVar(value="选择目标后可在图像中左键拖动")
+        self.sampling_summary_var = tk.StringVar(
+            value="正形灰度 --（0点） | 负形灰度 --（0点）"
+        )
         self._ideal_pose_source = "手动"
         self._ideal_car_yaw_source = "手动"
+        self.sampling_window: tk.Toplevel | None = None
 
         self.all_files: list[Path] = []
         self.visible_files: list[Path] = []
@@ -214,7 +236,7 @@ class PictureViewerApp:
         side = ttk.Frame(self.root, padding=(4, 0, 8, 7), width=360)
         side.grid(row=1, column=2, sticky="nsew")
         side.columnconfigure(0, weight=1)
-        side.rowconfigure(5, weight=1)
+        side.rowconfigure(3, weight=1)
 
         binary_controls = ttk.LabelFrame(side, text="单阈值二值化", padding=8)
         binary_controls.grid(row=0, column=0, sticky="ew")
@@ -278,8 +300,19 @@ class PictureViewerApp:
         metadata_frame.grid(row=2, column=0, sticky="ew", pady=(7, 0))
         ttk.Label(metadata_frame, textvariable=self.metadata_var, justify=tk.LEFT).pack(anchor="w")
 
-        ideal_controls = ttk.LabelFrame(side, text="理想目标投影", padding=8)
-        ideal_controls.grid(row=3, column=0, sticky="ew", pady=(7, 0))
+        analysis_notebook = ttk.Notebook(side)
+        self.analysis_notebook = analysis_notebook
+        analysis_notebook.grid(row=3, column=0, sticky="nsew", pady=(7, 0))
+        ideal_tab = ttk.Frame(analysis_notebook, padding=4)
+        candidate_tab = ttk.Frame(analysis_notebook, padding=4)
+        analysis_notebook.add(ideal_tab, text="理想目标")
+        analysis_notebook.add(candidate_tab, text="连通域候选")
+        ideal_tab.columnconfigure(0, weight=1)
+        candidate_tab.columnconfigure(0, weight=1)
+        candidate_tab.rowconfigure(1, weight=1)
+
+        ideal_controls = ttk.LabelFrame(ideal_tab, text="理想目标投影", padding=8)
+        ideal_controls.grid(row=0, column=0, sticky="nsew")
         ideal_controls.columnconfigure(1, weight=1)
         ideal_controls.columnconfigure(3, weight=1)
 
@@ -374,20 +407,48 @@ class PictureViewerApp:
         parameter_entry(9, 2, "开口偏移°", self.arrow_opening_offset_var, self.ideal_parameter_changed)
         parameter_entry(10, 0, "信标直径cm", self.beacon_diameter_var, self.ideal_parameter_changed)
         parameter_entry(10, 2, "信标高cm", self.beacon_plane_height_var, self.ideal_parameter_changed)
+        ttk.Separator(ideal_controls).grid(
+            row=11, column=0, columnspan=4, sticky="ew", pady=(6, 1)
+        )
+        sampling_actions = ttk.Frame(ideal_controls)
+        sampling_actions.grid(row=12, column=0, columnspan=4, sticky="ew", pady=(4, 0))
+        ttk.Button(
+            sampling_actions,
+            text="采样参数",
+            command=self.open_sampling_window,
+        ).pack(side=tk.LEFT)
+        ttk.Button(
+            sampling_actions,
+            text="对齐候选质心",
+            command=self.align_ideal_to_selected_component,
+        ).pack(side=tk.LEFT, padx=(6, 0))
+        ttk.Label(
+            ideal_controls,
+            textvariable=self.sampling_summary_var,
+            justify=tk.LEFT,
+            wraplength=330,
+        ).grid(row=13, column=0, columnspan=4, sticky="w", pady=(5, 0))
         ttk.Label(
             ideal_controls,
             textvariable=self.ideal_status_var,
             justify=tk.LEFT,
             wraplength=330,
-        ).grid(row=11, column=0, columnspan=4, sticky="w", pady=(5, 0))
+        ).grid(row=14, column=0, columnspan=4, sticky="w", pady=(5, 0))
 
-        candidate_bar = ttk.Frame(side)
-        candidate_bar.grid(row=4, column=0, sticky="ew", pady=(8, 4))
+        candidate_bar = ttk.Frame(candidate_tab)
+        candidate_bar.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 4))
         ttk.Label(candidate_bar, text="连通域候选").pack(side=tk.LEFT)
         ttk.Button(candidate_bar, text="打开候选", command=self.open_selected_component).pack(side=tk.RIGHT)
+        ttk.Button(
+            candidate_bar,
+            text="对齐理想目标",
+            command=self.align_ideal_to_selected_component,
+        ).pack(side=tk.RIGHT, padx=(0, 6))
 
         columns = ("area", "center", "box", "circle", "fill")
-        self.component_tree = ttk.Treeview(side, columns=columns, show="tree headings", height=12)
+        self.component_tree = ttk.Treeview(
+            candidate_tab, columns=columns, show="tree headings", height=12
+        )
         self.component_tree.heading("#0", text="#")
         self.component_tree.column("#0", width=36, stretch=False, anchor="center")
         headings = {
@@ -400,10 +461,12 @@ class PictureViewerApp:
         for name, (text, width) in headings.items():
             self.component_tree.heading(name, text=text)
             self.component_tree.column(name, width=width, anchor="center")
-        component_scroll = ttk.Scrollbar(side, orient=tk.VERTICAL, command=self.component_tree.yview)
+        component_scroll = ttk.Scrollbar(
+            candidate_tab, orient=tk.VERTICAL, command=self.component_tree.yview
+        )
         self.component_tree.configure(yscrollcommand=component_scroll.set)
-        self.component_tree.grid(row=5, column=0, sticky="nsew")
-        component_scroll.grid(row=5, column=1, sticky="ns")
+        self.component_tree.grid(row=1, column=0, sticky="nsew")
+        component_scroll.grid(row=1, column=1, sticky="ns")
 
         status = ttk.Label(self.root, textvariable=self.status_var, relief=tk.SUNKEN, anchor="w", padding=(6, 3))
         status.grid(row=2, column=0, columnspan=3, sticky="ew")
@@ -464,6 +527,18 @@ class PictureViewerApp:
                 "beacon_diameter_cm": self.safe_float(self.beacon_diameter_var, 10.0),
                 "beacon_plane_height_cm": self.safe_float(
                     self.beacon_plane_height_var, 0.0
+                ),
+                "sampling_step_px": self.safe_int(
+                    self.sampling_step_var, 2, 1, 32
+                ),
+                "sampling_margin_px": self.safe_float(
+                    self.sampling_margin_var, 4.0
+                ),
+                "sampling_positive_band_px": self.safe_float(
+                    self.sampling_positive_band_var, 1.5
+                ),
+                "sampling_negative_guard_px": self.safe_float(
+                    self.sampling_negative_guard_var, 3.0
                 ),
             },
         }
@@ -718,6 +793,80 @@ class PictureViewerApp:
     def ideal_parameter_changed(self, _event: object = None) -> None:
         self.redraw_canvas()
 
+    def open_sampling_window(self) -> None:
+        if self.sampling_window is not None and self.sampling_window.winfo_exists():
+            self.sampling_window.deiconify()
+            self.sampling_window.lift()
+            return
+
+        window = tk.Toplevel(self.root)
+        window.title("正负形采样参数")
+        window.resizable(False, False)
+        self.sampling_window = window
+        content = ttk.Frame(window, padding=10)
+        content.grid(row=0, column=0, sticky="nsew")
+        content.columnconfigure(1, weight=1)
+        fields = (
+            ("采样步长 (px)", self.sampling_step_var),
+            ("采样框余量 (px)", self.sampling_margin_var),
+            ("正形轮廓带 (px)", self.sampling_positive_band_var),
+            ("负形最小距离 (px)", self.sampling_negative_guard_var),
+        )
+        for row, (label, variable) in enumerate(fields):
+            ttk.Label(content, text=label).grid(row=row, column=0, sticky="w", pady=3)
+            if row == 0:
+                entry = ttk.Spinbox(
+                    content,
+                    from_=1,
+                    to=32,
+                    width=9,
+                    textvariable=variable,
+                    command=self.sampling_parameter_changed,
+                )
+            else:
+                entry = ttk.Entry(content, width=11, textvariable=variable)
+            entry.grid(row=row, column=1, sticky="ew", padx=(8, 0), pady=3)
+            entry.bind("<KeyRelease>", self.sampling_parameter_changed)
+
+        legend = ttk.Frame(content)
+        legend.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(6, 0))
+        tk.Label(legend, text="● 正形点", fg="#168a45").pack(side=tk.LEFT)
+        tk.Label(legend, text="● 负形点", fg="#d62f4b").pack(side=tk.LEFT, padx=(12, 0))
+        ttk.Label(
+            content,
+            textvariable=self.sampling_summary_var,
+            justify=tk.LEFT,
+            wraplength=280,
+        ).grid(row=5, column=0, columnspan=2, sticky="w", pady=(7, 0))
+        actions = ttk.Frame(content)
+        actions.grid(row=6, column=0, columnspan=2, sticky="e", pady=(8, 0))
+        ttk.Button(
+            actions,
+            text="恢复默认",
+            command=self.reset_sampling_parameters,
+        ).pack(side=tk.LEFT)
+        ttk.Button(
+            actions,
+            text="关闭",
+            command=self.close_sampling_window,
+        ).pack(side=tk.LEFT, padx=(6, 0))
+        window.protocol("WM_DELETE_WINDOW", self.close_sampling_window)
+
+    def close_sampling_window(self) -> None:
+        if self.sampling_window is not None and self.sampling_window.winfo_exists():
+            self.sampling_window.destroy()
+        self.sampling_window = None
+
+    def reset_sampling_parameters(self) -> None:
+        self.sampling_step_var.set("2")
+        self.sampling_margin_var.set("4")
+        self.sampling_positive_band_var.set("1.5")
+        self.sampling_negative_guard_var.set("3")
+        self.redraw_canvas()
+
+    def sampling_parameter_changed(self, _event: object = None) -> None:
+        self.redraw_canvas()
+
     def ideal_mount_angles_changed(self, _event: object = None) -> None:
         self.redraw_canvas()
 
@@ -810,6 +959,20 @@ class PictureViewerApp:
             (component for component in self.components if component.label == self.selected_component),
             None,
         )
+
+    def align_ideal_to_selected_component(self) -> None:
+        target = self.ideal_target_var.get()
+        if target not in (IDEAL_TARGET_ARROW, IDEAL_TARGET_BEACON):
+            messagebox.showinfo("理想目标", "请先选择理想箭头或理想信标。")
+            return
+        component = self.current_component()
+        if component is None:
+            messagebox.showinfo("候选质心", "请先在连通域候选表中选择一个候选。")
+            return
+        self.ideal_centers[target] = (component.centroid_x, component.centroid_y)
+        if self.view_var.get() not in IDEAL_BACKGROUND_NAMES:
+            self.view_var.set(self.ideal_background_var.get())
+        self.redraw_canvas()
 
     def open_selected_component(self) -> None:
         component = self.current_component()
@@ -919,9 +1082,11 @@ class PictureViewerApp:
         target = self.ideal_target_var.get()
         if target == IDEAL_TARGET_NONE:
             self.ideal_status_var.set("选择目标后可在图像中左键拖动")
+            self.sampling_summary_var.set("正形灰度 --（0点） | 负形灰度 --（0点）")
             return
         if self.view_var.get() not in IDEAL_BACKGROUND_NAMES:
             self.ideal_status_var.set("理想目标仅叠加在去畸变灰度图或单阈值二值图")
+            self.sampling_summary_var.set("当前显示模式不执行正负形采样")
             return
         calibration = self.projection_calibration
         if background.size != (calibration.output_width, calibration.output_height):
@@ -1008,6 +1173,13 @@ class PictureViewerApp:
             self.ideal_status_var.set(f"参数错误：{exc}")
             return
 
+        sampling_outline = (
+            projected_points
+            if target == IDEAL_TARGET_ARROW
+            else projected_points[:-1]
+        )
+        self.update_sampling_overlay(target, sampling_outline)
+
         canvas_points = [
             (
                 self.offset_x + point[0] * self.zoom,
@@ -1079,6 +1251,94 @@ class PictureViewerApp:
             f"({mount_roll:.1f}°, {mount_pitch:.1f}°, {mount_yaw:.1f}°)"
             f"{outside_text}"
         )
+
+    def current_sampling_config(self) -> SamplingConfig:
+        try:
+            step = int(self.sampling_step_var.get())
+            margin = float(self.sampling_margin_var.get())
+            positive_band = float(self.sampling_positive_band_var.get())
+            negative_guard = float(self.sampling_negative_guard_var.get())
+        except (TypeError, ValueError, tk.TclError) as exc:
+            raise ValueError("采样参数必须是数字") from exc
+        return SamplingConfig(
+            step_px=step,
+            margin_px=margin,
+            positive_band_px=positive_band,
+            negative_guard_px=negative_guard,
+        )
+
+    def update_sampling_overlay(
+        self,
+        target: str,
+        outline: list[tuple[float, float]],
+    ) -> None:
+        if self.undistorted is None:
+            self.sampling_summary_var.set("尚未生成去畸变灰度图")
+            return
+        try:
+            result = sample_projected_shape(
+                self.undistorted,
+                outline,
+                closed=target == IDEAL_TARGET_BEACON,
+                filled_positive=target == IDEAL_TARGET_BEACON,
+                config=self.current_sampling_config(),
+                is_valid_pixel=self.undistorter.is_valid_output_pixel,
+            )
+        except ValueError as exc:
+            self.sampling_summary_var.set(f"采样参数错误：{exc}")
+            return
+        self.draw_sampling_result(result)
+        positive_text = (
+            f"{result.positive_mean:.1f}"
+            if result.positive_mean is not None else "--"
+        )
+        negative_text = (
+            f"{result.negative_mean:.1f}"
+            if result.negative_mean is not None else "--"
+        )
+        extras = [f"忽略{result.ignored_count}点"]
+        if result.invalid_count:
+            extras.append(f"无效区{result.invalid_count}点")
+        if result.box_clipped:
+            extras.append("采样框已裁边")
+        self.sampling_summary_var.set(
+            f"正形灰度 {positive_text}（{len(result.positive_points)}点） | "
+            f"负形灰度 {negative_text}（{len(result.negative_points)}点） | "
+            + "，".join(extras)
+        )
+
+    def draw_sampling_result(self, result: SamplingResult) -> None:
+        if result.bounds is not None:
+            min_x, min_y, max_x, max_y = result.bounds
+            self.canvas.create_rectangle(
+                self.offset_x + min_x * self.zoom,
+                self.offset_y + min_y * self.zoom,
+                self.offset_x + max_x * self.zoom,
+                self.offset_y + max_y * self.zoom,
+                outline="#ffe066",
+                width=1,
+                dash=(4, 3),
+                tags="ideal_sampling",
+            )
+
+        def draw_points(points: tuple[tuple[int, int], ...], color: str) -> None:
+            stride = max(1, (len(points) + 799) // 800)
+            radius = 2.0
+            for image_x, image_y in points[::stride]:
+                canvas_x = self.offset_x + image_x * self.zoom
+                canvas_y = self.offset_y + image_y * self.zoom
+                self.canvas.create_oval(
+                    canvas_x - radius,
+                    canvas_y - radius,
+                    canvas_x + radius,
+                    canvas_y + radius,
+                    fill=color,
+                    outline="",
+                    tags="ideal_sampling",
+                )
+
+        draw_points(result.positive_points, "#28d96f")
+        draw_points(result.negative_points, "#f04464")
 
     def ideal_drag_start(self, event: tk.Event) -> None:
         target = self.ideal_target_var.get()
@@ -1186,9 +1446,16 @@ class PictureViewerApp:
 def self_test() -> int:
     analysis_self_test()
     projection_self_test(CALIBRATION_HEADER)
+    sampling_self_test()
     calibration = CameraCalibration.from_header(CALIBRATION_HEADER)
     assert (calibration.image_width, calibration.image_height) == (188, 120)
     assert (calibration.output_width, calibration.output_height) == (376, 240)
+    undistorter = FisheyeUndistorter(calibration)
+    assert undistorter.is_valid_output_pixel(
+        calibration.output_width // 2,
+        calibration.output_height // 2,
+    )
+    assert not undistorter.is_valid_output_pixel(-1, 0)
     assert DEFAULT_CAPTURE_DIR.is_dir()
     return 0
 
