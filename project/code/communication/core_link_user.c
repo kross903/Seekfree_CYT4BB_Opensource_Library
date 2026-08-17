@@ -129,6 +129,58 @@ static uint8 core_link_user_get_uplink_snapshot(
     return 0U;
 }
 
+static void core_link_user_build_search_direction_input(
+    const core_link_beacon_map_uplink_packet_struct *uplink,
+    uint8 uplink_valid,
+    const core_link_car_trajectory_packet_struct *trajectory,
+    uint8 trajectory_valid,
+    BeaconSearchDirectionInput_t *input)
+{
+    uint8 i;
+    uint8 map_count = 0U;
+
+    if(NULL == input)
+    {
+        return;
+    }
+
+    memset(input, 0, sizeof(*input));
+    if(uplink_valid && (NULL != uplink))
+    {
+        input->car_position_valid = uplink->car_visible ? 1U : 0U;
+        input->car_x_mm = uplink->car_x_mm;
+        input->car_y_mm = uplink->car_y_mm;
+        for(i = 0U; i < CORE_LINK_BEACON_MAP_COUNT; ++i)
+        {
+            if((0U == uplink->beacon[i].id) ||
+               (0U == uplink->beacon[i].state))
+            {
+                continue;
+            }
+            input->beacon[map_count] = uplink->beacon[i];
+            map_count++;
+        }
+    }
+
+    input->map_count = map_count;
+    input->map_valid = (map_count > 0U) ? 1U : 0U;
+
+    if(trajectory_valid && (NULL != trajectory) &&
+       (trajectory->flags & CORE_LINK_CAR_TRAJECTORY_FLAG_PREDICTED) &&
+       (0U != trajectory->predicted_beacon_id) &&
+       (CORE_LINK_PREDICTED_BEACON_SOURCE_NONE !=
+        trajectory->predicted_beacon_source))
+    {
+        input->predicted_valid = 1U;
+        input->predicted_id = trajectory->predicted_beacon_id;
+        input->car_absolute_yaw_ddeg = trajectory->car_absolute_yaw_ddeg;
+        input->predicted_beacon_forward_mm =
+            trajectory->predicted_beacon_forward_mm;
+        input->predicted_beacon_left_mm =
+            trajectory->predicted_beacon_left_mm;
+    }
+}
+
 static uint8 core_link_user_get_car_trajectory_snapshot(
     core_link_car_trajectory_packet_struct *snapshot)
 {
@@ -752,6 +804,7 @@ void core_link_user_poll (void)
 
 void core_link_user_tick (uint16 elapsed_ms)
 {
+    BeaconSearchDirectionInput_t search_direction = {0};
     BeaconSearchStabilityInput_t search_stability = {0};
     PMWFlowState_t flow_state = {0};
     VehicleMarkerLossDebug_t marker_loss = {0};
@@ -761,6 +814,8 @@ void core_link_user_tick (uint16 elapsed_ms)
     float follow_y_cm = 0.0f;
     uint8 follow_valid;
     uint8 car_link_valid;
+    uint8 uplink_snapshot_valid = 0U;
+    uint8 trajectory_snapshot_valid = 0U;
     uint8 car_motion_valid = 0U;
     uint8 car_target_valid = 0U;
     uint16 car_link_age_ms = 60000U;
@@ -812,10 +867,23 @@ void core_link_user_tick (uint16 elapsed_ms)
         s_core_link_user_car_trajectory_valid = 0U;
     }
 
-    car_link_valid = (uint8)(s_core_link_user_car_trajectory_valid &&
+    uplink_snapshot_valid = (uint8)(
+        s_core_link_user_beacon_uplink_valid &&
+        (s_core_link_user_beacon_uplink_age_ms <=
+         CORE_LINK_USER_BEACON_TIMEOUT_MS) &&
+        core_link_user_get_uplink_snapshot(&uplink_snapshot));
+    trajectory_snapshot_valid = (uint8)(
+        s_core_link_user_car_trajectory_valid &&
         (s_core_link_user_car_trajectory_age_ms <=
          CORE_LINK_USER_BEACON_TIMEOUT_MS) &&
         core_link_user_get_car_trajectory_snapshot(&trajectory_snapshot));
+
+    core_link_user_build_search_direction_input(
+        &uplink_snapshot, uplink_snapshot_valid,
+        &trajectory_snapshot, trajectory_snapshot_valid,
+        &search_direction);
+
+    car_link_valid = trajectory_snapshot_valid;
     if(car_link_valid)
     {
         car_link_age_ms = s_core_link_user_car_trajectory_age_ms;
@@ -828,8 +896,7 @@ void core_link_user_tick (uint16 elapsed_ms)
     {
         car_link_valid = (uint8)((s_core_link_user_car_motion_age_ms <=
              CORE_LINK_USER_BEACON_TIMEOUT_MS) &&
-            s_core_link_user_beacon_uplink_valid &&
-            core_link_user_get_uplink_snapshot(&uplink_snapshot));
+            uplink_snapshot_valid);
         if(car_link_valid)
         {
             car_link_age_ms = s_core_link_user_car_motion_age_ms;
@@ -867,6 +934,8 @@ void core_link_user_tick (uint16 elapsed_ms)
                       car_link_age_ms,
                       car_motion_valid,
                       car_target_valid,
+                      current_yaw,
+                      &search_direction,
                       &search_stability);
     BlindBoxTasks_Tick(elapsed_ms);
 }
