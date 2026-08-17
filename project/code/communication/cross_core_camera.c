@@ -1,5 +1,6 @@
 #include "communication/cross_core_camera.h"
 #include "common/project_headfile.h"
+#include <math.h>
 
 #define SHARED_VISION_INPUT_ADDR                    0x28001000u
 #define SHARED_VISION_RESULT_ADDR                   0x28001100u
@@ -709,6 +710,9 @@ void CrossCoreCamera_CameraCoreTask(void)
     uint32 recognition_start_cycle = 0U;
     uint32 recognition_elapsed_cycle = 0U;
     uint8 recognition_timer_valid = 0U;
+    float vision_car_yaw_deg = 0.0f;
+    uint16 vision_car_yaw_age_ms = 0U;
+    uint8 vision_yaw_valid = 0U;
 
     if(!CrossCoreCamera_CameraCoreAcquireFrame())
     {
@@ -752,10 +756,20 @@ void CrossCoreCamera_CameraCoreTask(void)
         input_snapshot.binary_thresholds[VISION_BINARY_ZONE_OUTER]);
     VisionRuntime_SetBeaconRecognitionEnabled((uint8)(
         input_valid && input_snapshot.beacon_recognition_enabled));
+    vision_yaw_valid = (uint8)(input_valid &&
+        isfinite(input_snapshot.yaw_deg));
+    if(vision_yaw_valid && input_snapshot.car_yaw_valid &&
+       input_snapshot.car_yaw_age_ms <= VISION_RUNTIME_YAW_MAX_AGE_MS &&
+       isfinite(input_snapshot.car_yaw_deg))
+    {
+        vision_car_yaw_deg = input_snapshot.car_yaw_deg;
+        vision_car_yaw_age_ms = input_snapshot.car_yaw_age_ms;
+    }
+    /* Missing or stale car yaw falls back to absolute yaw 0 degrees. */
     VisionRuntime_SetVehicleYawPrior(
-        input_snapshot.car_yaw_deg - input_snapshot.yaw_deg,
-        input_snapshot.car_yaw_age_ms,
-        (uint8)(input_valid && input_snapshot.car_yaw_valid));
+        vision_car_yaw_deg - input_snapshot.yaw_deg,
+        vision_car_yaw_age_ms,
+        vision_yaw_valid);
     recognition_timer_valid = (uint8)(CrossCoreCamera_DwtInit() &&
                                       (SystemCoreClock != 0U));
     if(recognition_timer_valid)

@@ -719,6 +719,14 @@ typedef struct
     int max_row;
     int min_col;
     int max_col;
+    int fine_area;
+    uint32 fine_col_sum;
+    uint32 fine_row_sum;
+    int fine_min_row;
+    int fine_max_row;
+    int fine_min_col;
+    int fine_max_col;
+    uint8 fine_coordinates_valid;
 } VisionRuntimeCandidate_t;
 
 typedef struct
@@ -776,6 +784,8 @@ typedef struct
 static VisionRuntimeFineRun_t
     s_vision_fine_runs[VISION_RUNTIME_RLE_MAX_RUNS];
 
+static uint8 VisionRuntime_FindFullCandidates(void);
+
 static void VisionRuntime_GetFineCandidateBounds(
     const VisionRuntimeCandidate_t *candidate,
     int *min_x, int *max_x, int *min_y, int *max_y)
@@ -791,6 +801,14 @@ static void VisionRuntime_GetFineCandidateBounds(
     if(candidate == NULL || min_x == NULL || max_x == NULL ||
        min_y == NULL || max_y == NULL)
     {
+        return;
+    }
+    if(candidate->fine_coordinates_valid)
+    {
+        *min_x = candidate->fine_min_col;
+        *max_x = candidate->fine_max_col;
+        *min_y = candidate->fine_min_row;
+        *max_y = candidate->fine_max_row;
         return;
     }
     for(corner = 0; corner < 4; ++corner)
@@ -1206,28 +1224,29 @@ static uint8 VisionRuntime_BuildFineCandidateIPMDualBinary(
 
 static void VisionRuntime_Binarize(const uint8 image[MT9V03X_H][MT9V03X_W])
 {
-    int row;
-    int col;
+    int fine_y;
+    int fine_x;
 
-    VisionRuntime_BinarizeCoarse(image);
-    VisionRuntime_FindCoarseCandidates();
     memset(s_vision_binary, 0, sizeof(s_vision_binary));
-    for(row = 0; row < MT9V03X_H; ++row)
+    for(fine_y = 0; fine_y < (int)VISION_RUNTIME_FINE_HEIGHT; ++fine_y)
     {
-        for(col = 0; col < MT9V03X_W; ++col)
+        for(fine_x = 0; fine_x < (int)VISION_RUNTIME_FINE_WIDTH; ++fine_x)
         {
-            int index = row * MT9V03X_W + col;
-            if(VISION_RUNTIME_IMAGE_BIT_GET(s_vision_coarse_binary, index))
+            uint16 source_x_q8;
+            uint16 source_y_q8;
+            uint8 sample;
+
+            if(IPM_SampleFullUndistortedGrayQ8(
+                   image, fine_x, fine_y,
+                   &source_x_q8, &source_y_q8, &sample) &&
+               sample >= s_vision_beacon_threshold)
             {
-                int fine_x = col * 2;
-                int fine_y = row * 2;
                 VISION_RUNTIME_FINE_BIT_SET(s_vision_binary, fine_x, fine_y);
-                VISION_RUNTIME_FINE_BIT_SET(s_vision_binary, fine_x + 1, fine_y);
-                VISION_RUNTIME_FINE_BIT_SET(s_vision_binary, fine_x, fine_y + 1);
-                VISION_RUNTIME_FINE_BIT_SET(s_vision_binary, fine_x + 1, fine_y + 1);
             }
         }
     }
+    s_vision_active_binary = s_vision_binary;
+    VisionRuntime_FindFullCandidates();
 #if VISION_RUNTIME_DEBUG_UNDISTORT_IMAGE_ENABLE
     IPM_GenerateUndistortedDebugImage(image, s_vision_undistorted);
 #endif
@@ -2317,6 +2336,174 @@ static void VisionRuntime_ClearFineComponent(uint16 run_count)
     }
 }
 
+static void VisionRuntime_SetFineCandidate(
+    VisionRuntimeCandidate_t *candidate, int fine_area,
+    uint32 fine_col_sum, uint32 fine_row_sum,
+    int fine_min_col, int fine_max_col,
+    int fine_min_row, int fine_max_row)
+{
+    uint32 coarse_area;
+
+    if(candidate == NULL || fine_area <= 0) return;
+    coarse_area = ((uint32)fine_area + 2U) / 4U;
+    if(coarse_area == 0U) coarse_area = 1U;
+    memset(candidate, 0, sizeof(*candidate));
+    candidate->area = (int)coarse_area;
+    candidate->col_sum = (uint32)(
+        ((uint64)fine_col_sum * coarse_area + (uint32)fine_area) /
+        ((uint64)(uint32)fine_area * 2U));
+    candidate->row_sum = (uint32)(
+        ((uint64)fine_row_sum * coarse_area + (uint32)fine_area) /
+        ((uint64)(uint32)fine_area * 2U));
+    candidate->min_col = fine_min_col / 2;
+    candidate->max_col = fine_max_col / 2;
+    candidate->min_row = fine_min_row / 2;
+    candidate->max_row = fine_max_row / 2;
+    candidate->fine_area = fine_area;
+    candidate->fine_col_sum = fine_col_sum;
+    candidate->fine_row_sum = fine_row_sum;
+    candidate->fine_min_col = fine_min_col;
+    candidate->fine_max_col = fine_max_col;
+    candidate->fine_min_row = fine_min_row;
+    candidate->fine_max_row = fine_max_row;
+    candidate->fine_coordinates_valid = 1U;
+}
+
+static uint8 VisionRuntime_CollectFineCandidates(
+    int min_col, int max_col, int min_row, int max_row,
+    int minimum_area, VisionRuntimeCandidate_t *candidates,
+    uint8 maximum_candidates)
+{
+    int row;
+    int col;
+    uint8 candidate_count = 0U;
+
+    if(candidates == NULL || maximum_candidates == 0U) return 0U;
+    if(min_col < 0) min_col = 0;
+    if(min_row < 0) min_row = 0;
+    if(max_col >= (int)VISION_RUNTIME_FINE_WIDTH)
+        max_col = VISION_RUNTIME_FINE_WIDTH - 1;
+    if(max_row >= (int)VISION_RUNTIME_FINE_HEIGHT)
+        max_row = VISION_RUNTIME_FINE_HEIGHT - 1;
+    if(minimum_area < 1) minimum_area = 1;
+    if(min_col > max_col || min_row > max_row) return 0U;
+
+    memset(s_vision_fine_visited, 0, sizeof(s_vision_fine_visited));
+    memset(s_vision_fine_component_mask, 0,
+           sizeof(s_vision_fine_component_mask));
+    memset(candidates, 0,
+           sizeof(VisionRuntimeCandidate_t) * maximum_candidates);
+    for(row = min_row; row <= max_row; ++row)
+    {
+        for(col = min_col; col <= max_col; ++col)
+        {
+            uint16 run_count = 0U;
+            int front = 0;
+            int area = 0;
+            uint32 col_sum = 0U;
+            uint32 row_sum = 0U;
+            int component_min_col = col;
+            int component_max_col = col;
+            int component_min_row = row;
+            int component_max_row = row;
+            uint8 complete = 1U;
+            int slot;
+
+            if(!VisionRuntime_FineIsForeground(col, row) ||
+               VISION_RUNTIME_FINE_BIT_GET(s_vision_fine_visited, col, row))
+            {
+                continue;
+            }
+            if(!VisionRuntime_FineAppendRun(row, col, min_col, max_col,
+                                            &run_count))
+            {
+                VisionRuntime_ClearFineComponent(run_count);
+                continue;
+            }
+            while(front < (int)run_count)
+            {
+                VisionRuntimeFineRun_t run = s_vision_fine_runs[front++];
+                int run_length = (int)run.end_col -
+                                 (int)run.start_col + 1;
+
+                area += run_length;
+                col_sum += (uint32)(((uint32)run.start_col + run.end_col) *
+                                    (uint32)run_length / 2U);
+                row_sum += (uint32)run.row * (uint32)run_length;
+                if((int)run.start_col < component_min_col)
+                    component_min_col = run.start_col;
+                if((int)run.end_col > component_max_col)
+                    component_max_col = run.end_col;
+                if((int)run.row < component_min_row)
+                    component_min_row = run.row;
+                if((int)run.row > component_max_row)
+                    component_max_row = run.row;
+                if(!VisionRuntime_FineAppendNeighborRuns(
+                       &run, (int)run.row - 1, min_col, max_col, &run_count) ||
+                   !VisionRuntime_FineAppendNeighborRuns(
+                       &run, (int)run.row + 1, min_col, max_col, &run_count))
+                {
+                    complete = 0U;
+                    break;
+                }
+            }
+            if(!complete || area < minimum_area)
+            {
+                VisionRuntime_ClearFineComponent(run_count);
+                continue;
+            }
+
+            slot = (int)candidate_count;
+            if(candidate_count >= maximum_candidates)
+            {
+                uint8 index;
+                slot = 0;
+                for(index = 1U; index < candidate_count; ++index)
+                {
+                    if(candidates[index].fine_area <
+                       candidates[slot].fine_area) slot = (int)index;
+                }
+                if(area <= candidates[slot].fine_area)
+                {
+                    VisionRuntime_ClearFineComponent(run_count);
+                    continue;
+                }
+            }
+            else
+            {
+                ++candidate_count;
+            }
+            VisionRuntime_SetFineCandidate(
+                &candidates[slot], area, col_sum, row_sum,
+                component_min_col, component_max_col,
+                component_min_row, component_max_row);
+            VisionRuntime_ClearFineComponent(run_count);
+        }
+    }
+    return candidate_count;
+}
+
+static uint8 VisionRuntime_FindFullCandidates(void)
+{
+    memset(s_vision_candidate_annotations, 0,
+           sizeof(s_vision_candidate_annotations));
+    memset(s_vision_candidate_beacon_area, 0,
+           sizeof(s_vision_candidate_beacon_area));
+    memset(s_vision_candidate_vehicle_area, 0,
+           sizeof(s_vision_candidate_vehicle_area));
+    memset(s_vision_candidate_beacon_brightness_sum, 0,
+           sizeof(s_vision_candidate_beacon_brightness_sum));
+    memset(s_vision_candidate_threshold_stats, 0,
+           sizeof(s_vision_candidate_threshold_stats));
+    s_vision_active_binary = s_vision_binary;
+    s_vision_candidate_count = VisionRuntime_CollectFineCandidates(
+        0, VISION_RUNTIME_FINE_WIDTH - 1,
+        0, VISION_RUNTIME_FINE_HEIGHT - 1,
+        VISION_RUNTIME_FULL_CANDIDATE_MIN_AREA,
+        s_vision_candidates, VISION_RUNTIME_MAX_CANDIDATES);
+    return s_vision_candidate_count;
+}
+
 typedef enum
 {
     VISION_RUNTIME_FINE_TARGET_VEHICLE = 0,
@@ -2614,6 +2801,18 @@ static uint8 VisionRuntime_GetIdealCenter(
     {
         return 0U;
     }
+    if(candidate->fine_coordinates_valid && candidate->fine_area > 0)
+    {
+        *center_x = (int)((candidate->fine_col_sum +
+                          (uint32)candidate->fine_area / 2U) /
+                         (uint32)candidate->fine_area);
+        *center_y = (int)((candidate->fine_row_sum +
+                          (uint32)candidate->fine_area / 2U) /
+                         (uint32)candidate->fine_area);
+        return (uint8)(*center_x >= 0 &&
+            *center_x < (int)VISION_RUNTIME_FINE_WIDTH &&
+            *center_y >= 0 && *center_y < (int)VISION_RUNTIME_FINE_HEIGHT);
+    }
     source_x = (float)candidate->col_sum / (float)candidate->area;
     source_y = (float)candidate->row_sum / (float)candidate->area;
     if(!CameraCalibration_SourcePointToRectified(
@@ -2631,7 +2830,8 @@ static uint8 VisionRuntime_GetIdealCenter(
 
 static uint8 VisionRuntime_TryIdealArrow(
     const uint8 image[MT9V03X_H][MT9V03X_W],
-    const VisionRuntimeCandidate_t *candidate, uint8 candidate_index)
+    const VisionRuntimeCandidate_t *candidate, uint8 candidate_index,
+    VisionIdealMatchResult_t *accepted_match)
 {
     VisionIdealMatchResult_t match;
     VehicleMarkerWorldPoint_t apex;
@@ -2671,12 +2871,87 @@ static uint8 VisionRuntime_TryIdealArrow(
     {
         return 0U;
     }
+    if(accepted_match != NULL)
+    {
+        *accepted_match = match;
+    }
     if(candidate_index < VISION_RUNTIME_MAX_CANDIDATES)
     {
         s_vision_candidate_annotations[candidate_index].vehicle_valid = 1U;
     }
     ++s_vision_runtime_diag.ir_blob_count;
     return 1U;
+}
+
+static uint8 VisionRuntime_PointWithinSegmentBand(
+    int x, int y, int x0, int y0, int x1, int y1, uint32 half_width)
+{
+    sint32 vx = (sint32)x1 - x0;
+    sint32 vy = (sint32)y1 - y0;
+    sint32 wx = (sint32)x - x0;
+    sint32 wy = (sint32)y - y0;
+    sint32 dot = wx * vx + wy * vy;
+    uint32 length_sq = (uint32)(vx * vx + vy * vy);
+    uint32 width_sq = half_width * half_width;
+
+    if(length_sq == 0U || dot <= 0)
+    {
+        return (uint8)((uint32)(wx * wx + wy * wy) <= width_sq);
+    }
+    if((uint32)dot >= length_sq)
+    {
+        sint32 dx = (sint32)x - x1;
+        sint32 dy = (sint32)y - y1;
+        return (uint8)((uint32)(dx * dx + dy * dy) <= width_sq);
+    }
+    {
+        sint32 cross = wx * vy - wy * vx;
+        uint64 cross_sq = (uint64)((int64)cross * (int64)cross);
+        return (uint8)(cross_sq <= (uint64)width_sq * length_sq);
+    }
+}
+
+static void VisionRuntime_MaskArrowSegment(
+    int x0, int y0, int x1, int y1, uint32 half_width)
+{
+    int min_x = ((x0 < x1) ? x0 : x1) - (int)half_width;
+    int max_x = ((x0 > x1) ? x0 : x1) + (int)half_width;
+    int min_y = ((y0 < y1) ? y0 : y1) - (int)half_width;
+    int max_y = ((y0 > y1) ? y0 : y1) + (int)half_width;
+    int x;
+    int y;
+
+    if(min_x < 0) min_x = 0;
+    if(min_y < 0) min_y = 0;
+    if(max_x >= (int)VISION_RUNTIME_FINE_WIDTH)
+        max_x = VISION_RUNTIME_FINE_WIDTH - 1;
+    if(max_y >= (int)VISION_RUNTIME_FINE_HEIGHT)
+        max_y = VISION_RUNTIME_FINE_HEIGHT - 1;
+    for(y = min_y; y <= max_y; ++y)
+    {
+        for(x = min_x; x <= max_x; ++x)
+        {
+            if(VisionRuntime_PointWithinSegmentBand(
+                   x, y, x0, y0, x1, y1, half_width))
+            {
+                VISION_RUNTIME_FINE_BIT_CLEAR(s_vision_binary, x, y);
+            }
+        }
+    }
+}
+
+static void VisionRuntime_MaskAcceptedArrow(
+    const VisionIdealMatchResult_t *match)
+{
+    if(match == NULL) return;
+    VisionRuntime_MaskArrowSegment(
+        match->image_x[0], match->image_y[0],
+        match->image_x[1], match->image_y[1],
+        VISION_RUNTIME_ARROW_MASK_HALF_WIDTH_PX);
+    VisionRuntime_MaskArrowSegment(
+        match->image_x[1], match->image_y[1],
+        match->image_x[2], match->image_y[2],
+        VISION_RUNTIME_ARROW_MASK_HALF_WIDTH_PX);
 }
 
 static uint8 VisionRuntime_TryIdealBeacon(
@@ -2713,7 +2988,8 @@ static uint8 VisionRuntime_TryIdealBeacon(
     memset(&blob, 0, sizeof(blob));
     blob.centroid_col = (float)center_x;
     blob.centroid_row = (float)center_y;
-    blob.area = candidate->area;
+    blob.area = candidate->fine_coordinates_valid ?
+        candidate->fine_area : candidate->area;
     blob.min_col = min_x;
     blob.max_col = max_x;
     blob.min_row = min_y;
@@ -2741,6 +3017,34 @@ static uint8 VisionRuntime_TryIdealBeacon(
     VisionRuntime_UpdateBeaconAnnotation(candidate_index, &blob, appended);
     if(appended) ++s_vision_runtime_diag.beacon_blob_count;
     return appended;
+}
+
+static void VisionRuntime_ProcessResidualBeacons(
+    const uint8 image[MT9V03X_H][MT9V03X_W],
+    const VisionRuntimeCandidate_t *arrow_candidate,
+    uint8 candidate_index)
+{
+    VisionRuntimeCandidate_t
+        residual[VISION_RUNTIME_RESIDUAL_MAX_CANDIDATES];
+    uint8 residual_count;
+    uint8 index;
+
+    if(!s_vision_beacon_recognition_enabled || arrow_candidate == NULL ||
+       !arrow_candidate->fine_coordinates_valid)
+    {
+        return;
+    }
+    s_vision_active_binary = s_vision_binary;
+    residual_count = VisionRuntime_CollectFineCandidates(
+        arrow_candidate->fine_min_col, arrow_candidate->fine_max_col,
+        arrow_candidate->fine_min_row, arrow_candidate->fine_max_row,
+        VISION_RUNTIME_FULL_CANDIDATE_MIN_AREA,
+        residual, VISION_RUNTIME_RESIDUAL_MAX_CANDIDATES);
+    for(index = 0U; index < residual_count; ++index)
+    {
+        (void)VisionRuntime_TryIdealBeacon(
+            image, &residual[index], candidate_index);
+    }
 }
 
 #if 0
@@ -2859,10 +3163,13 @@ static void VisionRuntime_ProcessBlobs(
     {
         for(i = 0U; i < s_vision_candidate_count; ++i)
         {
+            VisionIdealMatchResult_t arrow_match;
             uint8 arrow_priority = (uint8)(
                 s_vision_candidates[i].area >=
                 (int)VISION_RUNTIME_ROUTE_ARROW_MIN_AREA);
             uint8 matched = 0U;
+
+            memset(&arrow_match, 0, sizeof(arrow_match));
 
             if((route_pass == 0U && !arrow_priority) ||
                (route_pass == 1U && arrow_priority))
@@ -2879,8 +3186,14 @@ static void VisionRuntime_ProcessBlobs(
                 if(!frame_vehicle_confirmed)
                 {
                     matched = VisionRuntime_TryIdealArrow(
-                        image, &s_vision_candidates[i], i);
-                    if(matched) frame_vehicle_confirmed = 1U;
+                        image, &s_vision_candidates[i], i, &arrow_match);
+                    if(matched)
+                    {
+                        frame_vehicle_confirmed = 1U;
+                        VisionRuntime_MaskAcceptedArrow(&arrow_match);
+                        VisionRuntime_ProcessResidualBeacons(
+                            image, &s_vision_candidates[i], i);
+                    }
                 }
                 if(!matched)
                 {
@@ -2895,8 +3208,14 @@ static void VisionRuntime_ProcessBlobs(
                 if(!matched && !frame_vehicle_confirmed)
                 {
                     matched = VisionRuntime_TryIdealArrow(
-                        image, &s_vision_candidates[i], i);
-                    if(matched) frame_vehicle_confirmed = 1U;
+                        image, &s_vision_candidates[i], i, &arrow_match);
+                    if(matched)
+                    {
+                        frame_vehicle_confirmed = 1U;
+                        VisionRuntime_MaskAcceptedArrow(&arrow_match);
+                        VisionRuntime_ProcessResidualBeacons(
+                            image, &s_vision_candidates[i], i);
+                    }
                 }
             }
         }
@@ -3165,9 +3484,10 @@ uint8 VisionRuntime_GetCandidateBoxes(VisionRuntimeCandidateBox_t *boxes, uint8 
         boxes[i].vehicle_valid = s_vision_candidate_annotations[i].vehicle_valid;
         boxes[i].vehicle_skipped_small_box =
             s_vision_candidate_annotations[i].vehicle_skipped_small_box;
-        boxes[i].fine_roi_oversize = (uint8)
-            !VisionRuntime_FineBoundsWithinCostLimit(
-                min_x, max_x, min_y, max_y);
+        boxes[i].fine_roi_oversize =
+            s_vision_candidates[i].fine_coordinates_valid ? 0U : (uint8)
+                !VisionRuntime_FineBoundsWithinCostLimit(
+                    min_x, max_x, min_y, max_y);
         boxes[i].beacon_valid = s_vision_candidate_annotations[i].beacon_valid;
         boxes[i].detection_confidence =
             s_vision_candidate_annotations[i].detection_confidence;

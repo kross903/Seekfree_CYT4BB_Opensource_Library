@@ -6,7 +6,7 @@
 /* 候选区完整分辨率精筛阈值：箭头较亮，信标允许保留较暗像素。 */
 #define VISION_BINARY_THRESHOLD_VEHICLE          (145U) /* 箭头首轮精筛阈值 */
 #define VISION_BINARY_THRESHOLD_VEHICLE_FALLBACK (60U)  /* 首轮失败后的箭头回退阈值 */
-#define VISION_BINARY_THRESHOLD_BEACON           (50U)  /* 信标精筛二值化阈值 */
+#define VISION_BINARY_THRESHOLD_BEACON           (101U)  /* 与新上位机一致的单阈值 */
 #if VISION_BINARY_THRESHOLD_VEHICLE_FALLBACK == 0U || \
     VISION_BINARY_THRESHOLD_VEHICLE_FALLBACK >= VISION_BINARY_THRESHOLD_VEHICLE
 #error "Vehicle fallback threshold must be lower than the primary threshold"
@@ -16,8 +16,11 @@
 #define VISION_BINARY_THRESHOLD_MIDDLE VISION_BINARY_THRESHOLD_BEACON
 #define VISION_BINARY_THRESHOLD_OUTER  VISION_BINARY_THRESHOLD_BEACON
 #define VISION_BINARY_THRESHOLD        VISION_BINARY_THRESHOLD_BEACON
-#define VISION_RUNTIME_FIXED_THRESHOLD (50U) /* 新链路唯一二值化阈值 */
-#define VISION_RUNTIME_ROUTE_ARROW_MIN_AREA (30U) /* 前景面积达到该值时箭头优先 */
+#define VISION_RUNTIME_FIXED_THRESHOLD (101U) /* 新链路唯一二值化阈值 */
+#define VISION_RUNTIME_ROUTE_ARROW_MIN_AREA (30U) /* 188x120等效面积达到该值时箭头优先 */
+#define VISION_RUNTIME_FULL_CANDIDATE_MIN_AREA (6U) /* 376x240连通域最小面积 */
+#define VISION_RUNTIME_ARROW_MASK_HALF_WIDTH_PX (4U) /* 命中箭头后遮除两臂的半宽 */
+#define VISION_RUNTIME_RESIDUAL_MAX_CANDIDATES (6U) /* 单个箭头候选最多保留的残余亮区 */
 #define VISION_RUNTIME_YAW_MAX_AGE_MS (500U)
 #define VISION_RUNTIME_COARSE_ZONE_COUNT       (5U)  /* 中心到边缘共五个同心分区 */
 /* 粗筛阈值从中心向边缘递减：近处要求高，远处弱信标使用较低阈值。 */

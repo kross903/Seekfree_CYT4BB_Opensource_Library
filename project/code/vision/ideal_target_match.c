@@ -13,9 +13,9 @@
 
 #define IDEAL_SAMPLE_STEP_MIN_PX        (2)
 #define IDEAL_SAMPLE_MARGIN_PX          (4)
-#define IDEAL_POSITIVE_BAND_PX          (2)
-#define IDEAL_NEGATIVE_GUARD_PX         (3)
-#define IDEAL_NEAR_NEGATIVE_WIDTH_PX    (2)
+#define IDEAL_POSITIVE_BAND_SQ_Q2       (9U)   /* 1.5px squared, scaled by 4. */
+#define IDEAL_NEGATIVE_GUARD_SQ_Q2      (36U)  /* 3px squared, scaled by 4. */
+#define IDEAL_NEAR_NEGATIVE_SQ_Q2       (100U) /* 5px squared, scaled by 4. */
 #define IDEAL_FINE_WIDTH                 (MT9V03X_W * 2)
 #define IDEAL_FINE_HEIGHT                (MT9V03X_H * 2)
 
@@ -27,11 +27,11 @@
 #define IDEAL_ARROW_MIN_COMPLETE_Q8     (154U)
 #define IDEAL_ARROW_MIN_NEAR_DIFF       (90U)
 
-#define IDEAL_BEACON_MIN_GRAY_DIFF      (90U)
+#define IDEAL_BEACON_MIN_GRAY_DIFF      (50U)
 #define IDEAL_BEACON_MIN_SEPARATION_Q8  (512U)
 #define IDEAL_BEACON_MIN_POSITIVE_Q8    (174U)
 #define IDEAL_BEACON_MIN_NEGATIVE_Q8    (192U)
-#define IDEAL_BEACON_MIN_BINARY_Q8      (179U)
+#define IDEAL_BEACON_MIN_BINARY_Q8      (154U)
 #define IDEAL_BEACON_MIN_COMPLETE_Q8    (77U)
 #define IDEAL_BEACON_MIN_NEAR_DIFF      (80U)
 
@@ -113,7 +113,8 @@ static uint8 VisionIdeal_SampleGray(
 }
 
 static uint8 VisionIdeal_PointNearSegment(
-    int px, int py, int x0, int y0, int x1, int y1, uint32 limit_sq)
+    int px, int py, int x0, int y0, int x1, int y1,
+    uint32 limit_sq_q2)
 {
     sint32 vx = (sint32)x1 - x0;
     sint32 vy = (sint32)y1 - y0;
@@ -126,24 +127,28 @@ static uint8 VisionIdeal_PointNearSegment(
     {
         sint32 dx = (sint32)px - x0;
         sint32 dy = (sint32)py - y0;
-        return (uint8)((uint32)(dx * dx + dy * dy) <= limit_sq);
+        return (uint8)((uint64)(dx * dx + dy * dy) * 4ULL <=
+                       limit_sq_q2);
     }
     if(dot <= 0)
     {
         sint32 dx = (sint32)px - x0;
         sint32 dy = (sint32)py - y0;
-        return (uint8)((uint32)(dx * dx + dy * dy) <= limit_sq);
+        return (uint8)((uint64)(dx * dx + dy * dy) * 4ULL <=
+                       limit_sq_q2);
     }
     if((uint32)dot >= length_sq)
     {
         sint32 dx = (sint32)px - x1;
         sint32 dy = (sint32)py - y1;
-        return (uint8)((uint32)(dx * dx + dy * dy) <= limit_sq);
+        return (uint8)((uint64)(dx * dx + dy * dy) * 4ULL <=
+                       limit_sq_q2);
     }
     {
         sint32 cross = wx * vy - wy * vx;
         uint64 cross_sq = (uint64)((int64)cross * (int64)cross);
-        return (uint8)(cross_sq <= (uint64)limit_sq * length_sq);
+        return (uint8)(cross_sq * 4ULL <=
+                       (uint64)limit_sq_q2 * length_sq);
     }
 }
 
@@ -450,10 +455,10 @@ uint8 VisionIdealMatch_Arrow(
             if(!VisionIdeal_SampleGray(image, x, y, &sample)) continue;
             left_positive = VisionIdeal_PointNearSegment(
                 x, y, point_x[0], point_y[0], point_x[1], point_y[1],
-                IDEAL_POSITIVE_BAND_PX * IDEAL_POSITIVE_BAND_PX);
+                IDEAL_POSITIVE_BAND_SQ_Q2);
             right_positive = VisionIdeal_PointNearSegment(
                 x, y, point_x[1], point_y[1], point_x[2], point_y[2],
-                IDEAL_POSITIVE_BAND_PX * IDEAL_POSITIVE_BAND_PX);
+                IDEAL_POSITIVE_BAND_SQ_Q2);
             if(left_positive || right_positive)
             {
                 VisionIdeal_AddPositive(sample,
@@ -463,19 +468,17 @@ uint8 VisionIdealMatch_Arrow(
             }
             within_guard = (uint8)(VisionIdeal_PointNearSegment(
                 x, y, point_x[0], point_y[0], point_x[1], point_y[1],
-                IDEAL_NEGATIVE_GUARD_PX * IDEAL_NEGATIVE_GUARD_PX) ||
+                IDEAL_NEGATIVE_GUARD_SQ_Q2) ||
                 VisionIdeal_PointNearSegment(
                 x, y, point_x[1], point_y[1], point_x[2], point_y[2],
-                IDEAL_NEGATIVE_GUARD_PX * IDEAL_NEGATIVE_GUARD_PX));
+                IDEAL_NEGATIVE_GUARD_SQ_Q2));
             if(within_guard) continue;
             within_near = (uint8)(VisionIdeal_PointNearSegment(
                 x, y, point_x[0], point_y[0], point_x[1], point_y[1],
-                (IDEAL_NEGATIVE_GUARD_PX + IDEAL_NEAR_NEGATIVE_WIDTH_PX) *
-                (IDEAL_NEGATIVE_GUARD_PX + IDEAL_NEAR_NEGATIVE_WIDTH_PX)) ||
+                IDEAL_NEAR_NEGATIVE_SQ_Q2) ||
                 VisionIdeal_PointNearSegment(
                 x, y, point_x[1], point_y[1], point_x[2], point_y[2],
-                (IDEAL_NEGATIVE_GUARD_PX + IDEAL_NEAR_NEGATIVE_WIDTH_PX) *
-                (IDEAL_NEGATIVE_GUARD_PX + IDEAL_NEAR_NEGATIVE_WIDTH_PX)));
+                IDEAL_NEAR_NEGATIVE_SQ_Q2));
             VisionIdeal_AddNegative(sample, within_near, binary_threshold);
         }
     }
@@ -564,9 +567,10 @@ uint8 VisionIdealMatch_Beacon(
     }
     if(min_axis < 1U) return 0U;
     guard_ratio_q8 = 256U +
-        (IDEAL_NEGATIVE_GUARD_PX * 256U + min_axis - 1U) / min_axis;
+        (VisionIdeal_IntegerSqrt(IDEAL_NEGATIVE_GUARD_SQ_Q2) * 128U +
+         min_axis - 1U) / min_axis;
     near_ratio_q8 = 256U +
-        ((IDEAL_NEGATIVE_GUARD_PX + IDEAL_NEAR_NEGATIVE_WIDTH_PX) * 256U +
+        (VisionIdeal_IntegerSqrt(IDEAL_NEAR_NEGATIVE_SQ_Q2) * 128U +
          min_axis - 1U) / min_axis;
     extent_x = ((ex_x < 0) ? -ex_x : ex_x) +
                ((ey_x < 0) ? -ey_x : ey_x);
