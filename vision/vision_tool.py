@@ -300,7 +300,7 @@ class VisionToolApp:
         self.binary_mode_var = tk.StringVar(value="undistort_binary_ipm")
         self.status_var = tk.StringVar(value="就绪")
         self.frame_info_var = tk.StringVar(value="未选择帧")
-        self.frame_telemetry_var = tk.StringVar(value="帧姿态/高度：暂无")
+        self.frame_telemetry_var = tk.StringVar(value="帧姿态/高度及外参：暂无")
         self.result_info_var = tk.StringVar(value="暂无仿真结果")
         self.result_text: scrolledtext.ScrolledText | None = None
         self.preview_image: ImageTk.PhotoImage | None = None
@@ -1824,7 +1824,7 @@ class VisionToolApp:
             payload = json.loads(metadata_path.read_text(encoding="utf-8"))
             telemetry = payload.get("telemetry")
             if not isinstance(telemetry, dict):
-                self.frame_telemetry_var.set("帧姿态/高度：无元数据")
+                self.frame_telemetry_var.set("帧姿态/高度及外参：无元数据")
                 return
             roll = float(telemetry["roll_deg"])
             pitch = float(telemetry["pitch_deg"])
@@ -1837,13 +1837,29 @@ class VisionToolApp:
             self.height_var.set(f"{tof_height:.6f}")
             image_seq = telemetry.get("image_seq", "-")
             input_seq = telemetry.get("input_seq", "-")
-            self.frame_telemetry_var.set(
+            summary = (
                 f"帧元数据 seq={image_seq}/{input_seq}  "
                 f"R={roll:.2f}° P={pitch:.2f}° Y={yaw:.2f}°  "
                 f"ToF={tof_height:.1f}cm Fusion={fused_height:.1f}cm"
             )
+            if "car_yaw_deg" in telemetry:
+                car_yaw = float(telemetry["car_yaw_deg"])
+                car_yaw_age_ms = int(telemetry.get("car_yaw_age_ms", 0xFFFF))
+                car_yaw_text = f"{car_yaw:.2f}°" if telemetry.get("car_yaw_valid") else "无效"
+                mount_roll = float(telemetry["camera_mount_roll_deg"])
+                mount_pitch = float(telemetry["camera_mount_pitch_deg"])
+                mount_yaw = float(telemetry["camera_mount_yaw_deg"])
+                offset_x = float(telemetry["camera_offset_x_cm"])
+                offset_y = float(telemetry["camera_offset_y_cm"])
+                offset_z = float(telemetry["camera_offset_z_cm"])
+                summary += (
+                    f"\n小车Yaw={car_yaw_text} age={car_yaw_age_ms}ms  "
+                    f"相机外参 R/P/Y={mount_roll:.2f}/{mount_pitch:.2f}/{mount_yaw:.2f}°  "
+                    f"X/Y/Z={offset_x:.2f}/{offset_y:.2f}/{offset_z:.2f}cm"
+                )
+            self.frame_telemetry_var.set(summary)
         except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError):
-            self.frame_telemetry_var.set("帧姿态/高度：无元数据")
+            self.frame_telemetry_var.set("帧姿态/高度及外参：无元数据")
 
     @staticmethod
     def load_image(path: Path, target_size: tuple[int, int] | None = (WIDTH, HEIGHT)) -> Image.Image:
