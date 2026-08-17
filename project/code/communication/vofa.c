@@ -385,14 +385,14 @@ static uint8 set_position_feedforward_value(uint8 item, float value)
     }
 
     Position_Loop_Get_Trajectory_Config(&trajectory);
-    /* M3～M8依次设置位置P、修正速度、目标速度、整形A/J和纠偏包络A。 */
+    /* M6/M7旧A/J整形参数已删除；M8保留为P/Sqrt纠偏包络A。 */
     switch(item)
     {
         case '3': trajectory.position_kp = value; break;
         case '4': trajectory.correction_speed_max_cms = value; break;
         case '5': trajectory.target_speed_max_cms = value; break;
-        case '6': trajectory.acceleration_max_cms2 = value; break;
-        case '7': trajectory.jerk_max_cms3 = value; break;
+        case '6':
+        case '7': return 0U;
         case '8': trajectory.correction_accel_max_cms2 = value; break;
         default: return 0U;
     }
@@ -411,8 +411,8 @@ static uint8 set_position_brake_value(uint8 item, float value)
         case '3': brake.control_delay_ms = value; break;
         case '4': brake.safety_buffer_cm = value; break;
         case '5': brake.boost_margin_cm = value; break;
-        case '6': brake.brake_accel_max_cms2 = value; break;
-        case '7': brake.brake_jerk_max_cms3 = value; break;
+        case '6':
+        case '7': return 0U;
         default: return 0U;
     }
     return Position_Loop_Set_Brake_Config(&brake);
@@ -595,8 +595,8 @@ static void send_pid_data_back(uint8 command)
                            trajectory.position_kp,
                            trajectory.correction_speed_max_cms,
                            trajectory.target_speed_max_cms,
-                           trajectory.acceleration_max_cms2,
-                           trajectory.jerk_max_cms3,
+                           0.0f,
+                           0.0f,
                            trajectory.correction_accel_max_cms2);
             return;
         }
@@ -611,8 +611,8 @@ static void send_pid_data_back(uint8 command)
                               brake.control_delay_ms,
                               brake.safety_buffer_cm,
                               brake.boost_margin_cm,
-                              brake.brake_accel_max_cms2,
-                              brake.brake_jerk_max_cms3,
+                              0.0f,
+                              0.0f,
                               0.0f, 0.0f, 0.0f, 0.0f,
                               0.0f, 0.0f, 0.0f, 0.0f, 0.0f);
             return;
@@ -1923,11 +1923,11 @@ void send_date_back(void)
             {
                 status_flags |= 0x20U;
             }
-            if(car_motion.flags & CORE_LINK_CAR_MOTION_FLAG_SLIP_SUSPECT)
+            if(pos_diag.brake_schedule_active)
             {
-                status_flags |= 0x40U;
+                status_flags |= 0x08U;
             }
-            if(pos_diag.limit_flags & POSITION_LOOP_STATUS_TRAJECTORY_READY)
+            if(pos_diag.limit_flags & POSITION_LOOP_STATUS_TARGET_READY)
             {
                 status_flags |= 0x80U;
             }
@@ -2028,18 +2028,15 @@ void send_date_back(void)
         case 40:
         {
             PositionLoopDiag_t pos_diag = {0};
-            PositionLoopTrajectoryConfig_t trajectory = {0};
-
             Position_Loop_Get_Diag(&pos_diag);
-            Position_Loop_Get_Trajectory_Config(&trajectory);
             send_sixteen_date(pos_diag.relative_closing_speed_cms,
                               pos_diag.filtered_closing_speed_cms,
                               pos_diag.brake_schedule_ratio,
                               (float)pos_diag.brake_schedule_active,
-                              trajectory.acceleration_max_cms2,
-                              pos_diag.brake_accel_limit_cms2,
-                              trajectory.jerk_max_cms3,
-                              pos_diag.brake_jerk_limit_cms3,
+                              pos_diag.car_ff_raw_ax_cms2,
+                              pos_diag.car_ff_raw_ay_cms2,
+                              pos_diag.car_ff_applied_ax_cms2,
+                              pos_diag.car_ff_applied_ay_cms2,
                               pos_diag.stopping_distance_cm,
                               pos_diag.brake_delay_distance_cm,
                               pos_diag.brake_margin_cm,

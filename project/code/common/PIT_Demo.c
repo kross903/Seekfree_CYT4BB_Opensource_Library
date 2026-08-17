@@ -946,13 +946,23 @@ static void control_task_update_position_target(uint8 takeoff_active)
         float cos_yaw = cosf(yaw_delta_rad);
         float sin_yaw = sinf(yaw_delta_rad);
 
-        feedforward.valid = 1U;
+        feedforward.velocity_valid = 1U;
         feedforward.vx_uav_cms =
             cos_yaw * car_motion.forward_speed_cms -
             sin_yaw * car_motion.left_speed_cms;
         feedforward.vy_uav_cms =
             sin_yaw * car_motion.forward_speed_cms +
             cos_yaw * car_motion.left_speed_cms;
+        if(car_motion.acceleration_valid)
+        {
+            feedforward.acceleration_valid = 1U;
+            feedforward.ax_uav_cms2 =
+                cos_yaw * car_motion.forward_acc_cms2 -
+                sin_yaw * car_motion.left_acc_cms2;
+            feedforward.ay_uav_cms2 =
+                sin_yaw * car_motion.forward_acc_cms2 +
+                cos_yaw * car_motion.left_acc_cms2;
+        }
     }
     Position_Loop_Update_Velocity_Target(flow_snap.fused_velocity_valid,
                                          flow_snap.velocity_x_fused_cms,

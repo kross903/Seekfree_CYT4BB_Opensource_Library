@@ -23,9 +23,8 @@ typedef enum
     CORE_LINK_PROTOCOL_DRONE_STATUS = 0x10,                                     // Fixed-length drone status summary
     CORE_LINK_PROTOCOL_SCREEN_CMD   = 0x11,                                     // IPS200 mirror command stream
     CORE_LINK_PROTOCOL_BEACON_MAP   = 0x12,                                     // Fixed-length beacon map packet
-    CORE_LINK_PROTOCOL_BEACON_MAP_UPLINK = 0x13,                                // Fixed-length car uplink beacon map packet
     CORE_LINK_PROTOCOL_BEACON_OBSERVATIONS = 0x14,                              // Variable-count beacon observations
-    CORE_LINK_PROTOCOL_CAR_TRAJECTORY = 0x15,                                   // Unified car motion and trajectory state
+    CORE_LINK_PROTOCOL_CAR_TRAJECTORY = 0x15,                                   // Compact car motion feedforward state
 }core_link_protocol_enum;
 
 typedef enum
@@ -76,25 +75,10 @@ typedef struct
 
 #define CORE_LINK_BEACON_MAP_COUNT         (5U)
 #define CORE_LINK_BEACON_MAP_PAYLOAD_LEN   (37U)
-#define CORE_LINK_BEACON_MAP_UPLINK_PAYLOAD_LEN   (37U)
-#define CORE_LINK_BEACON_MAP_UPLINK_LEGACY_PAYLOAD_LEN (43U)
-#define CORE_LINK_CAR_MOTION_FLAG_VALID            (0x01U)
-#define CORE_LINK_CAR_MOTION_FLAG_SLIP_SUSPECT     (0x02U)
-#define CORE_LINK_CAR_MOTION_FLAG_TARGET_VALID     (0x04U)
-#define CORE_LINK_CAR_TRAJECTORY_VERSION            (1U)
-#define CORE_LINK_CAR_TRAJECTORY_PAYLOAD_LEN        (40U)
+#define CORE_LINK_CAR_TRAJECTORY_VERSION            (2U)
+#define CORE_LINK_CAR_TRAJECTORY_PAYLOAD_LEN        (14U)
 #define CORE_LINK_CAR_TRAJECTORY_FLAG_MOTION_VALID  (0x01U)
-#define CORE_LINK_CAR_TRAJECTORY_FLAG_PLAN_VALID    (0x02U)
-#define CORE_LINK_CAR_TRAJECTORY_FLAG_NAV_TARGET    (0x04U)
-#define CORE_LINK_CAR_TRAJECTORY_FLAG_PREDICTED     (0x08U)
-#define CORE_LINK_CAR_TRAJECTORY_FLAG_STOP_ONLY     (0x10U)
-#define CORE_LINK_CAR_TRAJECTORY_FLAG_FINISHED      (0x20U)
-#define CORE_LINK_CAR_TRAJECTORY_FLAG_GUIDE         (0x40U)
-#define CORE_LINK_CAR_TRAJECTORY_FLAG_POSITION_TARGET (0x80U)
-#define CORE_LINK_PREDICTED_BEACON_SOURCE_NONE      (0U)
-#define CORE_LINK_PREDICTED_BEACON_SOURCE_CURRENT   (1U)
-#define CORE_LINK_PREDICTED_BEACON_SOURCE_NEXT      (2U)
-#define CORE_LINK_PREDICTED_BEACON_SOURCE_GUIDE     (3U)
+#define CORE_LINK_CAR_TRAJECTORY_FLAG_PLAN_ACCEL_VALID (0x02U)
 #if CORE_LINK_CAR_TRAJECTORY_PAYLOAD_LEN > CORE_LINK_PAYLOAD_MAX_LEN
 #error "Car trajectory payload exceeds core link payload limit"
 #endif
@@ -117,46 +101,17 @@ typedef struct
     core_link_beacon_entry_struct beacon[CORE_LINK_BEACON_MAP_COUNT];
 } core_link_beacon_map_packet_struct;
 
-typedef struct
-{
-    uint8 car_visible;
-    int16 car_x_mm;
-    int16 car_y_mm;
-    /* Car IMU/Mahony yaw in the aligned yaw reference shared with UAV. */
-    int16 car_absolute_yaw_ddeg;
-    core_link_beacon_entry_struct beacon[CORE_LINK_BEACON_MAP_COUNT];
-    /* Present only when receiving the legacy 43-byte 0x13 frame. */
-    uint8 motion_flags;
-    uint8 motion_sequence;
-    int16 car_forward_speed_dcms;
-    int16 car_left_speed_dcms;
-} core_link_beacon_map_uplink_packet_struct;
-
+/* 0x15 V2 uses the car body frame at the sample instant: X forward, Y left. */
 typedef struct
 {
     uint8 version;
     uint8 flags;
     uint16 sequence;
-    uint16 plan_generation;
-    uint8 current_segment;
-    uint8 predicted_beacon_source;
     int16 car_absolute_yaw_ddeg;
     int16 actual_forward_speed_dcms;
     int16 actual_left_speed_dcms;
-    int16 command_forward_speed_dcms;
-    int16 command_left_speed_dcms;
     int16 planned_forward_acc_cms2;
     int16 planned_left_acc_cms2;
-    int16 planned_forward_jerk_cms3;
-    int16 planned_left_jerk_cms3;
-    int16 trajectory_error_forward_mm;
-    int16 trajectory_error_left_mm;
-    int16 target_forward_mm;
-    int16 target_left_mm;
-    uint8 predicted_beacon_id;
-    uint8 reserved;
-    int16 predicted_beacon_forward_mm;
-    int16 predicted_beacon_left_mm;
 } core_link_car_trajectory_packet_struct;
 
 #define CORE_LINK_BEACON_OBSERVATION_MAX_COUNT     (6U)
@@ -219,7 +174,6 @@ void core_link_send_frame       (uint8 protocol_id, const uint8 *payload, uint8 
 void core_link_send_text        (const char *text);                             // Send text payload frame
 void core_link_send_param_ascii (uint8 command, uint8 item, float value);       // Send ASCII param payload like "R1=1.234"
 void core_link_send_drone_status(const core_link_drone_status_packet_struct *status);
-void core_link_send_beacon_map_uplink(const core_link_beacon_map_uplink_packet_struct *packet);
 
 void core_link_on_frame_received (uint8 protocol_id, const uint8 *payload, uint8 length);       // Optional generic callback for new protocol ids
 void core_link_on_text_received  (const uint8 *text, uint8 length);                              // Optional text callback

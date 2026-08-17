@@ -1274,7 +1274,7 @@ static void sensor_status_draw_imu_power(void)
     BatteryStatus battery_status = {0};
     ICM_Health_t imu_health = {0};
     SmallDriverEscStatus esc_status = {0};
-    CoreLinkBeaconDiag_t car_diag = {0};
+    CoreLinkCarMotionDiag_t car_diag = {0};
     PositionLoopDiag_t pos_diag = {0};
     char esc_code_text[24];
     uint8 imu_fresh;
@@ -1288,7 +1288,7 @@ static void sensor_status_draw_imu_power(void)
     BatteryMonitor_GetStatus(&battery_status);
     ICM_GetHealth(&imu_health);
     small_driver_get_esc_status(&esc_status);
-    core_link_user_get_beacon_diag(&car_diag);
+    core_link_user_get_car_motion_diag(&car_diag);
     Position_Loop_Get_Diag(&pos_diag);
 
     imu_fresh = (uint8)(!imu_health.sample_stale && imu_health.sample_sequence != 0U);

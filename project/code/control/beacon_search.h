@@ -51,34 +51,6 @@ typedef struct
     float fused_velocity_y_cms;
 } BeaconSearchStabilityInput_t;
 
-/*
- * 小车链路给出的寻灯方向输入。地图坐标采用无人机机体系：X向前、Y向左；
- * 预测向量采用0x15定义的小车机体系：X向前、Y向左。保留定点字段，避免
- * 在通信任务中增加浮点转换和三角函数开销。
- */
-typedef struct
-{
-    uint8 map_valid;
-    uint8 map_count;
-    uint8 predicted_valid;
-    uint8 predicted_id;
-    uint8 car_position_valid;
-    uint8 reserved[3];
-    int16 car_x_mm;
-    int16 car_y_mm;
-    int16 car_absolute_yaw_ddeg;
-    int16 predicted_beacon_forward_mm;
-    int16 predicted_beacon_left_mm;
-    core_link_beacon_entry_struct beacon[CORE_LINK_BEACON_MAP_COUNT];
-} BeaconSearchDirectionInput_t;
-
-typedef enum
-{
-    BEACON_SEARCH_DIRECTION_DEFAULT = 0,
-    BEACON_SEARCH_DIRECTION_MAP,
-    BEACON_SEARCH_DIRECTION_PREDICTED
-} BeaconSearchDirectionMode_t;
-
 typedef struct
 {
     uint8 state;
@@ -105,13 +77,7 @@ typedef struct
     uint8 position_sample_valid;
     uint8 fused_velocity_valid;
     uint8 start_gate_ready;
-    uint8 direction_mode;
-    uint8 direction_map_count;
-    uint8 direction_predicted_valid;
-    int8 direction_first_sign;
     float search_origin_yaw_deg;
-    float predicted_target_yaw_deg;
-    uint16 predicted_hold_ms;
 } BeaconSearchDiag_t;
 
 void BeaconSearch_Init(void);
@@ -122,10 +88,7 @@ void BeaconSearch_Tick(uint16 elapsed_ms,
                        uint8 velocity_loop_enabled,
                        uint8 car_link_valid,
                        uint16 car_link_age_ms,
-                       uint8 car_motion_valid,
-                       uint8 car_target_valid,
                        float current_yaw_deg,
-                       const BeaconSearchDirectionInput_t *direction_input,
                        const BeaconSearchStabilityInput_t *stability_input);
 void BeaconSearch_OnObservationFrame(
     const core_link_beacon_observation_packet_struct *packet,
