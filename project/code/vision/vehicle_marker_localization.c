@@ -1046,6 +1046,38 @@ static uint8 vehicle_marker_chevron_store_pose(const VehicleMarkerWorldPoint_t *
     return 1U;
 }
 
+uint8 VehicleMarkerLocalization_CommitIdealChevron(
+    const VehicleMarkerWorldPoint_t *apex,
+    const VehicleMarkerWorldPoint_t *left_tip,
+    const VehicleMarkerWorldPoint_t *right_tip,
+    const VehicleMarkerPoint2D_t *apex_img,
+    const VehicleMarkerPoint2D_t *left_tip_img,
+    const VehicleMarkerPoint2D_t *right_tip_img,
+    float heading_deg, float tip_span_cm)
+{
+    uint8 committed;
+
+    if(apex == NULL || left_tip == NULL || right_tip == NULL ||
+       apex_img == NULL || left_tip_img == NULL || right_tip_img == NULL)
+    {
+        return 0U;
+    }
+    committed = vehicle_marker_chevron_store_pose(
+        apex, left_tip, right_tip,
+        apex_img, left_tip_img, apex_img, right_tip_img,
+        heading_deg, tip_span_cm,
+        VEHICLE_MARKER_CHEVRON_PLANE_HEIGHT_CM, NULL);
+    if(committed)
+    {
+        s_vehicle_marker_chevron_cached_pose_valid = 1U;
+        s_vehicle_marker_chevron_debug.geometry_score = 1.0f;
+        s_vehicle_marker_chevron_debug.direction_score = 1.0f;
+        s_vehicle_marker_chevron_debug.reject_reason =
+            VEHICLE_MARKER_CHEVRON_REJECT_NONE;
+    }
+    return committed;
+}
+
 uint8 VehicleMarkerLocalization_GetFollowPoint(
     const VehicleMarkerPose_t *pose,
     float *filtered_x, float *filtered_y,

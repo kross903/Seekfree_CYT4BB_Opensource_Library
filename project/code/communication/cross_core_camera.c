@@ -5,8 +5,8 @@
 #define SHARED_VISION_RESULT_ADDR                   0x28001100u
 #define SHARED_VISION_SCREEN_CTRL_ADDR              0x28001480u
 #define SHARED_VISION_SNAPSHOT_METADATA_ADDR        0x280014A0u
-#define SHARED_VISION_FRAME_CTRL_ADDR               0x280014C0u
-#define SHARED_VISION_CTRL_END_ADDR                 0x280014E0u
+#define SHARED_VISION_FRAME_CTRL_ADDR               0x280014E0u
+#define SHARED_VISION_CTRL_END_ADDR                 0x28001500u
 #define SHARED_VISION_MAGIC                         0x56495331u
 #define SHARED_VISION_SCREEN_MAGIC                  0x56534331u
 #define SHARED_VISION_SNAPSHOT_METADATA_MAGIC       0x56534D31u
@@ -17,8 +17,8 @@
 #define CROSS_CORE_CAMERA_DWT_LAR_UNLOCK            0xC5ACCE55UL
 
 #define CROSS_CORE_CAMERA_METADATA_FUNCTION         0x12U
-#define CROSS_CORE_CAMERA_METADATA_VERSION          0x01U
-#define CROSS_CORE_CAMERA_METADATA_PACKET_SIZE      33U
+#define CROSS_CORE_CAMERA_METADATA_VERSION          0x02U
+#define CROSS_CORE_CAMERA_METADATA_PACKET_SIZE      64U
 
 #define CROSS_CORE_CAMERA_SCREEN_OWNER_NONE         0U
 #define CROSS_CORE_CAMERA_SCREEN_OWNER_VISION       1U
@@ -32,10 +32,12 @@ typedef struct
     float yaw_deg;
     float tof_height_cm;
     float fused_height_cm;
-    float car_yaw_rel_uav_deg;
     uint8 binary_thresholds[VISION_BINARY_ZONE_COUNT];
     uint8 beacon_recognition_enabled;
+    float car_yaw_deg;
+    uint16 car_yaw_age_ms;
     uint8 car_yaw_valid;
+    uint8 reserved;
 } SharedVisionInput_t;
 
 typedef struct
@@ -85,6 +87,10 @@ typedef struct
     float yaw_deg;
     float tof_height_cm;
     float fused_height_cm;
+    float car_yaw_deg;
+    uint16 car_yaw_age_ms;
+    uint8 car_yaw_valid;
+    uint8 reserved;
 } SharedVisionSnapshotMetadata_t;
 
 typedef struct
@@ -96,9 +102,6 @@ typedef struct
     uint32 reserved[4];
 } SharedVisionFrameCtrl_t;
 
-typedef char SharedVisionInputLayoutCheck[
-    (sizeof(SharedVisionInput_t) <=
-     (SHARED_VISION_RESULT_ADDR - SHARED_VISION_INPUT_ADDR)) ? 1 : -1];
 typedef char SharedVisionResultLayoutCheck[
     (sizeof(SharedVisionResult_t) <= (SHARED_VISION_SCREEN_CTRL_ADDR - SHARED_VISION_RESULT_ADDR)) ? 1 : -1];
 typedef char SharedVisionScreenCtrlLayoutCheck[
@@ -303,6 +306,10 @@ static void CrossCoreCamera_CameraCorePublishAssistantSnapshot(const SharedVisio
     g_shared_vision_snapshot_metadata->yaw_deg = input_snapshot->yaw_deg;
     g_shared_vision_snapshot_metadata->tof_height_cm = input_snapshot->tof_height_cm;
     g_shared_vision_snapshot_metadata->fused_height_cm = input_snapshot->fused_height_cm;
+    g_shared_vision_snapshot_metadata->car_yaw_deg = input_snapshot->car_yaw_deg;
+    g_shared_vision_snapshot_metadata->car_yaw_age_ms = input_snapshot->car_yaw_age_ms;
+    g_shared_vision_snapshot_metadata->car_yaw_valid = input_snapshot->car_yaw_valid;
+    g_shared_vision_snapshot_metadata->reserved = 0U;
     CrossCoreCamera_CleanSnapshotMetadata();
 
     g_shared_vision_screen_ctrl->assistant_image_display_mode = CROSS_CORE_CAMERA_VISION_DISPLAY_RAW;
@@ -642,7 +649,6 @@ void CrossCoreCamera_CameraCoreInit(void)
     g_shared_vision_input->yaw_deg = 0.0f;
     g_shared_vision_input->tof_height_cm = 100.0f;
     g_shared_vision_input->fused_height_cm = 100.0f;
-    g_shared_vision_input->car_yaw_rel_uav_deg = 0.0f;
     g_shared_vision_input->binary_thresholds[VISION_BINARY_ZONE_INNER] =
         (uint8)VISION_BINARY_THRESHOLD_INNER;
     g_shared_vision_input->binary_thresholds[VISION_BINARY_ZONE_MIDDLE] =
@@ -650,7 +656,10 @@ void CrossCoreCamera_CameraCoreInit(void)
     g_shared_vision_input->binary_thresholds[VISION_BINARY_ZONE_OUTER] =
         (uint8)VISION_BINARY_THRESHOLD_OUTER;
     g_shared_vision_input->beacon_recognition_enabled = 0U;
+    g_shared_vision_input->car_yaw_deg = 0.0f;
+    g_shared_vision_input->car_yaw_age_ms = 0xFFFFU;
     g_shared_vision_input->car_yaw_valid = 0U;
+    g_shared_vision_input->reserved = 0U;
     g_shared_vision_snapshot_metadata->magic = 0U;
     g_shared_vision_snapshot_metadata->image_seq = 0U;
     g_shared_vision_snapshot_metadata->input_seq = 0U;
@@ -659,6 +668,10 @@ void CrossCoreCamera_CameraCoreInit(void)
     g_shared_vision_snapshot_metadata->yaw_deg = 0.0f;
     g_shared_vision_snapshot_metadata->tof_height_cm = 100.0f;
     g_shared_vision_snapshot_metadata->fused_height_cm = 100.0f;
+    g_shared_vision_snapshot_metadata->car_yaw_deg = 0.0f;
+    g_shared_vision_snapshot_metadata->car_yaw_age_ms = 0xFFFFU;
+    g_shared_vision_snapshot_metadata->car_yaw_valid = 0U;
+    g_shared_vision_snapshot_metadata->reserved = 0U;
     g_shared_vision_result->magic = SHARED_VISION_MAGIC;
     g_shared_vision_result->seq = 0U;
     g_shared_vision_screen_ctrl->magic = SHARED_VISION_SCREEN_MAGIC;
@@ -719,7 +732,6 @@ void CrossCoreCamera_CameraCoreTask(void)
         input_snapshot.yaw_deg = 0.0f;
         input_snapshot.tof_height_cm = 100.0f;
         input_snapshot.fused_height_cm = 100.0f;
-        input_snapshot.car_yaw_rel_uav_deg = 0.0f;
         input_snapshot.binary_thresholds[VISION_BINARY_ZONE_INNER] =
             (uint8)VISION_BINARY_THRESHOLD_INNER;
         input_snapshot.binary_thresholds[VISION_BINARY_ZONE_MIDDLE] =
@@ -727,7 +739,10 @@ void CrossCoreCamera_CameraCoreTask(void)
         input_snapshot.binary_thresholds[VISION_BINARY_ZONE_OUTER] =
             (uint8)VISION_BINARY_THRESHOLD_OUTER;
         input_snapshot.beacon_recognition_enabled = 0U;
+        input_snapshot.car_yaw_deg = 0.0f;
+        input_snapshot.car_yaw_age_ms = 0xFFFFU;
         input_snapshot.car_yaw_valid = 0U;
+        input_snapshot.reserved = 0U;
     }
 
     // 起飞预扫描完成前关闭信标分支，小车标志识别保持运行。
@@ -737,8 +752,9 @@ void CrossCoreCamera_CameraCoreTask(void)
         input_snapshot.binary_thresholds[VISION_BINARY_ZONE_OUTER]);
     VisionRuntime_SetBeaconRecognitionEnabled((uint8)(
         input_valid && input_snapshot.beacon_recognition_enabled));
-    VehicleMarkerLocalization_SetOpeningDirectionPrior(
-        input_snapshot.car_yaw_rel_uav_deg,
+    VisionRuntime_SetVehicleYawPrior(
+        input_snapshot.car_yaw_deg - input_snapshot.yaw_deg,
+        input_snapshot.car_yaw_age_ms,
         (uint8)(input_valid && input_snapshot.car_yaw_valid));
     recognition_timer_valid = (uint8)(CrossCoreCamera_DwtInit() &&
                                       (SystemCoreClock != 0U));
@@ -938,24 +954,25 @@ void CrossCoreCamera_ControlCorePublishInput(float roll_deg,
                                              float tof_height_cm,
                                              float fused_height_cm)
 {
-    float car_yaw_rel_uav_deg = 0.0f;
-    uint8 car_yaw_valid = core_link_user_get_car_relative_yaw_deg(
-        yaw_deg, &car_yaw_rel_uav_deg);
+    CoreLinkCarMotionDiag_t car_motion = {0};
 
+    core_link_user_get_car_motion_diag(&car_motion);
     g_shared_vision_input->magic = SHARED_VISION_MAGIC;
     g_shared_vision_input->roll_deg = roll_deg;
     g_shared_vision_input->pitch_deg = pitch_deg;
     g_shared_vision_input->yaw_deg = yaw_deg;
     g_shared_vision_input->tof_height_cm = tof_height_cm;
     g_shared_vision_input->fused_height_cm = fused_height_cm;
-    g_shared_vision_input->car_yaw_rel_uav_deg = car_yaw_rel_uav_deg;
     memcpy((void *)g_shared_vision_input->binary_thresholds,
            s_control_binary_thresholds,
            sizeof(s_control_binary_thresholds));
     g_shared_vision_input->beacon_recognition_enabled =
         (Flight_Takeoff_Is_Active() ||
          BeaconSearch_IsPausedByBlindBoxTask()) ? 0U : 1U;
-    g_shared_vision_input->car_yaw_valid = car_yaw_valid;
+    g_shared_vision_input->car_yaw_deg = car_motion.car_yaw_deg;
+    g_shared_vision_input->car_yaw_age_ms = car_motion.age_ms;
+    g_shared_vision_input->car_yaw_valid = car_motion.valid;
+    g_shared_vision_input->reserved = 0U;
     g_shared_vision_input->seq++;
     CrossCoreCamera_CleanInput();
 }
@@ -1040,6 +1057,10 @@ void CrossCoreCamera_ControlCoreAssistantInit(void)
            s_control_binary_thresholds,
            sizeof(s_control_binary_thresholds));
     g_shared_vision_input->beacon_recognition_enabled = 0U;
+    g_shared_vision_input->car_yaw_deg = 0.0f;
+    g_shared_vision_input->car_yaw_age_ms = 0xFFFFU;
+    g_shared_vision_input->car_yaw_valid = 0U;
+    g_shared_vision_input->reserved = 0U;
     g_shared_vision_snapshot_metadata->magic = 0U;
     g_shared_vision_snapshot_metadata->image_seq = 0U;
     g_shared_vision_snapshot_metadata->input_seq = 0U;
@@ -1048,6 +1069,10 @@ void CrossCoreCamera_ControlCoreAssistantInit(void)
     g_shared_vision_snapshot_metadata->yaw_deg = 0.0f;
     g_shared_vision_snapshot_metadata->tof_height_cm = 100.0f;
     g_shared_vision_snapshot_metadata->fused_height_cm = 100.0f;
+    g_shared_vision_snapshot_metadata->car_yaw_deg = 0.0f;
+    g_shared_vision_snapshot_metadata->car_yaw_age_ms = 0xFFFFU;
+    g_shared_vision_snapshot_metadata->car_yaw_valid = 0U;
+    g_shared_vision_snapshot_metadata->reserved = 0U;
     g_shared_vision_result->magic = 0U;
     g_shared_vision_result->seq = 0U;
     g_shared_vision_screen_ctrl->magic = SHARED_VISION_SCREEN_MAGIC;
@@ -1108,6 +1133,12 @@ static void CrossCoreCamera_MetadataWriteU32(uint8 *buffer, uint32 value)
     buffer[3] = (uint8)((value >> 24) & 0xFFU);
 }
 
+static void CrossCoreCamera_MetadataWriteU16(uint8 *buffer, uint16 value)
+{
+    buffer[0] = (uint8)(value & 0xFFU);
+    buffer[1] = (uint8)((value >> 8) & 0xFFU);
+}
+
 static void CrossCoreCamera_MetadataWriteFloat(uint8 *buffer, float value)
 {
     uint32 bits = 0U;
@@ -1121,6 +1152,9 @@ static void CrossCoreCamera_SendSnapshotMetadata(const SharedVisionSnapshotMetad
     uint8 packet[CROSS_CORE_CAMERA_METADATA_PACKET_SIZE] = {0};
     uint8 checksum = 0U;
     uint8 i;
+    CameraCalibration_Params_t calibration;
+
+    CameraCalibration_GetParams(&calibration);
 
     packet[0] = SEEKFREE_ASSISTANT_SEND_HEAD;
     packet[1] = CROSS_CORE_CAMERA_METADATA_FUNCTION;
@@ -1133,6 +1167,15 @@ static void CrossCoreCamera_SendSnapshotMetadata(const SharedVisionSnapshotMetad
     CrossCoreCamera_MetadataWriteFloat(&packet[20], metadata->yaw_deg);
     CrossCoreCamera_MetadataWriteFloat(&packet[24], metadata->tof_height_cm);
     CrossCoreCamera_MetadataWriteFloat(&packet[28], metadata->fused_height_cm);
+    CrossCoreCamera_MetadataWriteFloat(&packet[32], metadata->car_yaw_deg);
+    packet[36] = metadata->car_yaw_valid;
+    CrossCoreCamera_MetadataWriteU16(&packet[37], metadata->car_yaw_age_ms);
+    CrossCoreCamera_MetadataWriteFloat(&packet[39], calibration.mount_roll_offset_deg);
+    CrossCoreCamera_MetadataWriteFloat(&packet[43], calibration.mount_pitch_offset_deg);
+    CrossCoreCamera_MetadataWriteFloat(&packet[47], calibration.mount_yaw_offset_deg);
+    CrossCoreCamera_MetadataWriteFloat(&packet[51], calibration.offset_x_cm);
+    CrossCoreCamera_MetadataWriteFloat(&packet[55], calibration.offset_y_cm);
+    CrossCoreCamera_MetadataWriteFloat(&packet[59], calibration.offset_z_cm);
 
     for(i = 0U; i < (CROSS_CORE_CAMERA_METADATA_PACKET_SIZE - 1U); i++)
     {

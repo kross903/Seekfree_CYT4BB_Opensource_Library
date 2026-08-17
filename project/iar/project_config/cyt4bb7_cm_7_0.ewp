@@ -1367,6 +1367,12 @@
             <name>$PROJ_DIR$\..\..\code\vision\vehicle_marker_localization.h</name>
         </file>
         <file>
+            <name>$PROJ_DIR$\..\..\code\vision\ideal_target_match.c</name>
+        </file>
+        <file>
+            <name>$PROJ_DIR$\..\..\code\vision\ideal_target_match.h</name>
+        </file>
+        <file>
             <name>$PROJ_DIR$\..\..\code\control\velocity_loop.c</name>
         </file>
         <file>

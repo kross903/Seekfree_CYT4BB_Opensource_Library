@@ -7,11 +7,11 @@
 #define BEACON_SEARCH_YAW_RATE_DEFAULT_DPS        (90.0f) /* 自搜索Yaw速度默认值，单位deg/s */
 #define BEACON_SEARCH_YAW_RATE_MIN_DPS            (30.0f) /* VOFA允许设置的最小自搜索Yaw速度 */
 #define BEACON_SEARCH_YAW_RATE_MAX_DPS           (120.0f) /* VOFA允许设置的最大自搜索Yaw速度 */
-#define BEACON_SEARCH_SWEEP_HALF_ANGLE_DEFAULT_DEG (60.0f)/* 普通自搜索默认半角，范围为-半角到+半角 */
+#define BEACON_SEARCH_SWEEP_HALF_ANGLE_DEFAULT_DEG (90.0f)/* 相机长轴覆盖：默认从起始Yaw向两侧各90度 */
 #define BEACON_SEARCH_SWEEP_HALF_ANGLE_MIN_DEG     (5.0f) /* VOFA允许设置的最小自搜索半角 */
 #define BEACON_SEARCH_SWEEP_HALF_ANGLE_MAX_DEG    (90.0f) /* VOFA允许设置的最大自搜索半角 */
 #define BEACON_SEARCH_SWEEP_ANGLE_DEG \
-    (4.0f * BEACON_SEARCH_SWEEP_HALF_ANGLE_DEFAULT_DEG)   /* 默认完整摆扫角度：0→+半角→0→-半角→0 */
+    (2.0f * BEACON_SEARCH_SWEEP_HALF_ANGLE_DEFAULT_DEG)   /* 默认一轮摆扫角度：+90度端点到-90度端点 */
 #define BEACON_SEARCH_POSITION_GATE_CM            (50.0f) /* 启动自搜索前，小车相对位置误差允许范围 */
 #define BEACON_SEARCH_POSITION_WINDOW_FRAMES      (10U)   /* 位置稳定判定滑动窗口帧数 */
 #define BEACON_SEARCH_POSITION_REQUIRED_FRAMES    (5U)    /* 滑动窗口内至少需要合格的位置帧数 */
@@ -51,6 +51,34 @@ typedef struct
     float fused_velocity_y_cms;
 } BeaconSearchStabilityInput_t;
 
+/*
+ * 小车链路给出的寻灯方向输入。地图坐标采用无人机机体系：X向前、Y向左；
+ * 预测向量采用0x15定义的小车机体系：X向前、Y向左。保留定点字段，避免
+ * 在通信任务中增加浮点转换和三角函数开销。
+ */
+typedef struct
+{
+    uint8 map_valid;
+    uint8 map_count;
+    uint8 predicted_valid;
+    uint8 predicted_id;
+    uint8 car_position_valid;
+    uint8 reserved[3];
+    int16 car_x_mm;
+    int16 car_y_mm;
+    int16 car_absolute_yaw_ddeg;
+    int16 predicted_beacon_forward_mm;
+    int16 predicted_beacon_left_mm;
+    core_link_beacon_entry_struct beacon[CORE_LINK_BEACON_MAP_COUNT];
+} BeaconSearchDirectionInput_t;
+
+typedef enum
+{
+    BEACON_SEARCH_DIRECTION_DEFAULT = 0,
+    BEACON_SEARCH_DIRECTION_MAP,
+    BEACON_SEARCH_DIRECTION_PREDICTED
+} BeaconSearchDirectionMode_t;
+
 typedef struct
 {
     uint8 state;
@@ -77,6 +105,13 @@ typedef struct
     uint8 position_sample_valid;
     uint8 fused_velocity_valid;
     uint8 start_gate_ready;
+    uint8 direction_mode;
+    uint8 direction_map_count;
+    uint8 direction_predicted_valid;
+    int8 direction_first_sign;
+    float search_origin_yaw_deg;
+    float predicted_target_yaw_deg;
+    uint16 predicted_hold_ms;
 } BeaconSearchDiag_t;
 
 void BeaconSearch_Init(void);
@@ -89,6 +124,8 @@ void BeaconSearch_Tick(uint16 elapsed_ms,
                        uint16 car_link_age_ms,
                        uint8 car_motion_valid,
                        uint8 car_target_valid,
+                       float current_yaw_deg,
+                       const BeaconSearchDirectionInput_t *direction_input,
                        const BeaconSearchStabilityInput_t *stability_input);
 void BeaconSearch_OnObservationFrame(
     const core_link_beacon_observation_packet_struct *packet,

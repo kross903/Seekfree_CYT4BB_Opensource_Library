@@ -29,8 +29,8 @@
 /* Current UP-FLOW-302 mounting on this airframe:
  * module X maps to body/backend Y, module Y maps to body/backend X.
  * X_SIGN / Y_SIGN are applied after the axis swap, so they mean body/backend axes. */
-#define FLOW_SENSOR_UPFLOW302_X_SIGN          (-1.0f)
-#define FLOW_SENSOR_UPFLOW302_Y_SIGN          (-1.0f)
+#define FLOW_SENSOR_UPFLOW302_X_SIGN          (1.0f)
+#define FLOW_SENSOR_UPFLOW302_Y_SIGN          (1.0f)
 #define FLOW_SENSOR_UPFLOW302_SWAP_XY         (1)
 #define FLOW_SENSOR_UPFLOW302_VALID_VALUE     (245U)
 #define FLOW_SENSOR_UPFLOW302_COMP_X_FROM_GYRO_X_SIGN (0.0f)
@@ -39,8 +39,8 @@
 #define FLOW_SENSOR_UPFLOW302_COMP_Y_FROM_GYRO_Y_SIGN (0.0f)
 /* UP-FLOW-302镜头相对飞机重心的位置：X向前、Y向左、Z向上。 */
 #define FLOW_SENSOR_UPFLOW302_OFFSET_X_CM       (0.0f)
-#define FLOW_SENSOR_UPFLOW302_OFFSET_Y_CM       (-3.0f)
-#define FLOW_SENSOR_UPFLOW302_OFFSET_Z_CM       (-10.0f)
+#define FLOW_SENSOR_UPFLOW302_OFFSET_Y_CM       (14.0f)
+#define FLOW_SENSOR_UPFLOW302_OFFSET_Z_CM       (3.0f)
 
 #if FLOW_SENSOR_SELECTED == FLOW_SENSOR_PMW3901
 #define FLOW_SENSOR_UPDATE_US       FLOW_SENSOR_PMW3901_UPDATE_US

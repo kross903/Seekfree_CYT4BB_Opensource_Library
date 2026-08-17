@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import json
 import math
 from pathlib import Path
@@ -24,8 +24,10 @@ from image_analysis import (
 from ideal_projection import (
     ProjectionCalibration,
     TargetPlaneProjector,
+    build_ideal_beacon_cardinal_points,
     build_ideal_beacon_points,
     build_ideal_chevron_points,
+    build_projected_ellipse_outline,
     self_test as projection_self_test,
     wrap_degrees,
 )
@@ -98,6 +100,12 @@ class BeaconRecognitionResult:
     passed: bool
     failures: tuple[str, ...]
     box_clipped: bool = False
+    target_kind: str | None = None
+    route: str = ""
+    attempts: tuple[str, ...] = ()
+
+
+FIRMWARE_ROUTE_ARROW_MIN_AREA = 30
 
 
 class PictureViewerApp:
@@ -109,7 +117,10 @@ class PictureViewerApp:
 
         self.calibration = CameraCalibration.from_header(CALIBRATION_HEADER)
         self.undistorter = FisheyeUndistorter(self.calibration)
-        self.projection_calibration = ProjectionCalibration.from_header(CALIBRATION_HEADER)
+        self.base_projection_calibration = ProjectionCalibration.from_header(
+            CALIBRATION_HEADER
+        )
+        self.projection_calibration = self.base_projection_calibration
         settings = self._load_settings()
         ideal_settings = settings.get("ideal_target", {})
         if not isinstance(ideal_settings, dict):
@@ -535,11 +546,11 @@ class PictureViewerApp:
         ).pack(side=tk.RIGHT, padx=(0, 6))
         ttk.Button(
             candidate_actions,
-            text="一键信标识别",
-            command=self.recognize_current_image_beacons,
+            text="一键新方案识别",
+            command=self.recognize_current_image_targets,
         ).pack(side=tk.LEFT)
 
-        columns = ("area", "center", "box", "circle", "fill", "beacon")
+        columns = ("area", "center", "box", "route", "beacon")
         self.component_tree = ttk.Treeview(
             candidate_tab, columns=columns, show="tree headings", height=12
         )
@@ -549,9 +560,8 @@ class PictureViewerApp:
             "area": ("面积", 55),
             "center": ("质心", 82),
             "box": ("外接框", 85),
-            "circle": ("圆度", 55),
-            "fill": ("占空", 55),
-            "beacon": ("信标识别", 180),
+            "route": ("面积分流", 80),
+            "beacon": ("新方案识别", 260),
         }
         for name, (text, width) in headings.items():
             self.component_tree.heading(name, text=text)
@@ -842,6 +852,8 @@ class PictureViewerApp:
         return None
 
     def apply_ideal_telemetry(self, telemetry: dict) -> None:
+        self.projection_calibration = self.base_projection_calibration
+        self.target_projector.calibration = self.projection_calibration
         pose_fields = (
             (self.roll_var, ("roll_deg",)),
             (self.pitch_var, ("pitch_deg",)),
@@ -858,6 +870,34 @@ class PictureViewerApp:
                 variable.set(f"{value:.6f}")
                 pose_loaded = True
         self._ideal_pose_source = "同名JSON" if pose_loaded else "手动（JSON无姿态）"
+
+        mount_fields = (
+            (self.mount_roll_var, "camera_mount_roll_deg"),
+            (self.mount_pitch_var, "camera_mount_pitch_deg"),
+            (self.mount_yaw_var, "camera_mount_yaw_deg"),
+        )
+        for variable, name in mount_fields:
+            value = self.telemetry_number(telemetry, name)
+            if value is not None:
+                variable.set(f"{value:.6f}")
+        offset_values = {
+            field: self.telemetry_number(telemetry, json_name)
+            for field, json_name in (
+                ("offset_x_cm", "camera_offset_x_cm"),
+                ("offset_y_cm", "camera_offset_y_cm"),
+                ("offset_z_cm", "camera_offset_z_cm"),
+            )
+        }
+        if any(value is not None for value in offset_values.values()):
+            self.projection_calibration = replace(
+                self.projection_calibration,
+                **{
+                    field: value
+                    for field, value in offset_values.items()
+                    if value is not None
+                },
+            )
+            self.target_projector.calibration = self.projection_calibration
 
         yaw_valid = telemetry.get(
             "car_yaw_valid", telemetry.get("vehicle_yaw_valid", True)
@@ -1176,7 +1216,7 @@ class PictureViewerApp:
             for item_id in self.component_tree.get_children():
                 self.component_tree.set(item_id, "beacon", "未检测")
         if had_results:
-            self.status_var.set("信标识别结果已失效，请重新识别")
+            self.status_var.set("新方案识别结果已失效，请重新识别")
 
     def run_analysis(self) -> None:
         self._threshold_job = None
@@ -1208,10 +1248,18 @@ class PictureViewerApp:
             if recognition is None:
                 recognition_text = "未检测"
             elif recognition.passed:
-                recognition_text = "通过"
+                recognition_text = (
+                    "箭头通过" if recognition.target_kind == TARGET_ARROW
+                    else "信标通过"
+                )
             else:
                 first_failure = recognition.failures[0] if recognition.failures else "未通过"
                 recognition_text = f"未通过：{first_failure}"
+            coarse_area = max(1, (component.area + 2) // 4)
+            route_text = (
+                "箭头优先" if coarse_area >= FIRMWARE_ROUTE_ARROW_MIN_AREA
+                else "信标优先"
+            )
             self.component_tree.insert(
                 "",
                 tk.END,
@@ -1221,8 +1269,7 @@ class PictureViewerApp:
                     component.area,
                     f"{component.centroid_x:.1f},{component.centroid_y:.1f}",
                     f"{component.width}x{component.height}",
-                    f"{component.circularity:.3f}",
-                    f"{component.occupancy:.2f}",
+                    route_text,
                     recognition_text,
                 ),
             )
@@ -1348,6 +1395,227 @@ class PictureViewerApp:
             f"二值阈值 {binary_threshold} | 信标直径 {diameter:.1f} cm"
         )
 
+    def recognize_current_image_targets(self) -> None:
+        if self.undistorted is None:
+            messagebox.showinfo("新方案识别", "请先加载一张图像。")
+            return
+        if not self.components:
+            self.invalidate_beacon_recognition()
+            self.update_component_tree()
+            self.view_var.set("连通域候选")
+            self.status_var.set("新方案识别完成：当前图像无连通域候选")
+            return
+
+        try:
+            roll = float(self.roll_var.get())
+            pitch = float(self.pitch_var.get())
+            height = float(self.height_var.get())
+            uav_yaw = float(self.uav_yaw_var.get())
+            car_yaw = float(self.car_yaw_var.get())
+            arrow_plane_height = float(self.arrow_plane_height_var.get())
+            beacon_plane_height = float(self.beacon_plane_height_var.get())
+            arm_length = float(self.arrow_arm_length_var.get())
+            arrow_angle = float(self.arrow_angle_var.get())
+            opening_offset = float(self.arrow_opening_offset_var.get())
+            beacon_diameter = float(self.beacon_diameter_var.get())
+            mount_roll = float(self.mount_roll_var.get())
+            mount_pitch = float(self.mount_pitch_var.get())
+            mount_yaw = float(self.mount_yaw_var.get())
+            values = (
+                roll, pitch, height, uav_yaw, car_yaw,
+                arrow_plane_height, beacon_plane_height,
+                arm_length, arrow_angle, opening_offset, beacon_diameter,
+                mount_roll, mount_pitch, mount_yaw,
+            )
+            if not all(math.isfinite(value) for value in values):
+                raise ValueError("姿态、高度和目标参数必须是有限数值")
+            if height <= 0.0:
+                raise ValueError("无人机高度必须大于0")
+            if min(arrow_plane_height, beacon_plane_height) < 0.0:
+                raise ValueError("目标平面高度不能小于0")
+            if max(arrow_plane_height, beacon_plane_height) >= (
+                height - self.projection_calibration.offset_z_cm
+            ):
+                raise ValueError("目标平面必须低于相机")
+            self.target_projector.set_mount_angles(
+                mount_roll, mount_pitch, mount_yaw
+            )
+            sampling_config = self.current_sampling_config()
+            near_negative_width = self.current_near_negative_width()
+            binary_threshold = self.safe_int(self.threshold_var, 50, 0, 255)
+            relative_yaw = wrap_degrees(
+                car_yaw if self.car_yaw_relative_var.get() else car_yaw - uav_yaw
+            )
+        except ValueError as exc:
+            messagebox.showerror("新方案参数错误", str(exc))
+            self.status_var.set(f"新方案识别失败：{exc}")
+            return
+
+        def evaluate_target(
+            component: ConnectedComponent,
+            target_kind: str,
+        ) -> BeaconRecognitionResult:
+            center_image = (component.centroid_x, component.centroid_y)
+            plane_height = (
+                arrow_plane_height if target_kind == TARGET_ARROW
+                else beacon_plane_height
+            )
+            try:
+                center_plane = self.target_projector.image_to_plane(
+                    center_image, roll, pitch, height, plane_height
+                )
+                if center_plane is None:
+                    raise ValueError("候选质心无法投影到目标平面")
+                if target_kind == TARGET_ARROW:
+                    physical_points = build_ideal_chevron_points(
+                        center_plane,
+                        arm_length,
+                        arrow_angle,
+                        wrap_degrees(relative_yaw + opening_offset),
+                    )
+                    outline = []
+                    for name in ("left_tip", "apex", "right_tip"):
+                        projected = self.target_projector.plane_to_image(
+                            physical_points[name], roll, pitch, height, plane_height
+                        )
+                        if projected is None:
+                            raise ValueError("箭头端点位于相机后方")
+                        outline.append(projected)
+                    closed = False
+                    filled_positive = False
+                else:
+                    physical_points = build_ideal_beacon_cardinal_points(
+                        center_plane, beacon_diameter
+                    )
+                    projected_points: dict[str, tuple[float, float]] = {
+                        "center": center_image,
+                    }
+                    for name in ("left", "right", "up", "down"):
+                        projected = self.target_projector.plane_to_image(
+                            physical_points[name], roll, pitch, height, plane_height
+                        )
+                        if projected is None:
+                            raise ValueError("信标基准点位于相机后方")
+                        projected_points[name] = projected
+                    outline = list(build_projected_ellipse_outline(
+                        projected_points["center"],
+                        projected_points["left"],
+                        projected_points["right"],
+                        projected_points["up"],
+                        projected_points["down"],
+                    ))
+                    closed = True
+                    filled_positive = True
+                sampling = sample_projected_shape(
+                    self.undistorted,
+                    outline,
+                    closed=closed,
+                    filled_positive=filled_positive,
+                    config=sampling_config,
+                    is_valid_pixel=self.undistorter.is_valid_output_pixel,
+                )
+                metrics = calculate_matching_metrics(
+                    self.undistorted,
+                    outline,
+                    sampling,
+                    target_kind=target_kind,
+                    center=center_image,
+                    binary_threshold=binary_threshold,
+                    negative_guard_px=sampling_config.negative_guard_px,
+                    near_negative_width_px=near_negative_width,
+                )
+                decision = evaluate_matching_metrics(
+                    metrics,
+                    self.current_matching_thresholds(target_kind),
+                    target_kind=target_kind,
+                )
+                return BeaconRecognitionResult(
+                    metrics=metrics,
+                    passed=decision.passed,
+                    failures=decision.failures,
+                    box_clipped=sampling.box_clipped,
+                    target_kind=target_kind if decision.passed else None,
+                )
+            except (ValueError, OverflowError) as exc:
+                return BeaconRecognitionResult(
+                    metrics=None,
+                    passed=False,
+                    failures=(f"计算失败：{exc}",),
+                )
+
+        arrow_priority = [
+            component for component in self.components
+            if max(1, (component.area + 2) // 4) >= FIRMWARE_ROUTE_ARROW_MIN_AREA
+        ]
+        beacon_priority = [
+            component for component in self.components
+            if component not in arrow_priority
+        ]
+        results: dict[int, BeaconRecognitionResult] = {}
+        arrow_found = False
+        for component in (*arrow_priority, *beacon_priority):
+            route = (
+                "箭头优先" if component in arrow_priority else "信标优先"
+            )
+            order = (
+                (TARGET_ARROW, TARGET_BEACON)
+                if route == "箭头优先"
+                else (TARGET_BEACON, TARGET_ARROW)
+            )
+            attempts: list[str] = []
+            failures: list[str] = []
+            last_result: BeaconRecognitionResult | None = None
+            for target_kind in order:
+                target_name = "箭头" if target_kind == TARGET_ARROW else "信标"
+                if target_kind == TARGET_ARROW and arrow_found:
+                    attempts.append("箭头跳过（本帧已有箭头）")
+                    continue
+                current = evaluate_target(component, target_kind)
+                last_result = current
+                attempts.append(f"{target_name}{'通过' if current.passed else '失败'}")
+                if current.passed:
+                    if target_kind == TARGET_ARROW:
+                        arrow_found = True
+                    results[component.label] = BeaconRecognitionResult(
+                        metrics=current.metrics,
+                        passed=True,
+                        failures=(),
+                        box_clipped=current.box_clipped,
+                        target_kind=target_kind,
+                        route=route,
+                        attempts=tuple(attempts),
+                    )
+                    break
+                first_failure = current.failures[0] if current.failures else "未通过"
+                failures.append(f"{target_name}：{first_failure}")
+            else:
+                results[component.label] = BeaconRecognitionResult(
+                    metrics=last_result.metrics if last_result else None,
+                    passed=False,
+                    failures=tuple(failures) or ("没有可执行的识别分支",),
+                    box_clipped=bool(last_result and last_result.box_clipped),
+                    route=route,
+                    attempts=tuple(attempts),
+                )
+
+        self.beacon_recognition_results = results
+        self.update_component_tree()
+        self.view_var.set("连通域候选")
+        self.redraw_canvas()
+        arrow_count = sum(
+            result.passed and result.target_kind == TARGET_ARROW
+            for result in results.values()
+        )
+        beacon_count = sum(
+            result.passed and result.target_kind == TARGET_BEACON
+            for result in results.values()
+        )
+        self.status_var.set(
+            f"新方案识别完成：箭头 {arrow_count}，信标 {beacon_count}，"
+            f"候选 {len(results)} | 固定阈值 {binary_threshold} | "
+            f"面积分流线 {FIRMWARE_ROUTE_ARROW_MIN_AREA}（188x120等效）"
+        )
+
     def component_selected(self, _event: object = None) -> None:
         selection = self.component_tree.selection()
         self.selected_component = int(selection[0]) if selection else None
@@ -1415,9 +1683,13 @@ class PictureViewerApp:
         )
         recognition = self.beacon_recognition_results.get(component.label)
         if recognition is None:
-            details += "\n信标识别：未检测"
+            details += "\n新方案识别：未检测"
         elif recognition.metrics is None:
-            details += "\n信标识别：未通过\n原因：\n  - " + "\n  - ".join(
+            details += (
+                f"\n新方案识别：未通过  分流：{recognition.route}"
+                f"\n尝试：{' → '.join(recognition.attempts)}"
+                "\n原因：\n  - "
+            ) + "\n  - ".join(
                 recognition.failures
             )
         else:
@@ -1426,15 +1698,23 @@ class PictureViewerApp:
             def metric_text(value: float | None, digits: int = 2) -> str:
                 return f"{value:.{digits}f}" if value is not None else "--"
 
+            target_text = (
+                "箭头" if recognition.target_kind == TARGET_ARROW
+                else "信标" if recognition.target_kind == TARGET_BEACON
+                else "未分类"
+            )
             details += (
-                f"\n信标识别：{'通过' if recognition.passed else '未通过'}"
+                f"\n新方案识别：{'通过' if recognition.passed else '未通过'}"
+                f"  类型：{target_text}"
+                f"  分流：{recognition.route}"
                 f"{'  采样框已裁边' if recognition.box_clipped else ''}\n"
+                f"尝试：{' → '.join(recognition.attempts)}\n"
                 f"灰差 {metric_text(metrics.gray_difference, 1)}    "
                 f"分离度 {metric_text(metrics.standardized_separation)}    "
                 f"固定一致 {metric_text(metrics.binary_consistency)}\n"
                 f"正/负命中 {metric_text(metrics.positive_hit_rate)}/"
                 f"{metric_text(metrics.negative_hit_rate)}    "
-                f"四象限 {metric_text(metrics.completeness)}    "
+                f"完整度 {metric_text(metrics.completeness)}    "
                 f"近/远差 {metric_text(metrics.near_difference, 1)}/"
                 f"{metric_text(metrics.far_difference, 1)}    "
                 f"P/N {metrics.positive_count}/{metrics.negative_count}"
@@ -1479,7 +1759,8 @@ class PictureViewerApp:
                     width=width,
                 )
                 label = (
-                    f"{component.label} 信标"
+                    f"{component.label} "
+                    f"{('箭头' if recognition.target_kind == TARGET_ARROW else '信标')}"
                     if recognition is not None and recognition.passed
                     else str(component.label)
                 )

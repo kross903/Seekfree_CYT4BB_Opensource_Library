@@ -165,6 +165,15 @@ uint8 VehicleMarkerLocalization_AppendAndValidateBlob(
     const VehicleMarkerBinaryView_t *binary_view,
     const VehicleMarkerOpenVGate_t *open_v_gate,
     VehicleMarkerOpenVGate_t *measured_open_v);
+/* Commits a chevron already accepted by the ideal grayscale matcher. */
+uint8 VehicleMarkerLocalization_CommitIdealChevron(
+    const VehicleMarkerWorldPoint_t *apex,
+    const VehicleMarkerWorldPoint_t *left_tip,
+    const VehicleMarkerWorldPoint_t *right_tip,
+    const VehicleMarkerPoint2D_t *apex_img,
+    const VehicleMarkerPoint2D_t *left_tip_img,
+    const VehicleMarkerPoint2D_t *right_tip_img,
+    float heading_deg, float tip_span_cm);
 uint8 VehicleMarkerLocalization_EndBlobFrame(VehicleMarkerPose_t *out_pose);
 
 extern VehicleMarkerPose_t g_vehicle_marker_pose;

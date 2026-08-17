@@ -21,6 +21,7 @@ extern volatile uint8 armed;
 #define HEIGHT_TARGET_ERROR_LIMIT_CM      40.0f
 #define HEIGHT_TARGET_RAMP_DURATION_S     3.0f
 #define HEIGHT_VEL_TARGET_LIMIT_CMS       40.0f
+#define HEIGHT_PID_LIMIT_DIAG_EPSILON     0.001f
 #define HEIGHT_AUTO_LAND_RATE_CMS         20.0f
 #define HEIGHT_AUTO_LAND_MIN_CM           15.0f
 #define HEIGHT_AUTO_LAND_TOUCHDOWN_TICKS  30U
@@ -54,7 +55,7 @@ extern volatile uint8 armed;
  *   - T2 is at -Y and its beam tilts outward toward -Y by 15 degrees.
  *
  * The optical-flow installation remains at -Y.  The signs follow the
- * existing body-axis convention used by body_y_down_offset_cm().
+ * existing body-axis convention used by body_y_up_offset_cm().
  */
 #define TOF1_SENSOR_OFFSET_Y_CM           (+14.0f)
 #define TOF2_SENSOR_OFFSET_Y_CM           (-14.0f)
@@ -502,7 +503,7 @@ float HeightManager_GetAutoLandingTarget(void)
     return s_auto_landing_target_cm;
 }
 
-static float body_y_down_offset_cm(float offset_y_cm, float roll_deg, float pitch_deg)
+static float body_y_up_offset_cm(float offset_y_cm, float roll_deg, float pitch_deg)
 {
     float roll_rad = roll_deg * DEG2RAD;
     float pitch_rad = pitch_deg * DEG2RAD;
@@ -519,9 +520,11 @@ static float tof_beam_vertical_projection(float roll_deg,
     float tilt_rad = beam_tilt_y_deg * DEG2RAD;
     float projection;
 
+    /* Positive beam tilt points toward +Y.  A positive roll tilts the body
+     * downward axis toward the same side, so the two angles add. */
     projection = cosf(pitch_rad) *
-                 (sinf(roll_rad) * sinf(tilt_rad) +
-                  cosf(roll_rad) * cosf(tilt_rad));
+                 (cosf(roll_rad) * cosf(tilt_rad) -
+                  sinf(roll_rad) * sinf(tilt_rad));
 
     if(projection < TOF_BEAM_VERTICAL_COS_MIN)
     {
@@ -538,7 +541,7 @@ static float height_get_center_height_from_tof_cm(float tof_los_cm,
                                                   float beam_tilt_y_deg)
 {
     float tof_vertical_cm;
-    float tof_down_offset_cm;
+    float sensor_up_offset_cm;
     float center_height_cm;
 
     if(tof_los_cm <= 0.0f)
@@ -549,10 +552,10 @@ static float height_get_center_height_from_tof_cm(float tof_los_cm,
     tof_vertical_cm = tof_los_cm * tof_beam_vertical_projection(roll_deg,
                                                                 pitch_deg,
                                                                 beam_tilt_y_deg);
-    tof_down_offset_cm = body_y_down_offset_cm(sensor_offset_y_cm,
-                                               roll_deg,
-                                               pitch_deg);
-    center_height_cm = tof_vertical_cm + tof_down_offset_cm;
+    sensor_up_offset_cm = body_y_up_offset_cm(sensor_offset_y_cm,
+                                              roll_deg,
+                                              pitch_deg);
+    center_height_cm = tof_vertical_cm - sensor_up_offset_cm;
 
     return center_height_cm > 0.0f ? center_height_cm : 0.0f;
 }
@@ -561,13 +564,14 @@ static float height_get_flow_height_from_center_cm(float center_height_cm,
                                                    float roll_deg,
                                                    float pitch_deg)
 {
-    float flow_down_offset_cm;
+    float flow_up_offset_cm;
+    float flow_height_cm;
 
-    flow_down_offset_cm = body_y_down_offset_cm(FLOW_SENSOR_OFFSET_Y_CM,
-                                                 roll_deg,
-                                                 pitch_deg);
-    return (center_height_cm - flow_down_offset_cm) > 0.0f ?
-           (center_height_cm - flow_down_offset_cm) : 0.0f;
+    flow_up_offset_cm = body_y_up_offset_cm(FLOW_SENSOR_OFFSET_Y_CM,
+                                            roll_deg,
+                                            pitch_deg);
+    flow_height_cm = center_height_cm + flow_up_offset_cm;
+    return flow_height_cm > 0.0f ? flow_height_cm : 0.0f;
 }
 
 /* Public helper retained for callers that use the T1 installation geometry. */
@@ -1204,6 +1208,11 @@ void HeightManager_Task_10ms(void)
             uint8 throttle_positive_limited;
             uint8 height_negative_limited;
             uint8 height_positive_limited;
+            uint8 takeoff_integrator_hold;
+            uint8 height_output_negative_limited;
+            uint8 height_output_positive_limited;
+            uint8 velocity_output_negative_limited;
+            uint8 velocity_output_positive_limited;
 
             velocity_feedback_cms = s_height_velocity_feedback_cms;
             Motor_Mixer_Get_Limit_Diag(&mixer_diag);
@@ -1219,24 +1228,49 @@ void HeightManager_Task_10ms(void)
             height_positive_limited = (uint8)(throttle_positive_limited ||
                                                (s_height_diag.target_velocity_cms >=
                                                 HEIGHT_VEL_TARGET_LIMIT_CMS));
+            /* 软输出尚未完全接管或起飞轨迹仍在移动时，禁止积分在衰减输出背后累积。 */
+            takeoff_integrator_hold =
+                (uint8)(s_soft_takeoff_active &&
+                        ((s_soft_takeoff_output_blend < 1.0f) ||
+                         s_height_takeoff_target_active));
             height_integral_before = HeightPID.integral;
             height_pid_vz_cms = PID_CalculateLimited(&HeightPID,
                                                      actual_cm + error_cm,
                                                      actual_cm,
                                                      TOF_DT,
-                                                     height_negative_limited,
-                                                     height_positive_limited);
+                                                     (uint8)(height_negative_limited ||
+                                                             takeoff_integrator_hold),
+                                                     (uint8)(height_positive_limited ||
+                                                             takeoff_integrator_hold));
             target_vz_cms = height_clamp_float(height_pid_vz_cms,
                                                -HEIGHT_VEL_TARGET_LIMIT_CMS,
                                                HEIGHT_VEL_TARGET_LIMIT_CMS);
+            height_output_negative_limited =
+                (uint8)((height_pid_vz_cms <=
+                         (-HeightPID.output_limit + HEIGHT_PID_LIMIT_DIAG_EPSILON)) ||
+                        (height_pid_vz_cms <=
+                         (-HEIGHT_VEL_TARGET_LIMIT_CMS + HEIGHT_PID_LIMIT_DIAG_EPSILON)));
+            height_output_positive_limited =
+                (uint8)((height_pid_vz_cms >=
+                         (HeightPID.output_limit - HEIGHT_PID_LIMIT_DIAG_EPSILON)) ||
+                        (height_pid_vz_cms >=
+                         (HEIGHT_VEL_TARGET_LIMIT_CMS - HEIGHT_PID_LIMIT_DIAG_EPSILON)));
 
             velocity_integral_before = HeightVelPID.integral;
             raw_velocity_output = PID_CalculateLimited(&HeightVelPID,
                                                        target_vz_cms,
                                                        velocity_feedback_cms,
                                                        TOF_DT,
-                                                       throttle_negative_limited,
-                                                       throttle_positive_limited);
+                                                       (uint8)(throttle_negative_limited ||
+                                                               takeoff_integrator_hold),
+                                                       (uint8)(throttle_positive_limited ||
+                                                               takeoff_integrator_hold));
+            velocity_output_negative_limited =
+                (uint8)(raw_velocity_output <=
+                        (-HeightVelPID.output_limit + HEIGHT_PID_LIMIT_DIAG_EPSILON));
+            velocity_output_positive_limited =
+                (uint8)(raw_velocity_output >=
+                        (HeightVelPID.output_limit - HEIGHT_PID_LIMIT_DIAG_EPSILON));
             HeightSpeedPID_output = raw_velocity_output *
                                     (s_soft_takeoff_active ? s_soft_takeoff_output_blend : 1.0f);
 
@@ -1245,19 +1279,28 @@ void HeightManager_Task_10ms(void)
             s_height_diag.velocity_error_cms = target_vz_cms - velocity_feedback_cms;
             s_height_diag.velocity_pid_output = HeightSpeedPID_output;
             s_height_diag.height_pid_limit_flags =
-                (uint8)((height_negative_limited ? MOTOR_MIXER_LIMIT_NEGATIVE : 0U) |
-                        (height_positive_limited ? MOTOR_MIXER_LIMIT_POSITIVE : 0U));
-            s_height_diag.velocity_pid_limit_flags = mixer_diag.throttle_limit_flags;
+                (uint8)(((height_negative_limited || height_output_negative_limited) ?
+                         MOTOR_MIXER_LIMIT_NEGATIVE : 0U) |
+                        ((height_positive_limited || height_output_positive_limited) ?
+                         MOTOR_MIXER_LIMIT_POSITIVE : 0U));
+            s_height_diag.velocity_pid_limit_flags =
+                (uint8)(mixer_diag.throttle_limit_flags |
+                        (velocity_output_negative_limited ? MOTOR_MIXER_LIMIT_NEGATIVE : 0U) |
+                        (velocity_output_positive_limited ? MOTOR_MIXER_LIMIT_POSITIVE : 0U));
             s_height_diag.height_integrator_held =
-                (uint8)((HeightPID.integral == height_integral_before) &&
-                        ((height_negative_limited && (error_cm < 0.0f)) ||
-                         (height_positive_limited && (error_cm > 0.0f))));
+                (uint8)(takeoff_integrator_hold ||
+                        ((HeightPID.integral == height_integral_before) &&
+                         (((height_negative_limited || height_output_negative_limited) &&
+                           (error_cm < 0.0f)) ||
+                          ((height_positive_limited || height_output_positive_limited) &&
+                           (error_cm > 0.0f)))));
             s_height_diag.velocity_integrator_held =
-                (uint8)((HeightVelPID.integral == velocity_integral_before) &&
-                        ((throttle_negative_limited &&
-                          (s_height_diag.velocity_error_cms < 0.0f)) ||
-                         (throttle_positive_limited &&
-                          (s_height_diag.velocity_error_cms > 0.0f))));
+                (uint8)(takeoff_integrator_hold ||
+                        ((HeightVelPID.integral == velocity_integral_before) &&
+                         (((throttle_negative_limited || velocity_output_negative_limited) &&
+                           (s_height_diag.velocity_error_cms < 0.0f)) ||
+                          ((throttle_positive_limited || velocity_output_positive_limited) &&
+                           (s_height_diag.velocity_error_cms > 0.0f)))));
             s_height_diag.cascade_enabled = 1U;
         }
 #else

@@ -76,6 +76,46 @@ def build_ideal_beacon_points(
     )
 
 
+def build_ideal_beacon_cardinal_points(
+    center: Point2D,
+    diameter_cm: float,
+) -> dict[str, Point2D]:
+    """Return the center and four physical points used by the firmware."""
+    if diameter_cm <= 0.0:
+        raise ValueError("信标直径必须大于0")
+    radius = diameter_cm * 0.5
+    return {
+        "center": center,
+        "left": (center[0], center[1] - radius),
+        "right": (center[0], center[1] + radius),
+        "up": (center[0] + radius, center[1]),
+        "down": (center[0] - radius, center[1]),
+    }
+
+
+def build_projected_ellipse_outline(
+    center: Point2D,
+    left: Point2D,
+    right: Point2D,
+    up: Point2D,
+    down: Point2D,
+    point_count: int = 32,
+) -> tuple[Point2D, ...]:
+    """Interpolate an image ellipse after only five physical projections."""
+    point_count = max(12, int(point_count))
+    ex = ((right[0] - left[0]) * 0.5, (right[1] - left[1]) * 0.5)
+    ey = ((down[0] - up[0]) * 0.5, (down[1] - up[1]) * 0.5)
+    return tuple(
+        (
+            center[0] + ex[0] * math.cos(2.0 * math.pi * index / point_count)
+            + ey[0] * math.sin(2.0 * math.pi * index / point_count),
+            center[1] + ex[1] * math.cos(2.0 * math.pi * index / point_count)
+            + ey[1] * math.sin(2.0 * math.pi * index / point_count),
+        )
+        for index in range(point_count)
+    )
+
+
 @dataclass(frozen=True)
 class ProjectionCalibration:
     image_width: int
@@ -290,6 +330,14 @@ def self_test(calibration_path: Path) -> None:
     beacon_points = build_ideal_beacon_points((2.0, -3.0), 10.0, 48)
     assert len(beacon_points) == 48
     assert abs(math.dist(beacon_points[0], beacon_points[24]) - 10.0) < 1e-6
+    cardinal = build_ideal_beacon_cardinal_points((2.0, -3.0), 10.0)
+    assert set(cardinal) == {"center", "left", "right", "up", "down"}
+    ellipse = build_projected_ellipse_outline(
+        (10.0, 10.0), (6.0, 10.0), (14.0, 10.0),
+        (10.0, 7.0), (10.0, 13.0),
+    )
+    assert len(ellipse) == 32
+    assert abs(ellipse[0][0] - 14.0) < 1e-6
 
     calibration = ProjectionCalibration.from_header(calibration_path)
     assert (calibration.output_width, calibration.output_height) == (376, 240)

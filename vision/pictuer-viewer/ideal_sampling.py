@@ -177,7 +177,13 @@ def sample_projected_shape(
             box_clipped=True,
         )
 
-    step = int(config.step_px)
+    box_width = max_x - min_x + 1
+    box_height = max_y - min_y + 1
+    step = max(
+        int(config.step_px),
+        (box_width + 15) // 16,
+        (box_height + 15) // 16,
+    )
     start_x = ((min_x + step - 1) // step) * step
     start_y = ((min_y + step - 1) // step) * step
     column_count = (max_x - start_x) // step + 1

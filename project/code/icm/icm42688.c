@@ -31,21 +31,21 @@ static void ICM42688_ApplyInstallMatrix(float x_in, float y_in, float z_in,
 float icm42688_acc_inv = 1, icm42688_gyro_inv = 1;
 
 static const float k_icm42688_sensor_to_body[3][3] = {
-    /* 2026-07-12 六面静止数据标定结果，传感器坐标系转换到机体坐标系。
-     * ZYX 数学等效角：Roll = 2.6486 deg，Pitch = 1.3344 deg，Yaw = 1.5246 deg。
-     * 六姿态残差：max = 0.5552 deg，RMS = 0.3679 deg，det(R) = 1.0。
+    /* 2026-08-15 安装标定结果：新采集四侧面与上一轮上下两面联合求解。
+     * ZYX 数学等效角：Roll = 1.4784 deg，Pitch = -0.2299 deg，Yaw = 3.0057 deg。
+     * 六姿态残差：max = 0.8253 deg，RMS = 0.5137 deg，det(R) = 1.0。
      */
-    { 0.999374892f, -0.025502550f,  0.024483577f},
-    { 0.026599487f,  0.998606716f, -0.045575141f},
-    {-0.023287182f,  0.046197902f,  0.998660834f},
+    { 0.998616256f, -0.052521768f, -0.002652693f},
+    { 0.052435420f,  0.998286428f, -0.025975649f},
+    { 0.004012435f,  0.025800610f,  0.999659056f},
 
 };
 
-/* 同一组六面数据得到的传感器原始加速度零偏，单位为 ADC count。 */
+/* 与上述联合标定矩阵配套的传感器原始加速度零偏，单位为 ADC count。 */
 static const float k_icm42688_acc_bias_count[3] = {
-    -11.821327f,
-      3.214315f,
-     10.511541f,
+    -7.809485f,
+    -0.229362f,
+    33.089513f,
 };
 
 static void ICM42688_ApplyInstallMatrix(float x_in, float y_in, float z_in,

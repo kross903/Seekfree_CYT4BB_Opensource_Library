@@ -23,8 +23,14 @@ HEAD = 0xAA
 CAMERA_FUNCTION = 0x02
 CAMERA_HEADER_LEN = 8
 METADATA_FUNCTION = 0x12
-METADATA_VERSION = 0x01
-METADATA_PACKET_LEN = 33
+METADATA_VERSION_V1 = 0x01
+METADATA_VERSION = 0x02
+METADATA_PACKET_LEN_V1 = 33
+METADATA_PACKET_LEN = 64
+METADATA_PACKET_LENGTHS = {
+    METADATA_VERSION_V1: METADATA_PACKET_LEN_V1,
+    METADATA_VERSION: METADATA_PACKET_LEN,
+}
 
 
 def list_serial_ports() -> list[str]:
@@ -57,19 +63,21 @@ def read_exact(port: serial.Serial, size: int) -> bytes:
 
 
 def parse_metadata_packet(packet: bytes) -> dict:
-    if len(packet) != METADATA_PACKET_LEN:
+    if len(packet) < 4:
         raise ValueError(f"invalid metadata packet length: {len(packet)}")
     if packet[0] != HEAD or packet[1] != METADATA_FUNCTION:
         raise ValueError("invalid metadata packet header")
-    if packet[2] != METADATA_VERSION or packet[3] != METADATA_PACKET_LEN:
+    version = packet[2]
+    expected_length = METADATA_PACKET_LENGTHS.get(version)
+    if expected_length is None or packet[3] != expected_length or len(packet) != expected_length:
         raise ValueError("unsupported metadata packet version or size")
     if (sum(packet[:-1]) & 0xFF) != packet[-1]:
         raise ValueError("metadata checksum mismatch")
     image_seq, input_seq, roll, pitch, yaw, tof_height, fused_height = struct.unpack(
         "<IIfffff", packet[4:32]
     )
-    return {
-        "version": packet[2],
+    metadata = {
+        "version": version,
         "image_seq": image_seq,
         "input_seq": input_seq,
         "roll_deg": roll,
@@ -78,6 +86,30 @@ def parse_metadata_packet(packet: bytes) -> dict:
         "tof_height_cm": tof_height,
         "fused_height_cm": fused_height,
     }
+    if version == METADATA_VERSION:
+        (
+            car_yaw,
+            car_yaw_valid,
+            car_yaw_age_ms,
+            mount_roll,
+            mount_pitch,
+            mount_yaw,
+            offset_x,
+            offset_y,
+            offset_z,
+        ) = struct.unpack("<fBHffffff", packet[32:63])
+        metadata.update({
+            "car_yaw_deg": car_yaw,
+            "car_yaw_valid": bool(car_yaw_valid),
+            "car_yaw_age_ms": car_yaw_age_ms,
+            "camera_mount_roll_deg": mount_roll,
+            "camera_mount_pitch_deg": mount_pitch,
+            "camera_mount_yaw_deg": mount_yaw,
+            "camera_offset_x_cm": offset_x,
+            "camera_offset_y_cm": offset_y,
+            "camera_offset_z_cm": offset_z,
+        })
+    return metadata
 
 
 def find_camera_packet(port: serial.Serial) -> tuple[dict | None, int, int, int, int, int]:
@@ -92,7 +124,12 @@ def find_camera_packet(port: serial.Serial) -> tuple[dict | None, int, int, int,
         prefix = read_exact(port, 3)
         function = prefix[0]
         if function == METADATA_FUNCTION:
-            packet = bytes((HEAD, prefix[0], prefix[1], prefix[2])) + read_exact(port, METADATA_PACKET_LEN - 4)
+            declared_length = prefix[2]
+            if declared_length < 4:
+                continue
+            packet = bytes((HEAD, prefix[0], prefix[1], prefix[2])) + read_exact(
+                port, declared_length - 4
+            )
             try:
                 metadata = parse_metadata_packet(packet)
             except ValueError:

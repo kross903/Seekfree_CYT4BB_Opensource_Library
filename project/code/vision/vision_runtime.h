@@ -16,6 +16,9 @@
 #define VISION_BINARY_THRESHOLD_MIDDLE VISION_BINARY_THRESHOLD_BEACON
 #define VISION_BINARY_THRESHOLD_OUTER  VISION_BINARY_THRESHOLD_BEACON
 #define VISION_BINARY_THRESHOLD        VISION_BINARY_THRESHOLD_BEACON
+#define VISION_RUNTIME_FIXED_THRESHOLD (50U) /* 新链路唯一二值化阈值 */
+#define VISION_RUNTIME_ROUTE_ARROW_MIN_AREA (30U) /* 前景面积达到该值时箭头优先 */
+#define VISION_RUNTIME_YAW_MAX_AGE_MS (500U)
 #define VISION_RUNTIME_COARSE_ZONE_COUNT       (5U)  /* 中心到边缘共五个同心分区 */
 /* 粗筛阈值从中心向边缘递减：近处要求高，远处弱信标使用较低阈值。 */
 #define VISION_RUNTIME_COARSE_THRESHOLD_CENTER (150U) /* 光轴中心圈 */
@@ -85,7 +88,7 @@
 #error "VISION_RUNTIME_PHYSICAL_GRID_ENABLE must be 0 or 1"
 #endif
 #ifndef VISION_RUNTIME_DEBUG_UNDISTORT_IMAGE_ENABLE
-#define VISION_RUNTIME_DEBUG_UNDISTORT_IMAGE_ENABLE (1U)
+#define VISION_RUNTIME_DEBUG_UNDISTORT_IMAGE_ENABLE (0U)
 #endif
 
 /* Candidate refinement pipeline selection. */
@@ -262,6 +265,8 @@ typedef struct
 void VisionRuntime_ProcessFrame(float height_cm);
 void VisionRuntime_ProcessFrameWithPose(float roll_deg, float pitch_deg, float height_cm);
 void VisionRuntime_SetBeaconRecognitionEnabled(uint8 enabled);
+void VisionRuntime_SetVehicleYawPrior(float car_yaw_rel_uav_deg,
+                                      uint16 age_ms, uint8 valid);
 void VisionRuntime_SetBinaryThreshold(uint8 threshold);
 void VisionRuntime_SetBinaryThresholds(uint8 inner, uint8 middle, uint8 outer);
 void VisionRuntime_GetBinaryThresholds(uint8 thresholds[VISION_BINARY_ZONE_COUNT]);

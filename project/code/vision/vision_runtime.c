@@ -1,6 +1,7 @@
 #include "vision/vision_runtime.h"
 #include "vision/camera_calibration.h"
 #include "vision/coarse_distance_zone_map.h"
+#include "vision/ideal_target_match.h"
 #include <string.h>
 #include <math.h>
 
@@ -15,6 +16,8 @@ static uint8 s_vision_vehicle_threshold =
 static uint8 s_vision_beacon_threshold =
     (uint8)VISION_BINARY_THRESHOLD_BEACON;
 static uint8 s_vision_beacon_recognition_enabled = 1U;
+static float s_vision_car_yaw_rel_uav_deg = 0.0f;
+static uint8 s_vision_car_yaw_valid = 0U;
 #if defined(VISION_RUNTIME_PC_DIAGNOSTICS)
 static uint8 s_vision_vehicle_fallback_enabled = 1U;
 static uint8 s_vision_vehicle_fallback_threshold =
@@ -41,12 +44,13 @@ void VisionRuntime_SetBinaryThreshold(uint8 threshold)
 void VisionRuntime_SetCoarseThreshold(uint8 threshold)
 {
     uint8 value = (threshold == 0U) ? 1U : threshold;
+    VisionRuntime_SetRecognitionThresholds(value, value);
     VisionRuntime_SetCoarseThresholdRange(value, value);
 }
 
 uint8 VisionRuntime_GetCoarseThreshold(void)
 {
-    return s_vision_coarse_zone_thresholds[0];
+    return s_vision_beacon_threshold;
 }
 
 void VisionRuntime_SetCoarseThresholdRange(uint8 center_threshold, uint8 edge_threshold)
@@ -54,42 +58,38 @@ void VisionRuntime_SetCoarseThresholdRange(uint8 center_threshold, uint8 edge_th
     uint8 center = (center_threshold == 0U) ? 1U : center_threshold;
     uint8 edge = (edge_threshold == 0U) ? 1U : edge_threshold;
 
-    s_vision_coarse_zone_thresholds[0] = center;
-    s_vision_coarse_zone_thresholds[1] =
-        (uint8)(((uint16)center * 3U + (uint16)edge + 2U) / 4U);
-    s_vision_coarse_zone_thresholds[2] =
-        (uint8)(((uint16)center + (uint16)edge + 1U) / 2U);
-    s_vision_coarse_zone_thresholds[3] =
-        (uint8)(((uint16)center + (uint16)edge * 3U + 2U) / 4U);
-    s_vision_coarse_zone_thresholds[4] = edge;
+    (void)edge;
+    s_vision_beacon_threshold = center;
+    memset(s_vision_coarse_zone_thresholds, center,
+           sizeof(s_vision_coarse_zone_thresholds));
 }
 
 void VisionRuntime_GetCoarseThresholdRange(uint8 *center_threshold, uint8 *edge_threshold)
 {
     if(center_threshold != NULL)
     {
-        *center_threshold = s_vision_coarse_zone_thresholds[0];
+        *center_threshold = s_vision_beacon_threshold;
     }
     if(edge_threshold != NULL)
     {
-        *edge_threshold = s_vision_coarse_zone_thresholds[4];
+        *edge_threshold = s_vision_beacon_threshold;
     }
 }
 
 void VisionRuntime_SetCoarseZoneThresholds(
     const uint8 thresholds[VISION_RUNTIME_COARSE_ZONE_COUNT])
 {
-    uint8 zone;
+    uint8 value;
 
     if(thresholds == NULL)
     {
         return;
     }
-    for(zone = 0U; zone < VISION_RUNTIME_COARSE_ZONE_COUNT; ++zone)
-    {
-        s_vision_coarse_zone_thresholds[zone] =
-            (thresholds[zone] == 0U) ? 1U : thresholds[zone];
-    }
+    value = thresholds[VISION_RUNTIME_COARSE_ZONE_COUNT / 2U];
+    value = (value == 0U) ? 1U : value;
+    s_vision_beacon_threshold = value;
+    memset(s_vision_coarse_zone_thresholds, value,
+           sizeof(s_vision_coarse_zone_thresholds));
 }
 
 void VisionRuntime_GetCoarseZoneThresholds(
@@ -138,6 +138,15 @@ void VisionRuntime_SetBeaconRecognitionEnabled(uint8 enabled)
         memset(s_vision_runtime_beacon_slots, 0,
                sizeof(s_vision_runtime_beacon_slots));
     }
+}
+
+void VisionRuntime_SetVehicleYawPrior(float car_yaw_rel_uav_deg,
+                                      uint16 age_ms, uint8 valid)
+{
+    s_vision_car_yaw_rel_uav_deg = car_yaw_rel_uav_deg;
+    s_vision_car_yaw_valid = (uint8)(valid &&
+        age_ms <= VISION_RUNTIME_YAW_MAX_AGE_MS &&
+        isfinite(car_yaw_rel_uav_deg));
 }
 
 #if CY_CORE_CM7_1
@@ -704,6 +713,8 @@ static float VisionRuntime_NormalizedAspect(int width, int height)
 typedef struct
 {
     int area;
+    uint32 col_sum;
+    uint32 row_sum;
     int min_row;
     int max_row;
     int min_col;
@@ -823,9 +834,7 @@ static void VisionRuntime_BinarizeCoarse(const uint8 image[MT9V03X_H][MT9V03X_W]
         for(col = 0; col < MT9V03X_W; ++col)
         {
             int index = row * MT9V03X_W + col;
-            uint8 zone = g_vision_coarse_distance_zone[index];
-            uint8 threshold = s_vision_coarse_zone_thresholds[zone];
-            if(image[row][col] >= threshold)
+            if(image[row][col] >= s_vision_beacon_threshold)
             {
                 VISION_RUNTIME_IMAGE_BIT_SET(s_vision_coarse_binary, index);
             }
@@ -942,6 +951,8 @@ static uint8 VisionRuntime_FindCoarseCandidates(void)
             uint16 run_count = 0U;
             int front = 0;
             int area = 0;
+            uint32 col_sum = 0U;
+            uint32 row_sum = 0U;
             int min_row = row;
             int max_row = row;
             int min_col = col;
@@ -963,6 +974,9 @@ static uint8 VisionRuntime_FindCoarseCandidates(void)
                 VisionRuntimeFineRun_t run = s_vision_fine_runs[front++];
                 int run_length = (int)run.end_col - (int)run.start_col + 1;
                 area += run_length;
+                col_sum += (uint32)(((uint32)run.start_col + run.end_col) *
+                                    (uint32)run_length / 2U);
+                row_sum += (uint32)run.row * (uint32)run_length;
                 {
                     int current_row = (int)run.row;
                 if(current_row < min_row) min_row = current_row;
@@ -981,14 +995,8 @@ static uint8 VisionRuntime_FindCoarseCandidates(void)
             }
             if(complete)
             {
-                int center_row = (min_row + max_row) / 2;
-                int center_col = (min_col + max_col) / 2;
-                uint8 center_zone = g_vision_coarse_distance_zone[
-                    center_row * MT9V03X_W + center_col];
                 int minimum_area =
-                    (center_zone >= VISION_RUNTIME_OUTER_CANDIDATE_FIRST_ZONE) ?
-                    (int)VISION_RUNTIME_OUTER_CANDIDATE_MIN_AREA :
-                    (int)VISION_RUNTIME_COARSE_CANDIDATE_MIN_AREA;
+                    (int)VISION_RUNTIME_OUTER_CANDIDATE_MIN_AREA;
                 int slot = (int)candidate_count;
 
                 if(area < minimum_area) continue;
@@ -1008,6 +1016,8 @@ static uint8 VisionRuntime_FindCoarseCandidates(void)
                     ++candidate_count;
                 }
                 s_vision_candidates[slot].area = area;
+                s_vision_candidates[slot].col_sum = col_sum;
+                s_vision_candidates[slot].row_sum = row_sum;
                 s_vision_candidates[slot].min_row = min_row;
                 s_vision_candidates[slot].max_row = max_row;
                 s_vision_candidates[slot].min_col = min_col;
@@ -1196,12 +1206,28 @@ static uint8 VisionRuntime_BuildFineCandidateIPMDualBinary(
 
 static void VisionRuntime_Binarize(const uint8 image[MT9V03X_H][MT9V03X_W])
 {
+    int row;
+    int col;
+
     VisionRuntime_BinarizeCoarse(image);
     VisionRuntime_FindCoarseCandidates();
     memset(s_vision_binary, 0, sizeof(s_vision_binary));
-    memset(s_vision_vehicle_binary, 0, sizeof(s_vision_vehicle_binary));
-    memset(s_vision_fine_component_mask, 0,
-           sizeof(s_vision_fine_component_mask));
+    for(row = 0; row < MT9V03X_H; ++row)
+    {
+        for(col = 0; col < MT9V03X_W; ++col)
+        {
+            int index = row * MT9V03X_W + col;
+            if(VISION_RUNTIME_IMAGE_BIT_GET(s_vision_coarse_binary, index))
+            {
+                int fine_x = col * 2;
+                int fine_y = row * 2;
+                VISION_RUNTIME_FINE_BIT_SET(s_vision_binary, fine_x, fine_y);
+                VISION_RUNTIME_FINE_BIT_SET(s_vision_binary, fine_x + 1, fine_y);
+                VISION_RUNTIME_FINE_BIT_SET(s_vision_binary, fine_x, fine_y + 1);
+                VISION_RUNTIME_FINE_BIT_SET(s_vision_binary, fine_x + 1, fine_y + 1);
+            }
+        }
+    }
 #if VISION_RUNTIME_DEBUG_UNDISTORT_IMAGE_ENABLE
     IPM_GenerateUndistortedDebugImage(image, s_vision_undistorted);
 #endif
@@ -2575,7 +2601,150 @@ static uint8 VisionRuntime_ProcessFineROI(
     return 0U;
 }
 
-static void VisionRuntime_ProcessBlobs(
+static uint8 VisionRuntime_GetIdealCenter(
+    const VisionRuntimeCandidate_t *candidate, int *center_x, int *center_y)
+{
+    float source_x;
+    float source_y;
+    float rectified_x;
+    float rectified_y;
+
+    if(candidate == NULL || center_x == NULL || center_y == NULL ||
+       candidate->area <= 0)
+    {
+        return 0U;
+    }
+    source_x = (float)candidate->col_sum / (float)candidate->area;
+    source_y = (float)candidate->row_sum / (float)candidate->area;
+    if(!CameraCalibration_SourcePointToRectified(
+           source_x, source_y, &rectified_x, &rectified_y))
+    {
+        rectified_x = source_x;
+        rectified_y = source_y;
+    }
+    *center_x = (int)(rectified_x * 2.0f + 0.5f);
+    *center_y = (int)(rectified_y * 2.0f + 0.5f);
+    return (uint8)(*center_x >= 0 &&
+        *center_x < (int)VISION_RUNTIME_FINE_WIDTH &&
+        *center_y >= 0 && *center_y < (int)VISION_RUNTIME_FINE_HEIGHT);
+}
+
+static uint8 VisionRuntime_TryIdealArrow(
+    const uint8 image[MT9V03X_H][MT9V03X_W],
+    const VisionRuntimeCandidate_t *candidate, uint8 candidate_index)
+{
+    VisionIdealMatchResult_t match;
+    VehicleMarkerWorldPoint_t apex;
+    VehicleMarkerWorldPoint_t left_tip;
+    VehicleMarkerWorldPoint_t right_tip;
+    VehicleMarkerPoint2D_t apex_img;
+    VehicleMarkerPoint2D_t left_tip_img;
+    VehicleMarkerPoint2D_t right_tip_img;
+    int center_x;
+    int center_y;
+
+    if(!VisionRuntime_GetIdealCenter(candidate, &center_x, &center_y) ||
+       !VisionIdealMatch_Arrow(image, center_x, center_y,
+                               s_vision_beacon_threshold, &match))
+    {
+        return 0U;
+    }
+    left_tip.x = match.world_x[0];
+    left_tip.y = match.world_y[0];
+    apex.x = match.world_x[1];
+    apex.y = match.world_y[1];
+    right_tip.x = match.world_x[2];
+    right_tip.y = match.world_y[2];
+    left_tip_img.u = (float)match.image_x[0];
+    left_tip_img.v = (float)match.image_y[0];
+    left_tip_img.intensity = (float)match.positive_mean;
+    apex_img.u = (float)match.image_x[1];
+    apex_img.v = (float)match.image_y[1];
+    apex_img.intensity = (float)match.positive_mean;
+    right_tip_img.u = (float)match.image_x[2];
+    right_tip_img.v = (float)match.image_y[2];
+    right_tip_img.intensity = (float)match.positive_mean;
+    if(!VehicleMarkerLocalization_CommitIdealChevron(
+           &apex, &left_tip, &right_tip,
+           &apex_img, &left_tip_img, &right_tip_img,
+           s_vision_car_yaw_rel_uav_deg, 21.7998f))
+    {
+        return 0U;
+    }
+    if(candidate_index < VISION_RUNTIME_MAX_CANDIDATES)
+    {
+        s_vision_candidate_annotations[candidate_index].vehicle_valid = 1U;
+    }
+    ++s_vision_runtime_diag.ir_blob_count;
+    return 1U;
+}
+
+static uint8 VisionRuntime_TryIdealBeacon(
+    const uint8 image[MT9V03X_H][MT9V03X_W],
+    const VisionRuntimeCandidate_t *candidate, uint8 candidate_index)
+{
+    VisionIdealMatchResult_t match;
+    VisionBlob_t blob;
+    int center_x;
+    int center_y;
+    int min_x;
+    int max_x;
+    int min_y;
+    int max_y;
+    int point;
+    uint8 appended;
+
+    if(!s_vision_beacon_recognition_enabled ||
+       !VisionRuntime_GetIdealCenter(candidate, &center_x, &center_y) ||
+       !VisionIdealMatch_Beacon(image, center_x, center_y,
+                                s_vision_beacon_threshold, &match))
+    {
+        return 0U;
+    }
+    min_x = max_x = match.image_x[1];
+    min_y = max_y = match.image_y[1];
+    for(point = 2; point < 5; ++point)
+    {
+        if(match.image_x[point] < min_x) min_x = match.image_x[point];
+        if(match.image_x[point] > max_x) max_x = match.image_x[point];
+        if(match.image_y[point] < min_y) min_y = match.image_y[point];
+        if(match.image_y[point] > max_y) max_y = match.image_y[point];
+    }
+    memset(&blob, 0, sizeof(blob));
+    blob.centroid_col = (float)center_x;
+    blob.centroid_row = (float)center_y;
+    blob.area = candidate->area;
+    blob.min_col = min_x;
+    blob.max_col = max_x;
+    blob.min_row = min_y;
+    blob.max_row = max_y;
+    blob.raw_min_col = candidate->min_col;
+    blob.raw_max_col = candidate->max_col;
+    blob.raw_min_row = candidate->min_row;
+    blob.raw_max_row = candidate->max_row;
+    blob.raw_box_area_pixels =
+        (candidate->max_col - candidate->min_col + 1) *
+        (candidate->max_row - candidate->min_row + 1);
+    blob.average_brightness = (float)match.positive_mean;
+    blob.aspect_ratio = 1.0f;
+    blob.occupancy_ratio = 1.0f;
+    blob.world_x = match.world_x[0];
+    blob.world_y = match.world_y[0];
+    blob.world_valid = 1U;
+    blob.detection_confidence = match.score_q8;
+    blob.position_sigma_cm = match.box_clipped ? 15U : 8U;
+    blob.confidence_box_size = (float)match.score_q8 / 255.0f;
+    blob.confidence_stability = 1.0f;
+    blob.confidence_area = (float)match.binary_consistency_q8 / 256.0f;
+    blob.confidence_edge = match.box_clipped ? 0.0f : 1.0f;
+    appended = BeaconDetect_AppendEvaluatedBlob(&blob);
+    VisionRuntime_UpdateBeaconAnnotation(candidate_index, &blob, appended);
+    if(appended) ++s_vision_runtime_diag.beacon_blob_count;
+    return appended;
+}
+
+#if 0
+static void VisionRuntime_ProcessBlobsDeprecated(
     const uint8 image[MT9V03X_H][MT9V03X_W])
 {
     uint8 i;
@@ -2671,6 +2840,69 @@ static void VisionRuntime_ProcessBlobs(
     }
     s_vision_active_binary = s_vision_binary;
 }
+#endif
+
+static void VisionRuntime_ProcessBlobs(
+    const uint8 image[MT9V03X_H][MT9V03X_W])
+{
+    uint8 route_pass;
+    uint8 i;
+    uint8 frame_vehicle_confirmed = 0U;
+
+    VisionRuntime_Binarize(image);
+    s_vision_runtime_diag.blob_count = s_vision_candidate_count;
+    for(i = 0U; i < s_vision_candidate_count; ++i)
+    {
+        VisionRuntime_InsertBlobAreaRank(s_vision_candidates[i].area);
+    }
+    for(route_pass = 0U; route_pass < 2U; ++route_pass)
+    {
+        for(i = 0U; i < s_vision_candidate_count; ++i)
+        {
+            uint8 arrow_priority = (uint8)(
+                s_vision_candidates[i].area >=
+                (int)VISION_RUNTIME_ROUTE_ARROW_MIN_AREA);
+            uint8 matched = 0U;
+
+            if((route_pass == 0U && !arrow_priority) ||
+               (route_pass == 1U && arrow_priority))
+            {
+                continue;
+            }
+            s_vision_candidate_annotations[i].raw_box_area_pixels =
+                (s_vision_candidates[i].max_col -
+                 s_vision_candidates[i].min_col + 1) *
+                (s_vision_candidates[i].max_row -
+                 s_vision_candidates[i].min_row + 1);
+            if(arrow_priority)
+            {
+                if(!frame_vehicle_confirmed)
+                {
+                    matched = VisionRuntime_TryIdealArrow(
+                        image, &s_vision_candidates[i], i);
+                    if(matched) frame_vehicle_confirmed = 1U;
+                }
+                if(!matched)
+                {
+                    (void)VisionRuntime_TryIdealBeacon(
+                        image, &s_vision_candidates[i], i);
+                }
+            }
+            else
+            {
+                matched = VisionRuntime_TryIdealBeacon(
+                    image, &s_vision_candidates[i], i);
+                if(!matched && !frame_vehicle_confirmed)
+                {
+                    matched = VisionRuntime_TryIdealArrow(
+                        image, &s_vision_candidates[i], i);
+                    if(matched) frame_vehicle_confirmed = 1U;
+                }
+            }
+        }
+    }
+    s_vision_active_binary = s_vision_binary;
+}
 
 static void VisionRuntime_UpdateDiagFromCurrentFrame(int beacon_count,
                                                      const BeaconResult_t *beacon_results)
@@ -2755,6 +2987,10 @@ static void VisionRuntime_ProcessFrameInternal(float roll_deg,
     {
         IPM_Interface_UpdateFromIMU(height_cm);
     }
+    VisionIdealMatch_BeginFrame(s_vision_car_yaw_rel_uav_deg,
+                                s_vision_car_yaw_valid);
+    VehicleMarkerLocalization_SetOpeningDirectionPrior(
+        s_vision_car_yaw_rel_uav_deg, s_vision_car_yaw_valid);
     s_vision_runtime_diag.blob_count = 0;
     s_vision_runtime_diag.ir_split_count = 0;
     s_vision_runtime_diag.beacon_split_count = 0;
