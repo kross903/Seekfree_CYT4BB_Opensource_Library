@@ -3,7 +3,9 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import json
+import math
 from pathlib import Path
 import sys
 import tkinter as tk
@@ -40,6 +42,7 @@ from ideal_matching import (
     COMPLETENESS,
     FAR_DIFFERENCE,
     GRAY_DIFFERENCE,
+    MatchingMetrics,
     MatchingThresholds,
     NEAR_DIFFERENCE,
     NEGATIVE_HIT_RATE,
@@ -87,6 +90,14 @@ MATCHING_FIELD_LABELS = {
     POSITIVE_POINTS: "最少正形点",
     NEGATIVE_POINTS: "最少负形点",
 }
+
+
+@dataclass(frozen=True)
+class BeaconRecognitionResult:
+    metrics: MatchingMetrics | None
+    passed: bool
+    failures: tuple[str, ...]
+    box_clipped: bool = False
 
 
 class PictureViewerApp:
@@ -222,6 +233,7 @@ class PictureViewerApp:
         self.binary: Image.Image | None = None
         self.components: list[ConnectedComponent] = []
         self.selected_component: int | None = None
+        self.beacon_recognition_results: dict[int, BeaconRecognitionResult] = {}
         self.current_telemetry: dict = {}
 
         self.canvas_photo: ImageTk.PhotoImage | None = None
@@ -507,15 +519,27 @@ class PictureViewerApp:
 
         candidate_bar = ttk.Frame(candidate_tab)
         candidate_bar.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 4))
-        ttk.Label(candidate_bar, text="连通域候选").pack(side=tk.LEFT)
-        ttk.Button(candidate_bar, text="打开候选", command=self.open_selected_component).pack(side=tk.RIGHT)
+        candidate_bar.columnconfigure(0, weight=1)
+        ttk.Label(candidate_bar, text="连通域候选").grid(row=0, column=0, sticky="w")
+        candidate_actions = ttk.Frame(candidate_bar)
+        candidate_actions.grid(row=1, column=0, sticky="ew", pady=(3, 0))
         ttk.Button(
-            candidate_bar,
+            candidate_actions,
+            text="打开候选",
+            command=self.open_selected_component,
+        ).pack(side=tk.RIGHT)
+        ttk.Button(
+            candidate_actions,
             text="对齐理想目标",
             command=self.align_ideal_to_selected_component,
         ).pack(side=tk.RIGHT, padx=(0, 6))
+        ttk.Button(
+            candidate_actions,
+            text="一键信标识别",
+            command=self.recognize_current_image_beacons,
+        ).pack(side=tk.LEFT)
 
-        columns = ("area", "center", "box", "circle", "fill")
+        columns = ("area", "center", "box", "circle", "fill", "beacon")
         self.component_tree = ttk.Treeview(
             candidate_tab, columns=columns, show="tree headings", height=12
         )
@@ -527,6 +551,7 @@ class PictureViewerApp:
             "box": ("外接框", 85),
             "circle": ("圆度", 55),
             "fill": ("占空", 55),
+            "beacon": ("信标识别", 180),
         }
         for name, (text, width) in headings.items():
             self.component_tree.heading(name, text=text)
@@ -537,6 +562,11 @@ class PictureViewerApp:
         self.component_tree.configure(yscrollcommand=component_scroll.set)
         self.component_tree.grid(row=1, column=0, sticky="nsew")
         component_scroll.grid(row=1, column=1, sticky="ns")
+        component_x_scroll = ttk.Scrollbar(
+            candidate_tab, orient=tk.HORIZONTAL, command=self.component_tree.xview
+        )
+        self.component_tree.configure(xscrollcommand=component_x_scroll.set)
+        component_x_scroll.grid(row=2, column=0, sticky="ew")
 
         status = ttk.Label(self.root, textvariable=self.status_var, relief=tk.SUNKEN, anchor="w", padding=(6, 3))
         status.grid(row=2, column=0, columnspan=3, sticky="ew")
@@ -849,6 +879,7 @@ class PictureViewerApp:
         else:
             self._ideal_car_yaw_source = "手动（JSON无小车Yaw）"
         self.update_ideal_source_text()
+        self.invalidate_beacon_recognition()
 
     def update_ideal_source_text(self) -> None:
         self.ideal_source_var.set(
@@ -865,6 +896,7 @@ class PictureViewerApp:
     def ideal_pose_edited(self, _event: object = None) -> None:
         self._ideal_pose_source = "手动"
         self.update_ideal_source_text()
+        self.invalidate_beacon_recognition()
         self.redraw_canvas()
 
     def ideal_car_yaw_edited(self, _event: object = None) -> None:
@@ -873,6 +905,7 @@ class PictureViewerApp:
         self.redraw_canvas()
 
     def ideal_parameter_changed(self, _event: object = None) -> None:
+        self.invalidate_beacon_recognition()
         self.redraw_canvas()
 
     def open_sampling_window(self) -> None:
@@ -944,9 +977,11 @@ class PictureViewerApp:
         self.sampling_margin_var.set("4")
         self.sampling_positive_band_var.set("1.5")
         self.sampling_negative_guard_var.set("3")
+        self.invalidate_beacon_recognition()
         self.redraw_canvas()
 
     def sampling_parameter_changed(self, _event: object = None) -> None:
+        self.invalidate_beacon_recognition()
         self.redraw_canvas()
 
     def current_matching_thresholds(self, target_kind: str) -> MatchingThresholds:
@@ -1084,12 +1119,15 @@ class PictureViewerApp:
                 self.matching_enabled_vars[target_kind][key].set(
                     key in config.enabled
                 )
+        self.invalidate_beacon_recognition()
         self.redraw_canvas()
 
     def matching_parameter_changed(self, _event: object = None) -> None:
+        self.invalidate_beacon_recognition()
         self.redraw_canvas()
 
     def ideal_mount_angles_changed(self, _event: object = None) -> None:
+        self.invalidate_beacon_recognition()
         self.redraw_canvas()
 
     def reset_mount_angles(self) -> None:
@@ -1097,6 +1135,7 @@ class PictureViewerApp:
         self.mount_pitch_var.set("0")
         self.mount_yaw_var.set("0")
         self.target_projector.set_mount_angles(0.0, 0.0, 0.0)
+        self.invalidate_beacon_recognition()
         self.redraw_canvas()
 
     def ideal_target_changed(self, _event: object = None) -> None:
@@ -1125,9 +1164,19 @@ class PictureViewerApp:
         self.schedule_analysis()
 
     def schedule_analysis(self) -> None:
+        self.invalidate_beacon_recognition()
         if self._threshold_job is not None:
             self.root.after_cancel(self._threshold_job)
         self._threshold_job = self.root.after(80, self.run_analysis)
+
+    def invalidate_beacon_recognition(self) -> None:
+        had_results = bool(self.beacon_recognition_results)
+        self.beacon_recognition_results.clear()
+        if hasattr(self, "component_tree"):
+            for item_id in self.component_tree.get_children():
+                self.component_tree.set(item_id, "beacon", "未检测")
+        if had_results:
+            self.status_var.set("信标识别结果已失效，请重新识别")
 
     def run_analysis(self) -> None:
         self._threshold_job = None
@@ -1142,6 +1191,7 @@ class PictureViewerApp:
             eight_connected=self.connectivity_var.get() == 8,
         )
         self.selected_component = None
+        self.invalidate_beacon_recognition()
         self.update_component_tree()
         self.redraw_canvas()
         foreground = sum(1 for value in self.binary.tobytes() if value)
@@ -1154,6 +1204,14 @@ class PictureViewerApp:
     def update_component_tree(self) -> None:
         self.component_tree.delete(*self.component_tree.get_children())
         for component in self.components:
+            recognition = self.beacon_recognition_results.get(component.label)
+            if recognition is None:
+                recognition_text = "未检测"
+            elif recognition.passed:
+                recognition_text = "通过"
+            else:
+                first_failure = recognition.failures[0] if recognition.failures else "未通过"
+                recognition_text = f"未通过：{first_failure}"
             self.component_tree.insert(
                 "",
                 tk.END,
@@ -1165,8 +1223,130 @@ class PictureViewerApp:
                     f"{component.width}x{component.height}",
                     f"{component.circularity:.3f}",
                     f"{component.occupancy:.2f}",
+                    recognition_text,
                 ),
             )
+        if (
+            self.selected_component is not None
+            and self.component_tree.exists(str(self.selected_component))
+        ):
+            self.component_tree.selection_set(str(self.selected_component))
+            self.component_tree.see(str(self.selected_component))
+
+    def recognize_current_image_beacons(self) -> None:
+        if self.undistorted is None:
+            messagebox.showinfo("信标识别", "请先加载一张图像。")
+            return
+        if not self.components:
+            self.invalidate_beacon_recognition()
+            self.update_component_tree()
+            self.view_var.set("连通域候选")
+            self.status_var.set("信标识别完成：当前图像无连通域候选")
+            return
+
+        try:
+            roll = float(self.roll_var.get())
+            pitch = float(self.pitch_var.get())
+            height = float(self.height_var.get())
+            plane_height = float(self.beacon_plane_height_var.get())
+            diameter = float(self.beacon_diameter_var.get())
+            mount_roll = float(self.mount_roll_var.get())
+            mount_pitch = float(self.mount_pitch_var.get())
+            mount_yaw = float(self.mount_yaw_var.get())
+            numeric_values = (
+                roll,
+                pitch,
+                height,
+                plane_height,
+                diameter,
+                mount_roll,
+                mount_pitch,
+                mount_yaw,
+            )
+            if not all(math.isfinite(value) for value in numeric_values):
+                raise ValueError("姿态、高度和信标参数必须是有限数值")
+            if height <= 0.0:
+                raise ValueError("无人机高度必须大于0")
+            if plane_height < 0.0:
+                raise ValueError("信标高度不能小于0")
+            if plane_height >= height - self.projection_calibration.offset_z_cm:
+                raise ValueError("信标平面必须低于相机")
+            if diameter <= 0.0:
+                raise ValueError("信标直径必须大于0")
+            self.target_projector.set_mount_angles(
+                mount_roll, mount_pitch, mount_yaw
+            )
+            sampling_config = self.current_sampling_config()
+            thresholds = self.current_matching_thresholds(TARGET_BEACON)
+            near_negative_width = self.current_near_negative_width()
+            binary_threshold = self.safe_int(self.threshold_var, 50, 0, 255)
+        except ValueError as exc:
+            messagebox.showerror("信标识别参数错误", str(exc))
+            self.status_var.set(f"信标识别失败：{exc}")
+            return
+
+        results: dict[int, BeaconRecognitionResult] = {}
+        for component in self.components:
+            center_image = (component.centroid_x, component.centroid_y)
+            try:
+                center_plane = self.target_projector.image_to_plane(
+                    center_image, roll, pitch, height, plane_height
+                )
+                if center_plane is None:
+                    raise ValueError("候选质心无法投影到信标平面")
+                projected_outline: list[tuple[float, float]] = []
+                for point in build_ideal_beacon_points(center_plane, diameter):
+                    projected = self.target_projector.plane_to_image(
+                        point, roll, pitch, height, plane_height
+                    )
+                    if projected is None:
+                        raise ValueError("信标轮廓位于相机后方")
+                    projected_outline.append(projected)
+                sampling = sample_projected_shape(
+                    self.undistorted,
+                    projected_outline,
+                    closed=True,
+                    filled_positive=True,
+                    config=sampling_config,
+                    is_valid_pixel=self.undistorter.is_valid_output_pixel,
+                )
+                metrics = calculate_matching_metrics(
+                    self.undistorted,
+                    projected_outline,
+                    sampling,
+                    target_kind=TARGET_BEACON,
+                    center=center_image,
+                    binary_threshold=binary_threshold,
+                    negative_guard_px=sampling_config.negative_guard_px,
+                    near_negative_width_px=near_negative_width,
+                )
+                decision = evaluate_matching_metrics(
+                    metrics,
+                    thresholds,
+                    target_kind=TARGET_BEACON,
+                )
+                results[component.label] = BeaconRecognitionResult(
+                    metrics=metrics,
+                    passed=decision.passed,
+                    failures=decision.failures,
+                    box_clipped=sampling.box_clipped,
+                )
+            except (ValueError, OverflowError) as exc:
+                results[component.label] = BeaconRecognitionResult(
+                    metrics=None,
+                    passed=False,
+                    failures=(f"计算失败：{exc}",),
+                )
+
+        self.beacon_recognition_results = results
+        self.update_component_tree()
+        self.view_var.set("连通域候选")
+        self.redraw_canvas()
+        accepted = sum(result.passed for result in results.values())
+        self.status_var.set(
+            f"信标识别完成：{accepted}/{len(results)} 个候选通过 | "
+            f"二值阈值 {binary_threshold} | 信标直径 {diameter:.1f} cm"
+        )
 
     def component_selected(self, _event: object = None) -> None:
         selection = self.component_tree.selection()
@@ -1233,7 +1413,35 @@ class PictureViewerApp:
             f"边界像素 {component.boundary_pixels}    圆度 {component.circularity:.4f}    "
             f"占空比 {component.occupancy:.4f}"
         )
-        ttk.Label(content, text=details, justify=tk.LEFT).grid(
+        recognition = self.beacon_recognition_results.get(component.label)
+        if recognition is None:
+            details += "\n信标识别：未检测"
+        elif recognition.metrics is None:
+            details += "\n信标识别：未通过\n原因：\n  - " + "\n  - ".join(
+                recognition.failures
+            )
+        else:
+            metrics = recognition.metrics
+
+            def metric_text(value: float | None, digits: int = 2) -> str:
+                return f"{value:.{digits}f}" if value is not None else "--"
+
+            details += (
+                f"\n信标识别：{'通过' if recognition.passed else '未通过'}"
+                f"{'  采样框已裁边' if recognition.box_clipped else ''}\n"
+                f"灰差 {metric_text(metrics.gray_difference, 1)}    "
+                f"分离度 {metric_text(metrics.standardized_separation)}    "
+                f"固定一致 {metric_text(metrics.binary_consistency)}\n"
+                f"正/负命中 {metric_text(metrics.positive_hit_rate)}/"
+                f"{metric_text(metrics.negative_hit_rate)}    "
+                f"四象限 {metric_text(metrics.completeness)}    "
+                f"近/远差 {metric_text(metrics.near_difference, 1)}/"
+                f"{metric_text(metrics.far_difference, 1)}    "
+                f"P/N {metrics.positive_count}/{metrics.negative_count}"
+            )
+            if recognition.failures:
+                details += "\n原因：\n  - " + "\n  - ".join(recognition.failures)
+        ttk.Label(content, text=details, justify=tk.LEFT, wraplength=720).grid(
             row=2, column=0, columnspan=2, sticky="w", padx=4, pady=(5, 0)
         )
         window.gray_photo = gray_photo  # type: ignore[attr-defined]
@@ -1257,14 +1465,25 @@ class PictureViewerApp:
             draw = ImageDraw.Draw(overlay)
             for component in self.components:
                 selected = component.label == self.selected_component
-                color = (255, 210, 0) if selected else (0, 255, 80)
-                width = 2 if selected else 1
+                recognition = self.beacon_recognition_results.get(component.label)
+                if selected:
+                    color = (255, 210, 0)
+                elif recognition is None or recognition.passed:
+                    color = (0, 255, 80)
+                else:
+                    color = (130, 130, 130)
+                width = 2 if selected or (recognition and recognition.passed) else 1
                 draw.rectangle(
                     (component.min_x, component.min_y, component.max_x, component.max_y),
                     outline=color,
                     width=width,
                 )
-                draw.text((component.min_x + 1, component.min_y + 1), str(component.label), fill=color)
+                label = (
+                    f"{component.label} 信标"
+                    if recognition is not None and recognition.passed
+                    else str(component.label)
+                )
+                draw.text((component.min_x + 1, component.min_y + 1), label, fill=color)
                 radius = 2 if selected else 1
                 draw.ellipse(
                     (
