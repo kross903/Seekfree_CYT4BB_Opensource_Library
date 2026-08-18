@@ -2293,18 +2293,26 @@ class PictureViewerApp:
         component: ConnectedComponent,
         metrics: ContourMetrics,
         yaw_context: ContourYawContext | None = None,
+        thresholds: ContourThresholds | None = None,
     ) -> tuple[float, str]:
-        if len(metrics.arm_tip_points) != 2:
-            raise ValueError("需要两个端点")
-        direction_points = (
-            ("V", metrics.vertex_point),
-            ("N", metrics.deepest_point),
-        )
-        available_points = [
-            (name, point) for name, point in direction_points if point is not None
-        ]
-        if not available_points:
-            raise ValueError("缺少外顶点V和内凹口N")
+        endpoint_count = len(metrics.arm_tip_points)
+        direction_points = {
+            "V": metrics.vertex_point,
+            "N": metrics.deepest_point,
+        }
+        available_points = {
+            name: point
+            for name, point in direction_points.items()
+            if point is not None
+        }
+        direction_count = len(available_points)
+        if endpoint_count + direction_count < 2:
+            raise ValueError("有效方向点不足2个")
+        if endpoint_count == 2 and direction_count == 0:
+            raise ValueError("只有两个端点，无法进行Yaw补救")
+        if endpoint_count > 2:
+            raise ValueError("端点数量无效")
+        shape_thresholds = thresholds or CONTOUR_ARROW_DEFAULT_THRESHOLDS
         context = yaw_context or self.current_contour_yaw_context()
 
         projector = TargetPlaneProjector(
@@ -2334,36 +2342,116 @@ class PictureViewerApp:
             context.arrow_angle_deg,
             wrap_degrees(relative_yaw + context.arrow_opening_offset_deg),
         )
-        projected_apex = projector.plane_to_image(
-            physical_points["apex"],
-            context.roll_deg,
-            context.pitch_deg,
-            context.height_cm,
-            context.arrow_plane_height_cm,
-        )
-        if projected_apex is None:
-            raise ValueError("理论箭头顶点位于相机后方")
-        expected = (
-            projected_apex[0] - center_image[0],
-            projected_apex[1] - center_image[1],
-        )
-        first_tip, second_tip = metrics.arm_tip_points
-        endpoint_center = (
-            (first_tip[0] + second_tip[0]) * 0.5,
-            (first_tip[1] + second_tip[1]) * 0.5,
-        )
-        errors: list[tuple[float, str]] = []
-        for name, point in available_points:
-            assert point is not None
-            error = self._direction_error_deg(
-                expected,
-                (point[0] - endpoint_center[0], point[1] - endpoint_center[1]),
+        projected: dict[str, tuple[float, float]] = {"center": center_image}
+        for name in ("left_tip", "apex", "right_tip"):
+            projected_point = projector.plane_to_image(
+                physical_points[name],
+                context.roll_deg,
+                context.pitch_deg,
+                context.height_cm,
+                context.arrow_plane_height_cm,
             )
-            if error is not None:
-                errors.append((error, name))
-        if not errors:
-            raise ValueError("方向点与端点中点重合")
-        return min(errors, key=lambda item: item[0])
+            if projected_point is None:
+                raise ValueError(f"理论箭头{name}位于相机后方")
+            projected[name] = projected_point
+
+        def vector(
+            start: tuple[float, float],
+            end: tuple[float, float],
+        ) -> tuple[float, float]:
+            return end[0] - start[0], end[1] - start[1]
+
+        def feature_turn_is_valid(name: str) -> bool:
+            if name == "V":
+                turn = metrics.vertex_turn_angle
+                return (
+                    turn is not None
+                    and shape_thresholds.min_vertex_turn_deg <= turn
+                    <= shape_thresholds.max_vertex_turn_deg
+                )
+            turn = metrics.notch_turn_angle
+            return (
+                turn is not None
+                and abs(turn) >= shape_thresholds.min_notch_turn_deg
+                and metrics.max_negative_turn_deg
+                <= shape_thresholds.max_negative_turn_deg
+            )
+
+        def endpoint_pair_error(
+            endpoint: tuple[int, int],
+            point_name: str,
+        ) -> float | None:
+            point = available_points.get(point_name)
+            if point is None:
+                return None
+            if point_name == "V":
+                expected_pairs = (
+                    vector(projected["left_tip"], projected["apex"]),
+                    vector(projected["right_tip"], projected["apex"]),
+                )
+            else:
+                expected_pairs = (
+                    vector(projected["left_tip"], projected["center"]),
+                    vector(projected["right_tip"], projected["center"]),
+                )
+            observed = vector(endpoint, point)
+            errors = [
+                error
+                for expected in expected_pairs
+                if (error := self._direction_error_deg(expected, observed))
+                is not None
+            ]
+            return min(errors) if errors else None
+
+        # Keep the original two-endpoint rescue: a valid V or N direction is
+        # compared with the theoretical apex direction from the endpoint center.
+        if endpoint_count == 2:
+            first_tip, second_tip = metrics.arm_tip_points
+            endpoint_center = (
+                (first_tip[0] + second_tip[0]) * 0.5,
+                (first_tip[1] + second_tip[1]) * 0.5,
+            )
+            expected = vector(projected["center"], projected["apex"])
+            errors = []
+            for name, point in available_points.items():
+                error = self._direction_error_deg(
+                    expected,
+                    vector(endpoint_center, point),
+                )
+                if error is not None:
+                    errors.append((error, name))
+            if not errors:
+                raise ValueError("方向点与端点中点重合")
+            return min(errors, key=lambda item: item[0])
+
+        # With one endpoint, any one valid E-V or E-N pair is sufficient.
+        if endpoint_count == 1:
+            endpoint = metrics.arm_tip_points[0]
+            candidates: list[tuple[float, str]] = []
+            for name in available_points:
+                if not feature_turn_is_valid(name):
+                    continue
+                pair_error = endpoint_pair_error(endpoint, name)
+                if pair_error is None:
+                    continue
+                candidates.append((pair_error, f"E+{name}"))
+            if candidates:
+                return min(candidates, key=lambda item: item[0])
+            raise ValueError("端点与V/N的方向关系不符合Yaw")
+
+        # With V and N only, both directions must agree with the theoretical
+        # arrow axis: V points toward the apex and N points in the opposite way.
+        if not feature_turn_is_valid("V") or not feature_turn_is_valid("N"):
+            raise ValueError("V/N自身转角不符合箭头条件")
+        expected = vector(projected["center"], projected["apex"])
+        observed = vector(
+            available_points["N"],
+            available_points["V"],
+        )
+        pair_error = self._direction_error_deg(expected, observed)
+        if pair_error is None:
+            raise ValueError("V/N方向数据无效")
+        return pair_error, "V+N"
 
     def evaluate_contour_arrow_with_yaw(
         self,
@@ -2377,9 +2465,15 @@ class PictureViewerApp:
         decision = evaluate_contour_metrics(metrics, thresholds)
         if decision.passed:
             return True, (), False, None, ""
-        if not yaw_assist_enabled or len(metrics.arm_tip_points) != 2:
+        endpoint_count = len(metrics.arm_tip_points)
+        direction_count = int(metrics.vertex_point is not None) + int(
+            metrics.deepest_point is not None
+        )
+        if not yaw_assist_enabled:
             return False, decision.failures, False, None, ""
-        if metrics.vertex_point is None and metrics.deepest_point is None:
+        if endpoint_count > 2 or endpoint_count + direction_count < 2:
+            return False, decision.failures, False, None, ""
+        if endpoint_count == 2 and direction_count == 0:
             return False, decision.failures, False, None, ""
 
         direction_free_thresholds = replace(
@@ -2398,6 +2492,7 @@ class PictureViewerApp:
                 component,
                 metrics,
                 yaw_context,
+                thresholds,
             )
         except ValueError as exc:
             return (
