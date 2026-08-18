@@ -2515,6 +2515,52 @@ class PictureViewerApp:
             direction_source,
         )
 
+    def evaluate_contour_beacon_yaw_rejection(
+        self,
+        component: ConnectedComponent,
+        metrics: ContourMetrics,
+        thresholds: ContourThresholds,
+        yaw_assist_enabled: bool,
+        yaw_tolerance_deg: float,
+        yaw_context: ContourYawContext | None = None,
+    ) -> tuple[bool, float | None, str, str | None]:
+        """Apply the arrow-Yaw signature as an exclusion gate for beacons."""
+        if not yaw_assist_enabled:
+            return False, None, "", None
+        endpoint_count = len(metrics.arm_tip_points)
+        direction_count = int(metrics.vertex_point is not None) + int(
+            metrics.deepest_point is not None
+        )
+        if endpoint_count > 2 or endpoint_count + direction_count < 2:
+            return False, None, "", None
+        if endpoint_count == 2 and direction_count == 0:
+            return False, None, "", None
+        direction_free_thresholds = replace(
+            thresholds,
+            enabled=tuple(
+                field_name
+                for field_name in thresholds.enabled
+                if field_name not in CONTOUR_YAW_RESCUE_FIELDS
+            ),
+        )
+        if not evaluate_contour_metrics(
+            metrics,
+            direction_free_thresholds,
+        ).passed:
+            return False, None, "", None
+        try:
+            direction_error, direction_source = self.contour_yaw_direction_error(
+                component,
+                metrics,
+                yaw_context,
+                thresholds,
+            )
+        except (ValueError, OverflowError) as exc:
+            return False, None, "", str(exc)
+        if direction_error <= yaw_tolerance_deg:
+            return True, direction_error, direction_source, None
+        return False, direction_error, direction_source, None
+
     def current_batch_recognition_config(self) -> BatchRecognitionConfig:
         if self.batch_mode_var.get() not in BATCH_MODE_NAMES:
             raise ValueError("批量识别模式无效")
@@ -2586,6 +2632,16 @@ class PictureViewerApp:
                     arrow_count += 1
                     yaw_assisted_count += int(assisted)
                 continue
+            beacon_yaw_rejected, _beacon_yaw_error, _beacon_yaw_source, _ = (
+                self.evaluate_contour_beacon_yaw_rejection(
+                    component,
+                    metrics,
+                    config.arrow_thresholds,
+                    config.yaw_assist_enabled,
+                    config.yaw_tolerance_deg,
+                    yaw_context,
+                )
+            )
             if config.mode == BATCH_MODE_BEACON:
                 if (
                     component_centroid_is_foreground(component, binary)
@@ -2593,6 +2649,7 @@ class PictureViewerApp:
                         metrics,
                         config.beacon_thresholds,
                     ).passed
+                    and not beacon_yaw_rejected
                 ):
                     beacon_count += 1
                 continue
@@ -2604,6 +2661,7 @@ class PictureViewerApp:
                     metrics,
                     config.beacon_thresholds,
                 ).passed
+                and not beacon_yaw_rejected
             ):
                 beacon_count += 1
                 continue
@@ -3087,9 +3145,23 @@ class PictureViewerApp:
                         thresholds[TARGET_BEACON],
                     )
                     attempts.append(
-                        f"信标{'通过' if beacon_decision.passed else '失败'}"
+                        f"信标基础条件{'通过' if beacon_decision.passed else '失败'}"
                     )
-                    if beacon_decision.passed:
+                    beacon_yaw_rejected, beacon_yaw_error, beacon_yaw_source, _ = (
+                        self.evaluate_contour_beacon_yaw_rejection(
+                            component,
+                            contour_metrics,
+                            thresholds[TARGET_ARROW],
+                            yaw_assist_enabled,
+                            yaw_tolerance_deg,
+                        )
+                    )
+                    if beacon_decision.passed and beacon_yaw_rejected:
+                        attempts.append("信标Yaw拒绝")
+                        failures.append("信标：Yaw拒绝信标：候选符合箭头方向")
+                        yaw_direction_error = beacon_yaw_error
+                        yaw_direction_source = beacon_yaw_source
+                    if beacon_decision.passed and not beacon_yaw_rejected:
                         accepted_kind = TARGET_BEACON
                     else:
                         failures.extend(beacon_decision.failures)
@@ -3104,9 +3176,23 @@ class PictureViewerApp:
                             thresholds[TARGET_BEACON],
                         )
                         attempts.append(
-                            f"信标{'通过' if beacon_decision.passed else '失败'}"
+                            f"信标基础条件{'通过' if beacon_decision.passed else '失败'}"
                         )
-                        if beacon_decision.passed:
+                        beacon_yaw_rejected, beacon_yaw_error, beacon_yaw_source, _ = (
+                            self.evaluate_contour_beacon_yaw_rejection(
+                                component,
+                                contour_metrics,
+                                thresholds[TARGET_ARROW],
+                                yaw_assist_enabled,
+                                yaw_tolerance_deg,
+                            )
+                        )
+                        if beacon_decision.passed and beacon_yaw_rejected:
+                            attempts.append("信标Yaw拒绝")
+                            failures.append("信标：Yaw拒绝信标：候选符合箭头方向")
+                            yaw_direction_error = beacon_yaw_error
+                            yaw_direction_source = beacon_yaw_source
+                        if beacon_decision.passed and not beacon_yaw_rejected:
                             accepted_kind = TARGET_BEACON
                             beacon_found_count += 1
                         else:
