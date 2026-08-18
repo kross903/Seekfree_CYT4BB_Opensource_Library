@@ -7,6 +7,7 @@
 #include "menu/menu_motor_test.h"
 #include "motor_hardware/motor_hardware.h"
 #include "motor_hardware/small_driver_uart_control.h"
+#include "pmw/pmw_flow.h"
 #include <math.h>
 #include <stdio.h>
 
@@ -342,6 +343,7 @@ static const char *flight_safety_estop_reason_text(uint8 reason)
         case EMERGENCY_STOP_REASON_YAW_SPIN:        return "ESTOP YAW SPIN";
         case EMERGENCY_STOP_REASON_ESC_FAULT:       return "ESTOP ESC FAULT";
         case EMERGENCY_STOP_REASON_BATTERY_INVALID: return "ESTOP BAT INVALID";
+        case EMERGENCY_STOP_REASON_FLOW_TIMEOUT:    return "ESTOP FLOW TIMEOUT";
         case EMERGENCY_STOP_REASON_NONE:
         default:                                    return "ESTOP UNKNOWN";
     }
@@ -407,6 +409,7 @@ uint8 Flight_Runtime_Clear_Emergency_Stop_Latch(void)
 
     emergency_stop_triggered = 0U;
     emergency_stop_reason = EMERGENCY_STOP_REASON_NONE;
+    PMW_Flow_ClearFault();
     Flight_Safety_ResetYawSpinMonitor();
     return 1U;
 }

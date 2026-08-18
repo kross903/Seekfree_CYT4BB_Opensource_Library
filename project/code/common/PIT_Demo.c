@@ -12,6 +12,7 @@
 #include "menu/menu_motor_test.h"
 #include "motor_hardware/motor_hardware.h"
 #include "pmw/optical_flow_feed.h"
+#include "pmw/pmw_flow.h"
 #include <math.h>
 
 // ==================== Configuration constants ====================
@@ -385,6 +386,28 @@ void PIT_Demo_Safety_Clear_Motor_Throttle_State(void)
 static uint8 check_attitude_safety(void)
 {
     return Flight_Safety_Check_Attitude();
+}
+
+static uint8 control_task_handle_flow_safety(void)
+{
+    PMWFlowState_t flow_state = {0};
+
+    if(!armed)
+    {
+        return 0U;
+    }
+
+    PMW_Flow_GetState(&flow_state);
+    if(flow_state.flow_fault)
+    {
+        Flight_Runtime_Emergency_StopAt(EMERGENCY_STOP_REASON_FLOW_TIMEOUT,
+                                        "FLOW TIMEOUT",
+                                        __FILE__,
+                                        __LINE__);
+        return 1U;
+    }
+
+    return 0U;
 }
 
 static uint8 check_fly_test_attitude_safety(void)
@@ -1143,6 +1166,12 @@ void PIT_Control_Task_250us(void)
     }
 
     control_task_update_sensor_feedback();
+
+    if(control_task_handle_flow_safety())
+    {
+        control_task_finish_cycle(rate_due);
+        return;
+    }
 
     if(control_task_handle_attitude_safety())
     {

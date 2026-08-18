@@ -5,7 +5,7 @@
 //P分支由简单P控制切换到Sqrt分支的 切换距离 = M8 / M3²
 #define POSITION_LOOP_CAR_FF_GAIN_DEFAULT          (0.6f)   // M1/M2：小车X/Y速度前馈增益上电默认值
 #define POSITION_LOOP_CAR_FF_GAIN_MAX              (1.0f)    // M1/M2：小车X/Y速度前馈增益允许上限
-#define POSITION_LOOP_POSITION_KP_DEFAULT          (0.3f)    // M3：二维位置P增益默认值，单位s^-1
+#define POSITION_LOOP_POSITION_KP_DEFAULT          (0.22f)    // M3：二维位置P增益默认值，单位s^-1
 #define POSITION_LOOP_CORRECTION_MAX_DEFAULT_CMS   (100.0f)   // M4：位置修正速度模长上限，单位cm/s
 #define POSITION_LOOP_TARGET_MAX_DEFAULT_CMS       (300.0f)   // M5：合成后目标速度模长上限，单位cm/s
 #define POSITION_LOOP_CORRECTION_ACCEL_DEFAULT_CMS2 (35.0f)  // M8：P/Sqrt位置纠偏包络加速度，单位cm/s^2
@@ -15,7 +15,7 @@
 #define POSITION_LOOP_EPSILON                      (0.0001f) // 二维距离归一化时的除零保护阈值
 #define POSITION_LOOP_YAW_RESET_THRESHOLD_DEG      (60.0f)   // 单个水平控制周期内超过该变化视为Yaw参考系重置
 #define POSITION_LOOP_EFFECTIVE_ACCEL_DEFAULT_CMS2  (200.0f)  // N1：A/J安全速度模型的有效加速度，单位cm/s^2
-#define POSITION_LOOP_EFFECTIVE_JERK_DEFAULT_CMS3   (600.0f) // N2：A/J安全速度模型的有效Jerk，单位cm/s^3
+#define POSITION_LOOP_EFFECTIVE_JERK_DEFAULT_CMS3   (500.0f) // N2：A/J安全速度模型的有效Jerk，单位cm/s^3
 #define POSITION_LOOP_CONTROL_DELAY_DEFAULT_MS      (0.0f)   // N3：控制系统等效延迟，单位ms
 #define POSITION_LOOP_SAFETY_BUFFER_DEFAULT_CM      (0.0f)   // N4：安全余量，单位cm
 #define POSITION_LOOP_BOOST_MARGIN_DEFAULT_CM       (0.0f)   // N5：速度包络提前收紧宽度，单位cm

@@ -14,6 +14,7 @@ typedef struct
     uint8 flow_used;
     uint8 acc_used;
     uint8 fused_velocity_valid;
+    uint8 flow_fault;
     int16 flow_delta_x_count;
     int16 flow_delta_y_count;
     float dt_s;
@@ -103,6 +104,7 @@ typedef struct
     uint8 flow_sync_valid;
     uint16 flow_dropped_frame_count;
     uint16 flow_sync_error_count;
+    float flow_observation_age_s;
 } PMWFlowState_t;
 
 void PMW_Flow_Init(void);
@@ -112,6 +114,7 @@ void PMW_Flow_AccumulateGyro(float gyro_x_rate_dps,
                              float gyro_z_rate_dps,
                              float dt_s);
 void PMW_Flow_PredictVelocity(float imu_velocity_x_cms, float imu_velocity_y_cms, float dt_s);
+void PMW_Flow_ClearFault(void);
 uint8 PMW_Flow_GetGyroSnapshotAtCycle(uint32 target_cycle,
                                       float *total_x_rad,
                                       float *total_y_rad,
