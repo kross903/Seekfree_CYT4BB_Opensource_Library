@@ -44,7 +44,9 @@
 #define VISION_BINARY_ZONE_MIDDLE      (1U)
 #define VISION_BINARY_ZONE_OUTER       (2U)
 #define VISION_BINARY_ZONE_COUNT       (3U)
-#define VISION_RUNTIME_BEACON_SLOT_COUNT (6U)
+/* 单帧最多接受的信标数量；达到后跳过后续信标理想形状匹配。 */
+#define VISION_RUNTIME_BEACON_ACCEPT_LIMIT (3U)
+#define VISION_RUNTIME_BEACON_SLOT_COUNT   VISION_RUNTIME_BEACON_ACCEPT_LIMIT
 #define VISION_RUNTIME_BLOB_AREA_COUNT (16U)
 #define VISION_RUNTIME_BEACON_SPLIT_AREA_THRESHOLD (4)
 #define VISION_RUNTIME_CONTOUR_MAX_POINTS (640U)
@@ -263,6 +265,8 @@ typedef struct
     float adaptive_min_area_px;
     float adaptive_max_area_px;
     float adaptive_min_circularity;
+    float occupancy_ratio;              /* 前景面积 / 候选框面积 */
+    float horizontal_run_ratio;        /* 最长水平连续段 / 候选框宽度 */
 } VisionRuntimeCandidateBox_t;
 
 void VisionRuntime_ProcessFrame(float height_cm);

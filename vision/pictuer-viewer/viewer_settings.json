@@ -1,30 +1,45 @@
 {
-  "folder": "D:/code/project/Seekfree_CYT4BB_Opensource_Library_视觉算法优化/vision/capture/旧图像",
-  "threshold": 160,
+  "folder": "D:\\code\\project\\Seekfree_CYT4BB_Opensource_Library_视觉算法优化\\vision\\capture",
+  "threshold": 100,
   "min_area": 6,
   "connectivity": 8,
+  "candidate_mode": "八邻域轮廓爬线",
+  "undistort_mode": "定点双线性",
   "ideal_target": {
-    "type": "理想信标",
+    "type": "不显示",
     "background": "单阈值二值图",
-    "roll_deg": 2.042727,
-    "pitch_deg": -6.109004,
-    "uav_yaw_deg": -22.212582,
-    "height_cm": 143.17482,
-    "car_yaw_deg": 0.0,
+    "roll_deg": -4.738854,
+    "pitch_deg": -1.826562,
+    "uav_yaw_deg": -36.077831,
+    "height_cm": 128.161484,
+    "car_yaw_deg": -40.0,
     "car_yaw_relative": false,
-    "mount_roll_deg": 0.0,
+    "mount_roll_deg": -15.0,
     "mount_pitch_deg": 0.0,
-    "mount_yaw_deg": 0.0,
+    "mount_yaw_deg": 180.0,
     "arrow_arm_length_cm": 19.0,
     "arrow_angle_deg": 70.0,
     "arrow_plane_height_cm": 17.0,
     "arrow_opening_offset_deg": 180.0,
     "beacon_diameter_cm": 10.0,
     "beacon_plane_height_cm": 0.0,
-    "sampling_step_px": 2,
-    "sampling_margin_px": 4.0,
-    "sampling_positive_band_px": 1.5,
-    "sampling_negative_guard_px": 3.0
+    "near_shape_variance_enabled": false,
+    "sampling": {
+      "arrow": {
+        "positive_step_px": 2,
+        "negative_step_px": 2,
+        "margin_px": 4.0,
+        "positive_band_px": 1.5,
+        "negative_guard_px": 3.0
+      },
+      "beacon": {
+        "positive_step_px": 2,
+        "negative_step_px": 2,
+        "margin_px": 4.0,
+        "positive_band_px": 1.5,
+        "negative_guard_px": 3.0
+      }
+    }
   },
   "matching_thresholds": {
     "near_negative_width_px": 2.0,
@@ -40,13 +55,13 @@
         "positive_points",
         "negative_points"
       ],
-      "gray_difference": 100.0,
-      "standardized_separation": 2.0,
-      "positive_hit_rate": 0.7,
-      "negative_hit_rate": 0.75,
-      "binary_consistency": 0.78,
-      "completeness": 0.6,
-      "near_difference": 90.0,
+      "gray_difference": 70.0,
+      "standardized_separation": 1.7,
+      "positive_hit_rate": 0.6,
+      "negative_hit_rate": 0.65,
+      "binary_consistency": 0.65,
+      "completeness": 0.45,
+      "near_difference": 70.0,
       "far_difference": 110.0,
       "positive_points": 8,
       "negative_points": 16
@@ -63,16 +78,21 @@
         "positive_points",
         "negative_points"
       ],
-      "gray_difference": 50.0,
-      "standardized_separation": 2.0,
-      "positive_hit_rate": 0.68,
-      "negative_hit_rate": 0.75,
-      "binary_consistency": 0.6,
-      "completeness": 0.3,
-      "near_difference": 80.0,
+      "gray_difference": 35.0,
+      "standardized_separation": 1.0,
+      "positive_hit_rate": 0.7,
+      "negative_hit_rate": 0.8,
+      "binary_consistency": 0.5,
+      "completeness": 0.2,
+      "near_difference": 25.0,
       "far_difference": 90.0,
       "positive_points": 8,
       "negative_points": 16
+    },
+    "arrow_shape_gate": {
+      "enabled": true,
+      "max_occupancy": 0.8,
+      "max_horizontal_run_ratio": 0.9
     }
   }
 }

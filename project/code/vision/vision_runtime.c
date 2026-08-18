@@ -5,6 +5,10 @@
 #include <string.h>
 #include <math.h>
 
+#define VISION_RUNTIME_ARROW_SHAPE_GATE_ENABLE       (1U)
+#define VISION_RUNTIME_ARROW_MAX_OCCUPANCY_Q8        (128U) /* 0.5 */
+#define VISION_RUNTIME_ARROW_MAX_HORIZONTAL_RUN_Q8   (128U) /* 0.5 */
+
 static VisionRuntimeDiag_t s_vision_runtime_diag;
 static VisionRuntimeBeaconSlot_t s_vision_runtime_beacon_slots[VISION_RUNTIME_BEACON_SLOT_COUNT];
 static uint8 s_vision_binary[VISION_RUNTIME_BINARY_BYTES];
@@ -155,6 +159,10 @@ void VisionRuntime_SetVehicleYawPrior(float car_yaw_rel_uav_deg,
 #include "vision/ipm_interface.h"
 #include "vision/vehicle_marker_localization.h"
 #include "zf_device_mt9v03x.h"
+
+#if VISION_RUNTIME_BEACON_ACCEPT_LIMIT > BEACON_MAX_DETECTIONS
+#error "Beacon acceptance limit exceeds the beacon result buffer capacity"
+#endif
 
 #define VISION_RUNTIME_IMAGE_PIXEL_COUNT \
     (MT9V03X_H * MT9V03X_W)
@@ -719,6 +727,7 @@ typedef struct
     int max_row;
     int min_col;
     int max_col;
+    int max_horizontal_run;
     int fine_area;
     uint32 fine_col_sum;
     uint32 fine_row_sum;
@@ -975,6 +984,7 @@ static uint8 VisionRuntime_FindCoarseCandidates(void)
             int max_row = row;
             int min_col = col;
             int max_col = col;
+            int max_horizontal_run = 0;
             uint8 complete = 1U;
 
             if(!VISION_RUNTIME_IMAGE_BIT_GET(s_vision_coarse_binary, start_index) ||
@@ -992,6 +1002,8 @@ static uint8 VisionRuntime_FindCoarseCandidates(void)
                 VisionRuntimeFineRun_t run = s_vision_fine_runs[front++];
                 int run_length = (int)run.end_col - (int)run.start_col + 1;
                 area += run_length;
+                if(run_length > max_horizontal_run)
+                    max_horizontal_run = run_length;
                 col_sum += (uint32)(((uint32)run.start_col + run.end_col) *
                                     (uint32)run_length / 2U);
                 row_sum += (uint32)run.row * (uint32)run_length;
@@ -1040,6 +1052,8 @@ static uint8 VisionRuntime_FindCoarseCandidates(void)
                 s_vision_candidates[slot].max_row = max_row;
                 s_vision_candidates[slot].min_col = min_col;
                 s_vision_candidates[slot].max_col = max_col;
+                s_vision_candidates[slot].max_horizontal_run =
+                    max_horizontal_run;
             }
         }
     }
@@ -2340,7 +2354,8 @@ static void VisionRuntime_SetFineCandidate(
     VisionRuntimeCandidate_t *candidate, int fine_area,
     uint32 fine_col_sum, uint32 fine_row_sum,
     int fine_min_col, int fine_max_col,
-    int fine_min_row, int fine_max_row)
+    int fine_min_row, int fine_max_row,
+    int fine_max_horizontal_run)
 {
     uint32 coarse_area;
 
@@ -2359,6 +2374,7 @@ static void VisionRuntime_SetFineCandidate(
     candidate->max_col = fine_max_col / 2;
     candidate->min_row = fine_min_row / 2;
     candidate->max_row = fine_max_row / 2;
+    candidate->max_horizontal_run = fine_max_horizontal_run;
     candidate->fine_area = fine_area;
     candidate->fine_col_sum = fine_col_sum;
     candidate->fine_row_sum = fine_row_sum;
@@ -2367,6 +2383,74 @@ static void VisionRuntime_SetFineCandidate(
     candidate->fine_min_row = fine_min_row;
     candidate->fine_max_row = fine_max_row;
     candidate->fine_coordinates_valid = 1U;
+}
+
+static void VisionRuntime_GetCandidateShapeQ8(
+    const VisionRuntimeCandidate_t *candidate,
+    uint16 *occupancy_q8, uint16 *horizontal_run_q8)
+{
+    uint32 area;
+    uint32 width;
+    uint32 height;
+    uint32 box_area;
+    uint32 max_horizontal_run;
+    uint32 occupancy;
+    uint32 horizontal_run;
+
+    if(occupancy_q8 == NULL || horizontal_run_q8 == NULL)
+    {
+        return;
+    }
+    *occupancy_q8 = 0U;
+    *horizontal_run_q8 = 0U;
+    if(candidate == NULL) return;
+
+    if(candidate->fine_coordinates_valid && candidate->fine_area > 0)
+    {
+        area = (uint32)candidate->fine_area;
+        width = (uint32)(candidate->fine_max_col -
+                         candidate->fine_min_col + 1);
+        height = (uint32)(candidate->fine_max_row -
+                          candidate->fine_min_row + 1);
+    }
+    else
+    {
+        area = (candidate->area > 0) ? (uint32)candidate->area : 0U;
+        width = (uint32)(candidate->max_col - candidate->min_col + 1);
+        height = (uint32)(candidate->max_row - candidate->min_row + 1);
+    }
+    max_horizontal_run = (candidate->max_horizontal_run > 0) ?
+        (uint32)candidate->max_horizontal_run : 0U;
+    box_area = width * height;
+    if(area == 0U || box_area == 0U || max_horizontal_run == 0U)
+    {
+        return;
+    }
+    occupancy = (area * 256U + box_area / 2U) / box_area;
+    horizontal_run = (max_horizontal_run * 256U + width / 2U) / width;
+    if(occupancy > 65535U) occupancy = 65535U;
+    if(horizontal_run > 65535U) horizontal_run = 65535U;
+    *occupancy_q8 = (uint16)occupancy;
+    *horizontal_run_q8 = (uint16)horizontal_run;
+}
+
+static uint8 VisionRuntime_ArrowShapeGatePass(
+    const VisionRuntimeCandidate_t *candidate)
+{
+    uint16 occupancy_q8;
+    uint16 horizontal_run_q8;
+
+#if VISION_RUNTIME_ARROW_SHAPE_GATE_ENABLE
+    VisionRuntime_GetCandidateShapeQ8(
+        candidate, &occupancy_q8, &horizontal_run_q8);
+    if(occupancy_q8 == 0U || horizontal_run_q8 == 0U) return 1U;
+    return (uint8)(occupancy_q8 <= VISION_RUNTIME_ARROW_MAX_OCCUPANCY_Q8 &&
+                   horizontal_run_q8 <=
+                       VISION_RUNTIME_ARROW_MAX_HORIZONTAL_RUN_Q8);
+#else
+    (void)candidate;
+    return 1U;
+#endif
 }
 
 static uint8 VisionRuntime_CollectFineCandidates(
@@ -2406,6 +2490,7 @@ static uint8 VisionRuntime_CollectFineCandidates(
             int component_max_col = col;
             int component_min_row = row;
             int component_max_row = row;
+            int max_horizontal_run = 0;
             uint8 complete = 1U;
             int slot;
 
@@ -2427,6 +2512,8 @@ static uint8 VisionRuntime_CollectFineCandidates(
                                  (int)run.start_col + 1;
 
                 area += run_length;
+                if(run_length > max_horizontal_run)
+                    max_horizontal_run = run_length;
                 col_sum += (uint32)(((uint32)run.start_col + run.end_col) *
                                     (uint32)run_length / 2U);
                 row_sum += (uint32)run.row * (uint32)run_length;
@@ -2476,7 +2563,8 @@ static uint8 VisionRuntime_CollectFineCandidates(
             VisionRuntime_SetFineCandidate(
                 &candidates[slot], area, col_sum, row_sum,
                 component_min_col, component_max_col,
-                component_min_row, component_max_row);
+                component_min_row, component_max_row,
+                max_horizontal_run);
             VisionRuntime_ClearFineComponent(run_count);
         }
     }
@@ -2772,7 +2860,10 @@ static uint8 VisionRuntime_ProcessFineROI(
             VisionRuntime_ClearFineComponent(run_count);
         }
     }
-    if(target == VISION_RUNTIME_FINE_TARGET_BEACON && best_beacon_valid)
+    if(target == VISION_RUNTIME_FINE_TARGET_BEACON &&
+       best_beacon_valid &&
+       s_vision_runtime_diag.beacon_blob_count <
+           VISION_RUNTIME_BEACON_ACCEPT_LIMIT)
     {
         uint8 beacon_appended =
             BeaconDetect_AppendEvaluatedBlob(&best_beacon_blob);
@@ -2970,6 +3061,8 @@ static uint8 VisionRuntime_TryIdealBeacon(
     uint8 appended;
 
     if(!s_vision_beacon_recognition_enabled ||
+       s_vision_runtime_diag.beacon_blob_count >=
+           VISION_RUNTIME_BEACON_ACCEPT_LIMIT ||
        !VisionRuntime_GetIdealCenter(candidate, &center_x, &center_y) ||
        !VisionIdealMatch_Beacon(image, center_x, center_y,
                                 s_vision_beacon_threshold, &match))
@@ -3183,7 +3276,8 @@ static void VisionRuntime_ProcessBlobs(
                  s_vision_candidates[i].min_row + 1);
             if(arrow_priority)
             {
-                if(!frame_vehicle_confirmed)
+                if(!frame_vehicle_confirmed &&
+                   VisionRuntime_ArrowShapeGatePass(&s_vision_candidates[i]))
                 {
                     matched = VisionRuntime_TryIdealArrow(
                         image, &s_vision_candidates[i], i, &arrow_match);
@@ -3205,7 +3299,8 @@ static void VisionRuntime_ProcessBlobs(
             {
                 matched = VisionRuntime_TryIdealBeacon(
                     image, &s_vision_candidates[i], i);
-                if(!matched && !frame_vehicle_confirmed)
+                if(!matched && !frame_vehicle_confirmed &&
+                   VisionRuntime_ArrowShapeGatePass(&s_vision_candidates[i]))
                 {
                     matched = VisionRuntime_TryIdealArrow(
                         image, &s_vision_candidates[i], i, &arrow_match);
@@ -3476,6 +3571,17 @@ uint8 VisionRuntime_GetCandidateBoxes(VisionRuntimeCandidateBox_t *boxes, uint8 
         boxes[i].fine_min_col = min_x;
         boxes[i].fine_max_col = max_x;
         boxes[i].area = s_vision_candidates[i].area;
+        {
+            uint16 occupancy_q8;
+            uint16 horizontal_run_q8;
+
+            VisionRuntime_GetCandidateShapeQ8(
+                &s_vision_candidates[i],
+                &occupancy_q8, &horizontal_run_q8);
+            boxes[i].occupancy_ratio = (float)occupancy_q8 / 256.0f;
+            boxes[i].horizontal_run_ratio =
+                (float)horizontal_run_q8 / 256.0f;
+        }
         boxes[i].raw_box_area_pixels =
             (s_vision_candidates[i].max_col - s_vision_candidates[i].min_col + 1) *
             (s_vision_candidates[i].max_row - s_vision_candidates[i].min_row + 1);

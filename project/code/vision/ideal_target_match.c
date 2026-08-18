@@ -11,21 +11,28 @@
 #define IDEAL_BEACON_RADIUS_CM          (5.0f)
 #define IDEAL_BEACON_PLANE_HEIGHT_CM    (0.0f)
 
-#define IDEAL_SAMPLE_STEP_MIN_PX        (2)
-#define IDEAL_SAMPLE_MARGIN_PX          (4)
-#define IDEAL_POSITIVE_BAND_SQ_Q2       (9U)   /* 1.5px squared, scaled by 4. */
-#define IDEAL_NEGATIVE_GUARD_SQ_Q2      (36U)  /* 3px squared, scaled by 4. */
-#define IDEAL_NEAR_NEGATIVE_SQ_Q2       (100U) /* 5px squared, scaled by 4. */
+#define IDEAL_ARROW_POSITIVE_STEP_MIN_PX (2)   /* 箭头正形采样步长 */
+#define IDEAL_ARROW_NEGATIVE_STEP_MIN_PX (4)   /* 箭头负形采样步长 */
+#define IDEAL_ARROW_SAMPLE_MARGIN_PX     (4)
+#define IDEAL_ARROW_POSITIVE_BAND_SQ_Q2  (9U)   /* 1.5px squared, scaled by 4. */
+#define IDEAL_ARROW_NEGATIVE_GUARD_SQ_Q2 (36U)  /* 3px squared, scaled by 4. */
+#define IDEAL_ARROW_NEAR_NEGATIVE_SQ_Q2  (100U) /* 5px squared, scaled by 4. */
+
+#define IDEAL_BEACON_POSITIVE_STEP_MIN_PX (2) /* 信标正形采样步长 */
+#define IDEAL_BEACON_NEGATIVE_STEP_MIN_PX (4) /* 信标负形采样步长 */
+#define IDEAL_BEACON_SAMPLE_MARGIN_PX    (4)
+#define IDEAL_BEACON_NEGATIVE_GUARD_SQ_Q2 (36U)  /* 3px squared, scaled by 4. */
+#define IDEAL_BEACON_NEAR_NEGATIVE_SQ_Q2  (100U) /* 5px squared, scaled by 4. */
 #define IDEAL_FINE_WIDTH                 (MT9V03X_W * 2)
 #define IDEAL_FINE_HEIGHT                (MT9V03X_H * 2)
 
-#define IDEAL_ARROW_MIN_GRAY_DIFF       (100U)
-#define IDEAL_ARROW_MIN_SEPARATION_Q8   (512U)
-#define IDEAL_ARROW_MIN_POSITIVE_Q8     (179U)
-#define IDEAL_ARROW_MIN_NEGATIVE_Q8     (192U)
-#define IDEAL_ARROW_MIN_BINARY_Q8       (200U)
-#define IDEAL_ARROW_MIN_COMPLETE_Q8     (154U)
-#define IDEAL_ARROW_MIN_NEAR_DIFF       (90U)
+#define IDEAL_ARROW_MIN_GRAY_DIFF       (70U)
+#define IDEAL_ARROW_MIN_SEPARATION_Q8   (320U)
+#define IDEAL_ARROW_MIN_POSITIVE_Q8     (154U)
+#define IDEAL_ARROW_MIN_NEGATIVE_Q8     (166U)
+#define IDEAL_ARROW_MIN_BINARY_Q8       (166U)
+#define IDEAL_ARROW_MIN_COMPLETE_Q8     (115U)
+#define IDEAL_ARROW_MIN_NEAR_DIFF       (55U)
 
 #define IDEAL_BEACON_MIN_GRAY_DIFF      (50U)
 #define IDEAL_BEACON_MIN_SEPARATION_Q8  (512U)
@@ -378,7 +385,11 @@ uint8 VisionIdealMatch_Arrow(
     int max_x;
     int min_y;
     int max_y;
-    int step;
+    int positive_step;
+    int negative_step;
+    int grid_step;
+    int grid_start_x;
+    int grid_start_y;
     int x;
     int y;
 
@@ -428,58 +439,83 @@ uint8 VisionIdealMatch_Arrow(
         if(point_y[x] < min_y) min_y = point_y[x];
         if(point_y[x] > max_y) max_y = point_y[x];
     }
-    min_x -= IDEAL_SAMPLE_MARGIN_PX;
-    max_x += IDEAL_SAMPLE_MARGIN_PX;
-    min_y -= IDEAL_SAMPLE_MARGIN_PX;
-    max_y += IDEAL_SAMPLE_MARGIN_PX;
+    min_x -= IDEAL_ARROW_SAMPLE_MARGIN_PX;
+    max_x += IDEAL_ARROW_SAMPLE_MARGIN_PX;
+    min_y -= IDEAL_ARROW_SAMPLE_MARGIN_PX;
+    max_y += IDEAL_ARROW_SAMPLE_MARGIN_PX;
     result->box_clipped = (uint8)(min_x < 0 || min_y < 0 ||
         max_x >= IDEAL_FINE_WIDTH || max_y >= IDEAL_FINE_HEIGHT);
     min_x = VisionIdeal_ClampInt(min_x, 0, IDEAL_FINE_WIDTH - 1);
     max_x = VisionIdeal_ClampInt(max_x, 0, IDEAL_FINE_WIDTH - 1);
     min_y = VisionIdeal_ClampInt(min_y, 0, IDEAL_FINE_HEIGHT - 1);
     max_y = VisionIdeal_ClampInt(max_y, 0, IDEAL_FINE_HEIGHT - 1);
-    step = IDEAL_SAMPLE_STEP_MIN_PX;
-    if((max_x - min_x + 16) / 16 > step) step = (max_x - min_x + 16) / 16;
-    if((max_y - min_y + 16) / 16 > step) step = (max_y - min_y + 16) / 16;
+    positive_step = IDEAL_ARROW_POSITIVE_STEP_MIN_PX;
+    negative_step = IDEAL_ARROW_NEGATIVE_STEP_MIN_PX;
+    if((max_x - min_x + 16) / 16 > positive_step)
+        positive_step = (max_x - min_x + 16) / 16;
+    if((max_y - min_y + 16) / 16 > positive_step)
+        positive_step = (max_y - min_y + 16) / 16;
+    if((max_x - min_x + 16) / 16 > negative_step)
+        negative_step = (max_x - min_x + 16) / 16;
+    if((max_y - min_y + 16) / 16 > negative_step)
+        negative_step = (max_y - min_y + 16) / 16;
+    grid_step = (positive_step < negative_step) ?
+        positive_step : negative_step;
+    grid_start_x = ((min_x + grid_step - 1) / grid_step) * grid_step;
+    grid_start_y = ((min_y + grid_step - 1) / grid_step) * grid_step;
 
-    for(y = min_y; y <= max_y; y += step)
+    for(y = grid_start_y; y <= max_y; y += grid_step)
     {
-        for(x = min_x; x <= max_x; x += step)
+        for(x = grid_start_x; x <= max_x; x += grid_step)
         {
             uint8 sample;
+            uint8 positive_grid;
+            uint8 negative_grid;
             uint8 left_positive;
             uint8 right_positive;
             uint8 within_guard;
             uint8 within_near;
 
+            positive_grid = (uint8)(((x - grid_start_x) % positive_step == 0) &&
+                                    ((y - grid_start_y) % positive_step == 0));
+            negative_grid = (uint8)(((x - grid_start_x) % negative_step == 0) &&
+                                    ((y - grid_start_y) % negative_step == 0));
+            if(!positive_grid && !negative_grid) continue;
             if(!VisionIdeal_SampleGray(image, x, y, &sample)) continue;
-            left_positive = VisionIdeal_PointNearSegment(
-                x, y, point_x[0], point_y[0], point_x[1], point_y[1],
-                IDEAL_POSITIVE_BAND_SQ_Q2);
-            right_positive = VisionIdeal_PointNearSegment(
-                x, y, point_x[1], point_y[1], point_x[2], point_y[2],
-                IDEAL_POSITIVE_BAND_SQ_Q2);
-            if(left_positive || right_positive)
+            left_positive = 0U;
+            right_positive = 0U;
+            if(positive_grid || negative_grid)
+            {
+                left_positive = VisionIdeal_PointNearSegment(
+                    x, y, point_x[0], point_y[0], point_x[1], point_y[1],
+                    IDEAL_ARROW_POSITIVE_BAND_SQ_Q2);
+                right_positive = VisionIdeal_PointNearSegment(
+                    x, y, point_x[1], point_y[1], point_x[2], point_y[2],
+                    IDEAL_ARROW_POSITIVE_BAND_SQ_Q2);
+            }
+            if(positive_grid && (left_positive || right_positive))
             {
                 VisionIdeal_AddPositive(sample,
                     (uint8)((right_positive && !left_positive) ? 1U : 0U),
                     binary_threshold);
-                continue;
             }
-            within_guard = (uint8)(VisionIdeal_PointNearSegment(
-                x, y, point_x[0], point_y[0], point_x[1], point_y[1],
-                IDEAL_NEGATIVE_GUARD_SQ_Q2) ||
-                VisionIdeal_PointNearSegment(
-                x, y, point_x[1], point_y[1], point_x[2], point_y[2],
-                IDEAL_NEGATIVE_GUARD_SQ_Q2));
-            if(within_guard) continue;
-            within_near = (uint8)(VisionIdeal_PointNearSegment(
-                x, y, point_x[0], point_y[0], point_x[1], point_y[1],
-                IDEAL_NEAR_NEGATIVE_SQ_Q2) ||
-                VisionIdeal_PointNearSegment(
-                x, y, point_x[1], point_y[1], point_x[2], point_y[2],
-                IDEAL_NEAR_NEGATIVE_SQ_Q2));
-            VisionIdeal_AddNegative(sample, within_near, binary_threshold);
+            if(negative_grid && !(left_positive || right_positive))
+            {
+                within_guard = (uint8)(VisionIdeal_PointNearSegment(
+                    x, y, point_x[0], point_y[0], point_x[1], point_y[1],
+                    IDEAL_ARROW_NEGATIVE_GUARD_SQ_Q2) ||
+                    VisionIdeal_PointNearSegment(
+                    x, y, point_x[1], point_y[1], point_x[2], point_y[2],
+                    IDEAL_ARROW_NEGATIVE_GUARD_SQ_Q2));
+                if(within_guard) continue;
+                within_near = (uint8)(VisionIdeal_PointNearSegment(
+                    x, y, point_x[0], point_y[0], point_x[1], point_y[1],
+                    IDEAL_ARROW_NEAR_NEGATIVE_SQ_Q2) ||
+                    VisionIdeal_PointNearSegment(
+                    x, y, point_x[1], point_y[1], point_x[2], point_y[2],
+                    IDEAL_ARROW_NEAR_NEGATIVE_SQ_Q2));
+                VisionIdeal_AddNegative(sample, within_near, binary_threshold);
+            }
         }
     }
 
@@ -523,7 +559,11 @@ uint8 VisionIdealMatch_Beacon(
     int max_x;
     int min_y;
     int max_y;
-    int step;
+    int positive_step;
+    int negative_step;
+    int grid_step;
+    int grid_start_x;
+    int grid_start_y;
     int x;
     int y;
 
@@ -567,32 +607,43 @@ uint8 VisionIdealMatch_Beacon(
     }
     if(min_axis < 1U) return 0U;
     guard_ratio_q8 = 256U +
-        (VisionIdeal_IntegerSqrt(IDEAL_NEGATIVE_GUARD_SQ_Q2) * 128U +
+        (VisionIdeal_IntegerSqrt(IDEAL_BEACON_NEGATIVE_GUARD_SQ_Q2) * 128U +
          min_axis - 1U) / min_axis;
     near_ratio_q8 = 256U +
-        (VisionIdeal_IntegerSqrt(IDEAL_NEAR_NEGATIVE_SQ_Q2) * 128U +
+        (VisionIdeal_IntegerSqrt(IDEAL_BEACON_NEAR_NEGATIVE_SQ_Q2) * 128U +
          min_axis - 1U) / min_axis;
     extent_x = ((ex_x < 0) ? -ex_x : ex_x) +
                ((ey_x < 0) ? -ey_x : ey_x);
     extent_y = ((ex_y < 0) ? -ex_y : ex_y) +
                ((ey_y < 0) ? -ey_y : ey_y);
-    min_x = center_x - extent_x - IDEAL_SAMPLE_MARGIN_PX;
-    max_x = center_x + extent_x + IDEAL_SAMPLE_MARGIN_PX;
-    min_y = center_y - extent_y - IDEAL_SAMPLE_MARGIN_PX;
-    max_y = center_y + extent_y + IDEAL_SAMPLE_MARGIN_PX;
+    min_x = center_x - extent_x - IDEAL_BEACON_SAMPLE_MARGIN_PX;
+    max_x = center_x + extent_x + IDEAL_BEACON_SAMPLE_MARGIN_PX;
+    min_y = center_y - extent_y - IDEAL_BEACON_SAMPLE_MARGIN_PX;
+    max_y = center_y + extent_y + IDEAL_BEACON_SAMPLE_MARGIN_PX;
     result->box_clipped = (uint8)(min_x < 0 || min_y < 0 ||
         max_x >= IDEAL_FINE_WIDTH || max_y >= IDEAL_FINE_HEIGHT);
     min_x = VisionIdeal_ClampInt(min_x, 0, IDEAL_FINE_WIDTH - 1);
     max_x = VisionIdeal_ClampInt(max_x, 0, IDEAL_FINE_WIDTH - 1);
     min_y = VisionIdeal_ClampInt(min_y, 0, IDEAL_FINE_HEIGHT - 1);
     max_y = VisionIdeal_ClampInt(max_y, 0, IDEAL_FINE_HEIGHT - 1);
-    step = IDEAL_SAMPLE_STEP_MIN_PX;
-    if((max_x - min_x + 16) / 16 > step) step = (max_x - min_x + 16) / 16;
-    if((max_y - min_y + 16) / 16 > step) step = (max_y - min_y + 16) / 16;
+    positive_step = IDEAL_BEACON_POSITIVE_STEP_MIN_PX;
+    negative_step = IDEAL_BEACON_NEGATIVE_STEP_MIN_PX;
+    if((max_x - min_x + 16) / 16 > positive_step)
+        positive_step = (max_x - min_x + 16) / 16;
+    if((max_y - min_y + 16) / 16 > positive_step)
+        positive_step = (max_y - min_y + 16) / 16;
+    if((max_x - min_x + 16) / 16 > negative_step)
+        negative_step = (max_x - min_x + 16) / 16;
+    if((max_y - min_y + 16) / 16 > negative_step)
+        negative_step = (max_y - min_y + 16) / 16;
+    grid_step = (positive_step < negative_step) ?
+        positive_step : negative_step;
+    grid_start_x = ((min_x + grid_step - 1) / grid_step) * grid_step;
+    grid_start_y = ((min_y + grid_step - 1) / grid_step) * grid_step;
 
-    for(y = min_y; y <= max_y; y += step)
+    for(y = grid_start_y; y <= max_y; y += grid_step)
     {
-        for(x = min_x; x <= max_x; x += step)
+        for(x = grid_start_x; x <= max_x; x += grid_step)
         {
             sint32 dx = (sint32)x - center_x;
             sint32 dy = (sint32)y - center_y;
@@ -601,15 +652,22 @@ uint8 VisionIdealMatch_Beacon(
             uint64 q = (uint64)((int64)u * u) +
                        (uint64)((int64)v * v);
             uint8 sample;
+            uint8 positive_grid;
+            uint8 negative_grid;
 
+            positive_grid = (uint8)(((x - grid_start_x) % positive_step == 0) &&
+                                    ((y - grid_start_y) % positive_step == 0));
+            negative_grid = (uint8)(((x - grid_start_x) % negative_step == 0) &&
+                                    ((y - grid_start_y) % negative_step == 0));
+            if(!positive_grid && !negative_grid) continue;
             if(!VisionIdeal_SampleGray(image, x, y, &sample)) continue;
-            if(q <= determinant_sq)
+            if(positive_grid && q <= determinant_sq)
             {
                 uint8 quadrant = (uint8)((dx >= 0 ? 1U : 0U) +
                                          (dy >= 0 ? 2U : 0U));
                 VisionIdeal_AddPositive(sample, quadrant, binary_threshold);
             }
-            else if(q * 65536ULL >
+            else if(negative_grid && q * 65536ULL >
                     determinant_sq * guard_ratio_q8 * guard_ratio_q8)
             {
                 uint8 near = (uint8)(q * 65536ULL <=

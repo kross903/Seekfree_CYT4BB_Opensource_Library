@@ -8,6 +8,7 @@ import json
 import math
 from pathlib import Path
 import sys
+from time import perf_counter
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
@@ -17,6 +18,9 @@ from image_analysis import (
     CameraCalibration,
     ConnectedComponent,
     FisheyeUndistorter,
+    UNDISTORT_BILINEAR,
+    UNDISTORT_NEAREST,
+    find_contour_components,
     find_components,
     self_test as analysis_self_test,
     threshold_image,
@@ -103,9 +107,23 @@ class BeaconRecognitionResult:
     target_kind: str | None = None
     route: str = ""
     attempts: tuple[str, ...] = ()
+    projected_outline: tuple[tuple[float, float], ...] = ()
+    sampling: SamplingResult | None = None
+    sampling_config: SamplingConfig | None = None
+    binary_threshold: int | None = None
 
 
 FIRMWARE_ROUTE_ARROW_MIN_AREA = 30
+FIRMWARE_BEACON_ACCEPT_LIMIT = 3
+ARROW_SHAPE_GATE_DEFAULT_ENABLED = True
+ARROW_MAX_OCCUPANCY_DEFAULT = 0.5
+ARROW_MAX_HORIZONTAL_RUN_DEFAULT = 0.5
+CANDIDATE_MODE_CONTOUR = "八邻域轮廓爬线"
+CANDIDATE_MODE_RLE = "RLE连通域"
+CANDIDATE_MODE_NAMES = (CANDIDATE_MODE_CONTOUR, CANDIDATE_MODE_RLE)
+UNDISTORT_MODE_BILINEAR = "定点双线性"
+UNDISTORT_MODE_NEAREST = "最近邻"
+UNDISTORT_MODE_NAMES = (UNDISTORT_MODE_BILINEAR, UNDISTORT_MODE_NEAREST)
 
 
 class PictureViewerApp:
@@ -134,6 +152,9 @@ class PictureViewerApp:
         matching_settings = settings.get("matching_thresholds", {})
         if not isinstance(matching_settings, dict):
             matching_settings = {}
+        sampling_settings = ideal_settings.get("sampling", {})
+        if not isinstance(sampling_settings, dict):
+            sampling_settings = {}
 
         self.folder_var = tk.StringVar(
             value=str(Path(settings.get("folder", DEFAULT_CAPTURE_DIR)))
@@ -146,6 +167,16 @@ class PictureViewerApp:
         self.threshold_var = tk.IntVar(value=int(settings.get("threshold", 50)))
         self.min_area_var = tk.IntVar(value=int(settings.get("min_area", 6)))
         self.connectivity_var = tk.IntVar(value=int(settings.get("connectivity", 8)))
+        candidate_mode = str(settings.get("candidate_mode", CANDIDATE_MODE_CONTOUR))
+        if candidate_mode not in CANDIDATE_MODE_NAMES:
+            candidate_mode = CANDIDATE_MODE_CONTOUR
+        undistort_mode = str(
+            settings.get("undistort_mode", UNDISTORT_MODE_BILINEAR)
+        )
+        if undistort_mode not in UNDISTORT_MODE_NAMES:
+            undistort_mode = UNDISTORT_MODE_BILINEAR
+        self.candidate_mode_var = tk.StringVar(value=candidate_mode)
+        self.undistort_mode_var = tk.StringVar(value=undistort_mode)
         self.status_var = tk.StringVar(value="就绪")
         self.pixel_var = tk.StringVar(value="移动鼠标查看坐标和灰度")
         self.metadata_var = tk.StringVar(value="尚未加载图像")
@@ -192,20 +223,76 @@ class PictureViewerApp:
         self.beacon_plane_height_var = tk.StringVar(
             value=str(ideal_settings.get("beacon_plane_height_cm", "0"))
         )
-        self.sampling_step_var = tk.StringVar(
-            value=str(ideal_settings.get("sampling_step_px", "2"))
-        )
-        self.sampling_margin_var = tk.StringVar(
-            value=str(ideal_settings.get("sampling_margin_px", "4"))
-        )
-        self.sampling_positive_band_var = tk.StringVar(
-            value=str(ideal_settings.get("sampling_positive_band_px", "1.5"))
-        )
-        self.sampling_negative_guard_var = tk.StringVar(
-            value=str(ideal_settings.get("sampling_negative_guard_px", "3"))
-        )
+        legacy_step = ideal_settings.get("sampling_step_px", None)
+        legacy_sampling = {
+            "positive_step_px": ideal_settings.get(
+                "sampling_positive_step_px",
+                "2" if legacy_step is None else legacy_step,
+            ),
+            "negative_step_px": ideal_settings.get(
+                "sampling_negative_step_px",
+                "4" if legacy_step is None else legacy_step,
+            ),
+            "margin_px": ideal_settings.get("sampling_margin_px", "4"),
+            "positive_band_px": ideal_settings.get(
+                "sampling_positive_band_px", "1.5"
+            ),
+            "negative_guard_px": ideal_settings.get(
+                "sampling_negative_guard_px", "3"
+            ),
+        }
+        self.sampling_vars: dict[str, dict[str, tk.StringVar]] = {}
+        for target_kind in MATCHING_TARGET_KINDS:
+            target_settings = sampling_settings.get(target_kind, {})
+            if not isinstance(target_settings, dict):
+                target_settings = {}
+            target_legacy_step = target_settings.get("step_px", None)
+            self.sampling_vars[target_kind] = {
+                key: tk.StringVar(
+                    value=str(
+                        target_settings.get(
+                            key,
+                            target_legacy_step
+                            if target_legacy_step is not None and key in {
+                                "positive_step_px",
+                                "negative_step_px",
+                            }
+                            else fallback,
+                        )
+                    )
+                )
+                for key, fallback in legacy_sampling.items()
+            }
         self.near_negative_width_var = tk.StringVar(
             value=str(matching_settings.get("near_negative_width_px", "2"))
+        )
+        self.near_shape_variance_enabled_var = tk.BooleanVar(
+            value=bool(ideal_settings.get("near_shape_variance_enabled", False))
+        )
+        arrow_shape_settings = matching_settings.get("arrow_shape_gate", {})
+        if not isinstance(arrow_shape_settings, dict):
+            arrow_shape_settings = {}
+        self.arrow_shape_gate_enabled_var = tk.BooleanVar(
+            value=bool(
+                arrow_shape_settings.get(
+                    "enabled", ARROW_SHAPE_GATE_DEFAULT_ENABLED
+                )
+            )
+        )
+        self.arrow_max_occupancy_var = tk.StringVar(
+            value=str(
+                arrow_shape_settings.get(
+                    "max_occupancy", ARROW_MAX_OCCUPANCY_DEFAULT
+                )
+            )
+        )
+        self.arrow_max_horizontal_run_var = tk.StringVar(
+            value=str(
+                arrow_shape_settings.get(
+                    "max_horizontal_run_ratio",
+                    ARROW_MAX_HORIZONTAL_RUN_DEFAULT,
+                )
+            )
         )
         self.matching_defaults = {
             TARGET_ARROW: ARROW_DEFAULT_THRESHOLDS,
@@ -229,7 +316,10 @@ class PictureViewerApp:
         self.ideal_source_var = tk.StringVar(value="姿态：手动；小车Yaw：手动")
         self.ideal_status_var = tk.StringVar(value="选择目标后可在图像中左键拖动")
         self.sampling_summary_var = tk.StringVar(
-            value="正形灰度 --（0点） | 负形灰度 --（0点）"
+            value="正形灰度 --（0点） | 负形灰度 --（0点） | 近形方差未启用"
+        )
+        self.sampling_count_var = tk.StringVar(
+            value="采样点总数：0 | 参与评分：0（正形 0 / 负形 0） | 近形 0"
         )
         self._ideal_pose_source = "手动"
         self._ideal_car_yaw_source = "手动"
@@ -255,6 +345,9 @@ class PictureViewerApp:
         self._fit_pending = False
         self._pan_anchor: tuple[int, int, float, float] | None = None
         self._threshold_job: str | None = None
+        self.undistort_elapsed_ms = 0.0
+        self.threshold_elapsed_ms = 0.0
+        self.candidate_elapsed_ms = 0.0
         ideal_center = (
             (self.calibration.output_width - 1.0) * 0.5,
             (self.calibration.output_height - 1.0) * 0.5,
@@ -374,6 +467,36 @@ class PictureViewerApp:
             variable=self.connectivity_var,
             command=self.schedule_analysis,
         ).pack(side=tk.LEFT)
+        processing_modes = ttk.Frame(binary_controls)
+        processing_modes.grid(
+            row=2, column=0, columnspan=3, sticky="ew", pady=(7, 0)
+        )
+        processing_modes.columnconfigure(1, weight=1)
+        processing_modes.columnconfigure(3, weight=1)
+        ttk.Label(processing_modes, text="去畸变").grid(row=0, column=0, sticky="w")
+        undistort_mode_box = ttk.Combobox(
+            processing_modes,
+            textvariable=self.undistort_mode_var,
+            values=UNDISTORT_MODE_NAMES,
+            state="readonly",
+            width=11,
+        )
+        undistort_mode_box.grid(row=0, column=1, sticky="ew", padx=(5, 10))
+        undistort_mode_box.bind(
+            "<<ComboboxSelected>>", self.undistort_mode_changed
+        )
+        ttk.Label(processing_modes, text="候选").grid(row=0, column=2, sticky="w")
+        candidate_mode_box = ttk.Combobox(
+            processing_modes,
+            textvariable=self.candidate_mode_var,
+            values=CANDIDATE_MODE_NAMES,
+            state="readonly",
+            width=14,
+        )
+        candidate_mode_box.grid(row=0, column=3, sticky="ew", padx=(5, 0))
+        candidate_mode_box.bind(
+            "<<ComboboxSelected>>", self.candidate_mode_changed
+        )
 
         pixel_frame = ttk.LabelFrame(side, text="局部灰度", padding=8)
         pixel_frame.grid(row=1, column=0, sticky="ew", pady=(7, 0))
@@ -550,7 +673,16 @@ class PictureViewerApp:
             command=self.recognize_current_image_targets,
         ).pack(side=tk.LEFT)
 
-        columns = ("area", "center", "box", "route", "beacon")
+        columns = (
+            "area",
+            "center",
+            "box",
+            "occupancy",
+            "horizontal_run",
+            "contour",
+            "route",
+            "beacon",
+        )
         self.component_tree = ttk.Treeview(
             candidate_tab, columns=columns, show="tree headings", height=12
         )
@@ -560,6 +692,9 @@ class PictureViewerApp:
             "area": ("面积", 55),
             "center": ("质心", 82),
             "box": ("外接框", 85),
+            "occupancy": ("占空比", 62),
+            "horizontal_run": ("最长段比", 70),
+            "contour": ("轮廓", 90),
             "route": ("面积分流", 80),
             "beacon": ("新方案识别", 260),
         }
@@ -616,17 +751,46 @@ class PictureViewerApp:
                 self.near_negative_width_var, 2.0
             ),
         }
+        sampling_settings = {}
         for target_kind in MATCHING_TARGET_KINDS:
             try:
                 thresholds = self.current_matching_thresholds(target_kind)
             except ValueError:
                 thresholds = self.matching_defaults[target_kind]
             matching_settings[target_kind] = thresholds.to_mapping()
+            variables = self.sampling_vars[target_kind]
+            sampling_settings[target_kind] = {
+                "positive_step_px": self.safe_int(
+                    variables["positive_step_px"], 2, 1, 32
+                ),
+                "negative_step_px": self.safe_int(
+                    variables["negative_step_px"], 4, 1, 32
+                ),
+                "margin_px": self.safe_float(variables["margin_px"], 4.0),
+                "positive_band_px": self.safe_float(
+                    variables["positive_band_px"], 1.5
+                ),
+                "negative_guard_px": self.safe_float(
+                    variables["negative_guard_px"], 3.0
+                ),
+            }
+        matching_settings["arrow_shape_gate"] = {
+            "enabled": bool(self.arrow_shape_gate_enabled_var.get()),
+            "max_occupancy": self.safe_ratio(
+                self.arrow_max_occupancy_var, ARROW_MAX_OCCUPANCY_DEFAULT
+            ),
+            "max_horizontal_run_ratio": self.safe_ratio(
+                self.arrow_max_horizontal_run_var,
+                ARROW_MAX_HORIZONTAL_RUN_DEFAULT,
+            ),
+        }
         settings = {
             "folder": self.folder_var.get(),
             "threshold": self.safe_int(self.threshold_var, 50, 0, 255),
             "min_area": self.safe_int(self.min_area_var, 6, 1, 90240),
             "connectivity": 8 if self.connectivity_var.get() == 8 else 4,
+            "candidate_mode": self.candidate_mode_var.get(),
+            "undistort_mode": self.undistort_mode_var.get(),
             "ideal_target": {
                 "type": self.ideal_target_var.get(),
                 "background": self.ideal_background_var.get(),
@@ -649,18 +813,10 @@ class PictureViewerApp:
                 "beacon_plane_height_cm": self.safe_float(
                     self.beacon_plane_height_var, 0.0
                 ),
-                "sampling_step_px": self.safe_int(
-                    self.sampling_step_var, 2, 1, 32
+                "near_shape_variance_enabled": bool(
+                    self.near_shape_variance_enabled_var.get()
                 ),
-                "sampling_margin_px": self.safe_float(
-                    self.sampling_margin_var, 4.0
-                ),
-                "sampling_positive_band_px": self.safe_float(
-                    self.sampling_positive_band_var, 1.5
-                ),
-                "sampling_negative_guard_px": self.safe_float(
-                    self.sampling_negative_guard_var, 3.0
-                ),
+                "sampling": sampling_settings,
             },
             "matching_thresholds": matching_settings,
         }
@@ -687,6 +843,14 @@ class PictureViewerApp:
             return float(variable.get())
         except (TypeError, ValueError, tk.TclError):
             return default
+
+    @staticmethod
+    def safe_ratio(variable: tk.Variable, default: float) -> float:
+        try:
+            value = float(variable.get())
+        except (TypeError, ValueError, tk.TclError):
+            value = default
+        return max(0.0, min(1.0, value))
 
     def choose_folder(self) -> None:
         selected = filedialog.askdirectory(
@@ -752,6 +916,22 @@ class PictureViewerApp:
         self.file_list.see(index)
         self.load_path(self.visible_files[index])
 
+    def current_undistort_interpolation(self) -> str:
+        return (
+            UNDISTORT_NEAREST
+            if self.undistort_mode_var.get() == UNDISTORT_MODE_NEAREST
+            else UNDISTORT_BILINEAR
+        )
+
+    def apply_current_undistortion(self, image: Image.Image) -> Image.Image:
+        started = perf_counter()
+        result = self.undistorter.apply(
+            image,
+            interpolation=self.current_undistort_interpolation(),
+        )
+        self.undistort_elapsed_ms = (perf_counter() - started) * 1000.0
+        return result
+
     def load_path(self, path: Path) -> None:
         if path == self.current_path:
             return
@@ -759,7 +939,7 @@ class PictureViewerApp:
             self.status_var.set(f"正在加载并去畸变：{path.name}")
             self.root.update_idletasks()
             image = self.load_gray_image(path)
-            undistorted = self.undistorter.apply(image)
+            undistorted = self.apply_current_undistortion(image)
         except (OSError, ValueError) as exc:
             messagebox.showerror("加载失败", str(exc))
             self.status_var.set(f"加载失败：{path.name}")
@@ -779,10 +959,6 @@ class PictureViewerApp:
         self.run_analysis()
         self._fit_pending = True
         self.root.after_idle(self.fit_image)
-        self.status_var.set(
-            f"{path.name} | 原图 {image.width}x{image.height} | "
-            f"去畸变 {undistorted.width}x{undistorted.height}"
-        )
 
     def load_gray_image(self, path: Path) -> Image.Image:
         if path.suffix.lower() == ".raw":
@@ -960,41 +1136,72 @@ class PictureViewerApp:
         self.sampling_window = window
         content = ttk.Frame(window, padding=10)
         content.grid(row=0, column=0, sticky="nsew")
-        content.columnconfigure(1, weight=1)
-        fields = (
-            ("采样步长 (px)", self.sampling_step_var),
-            ("采样框余量 (px)", self.sampling_margin_var),
-            ("正形轮廓带 (px)", self.sampling_positive_band_var),
-            ("负形最小距离 (px)", self.sampling_negative_guard_var),
-        )
-        for row, (label, variable) in enumerate(fields):
-            ttk.Label(content, text=label).grid(row=row, column=0, sticky="w", pady=3)
-            if row == 0:
-                entry = ttk.Spinbox(
-                    content,
-                    from_=1,
-                    to=32,
-                    width=9,
-                    textvariable=variable,
-                    command=self.sampling_parameter_changed,
-                )
-            else:
-                entry = ttk.Entry(content, width=11, textvariable=variable)
-            entry.grid(row=row, column=1, sticky="ew", padx=(8, 0), pady=3)
-            entry.bind("<KeyRelease>", self.sampling_parameter_changed)
+        content.columnconfigure(0, weight=1)
+        notebook = ttk.Notebook(content)
+        notebook.grid(row=0, column=0, sticky="ew")
+        for target_kind in MATCHING_TARGET_KINDS:
+            tab = ttk.Frame(notebook, padding=8)
+            notebook.add(
+                tab,
+                text="箭头" if target_kind == TARGET_ARROW else "信标",
+            )
+            tab.columnconfigure(1, weight=1)
+            variables = self.sampling_vars[target_kind]
+            fields = (
+                ("正形步长 (px)", variables["positive_step_px"]),
+                ("负形步长 (px)", variables["negative_step_px"]),
+                ("采样框余量 (px)", variables["margin_px"]),
+                ("正形轮廓带 (px)", variables["positive_band_px"]),
+                ("负形最小距离 (px)", variables["negative_guard_px"]),
+            )
+            for row, (label, variable) in enumerate(fields):
+                ttk.Label(tab, text=label).grid(row=row, column=0, sticky="w", pady=3)
+                if row in (0, 1):
+                    entry = ttk.Spinbox(
+                        tab,
+                        from_=1,
+                        to=32,
+                        width=9,
+                        textvariable=variable,
+                        command=self.sampling_parameter_changed,
+                    )
+                else:
+                    entry = ttk.Entry(tab, width=11, textvariable=variable)
+                entry.grid(row=row, column=1, sticky="ew", padx=(8, 0), pady=3)
+                entry.bind("<KeyRelease>", self.sampling_parameter_changed)
+        initial_target = self.ideal_target_var.get()
+        notebook.select(1 if initial_target == IDEAL_TARGET_BEACON else 0)
+        notebook.bind("<<NotebookTabChanged>>", self.sampling_tab_changed)
+        if initial_target not in (IDEAL_TARGET_ARROW, IDEAL_TARGET_BEACON):
+            self.ideal_target_var.set(IDEAL_TARGET_ARROW)
+            self.view_var.set(self.ideal_background_var.get())
+            self.redraw_canvas()
 
         legend = ttk.Frame(content)
-        legend.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(6, 0))
+        legend.grid(row=1, column=0, sticky="ew", pady=(6, 0))
         tk.Label(legend, text="● 正形点", fg="#168a45").pack(side=tk.LEFT)
         tk.Label(legend, text="● 负形点", fg="#d62f4b").pack(side=tk.LEFT, padx=(12, 0))
+        tk.Label(legend, text="● 近形点", fg="#d6a62f").pack(side=tk.LEFT, padx=(12, 0))
+        ttk.Checkbutton(
+            legend,
+            text="显示近形灰度方差",
+            variable=self.near_shape_variance_enabled_var,
+            command=self.sampling_parameter_changed,
+        ).pack(side=tk.RIGHT)
+        ttk.Label(
+            content,
+            textvariable=self.sampling_count_var,
+            justify=tk.LEFT,
+            wraplength=400,
+        ).grid(row=2, column=0, sticky="w", pady=(7, 0))
         ttk.Label(
             content,
             textvariable=self.sampling_summary_var,
             justify=tk.LEFT,
-            wraplength=280,
-        ).grid(row=5, column=0, columnspan=2, sticky="w", pady=(7, 0))
+            wraplength=400,
+        ).grid(row=3, column=0, sticky="w", pady=(7, 0))
         actions = ttk.Frame(content)
-        actions.grid(row=6, column=0, columnspan=2, sticky="e", pady=(8, 0))
+        actions.grid(row=4, column=0, sticky="e", pady=(8, 0))
         ttk.Button(
             actions,
             text="恢复默认",
@@ -1013,11 +1220,28 @@ class PictureViewerApp:
         self.sampling_window = None
 
     def reset_sampling_parameters(self) -> None:
-        self.sampling_step_var.set("2")
-        self.sampling_margin_var.set("4")
-        self.sampling_positive_band_var.set("1.5")
-        self.sampling_negative_guard_var.set("3")
+        for variables in self.sampling_vars.values():
+            variables["positive_step_px"].set("2")
+            variables["negative_step_px"].set("4")
+            variables["margin_px"].set("4")
+            variables["positive_band_px"].set("1.5")
+            variables["negative_guard_px"].set("3")
+        self.near_shape_variance_enabled_var.set(False)
         self.invalidate_beacon_recognition()
+        self.redraw_canvas()
+
+    def sampling_tab_changed(self, event: tk.Event) -> None:
+        notebook = event.widget
+        try:
+            target_kind = MATCHING_TARGET_KINDS[notebook.index("current")]
+        except (IndexError, tk.TclError):
+            return
+        target = (
+            IDEAL_TARGET_ARROW if target_kind == TARGET_ARROW else IDEAL_TARGET_BEACON
+        )
+        self.ideal_target_var.set(target)
+        if self.view_var.get() not in IDEAL_BACKGROUND_NAMES:
+            self.view_var.set(self.ideal_background_var.get())
         self.redraw_canvas()
 
     def sampling_parameter_changed(self, _event: object = None) -> None:
@@ -1056,6 +1280,24 @@ class PictureViewerApp:
             raise ValueError("近负形环宽度必须在0.1到32像素之间")
         return value
 
+    def current_arrow_shape_gate(self) -> tuple[bool, float, float]:
+        try:
+            max_occupancy = float(self.arrow_max_occupancy_var.get())
+            max_horizontal_run = float(
+                self.arrow_max_horizontal_run_var.get()
+            )
+        except (TypeError, ValueError, tk.TclError) as exc:
+            raise ValueError("箭头形状门控参数必须是数字") from exc
+        if not 0.0 <= max_occupancy <= 1.0:
+            raise ValueError("箭头占空比上限必须在0到1之间")
+        if not 0.0 <= max_horizontal_run <= 1.0:
+            raise ValueError("最长水平段比例上限必须在0到1之间")
+        return (
+            bool(self.arrow_shape_gate_enabled_var.get()),
+            max_occupancy,
+            max_horizontal_run,
+        )
+
     def open_matching_window(self) -> None:
         if self.matching_window is not None and self.matching_window.winfo_exists():
             self.matching_window.deiconify()
@@ -1090,6 +1332,37 @@ class PictureViewerApp:
             tab = ttk.Frame(notebook, padding=8)
             notebook.add(tab, text=MATCHING_TARGET_NAMES[target_kind])
             tab.columnconfigure(1, weight=1)
+            threshold_row_offset = 0
+            if target_kind == TARGET_ARROW:
+                ttk.Checkbutton(
+                    tab,
+                    text="启用箭头占空比/最长段门控",
+                    variable=self.arrow_shape_gate_enabled_var,
+                    command=self.matching_parameter_changed,
+                ).grid(row=0, column=0, columnspan=3, sticky="w", pady=2)
+                ttk.Label(tab, text="占空比上限").grid(
+                    row=1, column=1, sticky="w", padx=(2, 16), pady=2
+                )
+                occupancy_entry = ttk.Entry(
+                    tab,
+                    width=10,
+                    textvariable=self.arrow_max_occupancy_var,
+                )
+                occupancy_entry.grid(row=1, column=2, sticky="e", pady=2)
+                occupancy_entry.bind(
+                    "<KeyRelease>", self.matching_parameter_changed
+                )
+                ttk.Label(tab, text="最长水平段比例上限").grid(
+                    row=2, column=1, sticky="w", padx=(2, 16), pady=2
+                )
+                run_entry = ttk.Entry(
+                    tab,
+                    width=10,
+                    textvariable=self.arrow_max_horizontal_run_var,
+                )
+                run_entry.grid(row=2, column=2, sticky="e", pady=2)
+                run_entry.bind("<KeyRelease>", self.matching_parameter_changed)
+                threshold_row_offset = 3
             for row, key in enumerate(THRESHOLD_KEYS):
                 label = MATCHING_FIELD_LABELS[key]
                 if key == COMPLETENESS:
@@ -1102,16 +1375,20 @@ class PictureViewerApp:
                     tab,
                     variable=self.matching_enabled_vars[target_kind][key],
                     command=self.matching_parameter_changed,
-                ).grid(row=row, column=0, sticky="w", pady=2)
+                ).grid(row=row + threshold_row_offset, column=0, sticky="w", pady=2)
                 ttk.Label(tab, text=label).grid(
-                    row=row, column=1, sticky="w", padx=(2, 16), pady=2
+                    row=row + threshold_row_offset,
+                    column=1,
+                    sticky="w",
+                    padx=(2, 16),
+                    pady=2,
                 )
                 entry = ttk.Entry(
                     tab,
                     width=10,
                     textvariable=self.matching_value_vars[target_kind][key],
                 )
-                entry.grid(row=row, column=2, sticky="e", pady=2)
+                entry.grid(row=row + threshold_row_offset, column=2, sticky="e", pady=2)
                 entry.bind("<KeyRelease>", self.matching_parameter_changed)
 
         ttk.Label(
@@ -1150,6 +1427,11 @@ class PictureViewerApp:
 
     def reset_matching_thresholds(self) -> None:
         self.near_negative_width_var.set("2")
+        self.arrow_shape_gate_enabled_var.set(ARROW_SHAPE_GATE_DEFAULT_ENABLED)
+        self.arrow_max_occupancy_var.set(str(ARROW_MAX_OCCUPANCY_DEFAULT))
+        self.arrow_max_horizontal_run_var.set(
+            str(ARROW_MAX_HORIZONTAL_RUN_DEFAULT)
+        )
         for target_kind in MATCHING_TARGET_KINDS:
             config = self.matching_defaults[target_kind]
             for key, attribute in THRESHOLD_ATTRIBUTES.items():
@@ -1194,6 +1476,25 @@ class PictureViewerApp:
             self.ideal_background_var.set(view)
         self.redraw_canvas()
 
+    def undistort_mode_changed(self, _event: object = None) -> None:
+        if self.original is None:
+            return
+        try:
+            self.status_var.set(
+                f"正在切换去畸变采样：{self.undistort_mode_var.get()}"
+            )
+            self.root.update_idletasks()
+            self.undistorted = self.apply_current_undistortion(self.original)
+        except ValueError as exc:
+            messagebox.showerror("去畸变失败", str(exc))
+            return
+        self.run_analysis()
+
+    def candidate_mode_changed(self, _event: object = None) -> None:
+        if self.candidate_mode_var.get() == CANDIDATE_MODE_CONTOUR:
+            self.connectivity_var.set(8)
+        self.schedule_analysis()
+
     def threshold_scale_changed(self, value: str) -> None:
         self.threshold_var.set(int(round(float(value))))
 
@@ -1224,21 +1525,45 @@ class PictureViewerApp:
             return
         threshold = self.safe_int(self.threshold_var, 50, 0, 255)
         min_area = self.safe_int(self.min_area_var, 6, 1, self.undistorted.width * self.undistorted.height)
+        threshold_started = perf_counter()
         self.binary = threshold_image(self.undistorted, threshold)
-        self.components = find_components(
-            self.binary,
-            min_area=min_area,
-            eight_connected=self.connectivity_var.get() == 8,
-        )
+        self.threshold_elapsed_ms = (perf_counter() - threshold_started) * 1000.0
+        candidate_started = perf_counter()
+        if self.candidate_mode_var.get() == CANDIDATE_MODE_CONTOUR:
+            self.connectivity_var.set(8)
+            self.components = find_contour_components(
+                self.binary,
+                min_area=min_area,
+            )
+        else:
+            self.components = find_components(
+                self.binary,
+                min_area=min_area,
+                eight_connected=self.connectivity_var.get() == 8,
+            )
+        self.candidate_elapsed_ms = (perf_counter() - candidate_started) * 1000.0
         self.selected_component = None
         self.invalidate_beacon_recognition()
         self.update_component_tree()
         self.redraw_canvas()
         foreground = sum(1 for value in self.binary.tobytes() if value)
         ratio = 100.0 * foreground / (self.binary.width * self.binary.height)
+        contour_failures = sum(
+            component.extraction_method == "contour"
+            and not component.contour_closed
+            for component in self.components
+        )
+        failure_text = (
+            f" | 未闭合 {contour_failures}" if contour_failures else ""
+        )
+        file_text = f"{self.current_path.name} | " if self.current_path else ""
         self.status_var.set(
-            f"阈值 {threshold} | 前景 {foreground} ({ratio:.2f}%) | "
-            f"连通域 {len(self.components)} | 最小面积 {min_area}"
+            f"{file_text}{self.undistort_mode_var.get()} "
+            f"{self.undistort_elapsed_ms:.1f} ms | 二值化 "
+            f"{self.threshold_elapsed_ms:.1f} ms | {self.candidate_mode_var.get()} "
+            f"{self.candidate_elapsed_ms:.1f} ms | 阈值 {threshold} | "
+            f"前景 {foreground} ({ratio:.2f}%) | 候选 {len(self.components)}"
+            f"{failure_text} | 最小面积 {min_area}"
         )
 
     def update_component_tree(self) -> None:
@@ -1260,6 +1585,13 @@ class PictureViewerApp:
                 "箭头优先" if coarse_area >= FIRMWARE_ROUTE_ARROW_MIN_AREA
                 else "信标优先"
             )
+            if component.extraction_method == "contour":
+                contour_state = "闭合" if component.contour_closed else "未闭合"
+                if component.contour_overflow:
+                    contour_state = "步数溢出"
+                contour_text = f"{contour_state} {len(component.contour_directions)}"
+            else:
+                contour_text = "RLE"
             self.component_tree.insert(
                 "",
                 tk.END,
@@ -1269,6 +1601,9 @@ class PictureViewerApp:
                     component.area,
                     f"{component.centroid_x:.1f},{component.centroid_y:.1f}",
                     f"{component.width}x{component.height}",
+                    f"{component.occupancy:.3f}",
+                    f"{component.horizontal_run_ratio:.3f}",
+                    contour_text,
                     route_text,
                     recognition_text,
                 ),
@@ -1323,7 +1658,7 @@ class PictureViewerApp:
             self.target_projector.set_mount_angles(
                 mount_roll, mount_pitch, mount_yaw
             )
-            sampling_config = self.current_sampling_config()
+            sampling_config = self.current_sampling_config(TARGET_BEACON)
             thresholds = self.current_matching_thresholds(TARGET_BEACON)
             near_negative_width = self.current_near_negative_width()
             binary_threshold = self.safe_int(self.threshold_var, 50, 0, 255)
@@ -1333,7 +1668,23 @@ class PictureViewerApp:
             return
 
         results: dict[int, BeaconRecognitionResult] = {}
+        accepted = 0
         for component in self.components:
+            if accepted >= FIRMWARE_BEACON_ACCEPT_LIMIT:
+                results[component.label] = BeaconRecognitionResult(
+                    metrics=None,
+                    passed=False,
+                    failures=(
+                        f"信标跳过：已达到单帧上限 {FIRMWARE_BEACON_ACCEPT_LIMIT}",
+                    ),
+                    target_kind=TARGET_BEACON,
+                    route="信标优先",
+                    attempts=(
+                        f"信标跳过（已达到上限 {FIRMWARE_BEACON_ACCEPT_LIMIT}）",
+                    ),
+                    binary_threshold=binary_threshold,
+                )
+                continue
             center_image = (component.centroid_x, component.centroid_y)
             try:
                 center_plane = self.target_projector.image_to_plane(
@@ -1356,6 +1707,7 @@ class PictureViewerApp:
                     filled_positive=True,
                     config=sampling_config,
                     is_valid_pixel=self.undistorter.is_valid_output_pixel,
+                    collect_near_shape=self.near_shape_variance_enabled_var.get(),
                 )
                 metrics = calculate_matching_metrics(
                     self.undistorted,
@@ -1377,7 +1729,16 @@ class PictureViewerApp:
                     passed=decision.passed,
                     failures=decision.failures,
                     box_clipped=sampling.box_clipped,
+                    target_kind=TARGET_BEACON if decision.passed else None,
+                    projected_outline=(
+                        tuple(projected_outline) if decision.passed else ()
+                    ),
+                    sampling=sampling,
+                    sampling_config=sampling_config,
+                    binary_threshold=binary_threshold,
                 )
+                if decision.passed:
+                    accepted += 1
             except (ValueError, OverflowError) as exc:
                 results[component.label] = BeaconRecognitionResult(
                     metrics=None,
@@ -1389,7 +1750,6 @@ class PictureViewerApp:
         self.update_component_tree()
         self.view_var.set("连通域候选")
         self.redraw_canvas()
-        accepted = sum(result.passed for result in results.values())
         self.status_var.set(
             f"信标识别完成：{accepted}/{len(results)} 个候选通过 | "
             f"二值阈值 {binary_threshold} | 信标直径 {diameter:.1f} cm"
@@ -1440,7 +1800,10 @@ class PictureViewerApp:
             self.target_projector.set_mount_angles(
                 mount_roll, mount_pitch, mount_yaw
             )
-            sampling_config = self.current_sampling_config()
+            sampling_configs = {
+                target_kind: self.current_sampling_config(target_kind)
+                for target_kind in MATCHING_TARGET_KINDS
+            }
             near_negative_width = self.current_near_negative_width()
             binary_threshold = self.safe_int(self.threshold_var, 50, 0, 255)
             relative_yaw = wrap_degrees(
@@ -1456,11 +1819,36 @@ class PictureViewerApp:
             target_kind: str,
         ) -> BeaconRecognitionResult:
             center_image = (component.centroid_x, component.centroid_y)
+            sampling_config = sampling_configs[target_kind]
             plane_height = (
                 arrow_plane_height if target_kind == TARGET_ARROW
                 else beacon_plane_height
             )
             try:
+                if target_kind == TARGET_ARROW:
+                    shape_gate_enabled, max_occupancy, max_horizontal_run = (
+                        self.current_arrow_shape_gate()
+                    )
+                    if shape_gate_enabled:
+                        shape_failures: list[str] = []
+                        if component.occupancy > max_occupancy:
+                            shape_failures.append(
+                                f"箭头占空比 {component.occupancy:.3f} > "
+                                f"{max_occupancy:.3f}"
+                            )
+                        if component.horizontal_run_ratio > max_horizontal_run:
+                            shape_failures.append(
+                                f"最长水平段比例 "
+                                f"{component.horizontal_run_ratio:.3f} > "
+                                f"{max_horizontal_run:.3f}"
+                            )
+                        if shape_failures:
+                            return BeaconRecognitionResult(
+                                metrics=None,
+                                passed=False,
+                                failures=tuple(shape_failures),
+                                target_kind=TARGET_ARROW,
+                            )
                 center_plane = self.target_projector.image_to_plane(
                     center_image, roll, pitch, height, plane_height
                 )
@@ -1513,6 +1901,7 @@ class PictureViewerApp:
                     filled_positive=filled_positive,
                     config=sampling_config,
                     is_valid_pixel=self.undistorter.is_valid_output_pixel,
+                    collect_near_shape=self.near_shape_variance_enabled_var.get(),
                 )
                 metrics = calculate_matching_metrics(
                     self.undistorted,
@@ -1535,6 +1924,10 @@ class PictureViewerApp:
                     failures=decision.failures,
                     box_clipped=sampling.box_clipped,
                     target_kind=target_kind if decision.passed else None,
+                    projected_outline=tuple(outline) if decision.passed else (),
+                    sampling=sampling,
+                    sampling_config=sampling_config,
+                    binary_threshold=binary_threshold,
                 )
             except (ValueError, OverflowError) as exc:
                 return BeaconRecognitionResult(
@@ -1553,6 +1946,7 @@ class PictureViewerApp:
         ]
         results: dict[int, BeaconRecognitionResult] = {}
         arrow_found = False
+        beacon_found_count = 0
         for component in (*arrow_priority, *beacon_priority):
             route = (
                 "箭头优先" if component in arrow_priority else "信标优先"
@@ -1570,12 +1964,25 @@ class PictureViewerApp:
                 if target_kind == TARGET_ARROW and arrow_found:
                     attempts.append("箭头跳过（本帧已有箭头）")
                     continue
+                if (
+                    target_kind == TARGET_BEACON
+                    and beacon_found_count >= FIRMWARE_BEACON_ACCEPT_LIMIT
+                ):
+                    attempts.append(
+                        f"信标跳过（已达到上限 {FIRMWARE_BEACON_ACCEPT_LIMIT}）"
+                    )
+                    failures.append(
+                        f"信标：已达到单帧上限 {FIRMWARE_BEACON_ACCEPT_LIMIT}"
+                    )
+                    continue
                 current = evaluate_target(component, target_kind)
                 last_result = current
                 attempts.append(f"{target_name}{'通过' if current.passed else '失败'}")
                 if current.passed:
                     if target_kind == TARGET_ARROW:
                         arrow_found = True
+                    else:
+                        beacon_found_count += 1
                     results[component.label] = BeaconRecognitionResult(
                         metrics=current.metrics,
                         passed=True,
@@ -1584,6 +1991,10 @@ class PictureViewerApp:
                         target_kind=target_kind,
                         route=route,
                         attempts=tuple(attempts),
+                        projected_outline=current.projected_outline,
+                        sampling=current.sampling,
+                        sampling_config=current.sampling_config,
+                        binary_threshold=current.binary_threshold,
                     )
                     break
                 first_failure = current.failures[0] if current.failures else "未通过"
@@ -1596,6 +2007,13 @@ class PictureViewerApp:
                     box_clipped=bool(last_result and last_result.box_clipped),
                     route=route,
                     attempts=tuple(attempts),
+                    sampling=last_result.sampling if last_result else None,
+                    sampling_config=(
+                        last_result.sampling_config if last_result else None
+                    ),
+                    binary_threshold=(
+                        last_result.binary_threshold if last_result else binary_threshold
+                    ),
                 )
 
         self.beacon_recognition_results = results
@@ -1660,35 +2078,88 @@ class PictureViewerApp:
         binary_crop = self.binary.crop(box)
         scale = min(12, max(2, int(320 / max(1, gray_crop.width, gray_crop.height))))
         display_size = (gray_crop.width * scale, gray_crop.height * scale)
-        gray_display = gray_crop.resize(display_size, Image.Resampling.NEAREST)
+        gray_overlay = gray_crop.convert("RGB")
+        if component.contour_points:
+            contour_draw = ImageDraw.Draw(gray_overlay)
+            local_points = [
+                (point_x - box[0], point_y - box[1])
+                for point_x, point_y in component.contour_points
+            ]
+            if len(local_points) >= 2:
+                contour_draw.line(local_points, fill=(45, 205, 255), width=1)
+            start_x, start_y = local_points[0]
+            contour_draw.ellipse(
+                (start_x - 1, start_y - 1, start_x + 1, start_y + 1),
+                outline=(255, 230, 80),
+            )
+        gray_display = gray_overlay.resize(display_size, Image.Resampling.NEAREST)
         binary_display = binary_crop.resize(display_size, Image.Resampling.NEAREST)
 
         window = tk.Toplevel(self.root)
         window.title(f"候选 #{component.label}")
         window.resizable(True, True)
+        window.geometry("960x760")
+        window.minsize(760, 560)
         content = ttk.Frame(window, padding=8)
         content.pack(fill=tk.BOTH, expand=True)
+        content.columnconfigure(0, weight=1)
+        content.columnconfigure(1, weight=1)
+        content.rowconfigure(2, weight=1)
         gray_photo = ImageTk.PhotoImage(gray_display)
         binary_photo = ImageTk.PhotoImage(binary_display)
-        ttk.Label(content, text="去畸变灰度图").grid(row=0, column=0, padx=4)
+        gray_title = (
+            "去畸变灰度图 + 轮廓" if component.contour_points else "去畸变灰度图"
+        )
+        ttk.Label(content, text=gray_title).grid(row=0, column=0, padx=4)
         ttk.Label(content, text="单阈值二值图").grid(row=0, column=1, padx=4)
         ttk.Label(content, image=gray_photo).grid(row=1, column=0, padx=4, pady=4)
         ttk.Label(content, image=binary_photo).grid(row=1, column=1, padx=4, pady=4)
+        coarse_area = max(1, (component.area + 2) // 4)
         details = (
-            f"面积 {component.area} px    质心 ({component.centroid_x:.2f}, {component.centroid_y:.2f})\n"
-            f"外接框 ({component.min_x}, {component.min_y}) - ({component.max_x}, {component.max_y})    "
-            f"尺寸 {component.width}x{component.height}\n"
-            f"边界像素 {component.boundary_pixels}    圆度 {component.circularity:.4f}    "
-            f"占空比 {component.occupancy:.4f}"
+            f"候选 #{component.label}\n"
+            f"原图尺寸 {self.undistorted.width}x{self.undistorted.height}    "
+            f"连通域面积 {component.area} px    188x120等效面积 {coarse_area} px\n"
+            f"质心 x={component.centroid_x:.3f}, y={component.centroid_y:.3f}\n"
+            f"外接框 min=({component.min_x}, {component.min_y})  "
+            f"max=({component.max_x}, {component.max_y})  "
+            f"尺寸 {component.width}x{component.height}  "
+            f"框面积 {component.width * component.height} px\n"
+            f"边界像素 {component.boundary_pixels}    "
+            f"圆度 {component.circularity:.6f}    "
+            f"占空比 {component.occupancy:.6f}\n"
+            f"最长水平连续段 {component.max_horizontal_run} px    "
+            f"最长水平段比例 {component.horizontal_run_ratio:.6f}\n"
         )
+        if component.extraction_method == "contour":
+            direction_names = ("上", "右上", "右", "右下", "下", "左下", "左", "左上")
+            direction_text = "  ".join(
+                f"{name}:{count}"
+                for name, count in zip(direction_names, component.direction_counts)
+            )
+            contour_state = "闭合" if component.contour_closed else "未闭合"
+            if component.contour_overflow:
+                contour_state = "步数溢出"
+            details += (
+                f"候选提取 八邻域轮廓爬线    状态 {contour_state}    "
+                f"轮廓点 {len(component.contour_points)}    "
+                f"方向步数 {len(component.contour_directions)}    "
+                f"近似周长 {component.contour_perimeter:.3f} px\n"
+                f"八方向统计 {direction_text}\n"
+                "面积说明：轮廓扫描线跨度近似值，内部封闭孔洞按白色填平。\n"
+            )
+        else:
+            details += "候选提取 RLE连通域（对照模式）\n"
         recognition = self.beacon_recognition_results.get(component.label)
         if recognition is None:
-            details += "\n新方案识别：未检测"
+            details += "\n新方案识别：未检测（尚未执行识别）"
         elif recognition.metrics is None:
             details += (
-                f"\n新方案识别：未通过  分流：{recognition.route}"
-                f"\n尝试：{' → '.join(recognition.attempts)}"
-                "\n原因：\n  - "
+                f"\n新方案识别：未通过    类型："
+                f"{recognition.target_kind or '未分类'}    "
+                f"分流：{recognition.route or '未记录'}\n"
+                f"固定阈值：{recognition.binary_threshold if recognition.binary_threshold is not None else '--'}\n"
+                f"尝试：{' → '.join(recognition.attempts) or '无'}\n"
+                "原因：\n  - "
             ) + "\n  - ".join(
                 recognition.failures
             )
@@ -1704,28 +2175,90 @@ class PictureViewerApp:
                 else "未分类"
             )
             details += (
-                f"\n新方案识别：{'通过' if recognition.passed else '未通过'}"
-                f"  类型：{target_text}"
-                f"  分流：{recognition.route}"
-                f"{'  采样框已裁边' if recognition.box_clipped else ''}\n"
-                f"尝试：{' → '.join(recognition.attempts)}\n"
-                f"灰差 {metric_text(metrics.gray_difference, 1)}    "
-                f"分离度 {metric_text(metrics.standardized_separation)}    "
-                f"固定一致 {metric_text(metrics.binary_consistency)}\n"
-                f"正/负命中 {metric_text(metrics.positive_hit_rate)}/"
-                f"{metric_text(metrics.negative_hit_rate)}    "
-                f"完整度 {metric_text(metrics.completeness)}    "
-                f"近/远差 {metric_text(metrics.near_difference, 1)}/"
-                f"{metric_text(metrics.far_difference, 1)}    "
-                f"P/N {metrics.positive_count}/{metrics.negative_count}"
+                f"\n新方案识别：{'通过' if recognition.passed else '未通过'}    "
+                f"类型：{target_text}    分流：{recognition.route or '未记录'}\n"
+                f"固定阈值：{recognition.binary_threshold if recognition.binary_threshold is not None else '--'}    "
+                f"采样框裁边：{'是' if recognition.box_clipped else '否'}\n"
+                f"尝试：{' → '.join(recognition.attempts) or '无'}\n"
+                f"正形均值 {metric_text(metrics.positive_mean, 3)}  "
+                f"负形均值 {metric_text(metrics.negative_mean, 3)}  "
+                f"近负形均值 {metric_text(metrics.near_negative_mean, 3)}  "
+                f"远负形均值 {metric_text(metrics.far_negative_mean, 3)}\n"
+                f"局部阈值 {metric_text(metrics.local_threshold, 3)}  "
+                f"灰度差 {metric_text(metrics.gray_difference, 3)}  "
+                f"标准化分离度 {metric_text(metrics.standardized_separation, 3)}\n"
+                f"正形命中率 {metric_text(metrics.positive_hit_rate, 3)}  "
+                f"负形命中率 {metric_text(metrics.negative_hit_rate, 3)}  "
+                f"固定阈值一致率 {metric_text(metrics.binary_consistency, 3)}\n"
+                f"完整度 {metric_text(metrics.completeness, 3)}  "
+                f"近负形差 {metric_text(metrics.near_difference, 3)}  "
+                f"远背景差 {metric_text(metrics.far_difference, 3)}\n"
+                f"正形点 {metrics.positive_count}  负形点 {metrics.negative_count}  "
+                f"近负形点 {metrics.near_negative_count}  远背景点 {metrics.far_negative_count}\n"
+                f"近形点 {metrics.near_shape_count}  "
+                f"近形灰度方差 {metric_text(metrics.near_shape_variance, 3)}"
             )
+            if recognition.sampling is not None:
+                sampling = recognition.sampling
+                details += (
+                    "\n\n采样统计："
+                    f"\n  范围 {sampling.bounds or '--'}"
+                    f"\n  正形 {len(sampling.positive_points)}"
+                    f"  负形 {len(sampling.negative_points)}"
+                    f"  近形 {len(sampling.near_shape_points)}"
+                    f"  忽略 {sampling.ignored_count}"
+                    f"  无效 {sampling.invalid_count}"
+                    f"\n  采样框裁边：{'是' if sampling.box_clipped else '否'}"
+                )
+            if recognition.sampling_config is not None:
+                config = recognition.sampling_config
+                details += (
+                    "\n采样参数："
+                    f"\n  正形步长 {config.positive_step_px} px"
+                    f"  负形步长 {config.negative_step_px} px"
+                    f"  框余量 {config.margin_px:.3f} px"
+                    f"\n  正形轮廓带 {config.positive_band_px:.3f} px"
+                    f"  负形最小距离 {config.negative_guard_px:.3f} px"
+                    f"  近形方差统计："
+                    f"{'开启' if self.near_shape_variance_enabled_var.get() else '关闭'}"
+                )
+            if recognition.projected_outline:
+                outline_text = " ".join(
+                    f"({point[0]:.3f},{point[1]:.3f})"
+                    for point in recognition.projected_outline
+                )
+                details += f"\n理想轮廓投影点：{outline_text}"
             if recognition.failures:
                 details += "\n原因：\n  - " + "\n  - ".join(recognition.failures)
-        ttk.Label(content, text=details, justify=tk.LEFT, wraplength=720).grid(
-            row=2, column=0, columnspan=2, sticky="w", padx=4, pady=(5, 0)
+        details_frame = ttk.Frame(content)
+        details_frame.grid(row=2, column=0, columnspan=2, sticky="nsew", padx=4, pady=(5, 0))
+        details_frame.columnconfigure(0, weight=1)
+        details_frame.rowconfigure(0, weight=1)
+        details_text = tk.Text(
+            details_frame,
+            width=112,
+            height=24,
+            wrap=tk.NONE,
+            font=("Microsoft YaHei UI", 10),
         )
+        details_text.grid(row=0, column=0, sticky="nsew")
+        details_y_scroll = ttk.Scrollbar(
+            details_frame, orient=tk.VERTICAL, command=details_text.yview
+        )
+        details_y_scroll.grid(row=0, column=1, sticky="ns")
+        details_x_scroll = ttk.Scrollbar(
+            details_frame, orient=tk.HORIZONTAL, command=details_text.xview
+        )
+        details_x_scroll.grid(row=1, column=0, sticky="ew")
+        details_text.configure(
+            yscrollcommand=details_y_scroll.set,
+            xscrollcommand=details_x_scroll.set,
+        )
+        details_text.insert("1.0", details)
+        details_text.configure(state=tk.DISABLED)
         window.gray_photo = gray_photo  # type: ignore[attr-defined]
         window.binary_photo = binary_photo  # type: ignore[attr-defined]
+        window.details_text = details_text  # type: ignore[attr-defined]
 
     def canvas_configured(self, _event: object = None) -> None:
         if self._fit_pending:
@@ -1741,41 +2274,7 @@ class PictureViewerApp:
         if view == "单阈值二值图":
             return self.binary
         if view == "连通域候选" and self.undistorted is not None:
-            overlay = self.undistorted.convert("RGB")
-            draw = ImageDraw.Draw(overlay)
-            for component in self.components:
-                selected = component.label == self.selected_component
-                recognition = self.beacon_recognition_results.get(component.label)
-                if selected:
-                    color = (255, 210, 0)
-                elif recognition is None or recognition.passed:
-                    color = (0, 255, 80)
-                else:
-                    color = (130, 130, 130)
-                width = 2 if selected or (recognition and recognition.passed) else 1
-                draw.rectangle(
-                    (component.min_x, component.min_y, component.max_x, component.max_y),
-                    outline=color,
-                    width=width,
-                )
-                label = (
-                    f"{component.label} "
-                    f"{('箭头' if recognition.target_kind == TARGET_ARROW else '信标')}"
-                    if recognition is not None and recognition.passed
-                    else str(component.label)
-                )
-                draw.text((component.min_x + 1, component.min_y + 1), label, fill=color)
-                radius = 2 if selected else 1
-                draw.ellipse(
-                    (
-                        component.centroid_x - radius,
-                        component.centroid_y - radius,
-                        component.centroid_x + radius,
-                        component.centroid_y + radius,
-                    ),
-                    outline=(255, 70, 70),
-                )
-            return overlay
+            return self.undistorted.convert("RGB")
         return None
 
     def get_gray_reference(self) -> Image.Image | None:
@@ -1798,13 +2297,260 @@ class PictureViewerApp:
             image=self.canvas_photo,
             tags="frame",
         )
+        if self.view_var.get() == "连通域候选":
+            self.draw_recognition_overlay()
         self.draw_ideal_target_overlay(image)
+
+    def draw_recognition_overlay(self) -> None:
+        arrow_color = "#ff9f1c"
+        beacon_color = "#18c7a3"
+        pending_color = "#6f8fa8"
+        failed_color = "#7d858c"
+        selected_color = "#ffd54f"
+        occupied_labels: list[tuple[int, int, int, int]] = []
+        image_bounds = (
+            self.offset_x,
+            self.offset_y,
+            self.offset_x + self.calibration.output_width * self.zoom,
+            self.offset_y + self.calibration.output_height * self.zoom,
+        )
+
+        def canvas_point(point: tuple[float, float]) -> tuple[float, float]:
+            return (
+                self.offset_x + point[0] * self.zoom,
+                self.offset_y + point[1] * self.zoom,
+            )
+
+        def boxes_overlap(
+            left: tuple[int, int, int, int],
+            right: tuple[int, int, int, int],
+            padding: int = 3,
+        ) -> bool:
+            return not (
+                left[2] + padding < right[0]
+                or right[2] + padding < left[0]
+                or left[3] + padding < right[1]
+                or right[3] + padding < left[1]
+            )
+
+        def draw_label(
+            text: str,
+            color: str,
+            box: tuple[float, float, float, float],
+        ) -> None:
+            min_x, min_y, max_x, max_y = box
+            placements = (
+                (min_x, min_y - 4, tk.SW),
+                (min_x, max_y + 4, tk.NW),
+                (max_x + 5, min_y, tk.NW),
+                (min_x - 5, min_y, tk.NE),
+            )
+            text_id = self.canvas.create_text(
+                placements[0][0],
+                placements[0][1],
+                text=text,
+                fill=color,
+                anchor=placements[0][2],
+                font=("Microsoft YaHei UI", 9, "bold"),
+                tags="recognition_overlay",
+            )
+            chosen = placements[0]
+            chosen_bounds = self.canvas.bbox(text_id)
+            for placement in placements:
+                self.canvas.coords(text_id, placement[0], placement[1])
+                self.canvas.itemconfigure(text_id, anchor=placement[2])
+                bounds = self.canvas.bbox(text_id)
+                if bounds is None:
+                    continue
+                inside_image = (
+                    bounds[0] >= image_bounds[0]
+                    and bounds[1] >= image_bounds[1]
+                    and bounds[2] <= image_bounds[2]
+                    and bounds[3] <= image_bounds[3]
+                )
+                if inside_image and not any(
+                    boxes_overlap(bounds, occupied) for occupied in occupied_labels
+                ):
+                    chosen = placement
+                    chosen_bounds = bounds
+                    break
+            self.canvas.coords(text_id, chosen[0], chosen[1])
+            self.canvas.itemconfigure(text_id, anchor=chosen[2])
+            chosen_bounds = self.canvas.bbox(text_id) or chosen_bounds
+            shadow_id = self.canvas.create_text(
+                chosen[0] + 1,
+                chosen[1] + 1,
+                text=text,
+                fill="#101418",
+                anchor=chosen[2],
+                font=("Microsoft YaHei UI", 9, "bold"),
+                tags="recognition_overlay",
+            )
+            self.canvas.tag_lower(shadow_id, text_id)
+            if chosen_bounds is not None:
+                occupied_labels.append(chosen_bounds)
+
+        for component in sorted(self.components, key=lambda item: (item.min_y, item.min_x)):
+            recognition = self.beacon_recognition_results.get(component.label)
+            accepted_arrow = bool(
+                recognition
+                and recognition.passed
+                and recognition.target_kind == TARGET_ARROW
+            )
+            accepted_beacon = bool(
+                recognition
+                and recognition.passed
+                and recognition.target_kind == TARGET_BEACON
+            )
+            if accepted_arrow:
+                target_color = arrow_color
+                label = f"箭头 #{component.label}"
+            elif accepted_beacon:
+                target_color = beacon_color
+                label = f"信标 #{component.label}"
+            elif recognition is None:
+                target_color = pending_color
+                label = f"#{component.label}"
+            else:
+                target_color = failed_color
+                label = f"#{component.label}"
+
+            selected = component.label == self.selected_component
+            box_color = selected_color if selected else target_color
+            min_x, min_y = canvas_point((component.min_x, component.min_y))
+            max_x, max_y = canvas_point((component.max_x + 1, component.max_y + 1))
+            dash = (5, 4) if recognition is not None and not recognition.passed else ()
+            self.canvas.create_rectangle(
+                min_x,
+                min_y,
+                max_x,
+                max_y,
+                outline=box_color,
+                width=2 if selected or accepted_arrow or accepted_beacon else 1,
+                dash=dash,
+                tags="recognition_overlay",
+            )
+
+            if component.contour_points:
+                contour_points = list(component.contour_points)
+                contour_step = max(1, math.ceil(len(contour_points) / 512))
+                contour_display = contour_points[::contour_step]
+                if contour_display[-1] != contour_points[-1]:
+                    contour_display.append(contour_points[-1])
+                if len(contour_display) >= 2:
+                    flat_contour = [
+                        value
+                        for point in contour_display
+                        for value in canvas_point(point)
+                    ]
+                    self.canvas.create_line(
+                        *flat_contour,
+                        fill="#4ac6ff" if selected else "#3e7388",
+                        width=2 if selected else 1,
+                        joinstyle=tk.ROUND,
+                        tags="recognition_overlay",
+                    )
+                if selected:
+                    start_x, start_y = canvas_point(contour_points[0])
+                    self.canvas.create_oval(
+                        start_x - 5,
+                        start_y - 5,
+                        start_x + 5,
+                        start_y + 5,
+                        outline="#ffe66d",
+                        width=2,
+                        tags="recognition_overlay",
+                    )
+                    arrow_step = max(1, len(component.contour_directions) // 24)
+                    for index in range(0, len(component.contour_directions), arrow_step):
+                        if index + 1 >= len(contour_points):
+                            break
+                        start = canvas_point(contour_points[index])
+                        end = canvas_point(contour_points[index + 1])
+                        self.canvas.create_line(
+                            start[0],
+                            start[1],
+                            end[0],
+                            end[1],
+                            fill="#ffe66d",
+                            width=2,
+                            arrow=tk.LAST,
+                            tags="recognition_overlay",
+                        )
+
+            outline = recognition.projected_outline if recognition is not None else ()
+            if (accepted_arrow or accepted_beacon) and outline:
+                outline_points = [canvas_point(point) for point in outline]
+                if accepted_beacon:
+                    outline_points.append(outline_points[0])
+                flat_outline = [value for point in outline_points for value in point]
+                self.canvas.create_line(
+                    *flat_outline,
+                    fill=target_color,
+                    width=3 if accepted_arrow else 2,
+                    joinstyle=tk.ROUND,
+                    tags="recognition_overlay",
+                )
+                if accepted_arrow:
+                    for index, (point_x, point_y) in enumerate(outline_points):
+                        radius = 4 if index == 1 else 2.5
+                        self.canvas.create_oval(
+                            point_x - radius,
+                            point_y - radius,
+                            point_x + radius,
+                            point_y + radius,
+                            outline=target_color,
+                            width=2,
+                            tags="recognition_overlay",
+                        )
+
+            center_x, center_y = canvas_point(
+                (component.centroid_x, component.centroid_y)
+            )
+            if accepted_beacon:
+                radius = 4
+                self.canvas.create_oval(
+                    center_x - radius,
+                    center_y - radius,
+                    center_x + radius,
+                    center_y + radius,
+                    outline=target_color,
+                    width=2,
+                    tags="recognition_overlay",
+                )
+            else:
+                radius = 4 if accepted_arrow else 2
+                self.canvas.create_line(
+                    center_x - radius,
+                    center_y,
+                    center_x + radius,
+                    center_y,
+                    fill=target_color,
+                    width=2,
+                    tags="recognition_overlay",
+                )
+                self.canvas.create_line(
+                    center_x,
+                    center_y - radius,
+                    center_x,
+                    center_y + radius,
+                    fill=target_color,
+                    width=2,
+                    tags="recognition_overlay",
+                )
+            draw_label(label, target_color, (min_x, min_y, max_x, max_y))
 
     def draw_ideal_target_overlay(self, background: Image.Image) -> None:
         target = self.ideal_target_var.get()
+        self.sampling_count_var.set("采样点总数：--")
         if target == IDEAL_TARGET_NONE:
             self.ideal_status_var.set("选择目标后可在图像中左键拖动")
-            self.sampling_summary_var.set("正形灰度 --（0点） | 负形灰度 --（0点）")
+            self.sampling_summary_var.set(
+                "正形灰度 --（0点） | 负形灰度 --（0点） | 近形方差未启用"
+            )
+            self.sampling_count_var.set(
+                "采样点总数：0 | 参与评分：0（正形 0 / 负形 0） | 近形 0"
+            )
             return
         if self.view_var.get() not in IDEAL_BACKGROUND_NAMES:
             self.ideal_status_var.set("理想目标仅叠加在去畸变灰度图或单阈值二值图")
@@ -1974,20 +2720,31 @@ class PictureViewerApp:
             f"{outside_text}"
         )
 
-    def current_sampling_config(self) -> SamplingConfig:
+    def current_sampling_config(self, target_kind: str) -> SamplingConfig:
+        if target_kind not in MATCHING_TARGET_KINDS:
+            raise ValueError("采样目标类型无效")
+        variables = self.sampling_vars[target_kind]
+        target_name = "箭头" if target_kind == TARGET_ARROW else "信标"
         try:
-            step = int(self.sampling_step_var.get())
-            margin = float(self.sampling_margin_var.get())
-            positive_band = float(self.sampling_positive_band_var.get())
-            negative_guard = float(self.sampling_negative_guard_var.get())
+            positive_step = int(variables["positive_step_px"].get())
+            negative_step = int(variables["negative_step_px"].get())
+            margin = float(variables["margin_px"].get())
+            positive_band = float(variables["positive_band_px"].get())
+            negative_guard = float(variables["negative_guard_px"].get())
         except (TypeError, ValueError, tk.TclError) as exc:
-            raise ValueError("采样参数必须是数字") from exc
-        return SamplingConfig(
-            step_px=step,
+            raise ValueError(f"{target_name}采样参数必须是数字") from exc
+        config = SamplingConfig(
+            positive_step_px=positive_step,
+            negative_step_px=negative_step,
             margin_px=margin,
             positive_band_px=positive_band,
             negative_guard_px=negative_guard,
         )
+        try:
+            config.validate()
+        except ValueError as exc:
+            raise ValueError(f"{target_name}{exc}") from exc
+        return config
 
     def update_sampling_overlay(
         self,
@@ -1997,8 +2754,9 @@ class PictureViewerApp:
         if self.undistorted is None:
             self.sampling_summary_var.set("尚未生成去畸变灰度图")
             return
+        target_kind = TARGET_ARROW if target == IDEAL_TARGET_ARROW else TARGET_BEACON
         try:
-            sampling_config = self.current_sampling_config()
+            sampling_config = self.current_sampling_config(target_kind)
             result = sample_projected_shape(
                 self.undistorted,
                 outline,
@@ -2006,13 +2764,31 @@ class PictureViewerApp:
                 filled_positive=target == IDEAL_TARGET_BEACON,
                 config=sampling_config,
                 is_valid_pixel=self.undistorter.is_valid_output_pixel,
+                collect_near_shape=self.near_shape_variance_enabled_var.get(),
             )
         except ValueError as exc:
             self.sampling_summary_var.set(f"采样参数错误：{exc}")
             return
+        positive_count = len(result.positive_points)
+        negative_count = len(result.negative_points)
+        near_shape_count = len(result.near_shape_points)
+        scored_count = positive_count + negative_count
+        total_count = (
+            scored_count
+            + near_shape_count
+            + result.ignored_count
+            + result.invalid_count
+        )
+        self.sampling_count_var.set(
+            f"采样点总数：{total_count} | 参与评分：{scored_count}"
+            f"（正形 {positive_count} / 负形 {negative_count}） | "
+            f"近形 {near_shape_count} | "
+            f"忽略：{result.ignored_count} | 无效：{result.invalid_count} | "
+            f"步长 正/负 {sampling_config.positive_step_px}/"
+            f"{sampling_config.negative_step_px} px"
+        )
         self.draw_sampling_result(result)
 
-        target_kind = TARGET_ARROW if target == IDEAL_TARGET_ARROW else TARGET_BEACON
         try:
             metrics = calculate_matching_metrics(
                 self.undistorted,
@@ -2045,6 +2821,13 @@ class PictureViewerApp:
             decision_text = f"试判：未通过（{shown_failures}{suffix}）"
         completeness_name = "双臂" if target_kind == TARGET_ARROW else "四象限"
         extras = [f"忽略{result.ignored_count}点"]
+        if self.near_shape_variance_enabled_var.get():
+            extras.append(
+                f"近形 {metrics.near_shape_count}点/方差 "
+                f"{metric_text(metrics.near_shape_variance, 1)}"
+            )
+        else:
+            extras.append("近形方差未启用")
         if result.invalid_count:
             extras.append(f"无效区{result.invalid_count}点")
         if result.box_clipped:
@@ -2063,6 +2846,8 @@ class PictureViewerApp:
             f"{metric_text(metrics.negative_mean, 1)} | "
             f"近/远负形 {metric_text(metrics.near_negative_mean, 1)}/"
             f"{metric_text(metrics.far_negative_mean, 1)} | "
+            f"近形点/方差 {metrics.near_shape_count}/"
+            f"{metric_text(metrics.near_shape_variance, 1)} | "
             f"P/N {metrics.positive_count}/{metrics.negative_count} | "
             + "，".join(extras)
         )
@@ -2099,6 +2884,8 @@ class PictureViewerApp:
 
         draw_points(result.positive_points, "#28d96f")
         draw_points(result.negative_points, "#f04464")
+        if self.near_shape_variance_enabled_var.get():
+            draw_points(result.near_shape_points, "#d6a62f")
 
     def ideal_drag_start(self, event: tk.Event) -> None:
         target = self.ideal_target_var.get()
@@ -2217,6 +3004,15 @@ def self_test() -> int:
         calibration.output_height // 2,
     )
     assert not undistorter.is_valid_output_pixel(-1, 0)
+    sample = Image.new("L", (calibration.image_width, calibration.image_height), 127)
+    assert undistorter.apply(sample, interpolation=UNDISTORT_BILINEAR).size == (
+        calibration.output_width,
+        calibration.output_height,
+    )
+    assert undistorter.apply(sample, interpolation=UNDISTORT_NEAREST).size == (
+        calibration.output_width,
+        calibration.output_height,
+    )
     assert DEFAULT_CAPTURE_DIR.is_dir()
     return 0
 

@@ -18,7 +18,8 @@ MAX_SAMPLING_GRID_POINTS = 30000
 
 @dataclass(frozen=True)
 class SamplingConfig:
-    step_px: int = 2
+    positive_step_px: int = 2
+    negative_step_px: int = 4
     margin_px: float = 4.0
     positive_band_px: float = 1.5
     negative_guard_px: float = 3.0
@@ -31,8 +32,10 @@ class SamplingConfig:
         )
         if not all(math.isfinite(value) for value in values):
             raise ValueError("采样参数必须是有限数值")
-        if not 1 <= self.step_px <= 32:
-            raise ValueError("采样步长必须在1到32像素之间")
+        if not 1 <= self.positive_step_px <= 32:
+            raise ValueError("正形采样步长必须在1到32像素之间")
+        if not 1 <= self.negative_step_px <= 32:
+            raise ValueError("负形采样步长必须在1到32像素之间")
         if self.margin_px < 0.0:
             raise ValueError("采样框余量不能小于0")
         if self.positive_band_px <= 0.0:
@@ -51,6 +54,7 @@ class SamplingResult:
     ignored_count: int
     invalid_count: int
     box_clipped: bool
+    near_shape_points: tuple[PixelPoint, ...] = ()
 
 
 def _point_segment_distance_sq(point: Point2D, start: Point2D, end: Point2D) -> float:
@@ -137,6 +141,7 @@ def sample_projected_shape(
     filled_positive: bool,
     config: SamplingConfig,
     is_valid_pixel: PixelValidator | None = None,
+    collect_near_shape: bool = False,
 ) -> SamplingResult:
     """Classify a globally aligned pixel grid inside an expanded outline box."""
     config.validate()
@@ -179,11 +184,12 @@ def sample_projected_shape(
 
     box_width = max_x - min_x + 1
     box_height = max_y - min_y + 1
-    step = max(
-        int(config.step_px),
-        (box_width + 15) // 16,
-        (box_height + 15) // 16,
-    )
+    automatic_step = max((box_width + 15) // 16, (box_height + 15) // 16)
+    positive_step = max(int(config.positive_step_px), automatic_step)
+    negative_step = max(int(config.negative_step_px), automatic_step)
+    # 两套采样共用一个基础网格，避免重复读取同一像素；只有对齐到
+    # 对应步长的网格点才参与正形或负形统计。
+    step = min(positive_step, negative_step)
     start_x = ((min_x + step - 1) // step) * step
     start_y = ((min_y + step - 1) // step) * step
     column_count = (max_x - start_x) // step + 1
@@ -197,11 +203,22 @@ def sample_projected_shape(
     negative_points: list[PixelPoint] = []
     positive_values: list[int] = []
     negative_values: list[int] = []
+    near_shape_points: list[PixelPoint] = []
     ignored_count = 0
     invalid_count = 0
 
     for y in range(start_y, max_y + 1, step):
         for x in range(start_x, max_x + 1, step):
+            positive_grid = (
+                (x - start_x) % positive_step == 0
+                and (y - start_y) % positive_step == 0
+            )
+            negative_grid = (
+                (x - start_x) % negative_step == 0
+                and (y - start_y) % negative_step == 0
+            )
+            if not positive_grid and not negative_grid:
+                continue
             if is_valid_pixel is not None and not is_valid_pixel(x, y):
                 invalid_count += 1
                 continue
@@ -209,14 +226,28 @@ def sample_projected_shape(
             distance_sq = _point_outline_distance_sq(point, outline, closed)
             inside = closed and _point_in_polygon(point, outline)
             value = pixels[y * width + x]
-            if (filled_positive and inside) or distance_sq <= positive_limit_sq:
+            classified = False
+            if positive_grid and ((filled_positive and inside) or
+                                  distance_sq <= positive_limit_sq):
                 positive_points.append((x, y))
                 positive_values.append(value)
-            elif distance_sq >= negative_limit_sq and (not closed or not inside):
+                classified = True
+            if (negative_grid and not classified and
+                    distance_sq >= negative_limit_sq and
+                    (not closed or not inside)):
                 negative_points.append((x, y))
                 negative_values.append(value)
-            else:
-                ignored_count += 1
+                classified = True
+            if not classified:
+                near_shape = (
+                    collect_near_shape
+                    and distance_sq > positive_limit_sq
+                    and distance_sq < negative_limit_sq
+                )
+                if near_shape:
+                    near_shape_points.append((x, y))
+                else:
+                    ignored_count += 1
 
     return SamplingResult(
         bounds=(min_x, min_y, max_x, max_y),
@@ -227,6 +258,7 @@ def sample_projected_shape(
         ignored_count=ignored_count,
         invalid_count=invalid_count,
         box_clipped=box_clipped,
+        near_shape_points=tuple(near_shape_points),
     )
 
 
@@ -243,7 +275,8 @@ def self_test() -> None:
         closed=True,
         filled_positive=True,
         config=SamplingConfig(
-            step_px=1,
+            positive_step_px=1,
+            negative_step_px=1,
             margin_px=2.0,
             positive_band_px=0.25,
             negative_guard_px=1.5,
@@ -268,7 +301,8 @@ def self_test() -> None:
         closed=False,
         filled_positive=False,
         config=SamplingConfig(
-            step_px=1,
+            positive_step_px=1,
+            negative_step_px=1,
             margin_px=2.0,
             positive_band_px=0.5,
             negative_guard_px=1.5,
@@ -282,7 +316,7 @@ def self_test() -> None:
         square,
         closed=True,
         filled_positive=True,
-        config=SamplingConfig(step_px=2),
+        config=SamplingConfig(positive_step_px=2, negative_step_px=4),
     )
     assert all(x % 2 == 0 and y % 2 == 0 for x, y in (
         aligned_result.positive_points + aligned_result.negative_points

@@ -148,13 +148,13 @@ class MatchingThresholds:
 
 
 ARROW_DEFAULT_THRESHOLDS = MatchingThresholds(
-    min_gray_difference=100.0,
-    min_standardized_separation=2.0,
-    min_positive_hit_rate=0.70,
-    min_negative_hit_rate=0.75,
-    min_binary_consistency=0.78,
-    min_completeness=0.60,
-    min_near_difference=90.0,
+    min_gray_difference=70.0,
+    min_standardized_separation=1.25,
+    min_positive_hit_rate=0.60,
+    min_negative_hit_rate=0.65,
+    min_binary_consistency=0.65,
+    min_completeness=0.45,
+    min_near_difference=55.0,
     min_far_difference=110.0,
     min_positive_points=8,
     min_negative_points=16,
@@ -191,10 +191,12 @@ class MatchingMetrics:
     completeness: float | None
     near_difference: float | None
     far_difference: float | None
+    near_shape_variance: float | None
     positive_count: int
     negative_count: int
     near_negative_count: int
     far_negative_count: int
+    near_shape_count: int
 
 
 @dataclass(frozen=True)
@@ -319,6 +321,13 @@ def calculate_matching_metrics(
     far_values = values_at(far_points)
     near_negative_mean = _mean(near_values)
     far_negative_mean = _mean(far_values)
+    near_shape_values = values_at(sampling.near_shape_points)
+    near_shape_mean = _mean(near_shape_values)
+    near_shape_variance = (
+        _variance(near_shape_values, near_shape_mean)
+        if near_shape_mean is not None
+        else None
+    )
     near_difference = (
         positive_mean - near_negative_mean
         if positive_mean is not None and near_negative_mean is not None
@@ -344,10 +353,12 @@ def calculate_matching_metrics(
         completeness=completeness,
         near_difference=near_difference,
         far_difference=far_difference,
+        near_shape_variance=near_shape_variance,
         positive_count=len(positive_values),
         negative_count=len(negative_values),
         near_negative_count=len(near_values),
         far_negative_count=len(far_values),
+        near_shape_count=len(near_shape_values),
     )
 
 
