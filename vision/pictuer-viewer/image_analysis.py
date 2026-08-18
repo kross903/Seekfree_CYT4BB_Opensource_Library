@@ -187,6 +187,49 @@ class FisheyeUndistorter:
             and self.map_y_q8[index] != INVALID_Q8
         )
 
+    def sample_bytes(
+        self,
+        source: bytes,
+        x: int,
+        y: int,
+        interpolation: str = UNDISTORT_BILINEAR,
+    ) -> int | None:
+        """Sample one rectified pixel from a raw grayscale byte buffer."""
+        c = self.calibration
+        if x < 0 or y < 0 or x >= c.output_width or y >= c.output_height:
+            return None
+        if len(source) != c.image_width * c.image_height:
+            raise ValueError("鍘熷鐏板害缂撳啿鍖哄ぇ灏忎笉姝ｇ‘")
+        if interpolation not in (UNDISTORT_BILINEAR, UNDISTORT_NEAREST):
+            raise ValueError(f"涓嶆敮鎸佺殑鍗曠偣鍘荤暩鍙樻柟寮忥細{interpolation}")
+        index = y * c.output_width + x
+        source_x_q8 = self.map_x_q8[index]
+        source_y_q8 = self.map_y_q8[index]
+        if source_x_q8 == INVALID_Q8 or source_y_q8 == INVALID_Q8:
+            return None
+        if interpolation == UNDISTORT_NEAREST:
+            source_x = min(c.image_width - 1, (source_x_q8 + 128) >> 8)
+            source_y = min(c.image_height - 1, (source_y_q8 + 128) >> 8)
+            return source[source_y * c.image_width + source_x]
+
+        source_x = source_x_q8 >> 8
+        source_y = source_y_q8 >> 8
+        if source_x >= c.image_width - 1 or source_y >= c.image_height - 1:
+            return None
+        weight_x = source_x_q8 & 0xFF
+        weight_y = source_y_q8 & 0xFF
+        row0 = source_y * c.image_width
+        row1 = row0 + c.image_width
+        top = (
+            source[row0 + source_x] * (256 - weight_x)
+            + source[row0 + source_x + 1] * weight_x
+        )
+        bottom = (
+            source[row1 + source_x] * (256 - weight_x)
+            + source[row1 + source_x + 1] * weight_x
+        )
+        return (top * (256 - weight_y) + bottom * weight_y + 32768) >> 16
+
 
 @dataclass
 class ConnectedComponent:
@@ -402,12 +445,20 @@ def _trace_moore_contour(
 
     current = start
     backtrack = (start[0] - 1, start[1])
+    for dx, dy in CONTOUR_DIRECTIONS:
+        candidate_backtrack = (start[0] + dx, start[1] + dy)
+        if not is_foreground(*candidate_backtrack):
+            backtrack = candidate_backtrack
+            break
+    initial_backtrack = backtrack
     points = [start]
     directions: list[int] = []
     first_edge: tuple[tuple[int, int], tuple[int, int]] | None = None
     visited_edges: set[tuple[tuple[int, int], tuple[int, int]]] = set()
 
     for _ in range(max_steps):
+        if points != [start] and current == start and backtrack == initial_backtrack:
+            return points, directions, True, False
         back_offset = (backtrack[0] - current[0], backtrack[1] - current[1])
         search_start = direction_by_offset.get(back_offset, 6)
         next_point: tuple[int, int] | None = None
@@ -421,6 +472,10 @@ def _trace_moore_contour(
                 next_direction = direction
                 break
         if next_point is None:
+            return points, directions, len(points) == 1, False
+        if next_point == start and len(points) > 1:
+            directions.append(next_direction)
+            points.append(next_point)
             return points, directions, True, False
 
         edge = (current, next_point)
@@ -603,6 +658,298 @@ def find_contour_components(
     for label, component in enumerate(components, start=1):
         component.label = label
     return components
+
+
+@dataclass(frozen=True)
+class OnDemandContourResult:
+    components: tuple[ConnectedComponent, ...]
+    gray: Image.Image
+    binary: Image.Image
+    sampled_pixels: int
+    seed_hits: int
+    stopped_early: bool
+
+
+class OnDemandContourExtractor:
+    """Trace predicted candidates while sampling only requested rectified pixels."""
+
+    def __init__(
+        self,
+        raw: Image.Image,
+        undistorter: FisheyeUndistorter,
+        threshold: int,
+        interpolation: str = UNDISTORT_BILINEAR,
+        max_trace_steps: int = CONTOUR_MAX_STEPS,
+    ) -> None:
+        self.raw = raw.convert("L")
+        self.undistorter = undistorter
+        self.interpolation = interpolation
+        self.threshold = max(0, min(255, int(threshold)))
+        self.max_trace_steps = max(8, int(max_trace_steps))
+        self.width = undistorter.calibration.output_width
+        self.height = undistorter.calibration.output_height
+        self._source = self.raw.tobytes()
+        self._sampled = bytearray(self.width * self.height)
+        self._foreground = bytearray(self.width * self.height)
+        self._processed = bytearray(self.width * self.height)
+        self._gray = bytearray(self.width * self.height)
+        self.sampled_pixels = 0
+
+    def _sample(self, x: int, y: int) -> int | None:
+        if x < 0 or y < 0 or x >= self.width or y >= self.height:
+            return None
+        index = y * self.width + x
+        if not self._sampled[index]:
+            value = self.undistorter.sample_bytes(
+                self._source,
+                x,
+                y,
+                self.interpolation,
+            )
+            self._sampled[index] = 1
+            self.sampled_pixels += 1
+            if value is not None:
+                self._gray[index] = value
+                if value >= self.threshold:
+                    self._foreground[index] = 1
+        return self._gray[index] if self._sampled[index] else None
+
+    def _is_foreground(self, x: int, y: int) -> bool:
+        value = self._sample(x, y)
+        return value is not None and self._foreground[y * self.width + x] != 0
+
+    def _is_processed(self, x: int, y: int) -> bool:
+        return (
+            0 <= x < self.width
+            and 0 <= y < self.height
+            and self._processed[y * self.width + x] != 0
+        )
+
+    def _is_boundary(self, x: int, y: int) -> bool:
+        if not self._is_foreground(x, y):
+            return False
+        for dx, dy in CONTOUR_DIRECTIONS:
+            if not self._is_foreground(x + dx, y + dy):
+                return True
+        return False
+
+    def _find_boundary_seed(
+        self,
+        center: tuple[int, int],
+        max_radius: int,
+    ) -> tuple[int, int] | None:
+        cx = max(0, min(self.width - 1, int(round(center[0]))))
+        cy = max(0, min(self.height - 1, int(round(center[1]))))
+        seen: set[tuple[int, int]] = set()
+        for radius in range(max(0, int(max_radius)) + 1):
+            candidates: list[tuple[int, int]] = []
+            if radius == 0:
+                candidates.append((cx, cy))
+            else:
+                for x in range(cx - radius, cx + radius + 1):
+                    candidates.append((x, cy - radius))
+                    candidates.append((x, cy + radius))
+                for y in range(cy - radius + 1, cy + radius):
+                    candidates.append((cx - radius, y))
+                    candidates.append((cx + radius, y))
+            for x, y in candidates:
+                if (x, y) in seen or not (0 <= x < self.width and 0 <= y < self.height):
+                    continue
+                seen.add((x, y))
+                if self._is_processed(x, y) or not self._is_foreground(x, y):
+                    continue
+                boundary_x = x
+                while boundary_x > 0 and self._is_foreground(boundary_x - 1, y):
+                    boundary_x -= 1
+                return boundary_x, y
+        return None
+
+    def _trace(self, start: tuple[int, int]) -> tuple[list[tuple[int, int]], list[int], bool, bool]:
+        direction_by_offset = {
+            offset: index for index, offset in enumerate(CONTOUR_DIRECTIONS)
+        }
+        current = start
+        backtrack = (start[0] - 1, start[1])
+        for dx, dy in CONTOUR_DIRECTIONS:
+            candidate_backtrack = (start[0] + dx, start[1] + dy)
+            if not self._is_foreground(*candidate_backtrack):
+                backtrack = candidate_backtrack
+                break
+        initial_backtrack = backtrack
+        points = [start]
+        directions: list[int] = []
+        first_edge: tuple[tuple[int, int], tuple[int, int]] | None = None
+        visited_edges: set[tuple[tuple[int, int], tuple[int, int]]] = set()
+
+        for _ in range(self.max_trace_steps):
+            if points != [start] and current == start and backtrack == initial_backtrack:
+                return points, directions, True, False
+            back_offset = (
+                backtrack[0] - current[0],
+                backtrack[1] - current[1],
+            )
+            search_start = direction_by_offset.get(back_offset, 6)
+            next_point: tuple[int, int] | None = None
+            next_direction = 0
+            for search_offset in range(8):
+                direction = (search_start + search_offset) % 8
+                dx, dy = CONTOUR_DIRECTIONS[direction]
+                neighbor = (current[0] + dx, current[1] + dy)
+                if self._is_foreground(*neighbor):
+                    next_point = neighbor
+                    next_direction = direction
+                    break
+            if next_point is None:
+                return points, directions, len(points) == 1, False
+            if next_point == start and len(points) > 1:
+                directions.append(next_direction)
+                points.append(next_point)
+                return points, directions, True, False
+            edge = (current, next_point)
+            if first_edge is None:
+                first_edge = edge
+            elif edge == first_edge:
+                return points, directions, True, False
+            elif edge in visited_edges:
+                return points, directions, False, False
+            visited_edges.add(edge)
+            directions.append(next_direction)
+            previous_direction = (next_direction - 1) % 8
+            previous_dx, previous_dy = CONTOUR_DIRECTIONS[previous_direction]
+            backtrack = (current[0] + previous_dx, current[1] + previous_dy)
+            current = next_point
+            points.append(current)
+        return points, directions, False, True
+
+    def _materialize_component(self, component: ConnectedComponent, padding: int = 4) -> None:
+        min_x = max(0, component.min_x - padding)
+        max_x = min(self.width - 1, component.max_x + padding)
+        min_y = max(0, component.min_y - padding)
+        max_y = min(self.height - 1, component.max_y + padding)
+        for y in range(min_y, max_y + 1):
+            for x in range(min_x, max_x + 1):
+                self._sample(x, y)
+
+    def _component_from_trace(
+        self,
+        points: list[tuple[int, int]],
+        directions: list[int],
+        closed: bool,
+        overflow: bool,
+        min_area: int,
+    ) -> ConnectedComponent | None:
+        spans_by_row = _build_contour_spans(
+            points,
+            self.width,
+            self.height,
+            fill_interior=closed,
+        )
+        area = 0
+        x_sum = 0
+        y_sum = 0
+        min_x = self.width
+        min_y = self.height
+        max_x = -1
+        max_y = -1
+        max_horizontal_run = 0
+        for row, spans in spans_by_row.items():
+            row_offset = row * self.width
+            for start_x, end_x in spans:
+                run_length = end_x - start_x + 1
+                self._processed[row_offset + start_x : row_offset + end_x + 1] = (
+                    b"\x01" * run_length
+                )
+                area += run_length
+                x_sum += (start_x + end_x) * run_length // 2
+                y_sum += row * run_length
+                min_x = min(min_x, start_x)
+                max_x = max(max_x, end_x)
+                min_y = min(min_y, row)
+                max_y = max(max_y, row)
+                max_horizontal_run = max(max_horizontal_run, run_length)
+        if area < max(1, int(min_area)):
+            return None
+        direction_counts = [0] * 8
+        perimeter_q8 = 0
+        for direction in directions:
+            direction_counts[direction] += 1
+            perimeter_q8 += 362 if direction % 2 else 256
+        perimeter = perimeter_q8 / 256.0
+        boundary_pixels = len(set(points))
+        box_area = (max_x - min_x + 1) * (max_y - min_y + 1)
+        circularity = (
+            min(1.0, 4.0 * math.pi * area / (perimeter * perimeter))
+            if perimeter > 0.0
+            else 0.0
+        )
+        component = ConnectedComponent(
+            label=0,
+            area=area,
+            min_x=min_x,
+            min_y=min_y,
+            max_x=max_x,
+            max_y=max_y,
+            centroid_x=x_sum / area,
+            centroid_y=y_sum / area,
+            max_horizontal_run=max_horizontal_run,
+            boundary_pixels=boundary_pixels,
+            circularity=circularity,
+            occupancy=area / box_area if box_area else 0.0,
+            contour_points=tuple(points),
+            contour_directions=tuple(directions),
+            direction_counts=tuple(direction_counts),
+            contour_perimeter=perimeter,
+            contour_closed=closed,
+            contour_overflow=overflow,
+            extraction_method="on-demand-contour",
+        )
+        self._materialize_component(component)
+        return component
+
+    def extract(
+        self,
+        seed_points: list[tuple[float, float]],
+        min_area: int = 1,
+        max_components: int = 16,
+        search_radius: int = 32,
+    ) -> OnDemandContourResult:
+        components: list[ConnectedComponent] = []
+        seed_hits = 0
+        stopped_early = False
+        for seed in seed_points:
+            if len(components) >= max(1, int(max_components)):
+                stopped_early = True
+                break
+            boundary_seed = self._find_boundary_seed(seed, search_radius)
+            if boundary_seed is None:
+                continue
+            seed_hits += 1
+            if self._is_processed(*boundary_seed):
+                continue
+            points, directions, closed, overflow = self._trace(boundary_seed)
+            component = self._component_from_trace(
+                points,
+                directions,
+                closed,
+                overflow,
+                min_area,
+            )
+            if component is not None:
+                components.append(component)
+        for label, component in enumerate(components, start=1):
+            component.label = label
+        return OnDemandContourResult(
+            components=tuple(components),
+            gray=Image.frombytes("L", (self.width, self.height), bytes(self._gray)),
+            binary=Image.frombytes(
+                "L",
+                (self.width, self.height),
+                bytes(255 if value else 0 for value in self._foreground),
+            ),
+            sampled_pixels=self.sampled_pixels,
+            seed_hits=seed_hits,
+            stopped_early=stopped_early,
+        )
 
 
 def self_test() -> None:

@@ -18,6 +18,7 @@ from image_analysis import (
     CameraCalibration,
     ConnectedComponent,
     FisheyeUndistorter,
+    OnDemandContourExtractor,
     UNDISTORT_BILINEAR,
     UNDISTORT_NEAREST,
     component_centroid_is_foreground,
@@ -184,6 +185,9 @@ ARROW_MAX_HORIZONTAL_RUN_DEFAULT = 0.5
 CANDIDATE_MODE_CONTOUR = "八邻域轮廓爬线"
 CANDIDATE_MODE_RLE = "RLE连通域"
 CANDIDATE_MODE_NAMES = (CANDIDATE_MODE_CONTOUR, CANDIDATE_MODE_RLE)
+EXTRACTION_MODE_GLOBAL = "全局二值化"
+EXTRACTION_MODE_ON_DEMAND = "按需轮廓采样"
+EXTRACTION_MODE_NAMES = (EXTRACTION_MODE_GLOBAL, EXTRACTION_MODE_ON_DEMAND)
 UNDISTORT_MODE_BILINEAR = "定点双线性"
 UNDISTORT_MODE_NEAREST = "最近邻"
 UNDISTORT_MODE_NAMES = (UNDISTORT_MODE_BILINEAR, UNDISTORT_MODE_NEAREST)
@@ -270,6 +274,12 @@ class PictureViewerApp:
         if recognition_mode not in RECOGNITION_MODE_NAMES:
             recognition_mode = RECOGNITION_MODE_CONTOUR
         self.candidate_mode_var = tk.StringVar(value=candidate_mode)
+        extraction_mode = str(
+            settings.get("extraction_mode", EXTRACTION_MODE_GLOBAL)
+        )
+        if extraction_mode not in EXTRACTION_MODE_NAMES:
+            extraction_mode = EXTRACTION_MODE_GLOBAL
+        self.extraction_mode_var = tk.StringVar(value=extraction_mode)
         self.undistort_mode_var = tk.StringVar(value=undistort_mode)
         self.recognition_mode_var = tk.StringVar(value=recognition_mode)
         try:
@@ -489,6 +499,10 @@ class PictureViewerApp:
         self.undistorted: Image.Image | None = None
         self.binary: Image.Image | None = None
         self.components: list[ConnectedComponent] = []
+        self._on_demand_seed_points: list[tuple[float, float]] = []
+        self.on_demand_sampled_pixels = 0
+        self.on_demand_seed_hits = 0
+        self.on_demand_elapsed_ms = 0.0
         self.selected_component: int | None = None
         self.beacon_recognition_results: dict[int, BeaconRecognitionResult] = {}
         self.current_telemetry: dict = {}
@@ -652,6 +666,22 @@ class PictureViewerApp:
         candidate_mode_box.grid(row=0, column=3, sticky="ew", padx=(5, 0))
         candidate_mode_box.bind(
             "<<ComboboxSelected>>", self.candidate_mode_changed
+        )
+        ttk.Label(processing_modes, text="識別采样链路").grid(
+            row=1, column=0, sticky="w", pady=(7, 0)
+        )
+        extraction_mode_box = ttk.Combobox(
+            processing_modes,
+            textvariable=self.extraction_mode_var,
+            values=EXTRACTION_MODE_NAMES,
+            state="readonly",
+            width=14,
+        )
+        extraction_mode_box.grid(
+            row=1, column=1, columnspan=3, sticky="ew", padx=(5, 0), pady=(7, 0)
+        )
+        extraction_mode_box.bind(
+            "<<ComboboxSelected>>", self.extraction_mode_changed
         )
 
         pixel_frame = ttk.LabelFrame(side, text="局部灰度", padding=8)
@@ -1008,6 +1038,7 @@ class PictureViewerApp:
             "min_area": self.safe_int(self.min_area_var, 6, 1, 90240),
             "connectivity": 8 if self.connectivity_var.get() == 8 else 4,
             "candidate_mode": self.candidate_mode_var.get(),
+            "extraction_mode": self.extraction_mode_var.get(),
             "undistort_mode": self.undistort_mode_var.get(),
             "recognition_mode": self.recognition_mode_var.get(),
             "beacon_accept_limit": self.current_beacon_accept_limit(),
@@ -1181,6 +1212,9 @@ class PictureViewerApp:
         self.current_path = path
         self.original = image
         self.undistorted = undistorted
+        self._on_demand_seed_points = []
+        self.on_demand_sampled_pixels = 0
+        self.on_demand_seed_hits = 0
         self.selected_component = None
         ideal_center = (
             (self.calibration.output_width - 1.0) * 0.5,
@@ -1876,6 +1910,17 @@ class PictureViewerApp:
             self.connectivity_var.set(8)
         self.schedule_analysis()
 
+    def extraction_mode_changed(self, _event: object = None) -> None:
+        self.invalidate_beacon_recognition()
+        if self.extraction_mode_var.get() == EXTRACTION_MODE_GLOBAL:
+            if self.original is not None:
+                self.undistorted = self.apply_current_undistortion(self.original)
+                self.run_analysis()
+            return
+        if self.original is not None:
+            self.status_var.set("按需轮廓采样已启用：下次识别将使用预测种子")
+        self.redraw_canvas()
+
     def recognition_mode_changed(self, _event: object = None) -> None:
         if (
             self.recognition_mode_var.get() == RECOGNITION_MODE_CONTOUR
@@ -1910,6 +1955,71 @@ class PictureViewerApp:
             self.root.after_cancel(self._threshold_job)
         self._threshold_job = self.root.after(80, self.run_analysis)
 
+    def _on_demand_prediction_seeds(self) -> list[tuple[float, float]]:
+        ordered: list[tuple[float, float]] = []
+        accepted_labels = [
+            label
+            for label, result in self.beacon_recognition_results.items()
+            if result.passed
+        ]
+        for label in accepted_labels:
+            component = next(
+                (item for item in self.components if item.label == label),
+                None,
+            )
+            if component is not None:
+                ordered.append((component.centroid_x, component.centroid_y))
+        for component in sorted(
+            self.components,
+            key=lambda item: item.area,
+            reverse=True,
+        ):
+            point = (component.centroid_x, component.centroid_y)
+            if point not in ordered:
+                ordered.append(point)
+        return ordered[: max(1, self.current_beacon_accept_limit() + 1)]
+
+    def run_on_demand_analysis(self) -> bool:
+        if self.original is None:
+            return False
+        seeds = self._on_demand_prediction_seeds()
+        if not seeds:
+            return False
+        threshold = self.safe_int(self.threshold_var, 50, 0, 255)
+        min_area = self.safe_int(self.min_area_var, 6, 1, 90240)
+        started = perf_counter()
+        extractor = OnDemandContourExtractor(
+            self.original,
+            self.undistorter,
+            threshold,
+            interpolation=self.current_undistort_interpolation(),
+        )
+        result = extractor.extract(
+            seeds,
+            min_area=min_area,
+            max_components=max(1, self.current_beacon_accept_limit() + 1),
+        )
+        self.on_demand_elapsed_ms = (perf_counter() - started) * 1000.0
+        self.on_demand_sampled_pixels = result.sampled_pixels
+        self.on_demand_seed_hits = result.seed_hits
+        expected = min(
+            len(seeds),
+            max(1, self.current_beacon_accept_limit() + 1),
+        )
+        if not result.components or result.seed_hits < expected:
+            return False
+        self.undistorted = result.gray
+        self.binary = result.binary
+        self.components = list(result.components)
+        self._on_demand_seed_points = [
+            (component.centroid_x, component.centroid_y)
+            for component in self.components
+        ]
+        self.threshold_elapsed_ms = 0.0
+        self.candidate_elapsed_ms = self.on_demand_elapsed_ms
+        self.selected_component = None
+        return True
+
     def invalidate_beacon_recognition(self) -> None:
         had_results = bool(self.beacon_recognition_results)
         self.beacon_recognition_results.clear()
@@ -1921,6 +2031,11 @@ class PictureViewerApp:
 
     def run_analysis(self) -> None:
         self._threshold_job = None
+        if (
+            self.extraction_mode_var.get() == EXTRACTION_MODE_ON_DEMAND
+            and self.original is not None
+        ):
+            self.undistorted = self.apply_current_undistortion(self.original)
         if self.undistorted is None:
             return
         threshold = self.safe_int(self.threshold_var, 50, 0, 255)
@@ -1941,6 +2056,10 @@ class PictureViewerApp:
                 min_area=min_area,
                 eight_connected=self.connectivity_var.get() == 8,
             )
+        self._on_demand_seed_points = [
+            (component.centroid_x, component.centroid_y)
+            for component in self.components
+        ]
         self.candidate_elapsed_ms = (perf_counter() - candidate_started) * 1000.0
         self.selected_component = None
         self.invalidate_beacon_recognition()
@@ -1949,7 +2068,7 @@ class PictureViewerApp:
         foreground = sum(1 for value in self.binary.tobytes() if value)
         ratio = 100.0 * foreground / (self.binary.width * self.binary.height)
         contour_failures = sum(
-            component.extraction_method == "contour"
+            component.extraction_method in {"contour", "on-demand-contour"}
             and not component.contour_closed
             for component in self.components
         )
@@ -1995,7 +2114,7 @@ class PictureViewerApp:
                     "箭头优先" if coarse_area >= FIRMWARE_ROUTE_ARROW_MIN_AREA
                     else "信标优先"
                 )
-            if component.extraction_method == "contour":
+            if component.extraction_method in {"contour", "on-demand-contour"}:
                 contour_state = "闭合" if component.contour_closed else "未闭合"
                 if component.contour_overflow:
                     contour_state = "步数溢出"
@@ -3036,13 +3155,24 @@ class PictureViewerApp:
     def recognize_current_image_contours(self, target_only: str | None = None) -> None:
         if target_only not in (None, TARGET_ARROW, TARGET_BEACON):
             raise ValueError("轮廓单类型测试目标无效")
-        if self.undistorted is None or self.binary is None:
+        if self.original is None:
+            messagebox.showinfo("轮廓识别", "请先加载一张图像。")
+            return
+        on_demand = self.extraction_mode_var.get() == EXTRACTION_MODE_ON_DEMAND
+        if on_demand:
+            if not self.run_on_demand_analysis():
+                if self.original is None:
+                    messagebox.showinfo("按需轮廓识别", "当前没有可用的原始图像。")
+                    return
+                self.undistorted = self.apply_current_undistortion(self.original)
+                self.run_analysis()
+        elif self.undistorted is None or self.binary is None:
             messagebox.showinfo("轮廓识别", "请先加载一张图像。")
             return
         if (
             self.candidate_mode_var.get() != CANDIDATE_MODE_CONTOUR
             or any(
-                component.extraction_method != "contour"
+                component.extraction_method not in {"contour", "on-demand-contour"}
                 for component in self.components
             )
         ):
@@ -3677,7 +3807,7 @@ class PictureViewerApp:
             f"最长水平连续段 {component.max_horizontal_run} px    "
             f"最长水平段比例 {component.horizontal_run_ratio:.6f}\n"
         )
-        if component.extraction_method == "contour":
+        if component.extraction_method in {"contour", "on-demand-contour"}:
             direction_names = ("上", "右上", "右", "右下", "下", "左下", "左", "左上")
             direction_text = "  ".join(
                 f"{name}:{count}"
