@@ -1923,6 +1923,10 @@ void send_date_back(void)
             {
                 status_flags |= 0x20U;
             }
+            if(car_motion.search_requested)
+            {
+                status_flags |= 0x40U;
+            }
             if(pos_diag.limit_flags & POSITION_LOOP_STATUS_BRAKE_LIMITED)
             {
                 status_flags |= 0x08U;

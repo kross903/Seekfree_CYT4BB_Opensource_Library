@@ -701,10 +701,12 @@ void core_link_user_tick (uint16 elapsed_ms)
     BeaconSearchStabilityInput_t search_stability = {0};
     PMWFlowState_t flow_state = {0};
     VehicleMarkerLossDebug_t marker_loss = {0};
+    core_link_car_trajectory_packet_struct trajectory_snapshot = {0};
     float follow_x_cm = 0.0f;
     float follow_y_cm = 0.0f;
     uint8 follow_valid;
     uint8 car_link_valid = 0U;
+    uint8 car_search_requested = 0U;
     uint16 car_link_age_ms = 60000U;
 
     if(s_core_link_user_beacon_tx_elapsed_ms <= (uint16)(60000U - elapsed_ms))
@@ -733,10 +735,16 @@ void core_link_user_tick (uint16 elapsed_ms)
 
     car_link_valid = (uint8)(s_core_link_user_car_trajectory_valid &&
         (s_core_link_user_car_trajectory_age_ms <=
-         CORE_LINK_USER_BEACON_TIMEOUT_MS));
+         CORE_LINK_USER_BEACON_TIMEOUT_MS) &&
+        core_link_user_get_car_trajectory_snapshot(&trajectory_snapshot));
     if(car_link_valid)
     {
         car_link_age_ms = s_core_link_user_car_trajectory_age_ms;
+        car_search_requested = (uint8)(
+            (trajectory_snapshot.flags &
+             CORE_LINK_CAR_TRAJECTORY_FLAG_MOTION_VALID) &&
+            (trajectory_snapshot.flags &
+             CORE_LINK_CAR_TRAJECTORY_FLAG_SEARCH_REQUEST));
     }
 
     PMW_Flow_GetState(&flow_state);
@@ -764,6 +772,7 @@ void core_link_user_tick (uint16 elapsed_ms)
                       Velocity_Loop_Is_Enabled(),
                       car_link_valid,
                       car_link_age_ms,
+                      car_search_requested,
                       current_yaw,
                       &search_stability);
     BlindBoxTasks_Tick(elapsed_ms);
@@ -792,6 +801,8 @@ void core_link_user_get_car_motion_diag(CoreLinkCarMotionDiag_t *diag)
             CORE_LINK_CAR_TRAJECTORY_FLAG_MOTION_VALID) ? 1U : 0U;
         diag->acceleration_valid = (trajectory.flags &
             CORE_LINK_CAR_TRAJECTORY_FLAG_PLAN_ACCEL_VALID) ? 1U : 0U;
+        diag->search_requested = (trajectory.flags &
+            CORE_LINK_CAR_TRAJECTORY_FLAG_SEARCH_REQUEST) ? 1U : 0U;
         diag->flags = trajectory.flags;
         diag->sequence = trajectory.sequence;
         diag->forward_speed_cms =
@@ -991,7 +1002,8 @@ static void core_link_user_parse_car_trajectory(const uint8 *payload,
        (CORE_LINK_CAR_TRAJECTORY_VERSION != payload[0]) ||
        (payload[1] & (uint8)~(
             CORE_LINK_CAR_TRAJECTORY_FLAG_MOTION_VALID |
-            CORE_LINK_CAR_TRAJECTORY_FLAG_PLAN_ACCEL_VALID)))
+            CORE_LINK_CAR_TRAJECTORY_FLAG_PLAN_ACCEL_VALID |
+            CORE_LINK_CAR_TRAJECTORY_FLAG_SEARCH_REQUEST)))
     {
         if(s_core_link_user_car_trajectory_protocol_error_count < 65535U)
         {

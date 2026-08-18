@@ -455,6 +455,7 @@ void BeaconSearch_Tick(uint16 elapsed_ms,
                        uint8 velocity_loop_enabled,
                        uint8 car_link_valid,
                        uint16 car_link_age_ms,
+                       uint8 car_search_requested,
                        float current_yaw_deg,
                        const BeaconSearchStabilityInput_t *stability_input)
 {
@@ -477,6 +478,7 @@ void BeaconSearch_Tick(uint16 elapsed_ms,
     eligible = (uint8)(angle_mode && flight_ready &&
                        !BlindBoxTasks_IsBeaconSearchPaused() &&
                        velocity_loop_enabled &&
+                       car_link_valid && car_search_requested &&
                        (NULL != stability_input) &&
                        stability_input->position_loop_enabled);
     s_eligible = eligible;
@@ -494,15 +496,8 @@ void BeaconSearch_Tick(uint16 elapsed_ms,
 
     beacon_search_update_stability(elapsed_ms, stability_input);
 
-    /* 可信信标观测会在观测回调中清零计时；车链路在线时连续无观测才搜索。 */
-    if(car_link_valid)
-    {
-        s_loss_age_ms = beacon_search_add_ms(s_loss_age_ms, elapsed_ms);
-    }
-    else
-    {
-        s_loss_age_ms = 0U;
-    }
+    /* 仅在小车自动任务明确请求时累计；遥控器模式和链路失效不会触发搜索。 */
+    s_loss_age_ms = beacon_search_add_ms(s_loss_age_ms, elapsed_ms);
 
     if(BEACON_SEARCH_DISABLED == s_state)
     {
@@ -665,7 +660,8 @@ void BeaconSearch_ControlStep(float dt_s,
 
     if(control != last_control)
     {
-        if((BEACON_SEARCH_CONTROL_SPIN == control) ||
+        if((BEACON_SEARCH_CONTROL_NONE == control) ||
+           (BEACON_SEARCH_CONTROL_SPIN == control) ||
            (BEACON_SEARCH_CONTROL_HOLD == control))
         {
             *target_yaw_deg = current_yaw_deg;

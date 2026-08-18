@@ -111,7 +111,7 @@ extern float HeightSpeedPID_output;
 extern float tof_height_true_filt;
 extern float g_height_target_cm;
 
-void HeightManager_Init(float initial_height_cm);
+void HeightManager_Init(void);
 void HeightManager_Task_10ms(void);
 void HeightManager_Set_Target(float target_cm);
 float HeightManager_Get_Target(void);

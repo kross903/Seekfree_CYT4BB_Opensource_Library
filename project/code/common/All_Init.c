@@ -192,7 +192,7 @@ static void init_runtime_modules(void)
     ICM_VisionYaw_Configure(VISION_YAW_FUSION_ENABLE,
                             VISION_MARKER_WORLD_HEADING_DEG,
                             VISION_CAMERA_YAW_OFFSET_DEG);
-    HeightManager_Init(100.0f);
+    HeightManager_Init();
     PMW_Flow_Init();
     init_optical_flow_sensor();
     Flight_Control_Init();

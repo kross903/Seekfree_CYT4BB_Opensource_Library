@@ -13,6 +13,7 @@ typedef struct
 {
     uint8 valid;
     uint8 acceleration_valid;
+    uint8 search_requested;
     uint8 flags;
     uint16 sequence;
     uint16 age_ms;

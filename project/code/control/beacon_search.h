@@ -88,6 +88,7 @@ void BeaconSearch_Tick(uint16 elapsed_ms,
                        uint8 velocity_loop_enabled,
                        uint8 car_link_valid,
                        uint16 car_link_age_ms,
+                       uint8 car_search_requested,
                        float current_yaw_deg,
                        const BeaconSearchStabilityInput_t *stability_input);
 void BeaconSearch_OnObservationFrame(

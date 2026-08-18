@@ -3,19 +3,19 @@
 #include "vision/dual_camera_fusion.h"
 #include <math.h>
 //P分支由简单P控制切换到Sqrt分支的 切换距离 = M8 / M3²
-#define POSITION_LOOP_CAR_FF_GAIN_DEFAULT          (0.3f)   // M1/M2：小车X/Y速度前馈增益上电默认值
-#define POSITION_LOOP_CAR_FF_GAIN_MAX              (1.2f)    // M1/M2：小车X/Y速度前馈增益允许上限
+#define POSITION_LOOP_CAR_FF_GAIN_DEFAULT          (0.6f)   // M1/M2：小车X/Y速度前馈增益上电默认值
+#define POSITION_LOOP_CAR_FF_GAIN_MAX              (1.0f)    // M1/M2：小车X/Y速度前馈增益允许上限
 #define POSITION_LOOP_POSITION_KP_DEFAULT          (0.3f)    // M3：二维位置P增益默认值，单位s^-1
-#define POSITION_LOOP_CORRECTION_MAX_DEFAULT_CMS   (90.0f)   // M4：位置修正速度模长上限，单位cm/s
-#define POSITION_LOOP_TARGET_MAX_DEFAULT_CMS       (150.0f)   // M5：合成后目标速度模长上限，单位cm/s
+#define POSITION_LOOP_CORRECTION_MAX_DEFAULT_CMS   (100.0f)   // M4：位置修正速度模长上限，单位cm/s
+#define POSITION_LOOP_TARGET_MAX_DEFAULT_CMS       (300.0f)   // M5：合成后目标速度模长上限，单位cm/s
 #define POSITION_LOOP_CORRECTION_ACCEL_DEFAULT_CMS2 (35.0f)  // M8：P/Sqrt位置纠偏包络加速度，单位cm/s^2
 //P分支由简单P控制切换到Sqrt分支的 切换距离 = M8 / M3² 
 //v_corr = sqrt(2×M8×(e-0.5×M8/M3²))
 #define POSITION_LOOP_VISION_HOLD_MS               (200U)   // 视觉断帧后相对位置预测保持时间，单位ms
 #define POSITION_LOOP_EPSILON                      (0.0001f) // 二维距离归一化时的除零保护阈值
 #define POSITION_LOOP_YAW_RESET_THRESHOLD_DEG      (60.0f)   // 单个水平控制周期内超过该变化视为Yaw参考系重置
-#define POSITION_LOOP_EFFECTIVE_ACCEL_DEFAULT_CMS2  (170.0f)  // N1：A/J安全速度模型的有效加速度，单位cm/s^2
-#define POSITION_LOOP_EFFECTIVE_JERK_DEFAULT_CMS3   (280.0f) // N2：A/J安全速度模型的有效Jerk，单位cm/s^3
+#define POSITION_LOOP_EFFECTIVE_ACCEL_DEFAULT_CMS2  (200.0f)  // N1：A/J安全速度模型的有效加速度，单位cm/s^2
+#define POSITION_LOOP_EFFECTIVE_JERK_DEFAULT_CMS3   (600.0f) // N2：A/J安全速度模型的有效Jerk，单位cm/s^3
 #define POSITION_LOOP_CONTROL_DELAY_DEFAULT_MS      (0.0f)   // N3：控制系统等效延迟，单位ms
 #define POSITION_LOOP_SAFETY_BUFFER_DEFAULT_CM      (0.0f)   // N4：安全余量，单位cm
 #define POSITION_LOOP_BOOST_MARGIN_DEFAULT_CM       (0.0f)   // N5：速度包络提前收紧宽度，单位cm
@@ -290,7 +290,8 @@ static void position_loop_reset_runtime(uint8 reason)
     position_loop_reset_reacquisition();
     g_last_x_earth_cm = 0.0f;
     g_last_y_earth_cm = 0.0f;
-    g_last_pose_seq = g_vehicle_marker_pose_update_seq;
+    /* 使用与观测快照一致的前/后摄帧序号，不混用全局视觉姿态序号。 */
+    g_last_pose_seq = 0U;
     g_last_rear_pose_seq = 0U;
     g_observation_state = POSITION_LOOP_OBSERVATION_INVALID;
     g_vision_innovation_cm = 0.0f;
@@ -303,32 +304,46 @@ static void position_loop_reset_runtime(uint8 reason)
     g_diag.trajectory_reset_count = g_trajectory_reset_count;
 }
 
-static uint8 position_loop_raw_visual_valid(void)
+static uint8 position_loop_get_front_frame(CrossCoreCameraFrontFrame_t *frame)
 {
-    VehicleMarkerLossDebug_t loss = {0};
+    if((frame == NULL) ||
+       !CrossCoreCamera_ControlCoreGetFrontFrame(frame) ||
+       (frame->frame_seq == 0U) ||
+       !frame->yaw_valid ||
+       !frame->car_valid ||
+       !frame->car_raw_valid ||
+       !isfinite(frame->yaw_deg) ||
+       !frame->car_pose.valid ||
+       (frame->car_pose.detected_point_count < 3U))
+    {
+        return 0U;
+    }
 
-    VehicleMarkerLocalization_GetLossDebug(&loss);
-    return (uint8)(loss.raw_detect_valid && g_vehicle_marker_pose.valid &&
-                   !g_vehicle_marker_position_lost_flag);
+    return 1U;
 }
 
 static uint8 position_loop_get_rear_center(float *x_body,
                                            float *y_body,
+                                           float *capture_yaw_deg,
                                            uint32 *frame_seq)
 {
     DualCameraFusionSnapshot_t snapshot = {0};
 
-    if((x_body == NULL) || (y_body == NULL) || (frame_seq == NULL) ||
+    if((x_body == NULL) || (y_body == NULL) ||
+       (capture_yaw_deg == NULL) || (frame_seq == NULL) ||
        !DualCameraFusion_GetSnapshot(&snapshot) ||
        !snapshot.rear_car_valid ||
+       !snapshot.yaw_valid ||
        !isfinite(snapshot.rear_car_x_cm) ||
-       !isfinite(snapshot.rear_car_y_cm))
+       !isfinite(snapshot.rear_car_y_cm) ||
+       !isfinite(snapshot.yaw_deg))
     {
         return 0U;
     }
 
     *x_body = snapshot.rear_car_x_cm;
     *y_body = snapshot.rear_car_y_cm;
+    *capture_yaw_deg = snapshot.yaw_deg;
     *frame_seq = snapshot.reference_frame_seq;
     return 1U;
 }
@@ -668,6 +683,8 @@ void Position_Loop_Update_Velocity_Target(uint8 velocity_ready,
     uint8 raw_visual_valid;
     uint8 new_visual_pose;
     uint8 new_rear_pose;
+    CrossCoreCameraFrontFrame_t front_frame = {0};
+    uint8 front_frame_valid = 0U;
 
     if((target_vx_earth_cms == NULL) || (target_vy_earth_cms == NULL) ||
        (target_ax_earth_cms2 == NULL) || (target_ay_earth_cms2 == NULL)) return;
@@ -765,10 +782,11 @@ void Position_Loop_Update_Velocity_Target(uint8 velocity_ready,
         car_acceleration_valid = 1U;
     }
 
-    raw_visual_valid = (uint8)(!g_frozen_hold_active &&
-                               position_loop_raw_visual_valid());
+    front_frame_valid = (uint8)(!g_frozen_hold_active &&
+                                position_loop_get_front_frame(&front_frame));
+    raw_visual_valid = front_frame_valid;
     new_visual_pose = (uint8)(raw_visual_valid &&
-                              (g_vehicle_marker_pose_update_seq != g_last_pose_seq));
+                              (front_frame.frame_seq != g_last_pose_seq));
     new_rear_pose = 0U;
     if(g_frozen_hold_active)
     {
@@ -788,15 +806,18 @@ void Position_Loop_Update_Velocity_Target(uint8 velocity_ready,
         float pose_y_earth;
         float raw_x_earth;
         float raw_y_earth;
-        g_last_pose_seq = g_vehicle_marker_pose_update_seq;
-        if(VehicleMarkerLocalization_GetFollowPoint(&g_vehicle_marker_pose,
+        g_last_pose_seq = front_frame.frame_seq;
+        if(VehicleMarkerLocalization_GetFollowPoint(&front_frame.car_pose,
                                                     &pose_x_body, &pose_y_body,
                                                     &raw_x_body, &raw_y_body))
         {
+            /* 位置坐标与该视觉帧的采集Yaw同源，不能使用当前控制Yaw替代。 */
             position_loop_body_to_earth(pose_x_body, pose_y_body,
-                                        yaw_deg, &pose_x_earth, &pose_y_earth);
+                                        front_frame.yaw_deg,
+                                        &pose_x_earth, &pose_y_earth);
             position_loop_body_to_earth(raw_x_body, raw_y_body,
-                                        yaw_deg, &raw_x_earth, &raw_y_earth);
+                                        front_frame.yaw_deg,
+                                        &raw_x_earth, &raw_y_earth);
             position_valid = position_loop_accept_visual(
                 pose_x_earth, pose_y_earth,
                 raw_x_earth, raw_y_earth,
@@ -815,18 +836,21 @@ void Position_Loop_Update_Velocity_Target(uint8 velocity_ready,
     {
         float rear_x_body;
         float rear_y_body;
+        float rear_capture_yaw_deg = 0.0f;
         uint32 rear_frame_seq = 0U;
         float rear_x_earth;
         float rear_y_earth;
 
         new_rear_pose = (uint8)(position_loop_get_rear_center(
                                     &rear_x_body, &rear_y_body,
+                                    &rear_capture_yaw_deg,
                                     &rear_frame_seq) &&
                                 (rear_frame_seq != g_last_rear_pose_seq));
         if(new_rear_pose)
         {
             g_last_rear_pose_seq = rear_frame_seq;
-            position_loop_body_to_earth(rear_x_body, rear_y_body, yaw_deg,
+            position_loop_body_to_earth(rear_x_body, rear_y_body,
+                                        rear_capture_yaw_deg,
                                         &rear_x_earth, &rear_y_earth);
             position_valid = position_loop_accept_visual(
                 rear_x_earth, rear_y_earth,

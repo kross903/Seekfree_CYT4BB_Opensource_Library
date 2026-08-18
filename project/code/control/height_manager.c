@@ -16,7 +16,7 @@ extern volatile uint8 armed;
 #define TOF_MEDIAN_WINDOW                 3U
 
 #define HEIGHT_CASCADE_ENABLE             1U
-#define HEIGHT_TARGET_DEFAULT_CM          140.0f
+#define HEIGHT_TARGET_DEFAULT_CM          150.0f
 #define HEIGHT_TARGET_START_CM            50.0f
 #define HEIGHT_TARGET_ERROR_LIMIT_CM      40.0f
 #define HEIGHT_TARGET_RAMP_DURATION_S     3.0f
@@ -848,10 +848,8 @@ static void publish_estimator_result(void)
     publish_height_result(tof_height_true_filt * 100.0f, fused_velocity_cms);
 }
 
-void HeightManager_Init(float initial_height_cm)
+void HeightManager_Init(void)
 {
-    (void)initial_height_cm;
-
     tof_height_true_m = 0.0f;
     tof_height_true_filt = 0.0f;
     tof_height_true_prev = 0.0f;
