@@ -64,6 +64,16 @@ from ideal_matching import (
     evaluate_matching_metrics,
     self_test as matching_self_test,
 )
+from contour_matching import (
+    ARROW_DEFAULT_THRESHOLDS as CONTOUR_ARROW_DEFAULT_THRESHOLDS,
+    BEACON_DEFAULT_THRESHOLDS as CONTOUR_BEACON_DEFAULT_THRESHOLDS,
+    CONTOUR_THRESHOLD_FIELDS,
+    ContourMetrics,
+    ContourThresholds,
+    calculate_contour_metrics,
+    evaluate_contour_metrics,
+    self_test as contour_matching_self_test,
+)
 
 
 APP_DIR = Path(__file__).resolve().parent
@@ -111,10 +121,14 @@ class BeaconRecognitionResult:
     sampling: SamplingResult | None = None
     sampling_config: SamplingConfig | None = None
     binary_threshold: int | None = None
+    contour_metrics: ContourMetrics | None = None
+    recognition_engine: str = ""
 
 
 FIRMWARE_ROUTE_ARROW_MIN_AREA = 30
-FIRMWARE_BEACON_ACCEPT_LIMIT = 3
+BEACON_ACCEPT_LIMIT_DEFAULT = 3
+BEACON_ACCEPT_LIMIT_MIN = 1
+BEACON_ACCEPT_LIMIT_MAX = 16
 ARROW_SHAPE_GATE_DEFAULT_ENABLED = True
 ARROW_MAX_OCCUPANCY_DEFAULT = 0.5
 ARROW_MAX_HORIZONTAL_RUN_DEFAULT = 0.5
@@ -124,6 +138,9 @@ CANDIDATE_MODE_NAMES = (CANDIDATE_MODE_CONTOUR, CANDIDATE_MODE_RLE)
 UNDISTORT_MODE_BILINEAR = "定点双线性"
 UNDISTORT_MODE_NEAREST = "最近邻"
 UNDISTORT_MODE_NAMES = (UNDISTORT_MODE_BILINEAR, UNDISTORT_MODE_NEAREST)
+RECOGNITION_MODE_IDEAL = "理想形状匹配"
+RECOGNITION_MODE_CONTOUR = "轮廓几何识别"
+RECOGNITION_MODE_NAMES = (RECOGNITION_MODE_IDEAL, RECOGNITION_MODE_CONTOUR)
 
 
 class PictureViewerApp:
@@ -152,6 +169,9 @@ class PictureViewerApp:
         matching_settings = settings.get("matching_thresholds", {})
         if not isinstance(matching_settings, dict):
             matching_settings = {}
+        contour_settings = settings.get("contour_thresholds", {})
+        if not isinstance(contour_settings, dict):
+            contour_settings = {}
         sampling_settings = ideal_settings.get("sampling", {})
         if not isinstance(sampling_settings, dict):
             sampling_settings = {}
@@ -175,8 +195,25 @@ class PictureViewerApp:
         )
         if undistort_mode not in UNDISTORT_MODE_NAMES:
             undistort_mode = UNDISTORT_MODE_BILINEAR
+        recognition_mode = str(
+            settings.get("recognition_mode", RECOGNITION_MODE_CONTOUR)
+        )
+        if recognition_mode not in RECOGNITION_MODE_NAMES:
+            recognition_mode = RECOGNITION_MODE_CONTOUR
         self.candidate_mode_var = tk.StringVar(value=candidate_mode)
         self.undistort_mode_var = tk.StringVar(value=undistort_mode)
+        self.recognition_mode_var = tk.StringVar(value=recognition_mode)
+        try:
+            beacon_accept_limit = int(
+                settings.get("beacon_accept_limit", BEACON_ACCEPT_LIMIT_DEFAULT)
+            )
+        except (TypeError, ValueError):
+            beacon_accept_limit = BEACON_ACCEPT_LIMIT_DEFAULT
+        beacon_accept_limit = max(
+            BEACON_ACCEPT_LIMIT_MIN,
+            min(BEACON_ACCEPT_LIMIT_MAX, beacon_accept_limit),
+        )
+        self.beacon_accept_limit_var = tk.IntVar(value=beacon_accept_limit)
         self.status_var = tk.StringVar(value="就绪")
         self.pixel_var = tk.StringVar(value="移动鼠标查看坐标和灰度")
         self.metadata_var = tk.StringVar(value="尚未加载图像")
@@ -313,6 +350,20 @@ class PictureViewerApp:
                 key: tk.StringVar(value=str(getattr(config, THRESHOLD_ATTRIBUTES[key])))
                 for key in THRESHOLD_KEYS
             }
+        self.contour_defaults = {
+            TARGET_ARROW: CONTOUR_ARROW_DEFAULT_THRESHOLDS,
+            TARGET_BEACON: CONTOUR_BEACON_DEFAULT_THRESHOLDS,
+        }
+        self.contour_threshold_vars: dict[str, dict[str, tk.StringVar]] = {}
+        for target_kind in MATCHING_TARGET_KINDS:
+            config = ContourThresholds.from_mapping(
+                contour_settings.get(target_kind),
+                self.contour_defaults[target_kind],
+            )
+            self.contour_threshold_vars[target_kind] = {
+                field_name: tk.StringVar(value=str(getattr(config, field_name)))
+                for field_name, _label in CONTOUR_THRESHOLD_FIELDS
+            }
         self.ideal_source_var = tk.StringVar(value="姿态：手动；小车Yaw：手动")
         self.ideal_status_var = tk.StringVar(value="选择目标后可在图像中左键拖动")
         self.sampling_summary_var = tk.StringVar(
@@ -325,6 +376,7 @@ class PictureViewerApp:
         self._ideal_car_yaw_source = "手动"
         self.sampling_window: tk.Toplevel | None = None
         self.matching_window: tk.Toplevel | None = None
+        self.contour_matching_window: tk.Toplevel | None = None
 
         self.all_files: list[Path] = []
         self.visible_files: list[Path] = []
@@ -655,8 +707,41 @@ class PictureViewerApp:
         candidate_bar.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 4))
         candidate_bar.columnconfigure(0, weight=1)
         ttk.Label(candidate_bar, text="连通域候选").grid(row=0, column=0, sticky="w")
+        recognition_controls = ttk.Frame(candidate_bar)
+        recognition_controls.grid(row=1, column=0, sticky="ew", pady=(3, 0))
+        ttk.Label(recognition_controls, text="识别引擎").pack(side=tk.LEFT)
+        recognition_mode_box = ttk.Combobox(
+            recognition_controls,
+            textvariable=self.recognition_mode_var,
+            values=RECOGNITION_MODE_NAMES,
+            state="readonly",
+            width=14,
+        )
+        recognition_mode_box.pack(side=tk.LEFT, padx=(5, 6))
+        recognition_mode_box.bind(
+            "<<ComboboxSelected>>", self.recognition_mode_changed
+        )
+        ttk.Button(
+            recognition_controls,
+            text="轮廓阈值",
+            command=self.open_contour_matching_window,
+        ).pack(side=tk.LEFT)
+        ttk.Label(recognition_controls, text="信标上限").pack(
+            side=tk.LEFT, padx=(10, 3)
+        )
+        beacon_limit_spin = ttk.Spinbox(
+            recognition_controls,
+            from_=BEACON_ACCEPT_LIMIT_MIN,
+            to=BEACON_ACCEPT_LIMIT_MAX,
+            width=3,
+            textvariable=self.beacon_accept_limit_var,
+            command=self.beacon_accept_limit_changed,
+        )
+        beacon_limit_spin.pack(side=tk.LEFT)
+        beacon_limit_spin.bind("<KeyRelease>", self.beacon_accept_limit_changed)
+        beacon_limit_spin.bind("<FocusOut>", self.beacon_accept_limit_changed)
         candidate_actions = ttk.Frame(candidate_bar)
-        candidate_actions.grid(row=1, column=0, sticky="ew", pady=(3, 0))
+        candidate_actions.grid(row=2, column=0, sticky="ew", pady=(3, 0))
         ttk.Button(
             candidate_actions,
             text="打开候选",
@@ -669,7 +754,7 @@ class PictureViewerApp:
         ).pack(side=tk.RIGHT, padx=(0, 6))
         ttk.Button(
             candidate_actions,
-            text="一键新方案识别",
+            text="一键识别",
             command=self.recognize_current_image_targets,
         ).pack(side=tk.LEFT)
 
@@ -695,8 +780,8 @@ class PictureViewerApp:
             "occupancy": ("占空比", 62),
             "horizontal_run": ("最长段比", 70),
             "contour": ("轮廓", 90),
-            "route": ("面积分流", 80),
-            "beacon": ("新方案识别", 260),
+            "route": ("识别顺序", 80),
+            "beacon": ("识别结果", 260),
         }
         for name, (text, width) in headings.items():
             self.component_tree.heading(name, text=text)
@@ -752,6 +837,7 @@ class PictureViewerApp:
             ),
         }
         sampling_settings = {}
+        contour_threshold_settings = {}
         for target_kind in MATCHING_TARGET_KINDS:
             try:
                 thresholds = self.current_matching_thresholds(target_kind)
@@ -774,6 +860,11 @@ class PictureViewerApp:
                     variables["negative_guard_px"], 3.0
                 ),
             }
+            try:
+                contour_thresholds = self.current_contour_thresholds(target_kind)
+            except ValueError:
+                contour_thresholds = self.contour_defaults[target_kind]
+            contour_threshold_settings[target_kind] = contour_thresholds.to_mapping()
         matching_settings["arrow_shape_gate"] = {
             "enabled": bool(self.arrow_shape_gate_enabled_var.get()),
             "max_occupancy": self.safe_ratio(
@@ -791,6 +882,8 @@ class PictureViewerApp:
             "connectivity": 8 if self.connectivity_var.get() == 8 else 4,
             "candidate_mode": self.candidate_mode_var.get(),
             "undistort_mode": self.undistort_mode_var.get(),
+            "recognition_mode": self.recognition_mode_var.get(),
+            "beacon_accept_limit": self.current_beacon_accept_limit(),
             "ideal_target": {
                 "type": self.ideal_target_var.get(),
                 "background": self.ideal_background_var.get(),
@@ -819,6 +912,7 @@ class PictureViewerApp:
                 "sampling": sampling_settings,
             },
             "matching_thresholds": matching_settings,
+            "contour_thresholds": contour_threshold_settings,
         }
         try:
             SETTINGS_PATH.write_text(
@@ -851,6 +945,14 @@ class PictureViewerApp:
         except (TypeError, ValueError, tk.TclError):
             value = default
         return max(0.0, min(1.0, value))
+
+    def current_beacon_accept_limit(self) -> int:
+        return self.safe_int(
+            self.beacon_accept_limit_var,
+            BEACON_ACCEPT_LIMIT_DEFAULT,
+            BEACON_ACCEPT_LIMIT_MIN,
+            BEACON_ACCEPT_LIMIT_MAX,
+        )
 
     def choose_folder(self) -> None:
         selected = filedialog.askdirectory(
@@ -1298,6 +1400,105 @@ class PictureViewerApp:
             max_horizontal_run,
         )
 
+    def current_contour_thresholds(self, target_kind: str) -> ContourThresholds:
+        if target_kind not in MATCHING_TARGET_KINDS:
+            raise ValueError("轮廓识别目标类型无效")
+        values: dict[str, float | int] = {}
+        try:
+            for field_name, _label in CONTOUR_THRESHOLD_FIELDS:
+                raw_value = self.contour_threshold_vars[target_kind][field_name].get()
+                values[field_name] = (
+                    int(raw_value)
+                    if field_name in {"min_contour_points", "direction_window_points"}
+                    else float(raw_value)
+                )
+        except (TypeError, ValueError, tk.TclError) as exc:
+            raise ValueError("轮廓识别阈值必须是有效数字") from exc
+        thresholds = ContourThresholds(**values)
+        thresholds.validate()
+        return thresholds
+
+    def open_contour_matching_window(self) -> None:
+        if (
+            self.contour_matching_window is not None
+            and self.contour_matching_window.winfo_exists()
+        ):
+            self.contour_matching_window.deiconify()
+            self.contour_matching_window.lift()
+            return
+
+        window = tk.Toplevel(self.root)
+        window.title("轮廓几何识别阈值")
+        window.resizable(False, True)
+        self.contour_matching_window = window
+        content = ttk.Frame(window, padding=10)
+        content.grid(row=0, column=0, sticky="nsew")
+        ttk.Label(
+            content,
+            text=(
+                "轮廓模式不使用理想投影、姿态、高度或车辆Yaw。"
+                "当前数值为宽松初值，用于先观察各项几何特征。"
+            ),
+            justify=tk.LEFT,
+            wraplength=450,
+        ).grid(row=0, column=0, sticky="w", pady=(0, 7))
+
+        notebook = ttk.Notebook(content)
+        notebook.grid(row=1, column=0, sticky="nsew")
+        for target_kind in MATCHING_TARGET_KINDS:
+            tab = ttk.Frame(notebook, padding=8)
+            notebook.add(tab, text=MATCHING_TARGET_NAMES[target_kind])
+            tab.columnconfigure(0, weight=1)
+            for row, (field_name, label) in enumerate(CONTOUR_THRESHOLD_FIELDS):
+                ttk.Label(tab, text=label).grid(
+                    row=row, column=0, sticky="w", padx=(0, 18), pady=2
+                )
+                entry = ttk.Entry(
+                    tab,
+                    width=12,
+                    textvariable=self.contour_threshold_vars[target_kind][field_name],
+                )
+                entry.grid(row=row, column=1, sticky="e", pady=2)
+                entry.bind("<KeyRelease>", self.contour_parameter_changed)
+
+        actions = ttk.Frame(content)
+        actions.grid(row=2, column=0, sticky="e", pady=(9, 0))
+        ttk.Button(
+            actions,
+            text="恢复宽松初值",
+            command=self.reset_contour_thresholds,
+        ).pack(side=tk.LEFT)
+        ttk.Button(
+            actions,
+            text="关闭",
+            command=self.close_contour_matching_window,
+        ).pack(side=tk.LEFT, padx=(6, 0))
+        window.protocol("WM_DELETE_WINDOW", self.close_contour_matching_window)
+
+    def close_contour_matching_window(self) -> None:
+        if (
+            self.contour_matching_window is not None
+            and self.contour_matching_window.winfo_exists()
+        ):
+            self.contour_matching_window.destroy()
+        self.contour_matching_window = None
+
+    def reset_contour_thresholds(self) -> None:
+        for target_kind in MATCHING_TARGET_KINDS:
+            defaults = self.contour_defaults[target_kind]
+            for field_name, _label in CONTOUR_THRESHOLD_FIELDS:
+                self.contour_threshold_vars[target_kind][field_name].set(
+                    str(getattr(defaults, field_name))
+                )
+        self.invalidate_beacon_recognition()
+        self.update_component_tree()
+        self.redraw_canvas()
+
+    def contour_parameter_changed(self, _event: object = None) -> None:
+        self.invalidate_beacon_recognition()
+        self.update_component_tree()
+        self.redraw_canvas()
+
     def open_matching_window(self) -> None:
         if self.matching_window is not None and self.matching_window.winfo_exists():
             self.matching_window.deiconify()
@@ -1495,6 +1696,25 @@ class PictureViewerApp:
             self.connectivity_var.set(8)
         self.schedule_analysis()
 
+    def recognition_mode_changed(self, _event: object = None) -> None:
+        if (
+            self.recognition_mode_var.get() == RECOGNITION_MODE_CONTOUR
+            and self.candidate_mode_var.get() != CANDIDATE_MODE_CONTOUR
+        ):
+            self.candidate_mode_var.set(CANDIDATE_MODE_CONTOUR)
+            self.connectivity_var.set(8)
+            self.schedule_analysis()
+            return
+        self.invalidate_beacon_recognition()
+        self.update_component_tree()
+        self.redraw_canvas()
+        self.status_var.set(f"识别引擎已切换为：{self.recognition_mode_var.get()}")
+
+    def beacon_accept_limit_changed(self, _event: object = None) -> None:
+        self.invalidate_beacon_recognition()
+        self.update_component_tree()
+        self.redraw_canvas()
+
     def threshold_scale_changed(self, value: str) -> None:
         self.threshold_var.set(int(round(float(value))))
 
@@ -1573,18 +1793,28 @@ class PictureViewerApp:
             if recognition is None:
                 recognition_text = "未检测"
             elif recognition.passed:
-                recognition_text = (
+                target_text = (
                     "箭头通过" if recognition.target_kind == TARGET_ARROW
                     else "信标通过"
                 )
+                engine_text = (
+                    "轮廓" if recognition.recognition_engine == RECOGNITION_MODE_CONTOUR
+                    else "理想"
+                )
+                recognition_text = f"{engine_text}·{target_text}"
             else:
                 first_failure = recognition.failures[0] if recognition.failures else "未通过"
                 recognition_text = f"未通过：{first_failure}"
             coarse_area = max(1, (component.area + 2) // 4)
-            route_text = (
-                "箭头优先" if coarse_area >= FIRMWARE_ROUTE_ARROW_MIN_AREA
-                else "信标优先"
-            )
+            if recognition is not None and recognition.route:
+                route_text = recognition.route
+            elif self.recognition_mode_var.get() == RECOGNITION_MODE_CONTOUR:
+                route_text = "信标优先"
+            else:
+                route_text = (
+                    "箭头优先" if coarse_area >= FIRMWARE_ROUTE_ARROW_MIN_AREA
+                    else "信标优先"
+                )
             if component.extraction_method == "contour":
                 contour_state = "闭合" if component.contour_closed else "未闭合"
                 if component.contour_overflow:
@@ -1669,18 +1899,19 @@ class PictureViewerApp:
 
         results: dict[int, BeaconRecognitionResult] = {}
         accepted = 0
+        beacon_accept_limit = self.current_beacon_accept_limit()
         for component in self.components:
-            if accepted >= FIRMWARE_BEACON_ACCEPT_LIMIT:
+            if accepted >= beacon_accept_limit:
                 results[component.label] = BeaconRecognitionResult(
                     metrics=None,
                     passed=False,
                     failures=(
-                        f"信标跳过：已达到单帧上限 {FIRMWARE_BEACON_ACCEPT_LIMIT}",
+                        f"信标跳过：已达到单帧上限 {beacon_accept_limit}",
                     ),
                     target_kind=TARGET_BEACON,
                     route="信标优先",
                     attempts=(
-                        f"信标跳过（已达到上限 {FIRMWARE_BEACON_ACCEPT_LIMIT}）",
+                        f"信标跳过（已达到上限 {beacon_accept_limit}）",
                     ),
                     binary_threshold=binary_threshold,
                 )
@@ -1755,7 +1986,143 @@ class PictureViewerApp:
             f"二值阈值 {binary_threshold} | 信标直径 {diameter:.1f} cm"
         )
 
+    def recognize_current_image_contours(self) -> None:
+        if self.undistorted is None or self.binary is None:
+            messagebox.showinfo("轮廓识别", "请先加载一张图像。")
+            return
+        if (
+            self.candidate_mode_var.get() != CANDIDATE_MODE_CONTOUR
+            or any(
+                component.extraction_method != "contour"
+                for component in self.components
+            )
+        ):
+            self.candidate_mode_var.set(CANDIDATE_MODE_CONTOUR)
+            self.connectivity_var.set(8)
+            self.run_analysis()
+        if not self.components:
+            self.invalidate_beacon_recognition()
+            self.update_component_tree()
+            self.view_var.set("连通域候选")
+            self.status_var.set("轮廓识别完成：当前图像无连通域候选")
+            return
+
+        try:
+            thresholds = {
+                target_kind: self.current_contour_thresholds(target_kind)
+                for target_kind in MATCHING_TARGET_KINDS
+            }
+        except ValueError as exc:
+            messagebox.showerror("轮廓识别参数错误", str(exc))
+            self.status_var.set(f"轮廓识别失败：{exc}")
+            return
+
+        results: dict[int, BeaconRecognitionResult] = {}
+        arrow_found = False
+        beacon_found_count = 0
+        beacon_accept_limit = self.current_beacon_accept_limit()
+        binary_threshold = self.safe_int(self.threshold_var, 50, 0, 255)
+        for component in self.components:
+            try:
+                contour_metrics = calculate_contour_metrics(
+                    component,
+                    self.undistorted,
+                    self.binary,
+                    thresholds[TARGET_ARROW],
+                )
+            except (ValueError, OverflowError) as exc:
+                results[component.label] = BeaconRecognitionResult(
+                    metrics=None,
+                    passed=False,
+                    failures=(f"轮廓指标计算失败：{exc}",),
+                    route="信标优先",
+                    attempts=(),
+                    binary_threshold=binary_threshold,
+                    recognition_engine=RECOGNITION_MODE_CONTOUR,
+                )
+                continue
+
+            attempts: list[str] = []
+            failures: list[str] = []
+            accepted_kind: str | None = None
+            if beacon_found_count < beacon_accept_limit:
+                beacon_decision = evaluate_contour_metrics(
+                    contour_metrics,
+                    thresholds[TARGET_BEACON],
+                )
+                attempts.append(
+                    f"信标{'通过' if beacon_decision.passed else '失败'}"
+                )
+                if beacon_decision.passed:
+                    accepted_kind = TARGET_BEACON
+                    beacon_found_count += 1
+                else:
+                    failures.extend(
+                        f"信标：{failure}" for failure in beacon_decision.failures
+                    )
+            else:
+                attempts.append(
+                    f"信标跳过（已达到上限 {beacon_accept_limit}）"
+                )
+                failures.append(
+                    f"信标：已达到单帧上限 {beacon_accept_limit}"
+                )
+
+            if accepted_kind is None:
+                if arrow_found:
+                    attempts.append("箭头跳过（本帧已有箭头）")
+                    failures.append("箭头：本帧已有箭头")
+                else:
+                    arrow_decision = evaluate_contour_metrics(
+                        contour_metrics,
+                        thresholds[TARGET_ARROW],
+                    )
+                    attempts.append(
+                        f"箭头{'通过' if arrow_decision.passed else '失败'}"
+                    )
+                    if arrow_decision.passed:
+                        accepted_kind = TARGET_ARROW
+                        arrow_found = True
+                    else:
+                        failures.extend(
+                            f"箭头：{failure}" for failure in arrow_decision.failures
+                        )
+
+            results[component.label] = BeaconRecognitionResult(
+                metrics=None,
+                passed=accepted_kind is not None,
+                failures=() if accepted_kind is not None else tuple(failures),
+                box_clipped=contour_metrics.boundary_clipped,
+                target_kind=accepted_kind,
+                route="信标优先",
+                attempts=tuple(attempts),
+                binary_threshold=binary_threshold,
+                contour_metrics=contour_metrics,
+                recognition_engine=RECOGNITION_MODE_CONTOUR,
+            )
+
+        self.beacon_recognition_results = results
+        self.update_component_tree()
+        self.view_var.set("连通域候选")
+        self.redraw_canvas()
+        arrow_count = sum(
+            result.passed and result.target_kind == TARGET_ARROW
+            for result in results.values()
+        )
+        beacon_count = sum(
+            result.passed and result.target_kind == TARGET_BEACON
+            for result in results.values()
+        )
+        self.status_var.set(
+            f"轮廓几何识别完成：箭头 {arrow_count}，信标 {beacon_count}，"
+            f"候选 {len(results)} | 固定阈值 {binary_threshold} | "
+            "不使用姿态、高度、车辆Yaw和理想投影"
+        )
+
     def recognize_current_image_targets(self) -> None:
+        if self.recognition_mode_var.get() == RECOGNITION_MODE_CONTOUR:
+            self.recognize_current_image_contours()
+            return
         if self.undistorted is None:
             messagebox.showinfo("新方案识别", "请先加载一张图像。")
             return
@@ -1928,12 +2295,14 @@ class PictureViewerApp:
                     sampling=sampling,
                     sampling_config=sampling_config,
                     binary_threshold=binary_threshold,
+                    recognition_engine=RECOGNITION_MODE_IDEAL,
                 )
             except (ValueError, OverflowError) as exc:
                 return BeaconRecognitionResult(
                     metrics=None,
                     passed=False,
                     failures=(f"计算失败：{exc}",),
+                    recognition_engine=RECOGNITION_MODE_IDEAL,
                 )
 
         arrow_priority = [
@@ -1947,6 +2316,7 @@ class PictureViewerApp:
         results: dict[int, BeaconRecognitionResult] = {}
         arrow_found = False
         beacon_found_count = 0
+        beacon_accept_limit = self.current_beacon_accept_limit()
         for component in (*arrow_priority, *beacon_priority):
             route = (
                 "箭头优先" if component in arrow_priority else "信标优先"
@@ -1966,13 +2336,13 @@ class PictureViewerApp:
                     continue
                 if (
                     target_kind == TARGET_BEACON
-                    and beacon_found_count >= FIRMWARE_BEACON_ACCEPT_LIMIT
+                    and beacon_found_count >= beacon_accept_limit
                 ):
                     attempts.append(
-                        f"信标跳过（已达到上限 {FIRMWARE_BEACON_ACCEPT_LIMIT}）"
+                        f"信标跳过（已达到上限 {beacon_accept_limit}）"
                     )
                     failures.append(
-                        f"信标：已达到单帧上限 {FIRMWARE_BEACON_ACCEPT_LIMIT}"
+                        f"信标：已达到单帧上限 {beacon_accept_limit}"
                     )
                     continue
                 current = evaluate_target(component, target_kind)
@@ -1995,6 +2365,7 @@ class PictureViewerApp:
                         sampling=current.sampling,
                         sampling_config=current.sampling_config,
                         binary_threshold=current.binary_threshold,
+                        recognition_engine=RECOGNITION_MODE_IDEAL,
                     )
                     break
                 first_failure = current.failures[0] if current.failures else "未通过"
@@ -2014,6 +2385,7 @@ class PictureViewerApp:
                     binary_threshold=(
                         last_result.binary_threshold if last_result else binary_threshold
                     ),
+                    recognition_engine=RECOGNITION_MODE_IDEAL,
                 )
 
         self.beacon_recognition_results = results
@@ -2152,6 +2524,51 @@ class PictureViewerApp:
         recognition = self.beacon_recognition_results.get(component.label)
         if recognition is None:
             details += "\n新方案识别：未检测（尚未执行识别）"
+        elif recognition.contour_metrics is not None:
+            metrics = recognition.contour_metrics
+            target_text = (
+                "箭头" if recognition.target_kind == TARGET_ARROW
+                else "信标" if recognition.target_kind == TARGET_BEACON
+                else "未分类"
+            )
+
+            def optional_metric(value: float | None) -> str:
+                return f"{value:.3f}" if value is not None else "--"
+
+            details += (
+                f"\n识别引擎：{RECOGNITION_MODE_CONTOUR}    "
+                f"结果：{'通过' if recognition.passed else '未通过'}    "
+                f"类型：{target_text}    分流：{recognition.route or '未记录'}\n"
+                f"固定阈值：{recognition.binary_threshold if recognition.binary_threshold is not None else '--'}    "
+                f"接触图像边缘：{'是' if metrics.boundary_clipped else '否'}\n"
+                f"尝试：{' → '.join(recognition.attempts) or '无'}\n"
+                f"轮廓点 {metrics.contour_points}    面积 {metrics.area} px    "
+                f"周长 {metrics.perimeter:.3f} px\n"
+                f"长短边比例 {metrics.aspect_ratio:.3f}    "
+                f"圆度 {metrics.circularity:.3f}    "
+                f"占空比 {metrics.occupancy:.3f}\n"
+                f"凸包填充率 {metrics.solidity:.3f}    "
+                f"径向波动 {metrics.radial_cv:.3f}    "
+                f"最大凹陷比例 {metrics.concavity_ratio:.3f}    "
+                f"方向熵 {metrics.direction_entropy:.3f}\n"
+                f"两组主方向占比 {metrics.dominant_axis_ratio:.3f}    "
+                f"方向转折率 {metrics.turn_transition_ratio:.3f}    "
+                f"方向均值窗口 {metrics.direction_window_points} 点\n"
+                f"端点方向差 "
+                f"{'/'.join(f'{value:.1f}°' for value in metrics.endpoint_turn_angles) or '--'}    "
+                f"外顶点方向差 {optional_metric(metrics.vertex_turn_angle)}°    "
+                f"内凹口方向差 {optional_metric(metrics.notch_turn_angle)}°\n"
+                f"箭头物理夹角 {optional_metric(metrics.vertex_angle_deg)}°    "
+                f"候选两臂平衡度 {optional_metric(metrics.arm_balance)}\n"
+                f"前景灰度 {optional_metric(metrics.foreground_mean)}"
+                f"（{metrics.foreground_samples}点）    "
+                f"背景灰度 {optional_metric(metrics.background_mean)}"
+                f"（{metrics.background_samples}点）    "
+                f"灰度差 {optional_metric(metrics.gray_contrast)}\n"
+                "说明：凸包仅用于计算轮廓凹陷和填充率；目标面积仍采用候选轮廓扫描线面积。"
+            )
+            if recognition.failures:
+                details += "\n原因：\n  - " + "\n  - ".join(recognition.failures)
         elif recognition.metrics is None:
             details += (
                 f"\n新方案识别：未通过    类型："
@@ -2477,6 +2894,67 @@ class PictureViewerApp:
                             arrow=tk.LAST,
                             tags="recognition_overlay",
                         )
+
+            contour_metrics = (
+                recognition.contour_metrics if recognition is not None else None
+            )
+            if contour_metrics is not None:
+                tip_points = [
+                    canvas_point(point) for point in contour_metrics.arm_tip_points
+                ]
+                vertex = (
+                    canvas_point(contour_metrics.vertex_point)
+                    if contour_metrics.vertex_point is not None
+                    else None
+                )
+                if len(tip_points) == 2 and vertex is not None:
+                    first_tip, second_tip = tip_points
+                    self.canvas.create_line(
+                        first_tip[0],
+                        first_tip[1],
+                        vertex[0],
+                        vertex[1],
+                        second_tip[0],
+                        second_tip[1],
+                        fill="#00d2d3",
+                        width=2,
+                        dash=(3, 2),
+                        tags="recognition_overlay",
+                    )
+
+                def draw_direction_marker(
+                    point: tuple[float, float],
+                    marker: str,
+                    color: str,
+                    radius: int,
+                ) -> None:
+                    self.canvas.create_oval(
+                        point[0] - radius,
+                        point[1] - radius,
+                        point[0] + radius,
+                        point[1] + radius,
+                        fill="#101418",
+                        outline=color,
+                        width=2,
+                        tags="recognition_overlay",
+                    )
+                    self.canvas.create_text(
+                        point[0] + radius + 2,
+                        point[1] - radius - 1,
+                        text=marker,
+                        fill=color,
+                        anchor=tk.SW,
+                        font=("Microsoft YaHei UI", 8, "bold"),
+                        tags="recognition_overlay",
+                    )
+
+                for index, point in enumerate(tip_points, start=1):
+                    draw_direction_marker(point, f"E{index}", "#ff9f43", 3)
+                if vertex is not None:
+                    draw_direction_marker(vertex, "V", "#ff4d6d", 4)
+                if contour_metrics.deepest_point is not None:
+                    notch = canvas_point(contour_metrics.deepest_point)
+                    draw_direction_marker(notch, "N", "#9b6cff", 3)
 
             outline = recognition.projected_outline if recognition is not None else ()
             if (accepted_arrow or accepted_beacon) and outline:
@@ -2995,6 +3473,7 @@ def self_test() -> int:
     projection_self_test(CALIBRATION_HEADER)
     sampling_self_test()
     matching_self_test()
+    contour_matching_self_test()
     calibration = CameraCalibration.from_header(CALIBRATION_HEADER)
     assert (calibration.image_width, calibration.image_height) == (188, 120)
     assert (calibration.output_width, calibration.output_height) == (376, 240)
