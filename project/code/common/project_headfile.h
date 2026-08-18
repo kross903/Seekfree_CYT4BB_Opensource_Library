@@ -64,11 +64,10 @@
 #include "pmw/pmw_flow.h"
 
 // ==================================================== Vision ====================================================
-#include "vision/beacon_detect.h"
-#include "vision/drone_ipm.h"
 #include "vision/drone_ipm_embedded.h"
 #include "vision/ipm_interface.h"
 #include "vision/vehicle_marker_localization.h"
+#include "vision/vision_contour_match.h"
 #include "vision/vision_overlay.h"
 #include "vision/vision_runtime.h"
 #include "vision/dual_camera_fusion.h"

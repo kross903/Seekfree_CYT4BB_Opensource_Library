@@ -2,51 +2,32 @@
 #define VEHICLE_MARKER_LOCALIZATION_H_
 
 #include "zf_common_headfile.h"
-#include "vision/vision_runtime.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-// ==================== 配置参数 ====================
-/* Pose storage keeps four slots for the existing cross-core data layout;
- * chevron recognition uses apex, left tip and right tip. */
-#define VEHICLE_MARKER_POINT_COUNT             (4)
+#define VEHICLE_MARKER_POINT_COUNT             (4U)
 #define VEHICLE_MARKER_POSITION_LOST_HOLD_MS   (150U)
 #define VEHICLE_MARKER_TASK_PERIOD_MS          (5U)
 #define VEHICLE_MARKER_CHEVRON_PLANE_HEIGHT_CM (17.0f)
-#define VEHICLE_MARKER_FOLLOW_REAR_OFFSET_CM   (10.0f) /* 目标点与小车中心重合。 */
+#define VEHICLE_MARKER_FOLLOW_REAR_OFFSET_CM   (10.0f)
 
-#define VEHICLE_MARKER_CHEVRON_REJECT_NONE              (0U)
-#define VEHICLE_MARKER_CHEVRON_REJECT_NO_CANDIDATE      (1U)
-#define VEHICLE_MARKER_CHEVRON_REJECT_IMAGE_GEOMETRY    (2U)
-#define VEHICLE_MARKER_CHEVRON_REJECT_WORLD_PROJECTION  (3U)
-#define VEHICLE_MARKER_CHEVRON_REJECT_PHYSICAL_GEOMETRY (4U)
-#define VEHICLE_MARKER_CHEVRON_REJECT_OPEN_V             (5U)
-#define VEHICLE_MARKER_CHEVRON_REJECT_YAW_DIRECTION      (6U)
+#define VEHICLE_MARKER_CHEVRON_REJECT_NONE          (0U)
+#define VEHICLE_MARKER_CHEVRON_REJECT_NO_CANDIDATE  (1U)
+#define VEHICLE_MARKER_CHEVRON_REJECT_CONTOUR       (2U)
+#define VEHICLE_MARKER_CHEVRON_REJECT_YAW_DIRECTION (3U)
 
-typedef struct
-{
-    float u;
-    float v;
-    float intensity;
-} VehicleMarkerPoint2D_t;
+typedef struct { float u; float v; float intensity; } VehicleMarkerPoint2D_t;
+typedef struct { float x; float y; } VehicleMarkerWorldPoint_t;
 
 typedef struct
 {
     float x;
     float y;
-} VehicleMarkerWorldPoint_t;
-
-typedef struct
-{
-    float x;       /* 滤波后的小车中心X：箭头三顶点几何重心。 */
-    float y;       /* 滤波后的小车中心Y：箭头三顶点几何重心。 */
-    float raw_x;   /* 未滤波的小车中心X。 */
-    float raw_y;   /* 未滤波的小车中心Y。 */
+    float raw_x;
+    float raw_y;
     float z;
-    /* 视觉箭头几何角，仅用于识别/诊断；噪声较大，禁止替代车机两端
-     * IMU/Mahony 计算的 car_yaw_rel_uav。 */
     float heading_deg;
     float square_side_cm;
     VehicleMarkerPoint2D_t img_pts[VEHICLE_MARKER_POINT_COUNT];
@@ -56,14 +37,7 @@ typedef struct
     uint8 valid;
 } VehicleMarkerPose_t;
 
-typedef struct
-{
-    float score;
-    float center_gap;
-    float arm_support;
-    float arm_continuity;
-} VehicleMarkerOpenVGate_t;
-
+/* Layout retained for the existing display and cross-core diagnostics. */
 typedef struct
 {
     uint8 valid;
@@ -76,7 +50,7 @@ typedef struct
     VehicleMarkerPoint2D_t left_line_end_img;
     VehicleMarkerPoint2D_t right_line_start_img;
     VehicleMarkerPoint2D_t right_line_end_img;
-    float heading_deg;                       /* 仅视觉几何诊断，不参与车机相对Yaw。 */
+    float heading_deg;
     float physical_area_cm2;
     float physical_occupancy_ratio;
     float physical_circularity;
@@ -91,9 +65,9 @@ typedef struct
     float opening_ratio_score;
     float concavity_score;
     float basic_blob_score;
-    float direction_expected_deg;            /* 通信Yaw给出的期望开口方向。 */
-    float direction_error_deg;               /* 视觉开口方向与期望方向的夹角。 */
-    float direction_score;                   /* 开口方向一致性软评分。 */
+    float direction_expected_deg;
+    float direction_error_deg;
+    float direction_score;
     float geometry_score;
     float arm_angle_deg;
     float base_cm;
@@ -117,14 +91,6 @@ typedef struct
 
 typedef struct
 {
-    const uint8 *data;
-    uint16 width;
-    uint16 height;
-    uint16 stride;
-} VehicleMarkerBinaryView_t;
-
-typedef struct
-{
     uint8 raw_detect_valid;
     uint8 has_trackable_pose;
     uint8 lost_flag;
@@ -144,37 +110,25 @@ void VehicleMarkerLocalization_ServiceLostProtection(void);
 void VehicleMarkerLocalization_GetLossDebug(VehicleMarkerLossDebug_t *debug);
 void VehicleMarkerLocalization_SetLossDebug(const VehicleMarkerLossDebug_t *debug);
 void VehicleMarkerLocalization_GetChevronDebug(VehicleMarkerChevronDebug_t *debug);
-/* 设置当前帧的小车相对机体Yaw；无效或超出方向门限时不产生新车标。 */
 void VehicleMarkerLocalization_SetOpeningDirectionPrior(float car_yaw_rel_uav_deg,
                                                         uint8 valid);
+void VehicleMarkerLocalization_BeginFrame(void);
+uint8 VehicleMarkerLocalization_CommitContourArrow(
+    const VehicleMarkerPoint2D_t *apex_img,
+    const VehicleMarkerPoint2D_t *left_tip_img,
+    const VehicleMarkerPoint2D_t *right_tip_img,
+    float direction_error_deg,
+    uint8 yaw_assisted);
+void VehicleMarkerLocalization_EndFrame(void);
 uint8 VehicleMarkerLocalization_GetFollowPoint(
     const VehicleMarkerPose_t *pose,
     float *filtered_x, float *filtered_y,
-    float *raw_x, float *raw_y); /* raw_x/raw_y可同时传NULL。 */
+    float *raw_x, float *raw_y);
 void VehicleMarkerLocalization_GetBlobRejectDebug(int *area_low_count,
                                                   int *area_high_count,
                                                   int *size_count,
                                                   int *aspect_count,
                                                   int *insert_count);
-void VehicleMarkerLocalization_BeginBlobFrame(void);
-uint8 VehicleMarkerLocalization_AppendBlob(const VisionBlob_t *blob, const VisionContour_t *contour);
-/* Appends the blob and performs the full chevron geometry check without
- * committing a pose. A true result is safe for candidate short-circuiting. */
-uint8 VehicleMarkerLocalization_AppendAndValidateBlob(
-    const VisionBlob_t *blob, const VisionContour_t *contour,
-    const VehicleMarkerBinaryView_t *binary_view,
-    const VehicleMarkerOpenVGate_t *open_v_gate,
-    VehicleMarkerOpenVGate_t *measured_open_v);
-/* Commits a chevron already accepted by the ideal grayscale matcher. */
-uint8 VehicleMarkerLocalization_CommitIdealChevron(
-    const VehicleMarkerWorldPoint_t *apex,
-    const VehicleMarkerWorldPoint_t *left_tip,
-    const VehicleMarkerWorldPoint_t *right_tip,
-    const VehicleMarkerPoint2D_t *apex_img,
-    const VehicleMarkerPoint2D_t *left_tip_img,
-    const VehicleMarkerPoint2D_t *right_tip_img,
-    float heading_deg, float tip_span_cm);
-uint8 VehicleMarkerLocalization_EndBlobFrame(VehicleMarkerPose_t *out_pose);
 
 extern VehicleMarkerPose_t g_vehicle_marker_pose;
 extern volatile uint8 g_vehicle_marker_position_lost_flag;

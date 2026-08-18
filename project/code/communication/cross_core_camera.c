@@ -640,7 +640,6 @@ void CrossCoreCamera_CameraCoreInit(void)
 {
 #if CY_CORE_CM7_1
     VehicleMarkerLocalization_Init();
-    BeaconDetect_Init();
     IPM_Interface_Init();
     ipc_communicate_init(IPC_PORT_2, CrossCoreCamera_CameraCoreIpcCallback);
     g_shared_vision_input->magic = SHARED_VISION_MAGIC;

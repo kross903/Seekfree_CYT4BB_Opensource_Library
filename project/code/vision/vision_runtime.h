@@ -3,117 +3,73 @@
 
 #include "zf_common_headfile.h"
 
-/* 候选区完整分辨率精筛阈值：箭头较亮，信标允许保留较暗像素。 */
-#define VISION_BINARY_THRESHOLD_VEHICLE          (145U) /* 箭头首轮精筛阈值 */
-#define VISION_BINARY_THRESHOLD_VEHICLE_FALLBACK (60U)  /* 首轮失败后的箭头回退阈值 */
-#define VISION_BINARY_THRESHOLD_BEACON           (101U)  /* 与新上位机一致的单阈值 */
-#if VISION_BINARY_THRESHOLD_VEHICLE_FALLBACK == 0U || \
-    VISION_BINARY_THRESHOLD_VEHICLE_FALLBACK >= VISION_BINARY_THRESHOLD_VEHICLE
-#error "Vehicle fallback threshold must be lower than the primary threshold"
-#endif
-/* Legacy names keep the shared-memory interface source compatible. */
-#define VISION_BINARY_THRESHOLD_INNER  VISION_BINARY_THRESHOLD_VEHICLE
-#define VISION_BINARY_THRESHOLD_MIDDLE VISION_BINARY_THRESHOLD_BEACON
-#define VISION_BINARY_THRESHOLD_OUTER  VISION_BINARY_THRESHOLD_BEACON
-#define VISION_BINARY_THRESHOLD        VISION_BINARY_THRESHOLD_BEACON
-#define VISION_RUNTIME_FIXED_THRESHOLD (101U) /* 新链路唯一二值化阈值 */
-#define VISION_RUNTIME_ROUTE_ARROW_MIN_AREA (30U) /* 188x120等效面积达到该值时箭头优先 */
-#define VISION_RUNTIME_FULL_CANDIDATE_MIN_AREA (6U) /* 376x240连通域最小面积 */
-#define VISION_RUNTIME_ARROW_MASK_HALF_WIDTH_PX (4U) /* 命中箭头后遮除两臂的半宽 */
-#define VISION_RUNTIME_RESIDUAL_MAX_CANDIDATES (6U) /* 单个箭头候选最多保留的残余亮区 */
-#define VISION_RUNTIME_YAW_MAX_AGE_MS (500U)
-#define VISION_RUNTIME_COARSE_ZONE_COUNT       (5U)  /* 中心到边缘共五个同心分区 */
-/* 粗筛阈值从中心向边缘递减：近处要求高，远处弱信标使用较低阈值。 */
-#define VISION_RUNTIME_COARSE_THRESHOLD_CENTER (150U) /* 光轴中心圈 */
-#define VISION_RUNTIME_COARSE_THRESHOLD_NEAR   (60U) /* 近圈 */
-#define VISION_RUNTIME_COARSE_THRESHOLD_MIDDLE (50U) /* 中圈 */
-#define VISION_RUNTIME_COARSE_THRESHOLD_FAR    (50U) /* 远圈 */
-#define VISION_RUNTIME_COARSE_THRESHOLD_EDGE   (40U) /* 图像边缘圈：保留较弱的边缘信标 */
-/* Legacy single-threshold name keeps existing callers source compatible. */
-#define VISION_RUNTIME_COARSE_THRESHOLD VISION_RUNTIME_COARSE_THRESHOLD_CENTER
-#define VISION_RUNTIME_COARSE_CANDIDATE_MIN_AREA       (10U) /* 中心至中圈粗连通域最小面积 */
-#define VISION_RUNTIME_OUTER_CANDIDATE_MIN_AREA         (6U) /* 远圈和边缘圈允许更小的信标候选 */
-#define VISION_RUNTIME_OUTER_CANDIDATE_FIRST_ZONE       (3U) /* 3=远圈，4=边缘圈 */
-#if VISION_RUNTIME_OUTER_CANDIDATE_MIN_AREA > \
-        VISION_RUNTIME_COARSE_CANDIDATE_MIN_AREA || \
-    VISION_RUNTIME_OUTER_CANDIDATE_FIRST_ZONE >= \
-        VISION_RUNTIME_COARSE_ZONE_COUNT
-#error "Invalid outer coarse candidate gate"
-#endif
-#define VISION_BINARY_ZONE_INNER       (0U)
-#define VISION_BINARY_ZONE_MIDDLE      (1U)
-#define VISION_BINARY_ZONE_OUTER       (2U)
-#define VISION_BINARY_ZONE_COUNT       (3U)
-/* 单帧最多接受的信标数量；达到后跳过后续信标理想形状匹配。 */
-#define VISION_RUNTIME_BEACON_ACCEPT_LIMIT (3U)
-#define VISION_RUNTIME_BEACON_SLOT_COUNT   VISION_RUNTIME_BEACON_ACCEPT_LIMIT
-#define VISION_RUNTIME_BLOB_AREA_COUNT (16U)
-#define VISION_RUNTIME_BEACON_SPLIT_AREA_THRESHOLD (4)
-#define VISION_RUNTIME_CONTOUR_MAX_POINTS (640U)
-#define VISION_RUNTIME_LOCAL_BIRDVIEW_SCALE_CM_PER_PIXEL (0.5f)
-#define VISION_RUNTIME_LOCAL_BIRDVIEW_MAX_WIDTH (128U)
-#define VISION_RUNTIME_LOCAL_BIRDVIEW_MAX_HEIGHT (128U)
-#define VISION_RUNTIME_BEACON_BOX_AREA_MIN_PIXELS (8.0f)
-#define VISION_RUNTIME_BEACON_BOX_AREA_MAX_PIXELS (100.0f)
-#define VISION_RUNTIME_VEHICLE_MIN_RAW_BOX_AREA       (100U) /* 常规箭头候选框门槛 */
-#define VISION_RUNTIME_VEHICLE_SMALL_BOX_MIN_AREA     (90U)  /* 稀疏小箭头候选框门槛 */
-#define VISION_RUNTIME_VEHICLE_SMALL_BOX_MAX_FILL_PCT (70U)  /* 小框粗连通域最大占空比 */
-#if VISION_RUNTIME_VEHICLE_SMALL_BOX_MIN_AREA > \
-        VISION_RUNTIME_VEHICLE_MIN_RAW_BOX_AREA || \
-    VISION_RUNTIME_VEHICLE_SMALL_BOX_MAX_FILL_PCT > 100U
-#error "Invalid vehicle small-box gate"
-#endif
-#define VISION_RUNTIME_FINE_MIN_FOREGROUND_PIXELS (8U)
-/* 防止鱼眼极边缘的小候选在去畸变后膨胀为大面积精筛区域。 */
-#define VISION_RUNTIME_FINE_CANDIDATE_MAX_WIDTH   (96U)
-#define VISION_RUNTIME_FINE_CANDIDATE_MAX_HEIGHT  (96U)
-#define VISION_RUNTIME_FINE_CANDIDATE_MAX_PIXELS  (5000U)
-/* 箭头精筛断臂桥接：仅连接同向、弱灰度连续且物理间距不超过4cm的碎片。 */
-#define VISION_RUNTIME_VEHICLE_GAP_BRIDGE_ENABLE            (1U)
-#define VISION_RUNTIME_VEHICLE_GAP_BRIDGE_MAX_CM             (4.0f)
-#define VISION_RUNTIME_VEHICLE_GAP_BRIDGE_MAX_SEARCH_PIXELS (12U)
-#if VISION_RUNTIME_FINE_CANDIDATE_MAX_PIXELS > \
-        VISION_RUNTIME_FINE_CANDIDATE_MAX_WIDTH * \
-        VISION_RUNTIME_FINE_CANDIDATE_MAX_HEIGHT
-#error "Fine candidate pixel limit exceeds its bounding dimensions"
-#endif
-#if VISION_RUNTIME_VEHICLE_GAP_BRIDGE_ENABLE != 0U && \
-    VISION_RUNTIME_VEHICLE_GAP_BRIDGE_ENABLE != 1U
-#error "VISION_RUNTIME_VEHICLE_GAP_BRIDGE_ENABLE must be 0 or 1"
-#endif
-#if VISION_RUNTIME_VEHICLE_GAP_BRIDGE_MAX_SEARCH_PIXELS < 1U || \
-    VISION_RUNTIME_VEHICLE_GAP_BRIDGE_MAX_SEARCH_PIXELS > 16U
-#error "Invalid vehicle gap bridge search limit"
-#endif
-#ifndef VISION_RUNTIME_PHYSICAL_GRID_ENABLE
-#define VISION_RUNTIME_PHYSICAL_GRID_ENABLE (0U)
-#endif
-#if VISION_RUNTIME_PHYSICAL_GRID_ENABLE != 0U && \
-    VISION_RUNTIME_PHYSICAL_GRID_ENABLE != 1U
-#error "VISION_RUNTIME_PHYSICAL_GRID_ENABLE must be 0 or 1"
-#endif
-#ifndef VISION_RUNTIME_DEBUG_UNDISTORT_IMAGE_ENABLE
-#define VISION_RUNTIME_DEBUG_UNDISTORT_IMAGE_ENABLE (0U)
-#endif
+/* Single-threshold, on-demand rectified contour pipeline. */
+#define VISION_RUNTIME_FIXED_THRESHOLD        (120U)
+#define VISION_BINARY_THRESHOLD               VISION_RUNTIME_FIXED_THRESHOLD
+#define VISION_BINARY_THRESHOLD_VEHICLE       VISION_RUNTIME_FIXED_THRESHOLD
+#define VISION_BINARY_THRESHOLD_BEACON        VISION_RUNTIME_FIXED_THRESHOLD
+#define VISION_BINARY_THRESHOLD_VEHICLE_FALLBACK VISION_RUNTIME_FIXED_THRESHOLD
+#define VISION_BINARY_THRESHOLD_INNER         VISION_RUNTIME_FIXED_THRESHOLD
+#define VISION_BINARY_THRESHOLD_MIDDLE        VISION_RUNTIME_FIXED_THRESHOLD
+#define VISION_BINARY_THRESHOLD_OUTER         VISION_RUNTIME_FIXED_THRESHOLD
 
-/* Candidate refinement pipeline selection. */
-#define VISION_RUNTIME_PIPELINE_UNDISTORT_THEN_IPM (0U)
-#define VISION_RUNTIME_PIPELINE_IPM_THEN_BINARY   (1U)
-#ifndef VISION_RUNTIME_PIPELINE_MODE
-#define VISION_RUNTIME_PIPELINE_MODE VISION_RUNTIME_PIPELINE_UNDISTORT_THEN_IPM
-#endif
-#if VISION_RUNTIME_PIPELINE_MODE != VISION_RUNTIME_PIPELINE_UNDISTORT_THEN_IPM && \
-    VISION_RUNTIME_PIPELINE_MODE != VISION_RUNTIME_PIPELINE_IPM_THEN_BINARY
-#error "Unsupported VISION_RUNTIME_PIPELINE_MODE"
-#endif
+/* Compatibility constants for the existing cross-core parameter page. */
+#define VISION_BINARY_ZONE_INNER               (0U)
+#define VISION_BINARY_ZONE_MIDDLE              (1U)
+#define VISION_BINARY_ZONE_OUTER               (2U)
+#define VISION_BINARY_ZONE_COUNT               (3U)
+#define VISION_RUNTIME_COARSE_ZONE_COUNT       (5U)
+#define VISION_RUNTIME_COARSE_THRESHOLD_CENTER VISION_RUNTIME_FIXED_THRESHOLD
+#define VISION_RUNTIME_COARSE_THRESHOLD_NEAR   VISION_RUNTIME_FIXED_THRESHOLD
+#define VISION_RUNTIME_COARSE_THRESHOLD_MIDDLE VISION_RUNTIME_FIXED_THRESHOLD
+#define VISION_RUNTIME_COARSE_THRESHOLD_FAR    VISION_RUNTIME_FIXED_THRESHOLD
+#define VISION_RUNTIME_COARSE_THRESHOLD_EDGE   VISION_RUNTIME_FIXED_THRESHOLD
+#define VISION_RUNTIME_COARSE_THRESHOLD        VISION_RUNTIME_FIXED_THRESHOLD
 
-#define VISION_RUNTIME_FINE_WIDTH   (MT9V03X_W * 2U)
-#define VISION_RUNTIME_FINE_HEIGHT  (MT9V03X_H * 2U)
-#define VISION_RUNTIME_FINE_STRIDE  ((VISION_RUNTIME_FINE_WIDTH + 7U) / 8U)
-#define VISION_RUNTIME_FINE_BYTES   (VISION_RUNTIME_FINE_STRIDE * VISION_RUNTIME_FINE_HEIGHT)
-#define VISION_RUNTIME_BINARY_STRIDE VISION_RUNTIME_FINE_STRIDE
-#define VISION_RUNTIME_BINARY_BYTES  VISION_RUNTIME_FINE_BYTES
-#define VISION_RUNTIME_RLE_MAX_RUNS  (4096U)
+#define VISION_RUNTIME_FINE_WIDTH              (MT9V03X_W * 2U)
+#define VISION_RUNTIME_FINE_HEIGHT             (MT9V03X_H * 2U)
+#define VISION_RUNTIME_FINE_STRIDE             ((VISION_RUNTIME_FINE_WIDTH + 7U) / 8U)
+#define VISION_RUNTIME_FINE_BYTES              (VISION_RUNTIME_FINE_STRIDE * VISION_RUNTIME_FINE_HEIGHT)
+#define VISION_RUNTIME_BINARY_STRIDE           VISION_RUNTIME_FINE_STRIDE
+#define VISION_RUNTIME_BINARY_BYTES            VISION_RUNTIME_FINE_BYTES
+#define VISION_RUNTIME_CONTOUR_MAX_POINTS      (640U)
+#define VISION_RUNTIME_MAX_CANDIDATES          (16U)
+#define VISION_RUNTIME_BEACON_ACCEPT_LIMIT     (6U)
+#define VISION_RUNTIME_BEACON_SLOT_COUNT       VISION_RUNTIME_BEACON_ACCEPT_LIMIT
+#define VISION_RUNTIME_BLOB_AREA_COUNT         (16U)
+#define VISION_RUNTIME_YAW_MAX_AGE_MS          (500U)
+
+/* Runtime-selectable contour gates. Ratios use unsigned Q8 (256 == 1.0). */
+#define VISION_CONTOUR_GATE_MIN_POINTS         (1UL << 0)
+#define VISION_CONTOUR_GATE_MIN_CIRCULARITY    (1UL << 1)
+#define VISION_CONTOUR_GATE_MAX_CIRCULARITY    (1UL << 2)
+#define VISION_CONTOUR_GATE_MIN_SOLIDITY       (1UL << 3)
+#define VISION_CONTOUR_GATE_MAX_SOLIDITY       (1UL << 4)
+#define VISION_CONTOUR_GATE_MIN_VERTEX_ANGLE   (1UL << 5)
+#define VISION_CONTOUR_GATE_MAX_VERTEX_ANGLE   (1UL << 6)
+#define VISION_CONTOUR_GATE_MIN_ENDPOINT_TURN  (1UL << 7)
+#define VISION_CONTOUR_GATE_MIN_VERTEX_TURN    (1UL << 8)
+#define VISION_CONTOUR_GATE_MAX_VERTEX_TURN    (1UL << 9)
+#define VISION_CONTOUR_GATE_MIN_NOTCH_TURN     (1UL << 10)
+#define VISION_CONTOUR_GATE_MAX_NEGATIVE_TURN  (1UL << 11)
+
+typedef struct
+{
+    uint32 enabled_mask;
+    uint16 min_contour_points;
+    uint16 min_circularity_q8;
+    uint16 max_circularity_q8;
+    uint16 min_solidity_q8;
+    uint16 max_solidity_q8;
+    uint16 min_vertex_angle_deg;
+    uint16 max_vertex_angle_deg;
+    uint16 min_endpoint_turn_deg;
+    uint16 min_vertex_turn_deg;
+    uint16 max_vertex_turn_deg;
+    uint16 min_notch_turn_deg;
+    uint16 max_negative_turn_deg;
+    uint8 direction_window_points;
+} VisionContourThresholds_t;
 
 typedef struct
 {
@@ -177,7 +133,6 @@ typedef struct
     int ir_reject_size_count;
     int ir_reject_aspect_count;
     int ir_reject_insert_count;
-
     uint8 ir_raw_detect_valid;
     uint8 ir_track_valid;
     uint8 ir_detected_point_count;
@@ -185,7 +140,6 @@ typedef struct
     float ir_y_cm;
     float ir_square_side_cm;
     float ir_height_cm;
-
     int beacon_count;
     uint8 beacon_has_nearest;
     float beacon_nearest_x_cm;
@@ -199,7 +153,6 @@ typedef struct
     float beacon_nearest_occupancy;
     float beacon_nearest_aspect;
     uint8 beacon_nearest_confidence;
-    /* CM7_1 单帧完整视觉识别耗时，供 CM7_0 的 VOFA FS! 波形回传。 */
     float recognition_time_us;
     uint32 recognition_frame_seq;
 } VisionRuntimeDiag_t;
@@ -265,8 +218,8 @@ typedef struct
     float adaptive_min_area_px;
     float adaptive_max_area_px;
     float adaptive_min_circularity;
-    float occupancy_ratio;              /* 前景面积 / 候选框面积 */
-    float horizontal_run_ratio;        /* 最长水平连续段 / 候选框宽度 */
+    float occupancy_ratio;
+    float horizontal_run_ratio;
 } VisionRuntimeCandidateBox_t;
 
 void VisionRuntime_ProcessFrame(float height_cm);
@@ -287,18 +240,23 @@ void VisionRuntime_SetCoarseZoneThresholds(
     const uint8 thresholds[VISION_RUNTIME_COARSE_ZONE_COUNT]);
 void VisionRuntime_GetCoarseZoneThresholds(
     uint8 thresholds[VISION_RUNTIME_COARSE_ZONE_COUNT]);
+void VisionRuntime_SetContourThresholds(uint8 arrow,
+                                        const VisionContourThresholds_t *thresholds);
+void VisionRuntime_GetContourThresholds(uint8 arrow,
+                                        VisionContourThresholds_t *thresholds);
+void VisionRuntime_SetBeaconAcceptLimit(uint8 limit);
+uint8 VisionRuntime_GetBeaconAcceptLimit(void);
 void VisionRuntime_GetDiag(VisionRuntimeDiag_t *diag);
 void VisionRuntime_SetDiag(const VisionRuntimeDiag_t *diag);
 void VisionRuntime_GetBeaconSlots(VisionRuntimeBeaconSlot_t *slots, uint8 max_slots);
 void VisionRuntime_SetBeaconSlots(const VisionRuntimeBeaconSlot_t *slots, uint8 max_slots);
 uint8 VisionRuntime_GetCandidateBoxes(VisionRuntimeCandidateBox_t *boxes, uint8 max_boxes);
-/* Returns the row-aligned MSB-first 1-bit 376x240 binary bitmap. */
 const uint8 *VisionRuntime_GetBinaryImage(void);
 const uint8 *VisionRuntime_GetBinaryDisplayImage(void);
 const uint8 *VisionRuntime_GetUndistortedImage(void);
 uint32 VisionRuntime_GetFineRleOverflowCount(void);
+
 #if defined(VISION_RUNTIME_PC_DIAGNOSTICS)
-/* PC仿真诊断专用：不进入无人机正式固件。 */
 void VisionRuntime_SetVehicleFallbackEnabled(uint8 enabled);
 void VisionRuntime_SetVehicleFallbackThreshold(uint8 threshold);
 uint8 VisionRuntime_GetVehicleFallbackThreshold(void);

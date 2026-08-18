@@ -1133,18 +1133,6 @@
             <name>$PROJ_DIR$\..\..\code\common\battery_monitor.c</name>
         </file>
         <file>
-            <name>$PROJ_DIR$\..\..\code\vision\beacon_adaptive_threshold.c</name>
-        </file>
-        <file>
-            <name>$PROJ_DIR$\..\..\code\vision\beacon_adaptive_threshold.h</name>
-        </file>
-        <file>
-            <name>$PROJ_DIR$\..\..\code\vision\beacon_detect.c</name>
-        </file>
-        <file>
-            <name>$PROJ_DIR$\..\..\code\vision\beacon_detect.h</name>
-        </file>
-        <file>
             <name>$PROJ_DIR$\..\..\code\vision\camera_calibration.c</name>
         </file>
         <file>
@@ -1158,9 +1146,6 @@
         </file>
         <file>
             <name>$PROJ_DIR$\..\..\code\vision\camera_undistort_rect_map.h</name>
-        </file>
-        <file>
-            <name>$PROJ_DIR$\..\..\code\vision\coarse_distance_zone_map.h</name>
         </file>
         <file>
             <name>$PROJ_DIR$\..\..\code\communication\comm_mux.c</name>
@@ -1197,12 +1182,6 @@
         </file>
         <file>
             <name>$PROJ_DIR$\..\..\code\communication\cross_core_camera.h</name>
-        </file>
-        <file>
-            <name>$PROJ_DIR$\..\..\code\vision\drone_ipm.c</name>
-        </file>
-        <file>
-            <name>$PROJ_DIR$\..\..\code\vision\drone_ipm.h</name>
         </file>
         <file>
             <name>$PROJ_DIR$\..\..\code\vision\drone_ipm_embedded.c</name>
@@ -1265,19 +1244,10 @@
             <name>$PROJ_DIR$\..\..\code\icm\icm42688.c</name>
         </file>
         <file>
-            <name>$PROJ_DIR$\..\..\code\vision\ipm_demo.c</name>
-        </file>
-        <file>
             <name>$PROJ_DIR$\..\..\code\vision\ipm_interface.c</name>
         </file>
         <file>
             <name>$PROJ_DIR$\..\..\code\vision\ipm_interface.h</name>
-        </file>
-        <file>
-            <name>$PROJ_DIR$\..\..\code\vision\ir_localization.c</name>
-        </file>
-        <file>
-            <name>$PROJ_DIR$\..\..\code\vision\ir_localization.h</name>
         </file>
         <file>
             <name>$PROJ_DIR$\..\..\code\menu\key.c</name>
@@ -1367,10 +1337,10 @@
             <name>$PROJ_DIR$\..\..\code\vision\vehicle_marker_localization.h</name>
         </file>
         <file>
-            <name>$PROJ_DIR$\..\..\code\vision\ideal_target_match.c</name>
+            <name>$PROJ_DIR$\..\..\code\vision\vision_contour_match.c</name>
         </file>
         <file>
-            <name>$PROJ_DIR$\..\..\code\vision\ideal_target_match.h</name>
+            <name>$PROJ_DIR$\..\..\code\vision\vision_contour_match.h</name>
         </file>
         <file>
             <name>$PROJ_DIR$\..\..\code\control\velocity_loop.c</name>
