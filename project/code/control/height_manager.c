@@ -1149,7 +1149,8 @@ void HeightManager_Task_10ms(void)
             return;
         }
 
-        if(!s_soft_takeoff_active && base_throttle < FLIGHT_TAKEOFF_RAMP_TARGET_THROTTLE)
+        if(!s_auto_landing_active && !s_soft_takeoff_active &&
+           (base_throttle < FLIGHT_TAKEOFF_RAMP_TARGET_THROTTLE))
         {
             s_height_loop_enabled = 0U;
             s_height_takeoff_target_active = 0U;
