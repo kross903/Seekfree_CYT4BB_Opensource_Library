@@ -42,6 +42,24 @@ CONTOUR_THRESHOLD_FIELDS = (
     ("min_notch_turn_deg", "内凹口反向差下限(°)"),
     ("max_negative_turn_deg", "最大反向转角上限(°)"),
 )
+CONTOUR_PARAMETER_FIELDS = frozenset({"direction_window_points"})
+CONTOUR_GATE_FIELDS = tuple(
+    field_name
+    for field_name, _label in CONTOUR_THRESHOLD_FIELDS
+    if field_name not in CONTOUR_PARAMETER_FIELDS
+)
+CONTOUR_YAW_RESCUE_FIELDS = frozenset(
+    {
+        "min_vertex_angle_deg",
+        "max_vertex_angle_deg",
+        "min_arm_balance",
+        "min_endpoint_turn_deg",
+        "min_vertex_turn_deg",
+        "max_vertex_turn_deg",
+        "min_notch_turn_deg",
+        "max_negative_turn_deg",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -71,8 +89,15 @@ class ContourThresholds:
     max_vertex_turn_deg: float
     min_notch_turn_deg: float
     max_negative_turn_deg: float
+    enabled: tuple[str, ...]
 
     def validate(self) -> None:
+        invalid_enabled = set(self.enabled) - set(CONTOUR_GATE_FIELDS)
+        if invalid_enabled:
+            raise ValueError(
+                f"未知轮廓门槛开关：{', '.join(sorted(invalid_enabled))}"
+            )
+        enabled = set(self.enabled)
         if self.min_contour_points < 1:
             raise ValueError("最少轮廓点必须大于0")
         if not math.isfinite(self.min_gray_contrast) or not 0.0 <= self.min_gray_contrast <= 255.0:
@@ -91,15 +116,29 @@ class ContourThresholds:
             if not (
                 math.isfinite(minimum)
                 and math.isfinite(maximum)
-                and 0.0 <= minimum <= maximum <= 1.0
+                and 0.0 <= minimum <= 1.0
+                and 0.0 <= maximum <= 1.0
             ):
-                raise ValueError(f"{label}上下限必须满足 0 <= 下限 <= 上限 <= 1")
+                raise ValueError(f"{label}上下限必须在0到1之间")
+            if (
+                minimum_name in enabled
+                and maximum_name in enabled
+                and minimum > maximum
+            ):
+                raise ValueError(f"{label}已启用的下限不能大于上限")
         if not (
             math.isfinite(self.min_vertex_angle_deg)
             and math.isfinite(self.max_vertex_angle_deg)
-            and 0.0 <= self.min_vertex_angle_deg <= self.max_vertex_angle_deg <= 180.0
+            and 0.0 <= self.min_vertex_angle_deg <= 180.0
+            and 0.0 <= self.max_vertex_angle_deg <= 180.0
         ):
-            raise ValueError("候选顶点夹角必须满足 0 <= 下限 <= 上限 <= 180")
+            raise ValueError("候选顶点夹角上下限必须在0到180度之间")
+        if (
+            "min_vertex_angle_deg" in enabled
+            and "max_vertex_angle_deg" in enabled
+            and self.min_vertex_angle_deg > self.max_vertex_angle_deg
+        ):
+            raise ValueError("候选顶点夹角已启用的下限不能大于上限")
         if not math.isfinite(self.min_arm_balance) or not 0.0 <= self.min_arm_balance <= 1.0:
             raise ValueError("候选两臂平衡度下限必须在0到1之间")
         if not 2 <= self.direction_window_points <= 32:
@@ -113,16 +152,26 @@ class ContourThresholds:
         )
         if not all(math.isfinite(value) and 0.0 <= value <= 180.0 for value in turn_values):
             raise ValueError("轮廓方向差阈值必须在0到180度之间")
-        if self.min_vertex_turn_deg > self.max_vertex_turn_deg:
-            raise ValueError("外顶点方向差下限不能大于上限")
         if (
-            self.min_endpoint_turn_deg > 0.0
+            "min_vertex_turn_deg" in enabled
+            and "max_vertex_turn_deg" in enabled
+            and self.min_vertex_turn_deg > self.max_vertex_turn_deg
+        ):
+            raise ValueError("外顶点方向差已启用的下限不能大于上限")
+        if (
+            "min_endpoint_turn_deg" in enabled
+            and "max_vertex_turn_deg" in enabled
+            and self.min_endpoint_turn_deg > 0.0
             and self.min_endpoint_turn_deg < self.max_vertex_turn_deg
         ):
             raise ValueError("端点方向差下限不能小于外顶点方向差上限")
 
-    def to_mapping(self) -> dict[str, float | int]:
-        return {field.name: getattr(self, field.name) for field in fields(self)}
+    def to_mapping(self) -> dict[str, float | int | list[str]]:
+        mapping: dict[str, float | int | list[str]] = {}
+        for field in fields(self):
+            value = getattr(self, field.name)
+            mapping[field.name] = list(value) if field.name == "enabled" else value
+        return mapping
 
     @classmethod
     def from_mapping(
@@ -132,10 +181,20 @@ class ContourThresholds:
     ) -> "ContourThresholds":
         if not isinstance(mapping, Mapping):
             return fallback
-        values: dict[str, float | int] = {}
+        values: dict[str, float | int | tuple[str, ...]] = {}
         for field in fields(fallback):
             fallback_value = getattr(fallback, field.name)
             raw_value = mapping.get(field.name, fallback_value)
+            if field.name == "enabled":
+                if isinstance(raw_value, (list, tuple)):
+                    values[field.name] = tuple(
+                        str(item)
+                        for item in raw_value
+                        if str(item) in CONTOUR_GATE_FIELDS
+                    )
+                else:
+                    values[field.name] = fallback_value
+                continue
             try:
                 values[field.name] = (
                     int(raw_value)
@@ -180,6 +239,7 @@ ARROW_DEFAULT_THRESHOLDS = ContourThresholds(
     max_vertex_turn_deg=135.0,
     min_notch_turn_deg=60.0,
     max_negative_turn_deg=180.0,
+    enabled=CONTOUR_GATE_FIELDS,
 )
 
 BEACON_DEFAULT_THRESHOLDS = ContourThresholds(
@@ -208,6 +268,20 @@ BEACON_DEFAULT_THRESHOLDS = ContourThresholds(
     max_vertex_turn_deg=180.0,
     min_notch_turn_deg=0.0,
     max_negative_turn_deg=90.0,
+    enabled=tuple(
+        field_name
+        for field_name in CONTOUR_GATE_FIELDS
+        if field_name
+        not in {
+            "min_vertex_angle_deg",
+            "max_vertex_angle_deg",
+            "min_arm_balance",
+            "min_endpoint_turn_deg",
+            "min_vertex_turn_deg",
+            "max_vertex_turn_deg",
+            "min_notch_turn_deg",
+        }
+    ),
 )
 
 
@@ -478,11 +552,22 @@ def _extract_arrow_turn_geometry(
     )
     endpoint_angles = tuple(region.peak_angle for region in endpoint_regions)
 
+    enabled = set(thresholds.enabled)
+    effective_vertex_min = (
+        thresholds.min_vertex_turn_deg
+        if "min_vertex_turn_deg" in enabled
+        else 0.0
+    )
+    effective_vertex_max = (
+        thresholds.max_vertex_turn_deg
+        if "max_vertex_turn_deg" in enabled
+        else 180.0
+    )
     vertex_regions = [
         region for region in convex_regions
-        if thresholds.min_vertex_turn_deg
+        if effective_vertex_min
         <= region.peak_angle
-        <= thresholds.max_vertex_turn_deg
+        <= effective_vertex_max
         and (
             thresholds.min_endpoint_turn_deg <= 0.0
             or region.peak_angle < thresholds.min_endpoint_turn_deg
@@ -761,59 +846,82 @@ def evaluate_contour_metrics(
     thresholds: ContourThresholds,
 ) -> ContourDecision:
     thresholds.validate()
+    enabled = set(thresholds.enabled)
     failures: list[str] = []
     if not metrics.contour_closed:
         failures.append("轮廓未闭合")
     if metrics.contour_overflow:
         failures.append("轮廓跟踪步数溢出")
-    if metrics.contour_points < thresholds.min_contour_points:
+    if (
+        "min_contour_points" in enabled
+        and metrics.contour_points < thresholds.min_contour_points
+    ):
         failures.append(
             f"轮廓点 {metrics.contour_points} < {thresholds.min_contour_points}"
         )
-    if metrics.gray_contrast is None:
-        failures.append("缺少可用的前景或背景灰度样本")
-    elif metrics.gray_contrast < thresholds.min_gray_contrast:
-        failures.append(
-            f"前景/背景灰度差 {metrics.gray_contrast:.3f} < "
-            f"{thresholds.min_gray_contrast:.3f}"
-        )
+    if "min_gray_contrast" in enabled:
+        if metrics.gray_contrast is None:
+            failures.append("缺少可用的前景或背景灰度样本")
+        elif metrics.gray_contrast < thresholds.min_gray_contrast:
+            failures.append(
+                f"前景/背景灰度差 {metrics.gray_contrast:.3f} < "
+                f"{thresholds.min_gray_contrast:.3f}"
+            )
     checks = (
-        ("长短边比例", metrics.aspect_ratio, thresholds.min_aspect_ratio, thresholds.max_aspect_ratio),
-        ("圆度", metrics.circularity, thresholds.min_circularity, thresholds.max_circularity),
-        ("凸包填充率", metrics.solidity, thresholds.min_solidity, thresholds.max_solidity),
-        ("径向波动", metrics.radial_cv, thresholds.min_radial_cv, thresholds.max_radial_cv),
-        ("最大凹陷比例", metrics.concavity_ratio, thresholds.min_concavity_ratio, thresholds.max_concavity_ratio),
-        ("方向熵", metrics.direction_entropy, thresholds.min_direction_entropy, thresholds.max_direction_entropy),
-        ("两组主方向占比", metrics.dominant_axis_ratio, thresholds.min_dominant_axis_ratio, thresholds.max_dominant_axis_ratio),
+        ("min_aspect_ratio", "长短边比例", metrics.aspect_ratio, "min"),
+        ("max_aspect_ratio", "长短边比例", metrics.aspect_ratio, "max"),
+        ("min_circularity", "圆度", metrics.circularity, "min"),
+        ("max_circularity", "圆度", metrics.circularity, "max"),
+        ("min_solidity", "凸包填充率", metrics.solidity, "min"),
+        ("max_solidity", "凸包填充率", metrics.solidity, "max"),
+        ("min_radial_cv", "径向波动", metrics.radial_cv, "min"),
+        ("max_radial_cv", "径向波动", metrics.radial_cv, "max"),
+        ("min_concavity_ratio", "最大凹陷比例", metrics.concavity_ratio, "min"),
+        ("max_concavity_ratio", "最大凹陷比例", metrics.concavity_ratio, "max"),
+        ("min_direction_entropy", "方向熵", metrics.direction_entropy, "min"),
+        ("max_direction_entropy", "方向熵", metrics.direction_entropy, "max"),
+        ("min_dominant_axis_ratio", "两组主方向占比", metrics.dominant_axis_ratio, "min"),
+        ("max_dominant_axis_ratio", "两组主方向占比", metrics.dominant_axis_ratio, "max"),
     )
-    for label, value, minimum, maximum in checks:
-        if value < minimum:
-            failures.append(f"{label} {value:.3f} < {minimum:.3f}")
-        elif value > maximum:
-            failures.append(f"{label} {value:.3f} > {maximum:.3f}")
-    if metrics.max_negative_turn_deg > thresholds.max_negative_turn_deg:
+    for field_name, label, value, bound_kind in checks:
+        if field_name not in enabled:
+            continue
+        bound = float(getattr(thresholds, field_name))
+        if bound_kind == "min" and value < bound:
+            failures.append(f"{label} {value:.3f} < {bound:.3f}")
+        elif bound_kind == "max" and value > bound:
+            failures.append(f"{label} {value:.3f} > {bound:.3f}")
+    if (
+        "max_negative_turn_deg" in enabled
+        and metrics.max_negative_turn_deg > thresholds.max_negative_turn_deg
+    ):
         failures.append(
             f"最大反向转角 {metrics.max_negative_turn_deg:.3f} > "
             f"{thresholds.max_negative_turn_deg:.3f}"
         )
-    angle_is_enabled = (
-        thresholds.min_vertex_angle_deg > 0.0
-        or thresholds.max_vertex_angle_deg < 180.0
+    angle_is_enabled = bool(
+        {"min_vertex_angle_deg", "max_vertex_angle_deg"} & enabled
     )
     if angle_is_enabled:
         if metrics.vertex_angle_deg is None:
             failures.append("无法根据外顶点方向峰计算箭头物理夹角")
-        elif metrics.vertex_angle_deg < thresholds.min_vertex_angle_deg:
+        elif (
+            "min_vertex_angle_deg" in enabled
+            and metrics.vertex_angle_deg < thresholds.min_vertex_angle_deg
+        ):
             failures.append(
                 f"候选顶点夹角 {metrics.vertex_angle_deg:.3f} < "
                 f"{thresholds.min_vertex_angle_deg:.3f}"
             )
-        elif metrics.vertex_angle_deg > thresholds.max_vertex_angle_deg:
+        elif (
+            "max_vertex_angle_deg" in enabled
+            and metrics.vertex_angle_deg > thresholds.max_vertex_angle_deg
+        ):
             failures.append(
                 f"候选顶点夹角 {metrics.vertex_angle_deg:.3f} > "
                 f"{thresholds.max_vertex_angle_deg:.3f}"
             )
-    if thresholds.min_arm_balance > 0.0:
+    if "min_arm_balance" in enabled:
         if metrics.arm_balance is None:
             failures.append("未形成外顶点与两个端点，无法计算两臂平衡度")
         elif metrics.arm_balance < thresholds.min_arm_balance:
@@ -821,24 +929,34 @@ def evaluate_contour_metrics(
                 f"候选两臂平衡度 {metrics.arm_balance:.3f} < "
                 f"{thresholds.min_arm_balance:.3f}"
             )
-    turn_gate_enabled = thresholds.min_endpoint_turn_deg > 0.0
-    if turn_gate_enabled:
+    if "min_endpoint_turn_deg" in enabled:
         if len(metrics.endpoint_turn_angles) < 2:
             failures.append(
                 f"只找到 {len(metrics.endpoint_turn_angles)} 个端点方向峰，需要2个"
             )
+    vertex_turn_enabled = bool(
+        {"min_vertex_turn_deg", "max_vertex_turn_deg"} & enabled
+    )
+    if vertex_turn_enabled:
         if metrics.vertex_turn_angle is None:
             failures.append("未找到外顶点方向峰")
-        elif not (
-            thresholds.min_vertex_turn_deg
-            <= metrics.vertex_turn_angle
-            <= thresholds.max_vertex_turn_deg
+        elif (
+            "min_vertex_turn_deg" in enabled
+            and metrics.vertex_turn_angle < thresholds.min_vertex_turn_deg
         ):
             failures.append(
-                f"外顶点方向差 {metrics.vertex_turn_angle:.3f} 不在 "
-                f"{thresholds.min_vertex_turn_deg:.3f}~"
-                f"{thresholds.max_vertex_turn_deg:.3f} 度"
+                f"外顶点方向差 {metrics.vertex_turn_angle:.3f} < "
+                f"{thresholds.min_vertex_turn_deg:.3f}"
             )
+        elif (
+            "max_vertex_turn_deg" in enabled
+            and metrics.vertex_turn_angle > thresholds.max_vertex_turn_deg
+        ):
+            failures.append(
+                f"外顶点方向差 {metrics.vertex_turn_angle:.3f} > "
+                f"{thresholds.max_vertex_turn_deg:.3f}"
+            )
+    if "min_notch_turn_deg" in enabled:
         if metrics.notch_turn_angle is None:
             failures.append("未找到反向内凹口方向峰")
         elif abs(metrics.notch_turn_angle) < thresholds.min_notch_turn_deg:

@@ -9,7 +9,7 @@ import math
 from pathlib import Path
 import re
 
-from PIL import Image
+from PIL import Image, ImageDraw
 
 
 INVALID_Q8 = 0xFFFF
@@ -221,6 +221,22 @@ class ConnectedComponent:
     @property
     def horizontal_run_ratio(self) -> float:
         return self.max_horizontal_run / self.width if self.width else 0.0
+
+
+def component_centroid_is_foreground(
+    component: ConnectedComponent,
+    binary: Image.Image,
+) -> bool:
+    """Check the nearest binary pixel to a component's area centroid."""
+    if binary.mode != "L":
+        binary = binary.convert("L")
+    width, height = binary.size
+    if width <= 0 or height <= 0:
+        return False
+    x = max(0, min(width - 1, int(round(component.centroid_x))))
+    y = max(0, min(height - 1, int(round(component.centroid_y))))
+    return binary.getpixel((x, y)) != 0
+
 
 @dataclass(frozen=True)
 class _Run:
@@ -642,4 +658,20 @@ def self_test() -> None:
     white_component = find_contour_components(white_block)[0]
     assert white_component.area == 32 * 24
     assert white_component.contour_closed
+    assert component_centroid_is_foreground(white_component, white_block)
+
+    beacon = Image.new("L", (96, 96), 0)
+    ImageDraw.Draw(beacon).ellipse((25, 25, 71, 71), fill=255)
+    beacon_component = find_contour_components(beacon)[0]
+    assert component_centroid_is_foreground(beacon_component, beacon)
+
+    arrow = Image.new("L", (96, 96), 0)
+    ImageDraw.Draw(arrow).line(
+        ((20, 20), (48, 68), (76, 20)),
+        fill=255,
+        width=5,
+        joint="curve",
+    )
+    arrow_component = find_contour_components(arrow)[0]
+    assert not component_centroid_is_foreground(arrow_component, arrow)
 

@@ -20,6 +20,7 @@ from image_analysis import (
     FisheyeUndistorter,
     UNDISTORT_BILINEAR,
     UNDISTORT_NEAREST,
+    component_centroid_is_foreground,
     find_contour_components,
     find_components,
     self_test as analysis_self_test,
@@ -67,7 +68,10 @@ from ideal_matching import (
 from contour_matching import (
     ARROW_DEFAULT_THRESHOLDS as CONTOUR_ARROW_DEFAULT_THRESHOLDS,
     BEACON_DEFAULT_THRESHOLDS as CONTOUR_BEACON_DEFAULT_THRESHOLDS,
+    CONTOUR_GATE_FIELDS,
+    CONTOUR_PARAMETER_FIELDS,
     CONTOUR_THRESHOLD_FIELDS,
+    CONTOUR_YAW_RESCUE_FIELDS,
     ContourMetrics,
     ContourThresholds,
     calculate_contour_metrics,
@@ -128,6 +132,48 @@ class BeaconRecognitionResult:
     yaw_direction_source: str = ""
 
 
+@dataclass(frozen=True)
+class ContourYawContext:
+    roll_deg: float
+    pitch_deg: float
+    height_cm: float
+    uav_yaw_deg: float
+    car_yaw_deg: float
+    car_yaw_relative: bool
+    arrow_plane_height_cm: float
+    arrow_arm_length_cm: float
+    arrow_angle_deg: float
+    arrow_opening_offset_deg: float
+    mount_roll_deg: float
+    mount_pitch_deg: float
+    mount_yaw_deg: float
+    projection_calibration: ProjectionCalibration
+
+
+@dataclass(frozen=True)
+class BatchRecognitionConfig:
+    mode: str
+    binary_threshold: int
+    min_area: int
+    undistort_interpolation: str
+    arrow_thresholds: ContourThresholds
+    beacon_thresholds: ContourThresholds
+    beacon_accept_limit: int
+    yaw_assist_enabled: bool
+    yaw_tolerance_deg: float
+    yaw_context: ContourYawContext | None
+
+
+@dataclass(frozen=True)
+class BatchRecognitionRow:
+    path: Path
+    candidate_count: int
+    arrow_count: int
+    beacon_count: int
+    yaw_assisted_count: int
+    error: str = ""
+
+
 FIRMWARE_ROUTE_ARROW_MIN_AREA = 30
 BEACON_ACCEPT_LIMIT_DEFAULT = 3
 BEACON_ACCEPT_LIMIT_MIN = 1
@@ -144,6 +190,20 @@ UNDISTORT_MODE_NAMES = (UNDISTORT_MODE_BILINEAR, UNDISTORT_MODE_NEAREST)
 RECOGNITION_MODE_IDEAL = "理想形状匹配"
 RECOGNITION_MODE_CONTOUR = "轮廓几何识别"
 RECOGNITION_MODE_NAMES = (RECOGNITION_MODE_IDEAL, RECOGNITION_MODE_CONTOUR)
+BATCH_MODE_MIXED = "混合识别"
+BATCH_MODE_ARROW = "仅测箭头"
+BATCH_MODE_BEACON = "仅测信标"
+BATCH_MODE_NAMES = (BATCH_MODE_MIXED, BATCH_MODE_ARROW, BATCH_MODE_BEACON)
+BATCH_FILTER_ALL = "全部结果"
+BATCH_FILTER_MULTI_ARROW = "多箭头"
+BATCH_FILTER_UNRECOGNIZED = "未识别"
+BATCH_FILTER_ERROR = "异常"
+BATCH_FILTER_NAMES = (
+    BATCH_FILTER_ALL,
+    BATCH_FILTER_MULTI_ARROW,
+    BATCH_FILTER_UNRECOGNIZED,
+    BATCH_FILTER_ERROR,
+)
 
 
 class PictureViewerApp:
@@ -178,6 +238,9 @@ class PictureViewerApp:
         contour_yaw_settings = contour_settings.get("yaw_assist", {})
         if not isinstance(contour_yaw_settings, dict):
             contour_yaw_settings = {}
+        batch_settings = settings.get("batch_recognition", {})
+        if not isinstance(batch_settings, dict):
+            batch_settings = {}
         sampling_settings = ideal_settings.get("sampling", {})
         if not isinstance(sampling_settings, dict):
             sampling_settings = {}
@@ -361,6 +424,7 @@ class PictureViewerApp:
             TARGET_BEACON: CONTOUR_BEACON_DEFAULT_THRESHOLDS,
         }
         self.contour_threshold_vars: dict[str, dict[str, tk.StringVar]] = {}
+        self.contour_enabled_vars: dict[str, dict[str, tk.BooleanVar]] = {}
         for target_kind in MATCHING_TARGET_KINDS:
             config = ContourThresholds.from_mapping(
                 contour_settings.get(target_kind),
@@ -370,12 +434,26 @@ class PictureViewerApp:
                 field_name: tk.StringVar(value=str(getattr(config, field_name)))
                 for field_name, _label in CONTOUR_THRESHOLD_FIELDS
             }
+            self.contour_enabled_vars[target_kind] = {
+                field_name: tk.BooleanVar(value=field_name in config.enabled)
+                for field_name in CONTOUR_GATE_FIELDS
+            }
         self.contour_yaw_assist_enabled_var = tk.BooleanVar(
             value=bool(contour_yaw_settings.get("enabled", True))
         )
         self.contour_yaw_tolerance_var = tk.StringVar(
             value=str(contour_yaw_settings.get("tolerance_deg", "20"))
         )
+        batch_mode = str(batch_settings.get("mode", BATCH_MODE_ARROW))
+        if batch_mode not in BATCH_MODE_NAMES:
+            batch_mode = BATCH_MODE_ARROW
+        self.batch_mode_var = tk.StringVar(value=batch_mode)
+        self.batch_filtered_only_var = tk.BooleanVar(
+            value=bool(batch_settings.get("filtered_only", False))
+        )
+        self.batch_result_filter_var = tk.StringVar(value=BATCH_FILTER_ALL)
+        self.batch_summary_var = tk.StringVar(value="尚未开始批量识别")
+        self.batch_current_var = tk.StringVar(value="")
         self.ideal_source_var = tk.StringVar(value="姿态：手动；小车Yaw：手动")
         self.ideal_status_var = tk.StringVar(value="选择目标后可在图像中左键拖动")
         self.sampling_summary_var = tk.StringVar(
@@ -389,6 +467,20 @@ class PictureViewerApp:
         self.sampling_window: tk.Toplevel | None = None
         self.matching_window: tk.Toplevel | None = None
         self.contour_matching_window: tk.Toplevel | None = None
+        self.batch_window: tk.Toplevel | None = None
+        self.batch_tree: ttk.Treeview | None = None
+        self.batch_progress: ttk.Progressbar | None = None
+        self.batch_start_button: ttk.Button | None = None
+        self.batch_cancel_button: ttk.Button | None = None
+        self.batch_mode_box: ttk.Combobox | None = None
+        self.batch_scope_check: ttk.Checkbutton | None = None
+        self.batch_running = False
+        self.batch_cancel_requested = False
+        self.batch_files: list[Path] = []
+        self.batch_rows: list[BatchRecognitionRow] = []
+        self.batch_index = 0
+        self.batch_config: BatchRecognitionConfig | None = None
+        self.batch_run_id = 0
 
         self.all_files: list[Path] = []
         self.visible_files: list[Path] = []
@@ -779,6 +871,11 @@ class PictureViewerApp:
             text="仅测信标",
             command=self.recognize_current_image_beacons_only,
         ).pack(side=tk.LEFT, padx=(6, 0))
+        ttk.Button(
+            candidate_actions,
+            text="批量识别",
+            command=self.open_batch_recognition_window,
+        ).pack(side=tk.LEFT, padx=(6, 0))
 
         columns = (
             "area",
@@ -943,6 +1040,10 @@ class PictureViewerApp:
             },
             "matching_thresholds": matching_settings,
             "contour_thresholds": contour_threshold_settings,
+            "batch_recognition": {
+                "mode": self.batch_mode_var.get(),
+                "filtered_only": bool(self.batch_filtered_only_var.get()),
+            },
         }
         try:
             SETTINGS_PATH.write_text(
@@ -1433,7 +1534,7 @@ class PictureViewerApp:
     def current_contour_thresholds(self, target_kind: str) -> ContourThresholds:
         if target_kind not in MATCHING_TARGET_KINDS:
             raise ValueError("轮廓识别目标类型无效")
-        values: dict[str, float | int] = {}
+        values: dict[str, float | int | tuple[str, ...]] = {}
         try:
             for field_name, _label in CONTOUR_THRESHOLD_FIELDS:
                 raw_value = self.contour_threshold_vars[target_kind][field_name].get()
@@ -1444,6 +1545,11 @@ class PictureViewerApp:
                 )
         except (TypeError, ValueError, tk.TclError) as exc:
             raise ValueError("轮廓识别阈值必须是有效数字") from exc
+        values["enabled"] = tuple(
+            field_name
+            for field_name in CONTOUR_GATE_FIELDS
+            if self.contour_enabled_vars[target_kind][field_name].get()
+        )
         thresholds = ContourThresholds(**values)
         thresholds.validate()
         return thresholds
@@ -1508,15 +1614,25 @@ class PictureViewerApp:
             notebook.add(tab, text=MATCHING_TARGET_NAMES[target_kind])
             tab.columnconfigure(0, weight=1)
             for row, (field_name, label) in enumerate(CONTOUR_THRESHOLD_FIELDS):
+                if field_name in CONTOUR_PARAMETER_FIELDS:
+                    ttk.Label(tab, text="参数").grid(
+                        row=row, column=0, sticky="w", pady=2
+                    )
+                else:
+                    ttk.Checkbutton(
+                        tab,
+                        variable=self.contour_enabled_vars[target_kind][field_name],
+                        command=self.contour_parameter_changed,
+                    ).grid(row=row, column=0, sticky="w", pady=2)
                 ttk.Label(tab, text=label).grid(
-                    row=row, column=0, sticky="w", padx=(0, 18), pady=2
+                    row=row, column=1, sticky="w", padx=(2, 18), pady=2
                 )
                 entry = ttk.Entry(
                     tab,
                     width=12,
                     textvariable=self.contour_threshold_vars[target_kind][field_name],
                 )
-                entry.grid(row=row, column=1, sticky="e", pady=2)
+                entry.grid(row=row, column=2, sticky="e", pady=2)
                 entry.bind("<KeyRelease>", self.contour_parameter_changed)
 
         actions = ttk.Frame(content)
@@ -1547,6 +1663,10 @@ class PictureViewerApp:
             for field_name, _label in CONTOUR_THRESHOLD_FIELDS:
                 self.contour_threshold_vars[target_kind][field_name].set(
                     str(getattr(defaults, field_name))
+                )
+            for field_name in CONTOUR_GATE_FIELDS:
+                self.contour_enabled_vars[target_kind][field_name].set(
+                    field_name in defaults.enabled
                 )
         self.contour_yaw_assist_enabled_var.set(True)
         self.contour_yaw_tolerance_var.set("20")
@@ -2059,10 +2179,120 @@ class PictureViewerApp:
         cross = expected[0] * observed[1] - expected[1] * observed[0]
         return math.degrees(math.atan2(abs(cross), dot))
 
+    def current_contour_yaw_context(self) -> ContourYawContext:
+        try:
+            context = ContourYawContext(
+                roll_deg=float(self.roll_var.get()),
+                pitch_deg=float(self.pitch_var.get()),
+                height_cm=float(self.height_var.get()),
+                uav_yaw_deg=float(self.uav_yaw_var.get()),
+                car_yaw_deg=float(self.car_yaw_var.get()),
+                car_yaw_relative=bool(self.car_yaw_relative_var.get()),
+                arrow_plane_height_cm=float(self.arrow_plane_height_var.get()),
+                arrow_arm_length_cm=float(self.arrow_arm_length_var.get()),
+                arrow_angle_deg=float(self.arrow_angle_var.get()),
+                arrow_opening_offset_deg=float(
+                    self.arrow_opening_offset_var.get()
+                ),
+                mount_roll_deg=float(self.mount_roll_var.get()),
+                mount_pitch_deg=float(self.mount_pitch_var.get()),
+                mount_yaw_deg=float(self.mount_yaw_var.get()),
+                projection_calibration=self.projection_calibration,
+            )
+        except (TypeError, ValueError, tk.TclError) as exc:
+            raise ValueError("姿态、Yaw或箭头参数不是有效数字") from exc
+        values = (
+            context.roll_deg,
+            context.pitch_deg,
+            context.height_cm,
+            context.uav_yaw_deg,
+            context.car_yaw_deg,
+            context.arrow_plane_height_cm,
+            context.arrow_arm_length_cm,
+            context.arrow_angle_deg,
+            context.arrow_opening_offset_deg,
+            context.mount_roll_deg,
+            context.mount_pitch_deg,
+            context.mount_yaw_deg,
+        )
+        if not all(math.isfinite(value) for value in values):
+            raise ValueError("姿态、Yaw和箭头参数必须是有限数值")
+        if context.height_cm <= 0.0 or context.arrow_plane_height_cm < 0.0:
+            raise ValueError("高度和箭头平面高度无效")
+        if context.arrow_plane_height_cm >= (
+            context.height_cm - context.projection_calibration.offset_z_cm
+        ):
+            raise ValueError("箭头平面必须低于相机")
+        return context
+
+    def batch_yaw_context_for_path(
+        self,
+        path: Path,
+        baseline: ContourYawContext,
+    ) -> ContourYawContext:
+        telemetry: dict = {}
+        try:
+            metadata = json.loads(path.with_suffix(".json").read_text(encoding="utf-8-sig"))
+            if isinstance(metadata, dict):
+                raw_telemetry = metadata.get("telemetry", metadata)
+                if isinstance(raw_telemetry, dict):
+                    telemetry = raw_telemetry
+        except (OSError, UnicodeError, json.JSONDecodeError, TypeError, ValueError):
+            pass
+
+        replacements: dict[str, object] = {}
+        for field_name, json_names in (
+            ("roll_deg", ("roll_deg",)),
+            ("pitch_deg", ("pitch_deg",)),
+            ("height_cm", ("tof_height_cm", "vision_tof_height_cm", "fused_height_cm")),
+            ("uav_yaw_deg", ("yaw_deg",)),
+            ("mount_roll_deg", ("camera_mount_roll_deg",)),
+            ("mount_pitch_deg", ("camera_mount_pitch_deg",)),
+            ("mount_yaw_deg", ("camera_mount_yaw_deg",)),
+        ):
+            value = self.telemetry_number(telemetry, *json_names)
+            if value is not None:
+                replacements[field_name] = value
+
+        yaw_valid = telemetry.get(
+            "car_yaw_valid",
+            telemetry.get("vehicle_yaw_valid", True),
+        )
+        if bool(yaw_valid):
+            relative_yaw = self.telemetry_number(telemetry, "car_yaw_rel_uav_deg")
+            absolute_yaw = self.telemetry_number(
+                telemetry,
+                "car_yaw_deg",
+                "vehicle_yaw_deg",
+            )
+            if relative_yaw is not None:
+                replacements["car_yaw_deg"] = relative_yaw
+                replacements["car_yaw_relative"] = True
+            elif absolute_yaw is not None:
+                replacements["car_yaw_deg"] = absolute_yaw
+                replacements["car_yaw_relative"] = False
+
+        calibration_replacements = {
+            field_name: value
+            for field_name, json_name in (
+                ("offset_x_cm", "camera_offset_x_cm"),
+                ("offset_y_cm", "camera_offset_y_cm"),
+                ("offset_z_cm", "camera_offset_z_cm"),
+            )
+            if (value := self.telemetry_number(telemetry, json_name)) is not None
+        }
+        if calibration_replacements:
+            replacements["projection_calibration"] = replace(
+                baseline.projection_calibration,
+                **calibration_replacements,
+            )
+        return replace(baseline, **replacements)
+
     def contour_yaw_direction_error(
         self,
         component: ConnectedComponent,
         metrics: ContourMetrics,
+        yaw_context: ContourYawContext | None = None,
     ) -> tuple[float, str]:
         if len(metrics.arm_tip_points) != 2:
             raise ValueError("需要两个端点")
@@ -2075,69 +2305,41 @@ class PictureViewerApp:
         ]
         if not available_points:
             raise ValueError("缺少外顶点V和内凹口N")
+        context = yaw_context or self.current_contour_yaw_context()
 
-        try:
-            roll = float(self.roll_var.get())
-            pitch = float(self.pitch_var.get())
-            height = float(self.height_var.get())
-            uav_yaw = float(self.uav_yaw_var.get())
-            car_yaw = float(self.car_yaw_var.get())
-            plane_height = float(self.arrow_plane_height_var.get())
-            arm_length = float(self.arrow_arm_length_var.get())
-            arrow_angle = float(self.arrow_angle_var.get())
-            opening_offset = float(self.arrow_opening_offset_var.get())
-            mount_roll = float(self.mount_roll_var.get())
-            mount_pitch = float(self.mount_pitch_var.get())
-            mount_yaw = float(self.mount_yaw_var.get())
-        except (TypeError, ValueError, tk.TclError) as exc:
-            raise ValueError("姿态、Yaw或箭头参数不是有效数字") from exc
-        values = (
-            roll,
-            pitch,
-            height,
-            uav_yaw,
-            car_yaw,
-            plane_height,
-            arm_length,
-            arrow_angle,
-            opening_offset,
-            mount_roll,
-            mount_pitch,
-            mount_yaw,
+        projector = TargetPlaneProjector(
+            context.projection_calibration,
+            context.mount_roll_deg,
+            context.mount_pitch_deg,
+            context.mount_yaw_deg,
         )
-        if not all(math.isfinite(value) for value in values):
-            raise ValueError("姿态、Yaw和箭头参数必须是有限数值")
-        if height <= 0.0 or plane_height < 0.0:
-            raise ValueError("高度和箭头平面高度无效")
-        if plane_height >= height - self.projection_calibration.offset_z_cm:
-            raise ValueError("箭头平面必须低于相机")
-
-        self.target_projector.set_mount_angles(mount_roll, mount_pitch, mount_yaw)
         center_image = (component.centroid_x, component.centroid_y)
-        center_plane = self.target_projector.image_to_plane(
+        center_plane = projector.image_to_plane(
             center_image,
-            roll,
-            pitch,
-            height,
-            plane_height,
+            context.roll_deg,
+            context.pitch_deg,
+            context.height_cm,
+            context.arrow_plane_height_cm,
         )
         if center_plane is None:
             raise ValueError("候选质心无法投影到箭头平面")
         relative_yaw = wrap_degrees(
-            car_yaw if self.car_yaw_relative_var.get() else car_yaw - uav_yaw
+            context.car_yaw_deg
+            if context.car_yaw_relative
+            else context.car_yaw_deg - context.uav_yaw_deg
         )
         physical_points = build_ideal_chevron_points(
             center_plane,
-            arm_length,
-            arrow_angle,
-            wrap_degrees(relative_yaw + opening_offset),
+            context.arrow_arm_length_cm,
+            context.arrow_angle_deg,
+            wrap_degrees(relative_yaw + context.arrow_opening_offset_deg),
         )
-        projected_apex = self.target_projector.plane_to_image(
+        projected_apex = projector.plane_to_image(
             physical_points["apex"],
-            roll,
-            pitch,
-            height,
-            plane_height,
+            context.roll_deg,
+            context.pitch_deg,
+            context.height_cm,
+            context.arrow_plane_height_cm,
         )
         if projected_apex is None:
             raise ValueError("理论箭头顶点位于相机后方")
@@ -2170,6 +2372,7 @@ class PictureViewerApp:
         thresholds: ContourThresholds,
         yaw_assist_enabled: bool,
         yaw_tolerance_deg: float,
+        yaw_context: ContourYawContext | None = None,
     ) -> tuple[bool, tuple[str, ...], bool, float | None, str]:
         decision = evaluate_contour_metrics(metrics, thresholds)
         if decision.passed:
@@ -2181,14 +2384,11 @@ class PictureViewerApp:
 
         direction_free_thresholds = replace(
             thresholds,
-            min_vertex_angle_deg=0.0,
-            max_vertex_angle_deg=180.0,
-            min_arm_balance=0.0,
-            min_endpoint_turn_deg=0.0,
-            min_vertex_turn_deg=0.0,
-            max_vertex_turn_deg=180.0,
-            min_notch_turn_deg=0.0,
-            max_negative_turn_deg=180.0,
+            enabled=tuple(
+                field_name
+                for field_name in thresholds.enabled
+                if field_name not in CONTOUR_YAW_RESCUE_FIELDS
+            ),
         )
         base_decision = evaluate_contour_metrics(metrics, direction_free_thresholds)
         if not base_decision.passed:
@@ -2197,6 +2397,7 @@ class PictureViewerApp:
             direction_error, direction_source = self.contour_yaw_direction_error(
                 component,
                 metrics,
+                yaw_context,
             )
         except ValueError as exc:
             return (
@@ -2218,6 +2419,458 @@ class PictureViewerApp:
             direction_error,
             direction_source,
         )
+
+    def current_batch_recognition_config(self) -> BatchRecognitionConfig:
+        if self.batch_mode_var.get() not in BATCH_MODE_NAMES:
+            raise ValueError("批量识别模式无效")
+        yaw_assist_enabled, yaw_tolerance_deg = self.current_contour_yaw_assist()
+        return BatchRecognitionConfig(
+            mode=self.batch_mode_var.get(),
+            binary_threshold=self.safe_int(self.threshold_var, 50, 0, 255),
+            min_area=self.safe_int(
+                self.min_area_var,
+                6,
+                1,
+                self.calibration.output_width * self.calibration.output_height,
+            ),
+            undistort_interpolation=self.current_undistort_interpolation(),
+            arrow_thresholds=self.current_contour_thresholds(TARGET_ARROW),
+            beacon_thresholds=self.current_contour_thresholds(TARGET_BEACON),
+            beacon_accept_limit=self.current_beacon_accept_limit(),
+            yaw_assist_enabled=yaw_assist_enabled,
+            yaw_tolerance_deg=yaw_tolerance_deg,
+            yaw_context=(
+                self.current_contour_yaw_context()
+                if yaw_assist_enabled
+                else None
+            ),
+        )
+
+    def recognize_batch_path(
+        self,
+        path: Path,
+        config: BatchRecognitionConfig,
+    ) -> BatchRecognitionRow:
+        gray = self.load_gray_image(path)
+        undistorted = self.undistorter.apply(
+            gray,
+            interpolation=config.undistort_interpolation,
+        )
+        binary = threshold_image(undistorted, config.binary_threshold)
+        components = find_contour_components(binary, min_area=config.min_area)
+        yaw_context = (
+            self.batch_yaw_context_for_path(path, config.yaw_context)
+            if config.yaw_context is not None
+            else None
+        )
+        arrow_count = 0
+        beacon_count = 0
+        yaw_assisted_count = 0
+        for component in components:
+            metrics = calculate_contour_metrics(
+                component,
+                undistorted,
+                binary,
+                config.arrow_thresholds,
+                negative_turn_window_points=(
+                    config.beacon_thresholds.direction_window_points
+                ),
+            )
+            if config.mode == BATCH_MODE_ARROW:
+                arrow_passed, _failures, assisted, _error, _source = (
+                    self.evaluate_contour_arrow_with_yaw(
+                        component,
+                        metrics,
+                        config.arrow_thresholds,
+                        config.yaw_assist_enabled,
+                        config.yaw_tolerance_deg,
+                        yaw_context,
+                    )
+                )
+                if arrow_passed:
+                    arrow_count += 1
+                    yaw_assisted_count += int(assisted)
+                continue
+            if config.mode == BATCH_MODE_BEACON:
+                if (
+                    component_centroid_is_foreground(component, binary)
+                    and evaluate_contour_metrics(
+                        metrics,
+                        config.beacon_thresholds,
+                    ).passed
+                ):
+                    beacon_count += 1
+                continue
+
+            if (
+                beacon_count < config.beacon_accept_limit
+                and component_centroid_is_foreground(component, binary)
+                and evaluate_contour_metrics(
+                    metrics,
+                    config.beacon_thresholds,
+                ).passed
+            ):
+                beacon_count += 1
+                continue
+            if arrow_count >= 1:
+                continue
+            arrow_passed, _failures, assisted, _error, _source = (
+                self.evaluate_contour_arrow_with_yaw(
+                    component,
+                    metrics,
+                    config.arrow_thresholds,
+                    config.yaw_assist_enabled,
+                    config.yaw_tolerance_deg,
+                    yaw_context,
+                )
+            )
+            if arrow_passed:
+                arrow_count = 1
+                yaw_assisted_count += int(assisted)
+        return BatchRecognitionRow(
+            path=path,
+            candidate_count=len(components),
+            arrow_count=arrow_count,
+            beacon_count=beacon_count,
+            yaw_assisted_count=yaw_assisted_count,
+        )
+
+    def open_batch_recognition_window(self) -> None:
+        if self.batch_window is not None and self.batch_window.winfo_exists():
+            self.batch_window.deiconify()
+            self.batch_window.lift()
+            return
+        window = tk.Toplevel(self.root)
+        window.title("文件夹批量识别")
+        window.geometry("940x560")
+        window.minsize(760, 430)
+        self.batch_window = window
+        content = ttk.Frame(window, padding=10)
+        content.grid(row=0, column=0, sticky="nsew")
+        window.columnconfigure(0, weight=1)
+        window.rowconfigure(0, weight=1)
+        content.columnconfigure(0, weight=1)
+        content.rowconfigure(3, weight=1)
+
+        controls = ttk.Frame(content)
+        controls.grid(row=0, column=0, sticky="ew")
+        ttk.Label(controls, text="识别模式").pack(side=tk.LEFT)
+        self.batch_mode_box = ttk.Combobox(
+            controls,
+            textvariable=self.batch_mode_var,
+            values=BATCH_MODE_NAMES,
+            state="readonly",
+            width=12,
+        )
+        self.batch_mode_box.pack(side=tk.LEFT, padx=(5, 10))
+        self.batch_scope_check = ttk.Checkbutton(
+            controls,
+            text="只处理当前筛选结果",
+            variable=self.batch_filtered_only_var,
+        )
+        self.batch_scope_check.pack(side=tk.LEFT)
+        self.batch_start_button = ttk.Button(
+            controls,
+            text="开始批量识别",
+            command=self.start_batch_recognition,
+        )
+        self.batch_start_button.pack(side=tk.RIGHT)
+        self.batch_cancel_button = ttk.Button(
+            controls,
+            text="取消",
+            command=self.cancel_batch_recognition,
+            state=tk.DISABLED,
+        )
+        self.batch_cancel_button.pack(side=tk.RIGHT, padx=(0, 6))
+
+        progress_row = ttk.Frame(content)
+        progress_row.grid(row=1, column=0, sticky="ew", pady=(8, 4))
+        progress_row.columnconfigure(0, weight=1)
+        self.batch_progress = ttk.Progressbar(progress_row, mode="determinate")
+        self.batch_progress.grid(row=0, column=0, sticky="ew")
+        ttk.Label(
+            progress_row,
+            textvariable=self.batch_current_var,
+            anchor="w",
+        ).grid(row=1, column=0, sticky="ew", pady=(3, 0))
+
+        result_controls = ttk.Frame(content)
+        result_controls.grid(row=2, column=0, sticky="ew", pady=(3, 4))
+        ttk.Label(result_controls, textvariable=self.batch_summary_var).pack(
+            side=tk.LEFT
+        )
+        ttk.Button(
+            result_controls,
+            text="复制路径",
+            command=self.copy_batch_selected_path,
+        ).pack(side=tk.RIGHT)
+        result_filter_box = ttk.Combobox(
+            result_controls,
+            textvariable=self.batch_result_filter_var,
+            values=BATCH_FILTER_NAMES,
+            state="readonly",
+            width=10,
+        )
+        result_filter_box.pack(side=tk.RIGHT, padx=(6, 6))
+        result_filter_box.bind(
+            "<<ComboboxSelected>>",
+            lambda _event: self.refresh_batch_tree(),
+        )
+        ttk.Label(result_controls, text="筛选").pack(side=tk.RIGHT)
+
+        tree_frame = ttk.Frame(content)
+        tree_frame.grid(row=3, column=0, sticky="nsew")
+        tree_frame.columnconfigure(0, weight=1)
+        tree_frame.rowconfigure(0, weight=1)
+        columns = ("file", "candidates", "arrows", "beacons", "yaw", "status")
+        self.batch_tree = ttk.Treeview(
+            tree_frame,
+            columns=columns,
+            show="headings",
+            selectmode="browse",
+        )
+        headings = {
+            "file": ("文件", 520),
+            "candidates": ("候选", 60),
+            "arrows": ("箭头", 60),
+            "beacons": ("信标", 60),
+            "yaw": ("Yaw辅助", 75),
+            "status": ("状态/错误", 180),
+        }
+        for name, (label, width) in headings.items():
+            self.batch_tree.heading(name, text=label)
+            self.batch_tree.column(
+                name,
+                width=width,
+                minwidth=50,
+                stretch=name == "file",
+                anchor=tk.W if name == "file" else tk.CENTER,
+            )
+        self.batch_tree.tag_configure("multi", foreground="#d9363e")
+        self.batch_tree.tag_configure("error", foreground="#d97706")
+        self.batch_tree.tag_configure("empty", foreground="#6b7280")
+        self.batch_tree.grid(row=0, column=0, sticky="nsew")
+        scrollbar = ttk.Scrollbar(
+            tree_frame,
+            orient=tk.VERTICAL,
+            command=self.batch_tree.yview,
+        )
+        scrollbar.grid(row=0, column=1, sticky="ns")
+        self.batch_tree.configure(yscrollcommand=scrollbar.set)
+        self.batch_tree.bind("<Double-1>", self.open_batch_selected_image)
+        window.protocol("WM_DELETE_WINDOW", self.close_batch_recognition_window)
+        self.refresh_batch_tree()
+
+    def close_batch_recognition_window(self) -> None:
+        self.batch_run_id += 1
+        self.batch_cancel_requested = True
+        self.batch_running = False
+        if self.batch_window is not None and self.batch_window.winfo_exists():
+            self.batch_window.destroy()
+        self.batch_window = None
+        self.batch_tree = None
+        self.batch_progress = None
+        self.batch_start_button = None
+        self.batch_cancel_button = None
+        self.batch_mode_box = None
+        self.batch_scope_check = None
+
+    def start_batch_recognition(self) -> None:
+        if self.batch_running:
+            return
+        files = (
+            self.visible_files
+            if self.batch_filtered_only_var.get()
+            else self.all_files
+        )
+        if not files:
+            messagebox.showinfo("批量识别", "当前没有可处理的图像。")
+            return
+        try:
+            config = self.current_batch_recognition_config()
+        except ValueError as exc:
+            messagebox.showerror("批量识别参数错误", str(exc))
+            return
+        self.batch_files = list(files)
+        self.batch_rows.clear()
+        self.batch_index = 0
+        self.batch_config = config
+        self.batch_run_id += 1
+        run_id = self.batch_run_id
+        self.batch_running = True
+        self.batch_cancel_requested = False
+        self.batch_current_var.set("")
+        if self.batch_progress is not None:
+            self.batch_progress.configure(maximum=len(files), value=0)
+        if self.batch_start_button is not None:
+            self.batch_start_button.configure(state=tk.DISABLED)
+        if self.batch_cancel_button is not None:
+            self.batch_cancel_button.configure(state=tk.NORMAL)
+        if self.batch_mode_box is not None:
+            self.batch_mode_box.configure(state=tk.DISABLED)
+        if self.batch_scope_check is not None:
+            self.batch_scope_check.configure(state=tk.DISABLED)
+        self.refresh_batch_tree()
+        self.update_batch_summary()
+        self.root.after(1, lambda: self.process_next_batch_file(run_id))
+
+    def cancel_batch_recognition(self) -> None:
+        if self.batch_running:
+            self.batch_cancel_requested = True
+            self.batch_current_var.set("正在取消，已完成结果将保留……")
+
+    def process_next_batch_file(self, run_id: int | None = None) -> None:
+        if run_id is not None and run_id != self.batch_run_id:
+            return
+        if not self.batch_running or self.batch_window is None:
+            return
+        if self.batch_cancel_requested or self.batch_index >= len(self.batch_files):
+            self.finish_batch_recognition(cancelled=self.batch_cancel_requested)
+            return
+        path = self.batch_files[self.batch_index]
+        self.batch_current_var.set(
+            f"{self.batch_index + 1}/{len(self.batch_files)}  "
+            f"{self.batch_relative_path(path)}"
+        )
+        try:
+            assert self.batch_config is not None
+            row = self.recognize_batch_path(path, self.batch_config)
+        except (OSError, UnicodeError, ValueError, OverflowError) as exc:
+            row = BatchRecognitionRow(
+                path=path,
+                candidate_count=0,
+                arrow_count=0,
+                beacon_count=0,
+                yaw_assisted_count=0,
+                error=f"{type(exc).__name__}: {exc}",
+            )
+        self.batch_rows.append(row)
+        self.batch_index += 1
+        if self.batch_progress is not None:
+            self.batch_progress.configure(value=self.batch_index)
+        if self.batch_row_matches_filter(row):
+            self.insert_batch_row(len(self.batch_rows) - 1, row)
+        self.update_batch_summary()
+        current_run_id = self.batch_run_id
+        self.root.after(
+            1,
+            lambda: self.process_next_batch_file(current_run_id),
+        )
+
+    def finish_batch_recognition(self, cancelled: bool) -> None:
+        self.batch_running = False
+        if self.batch_start_button is not None:
+            self.batch_start_button.configure(state=tk.NORMAL)
+        if self.batch_cancel_button is not None:
+            self.batch_cancel_button.configure(state=tk.DISABLED)
+        if self.batch_mode_box is not None:
+            self.batch_mode_box.configure(state="readonly")
+        if self.batch_scope_check is not None:
+            self.batch_scope_check.configure(state=tk.NORMAL)
+        prefix = "已取消" if cancelled else "批量识别完成"
+        self.batch_current_var.set(
+            f"{prefix}：完成 {len(self.batch_rows)}/{len(self.batch_files)} 张"
+        )
+        self.update_batch_summary()
+
+    def batch_relative_path(self, path: Path) -> str:
+        try:
+            return str(path.relative_to(Path(self.folder_var.get())))
+        except ValueError:
+            return str(path)
+
+    def batch_row_matches_filter(self, row: BatchRecognitionRow) -> bool:
+        selected = self.batch_result_filter_var.get()
+        if selected == BATCH_FILTER_MULTI_ARROW:
+            return not row.error and row.arrow_count >= 2
+        if selected == BATCH_FILTER_UNRECOGNIZED:
+            return not row.error and row.arrow_count == 0 and row.beacon_count == 0
+        if selected == BATCH_FILTER_ERROR:
+            return bool(row.error)
+        return True
+
+    def batch_row_status(self, row: BatchRecognitionRow) -> tuple[str, str]:
+        if row.error:
+            return f"异常：{row.error}", "error"
+        if row.arrow_count >= 2:
+            return "多箭头", "multi"
+        if row.arrow_count == 0 and row.beacon_count == 0:
+            return "未识别", "empty"
+        return "通过", ""
+
+    def insert_batch_row(self, index: int, row: BatchRecognitionRow) -> None:
+        if self.batch_tree is None:
+            return
+        status, tag = self.batch_row_status(row)
+        self.batch_tree.insert(
+            "",
+            tk.END,
+            iid=str(index),
+            values=(
+                self.batch_relative_path(row.path),
+                row.candidate_count,
+                row.arrow_count,
+                row.beacon_count,
+                row.yaw_assisted_count,
+                status,
+            ),
+            tags=(tag,) if tag else (),
+        )
+
+    def refresh_batch_tree(self) -> None:
+        if self.batch_tree is None:
+            return
+        children = self.batch_tree.get_children()
+        if children:
+            self.batch_tree.delete(*children)
+        for index, row in enumerate(self.batch_rows):
+            if self.batch_row_matches_filter(row):
+                self.insert_batch_row(index, row)
+
+    def update_batch_summary(self) -> None:
+        errors = sum(bool(row.error) for row in self.batch_rows)
+        zero = sum(
+            not row.error and row.arrow_count == 0
+            for row in self.batch_rows
+        )
+        one = sum(
+            not row.error and row.arrow_count == 1
+            for row in self.batch_rows
+        )
+        multiple = sum(
+            not row.error and row.arrow_count >= 2
+            for row in self.batch_rows
+        )
+        self.batch_summary_var.set(
+            f"完成 {len(self.batch_rows)}/{len(self.batch_files)} | "
+            f"箭头0个 {zero}，1个 {one}，≥2个 {multiple} | 异常 {errors}"
+        )
+
+    def selected_batch_row(self) -> BatchRecognitionRow | None:
+        if self.batch_tree is None:
+            return None
+        selection = self.batch_tree.selection()
+        if not selection:
+            return None
+        try:
+            return self.batch_rows[int(selection[0])]
+        except (ValueError, IndexError):
+            return None
+
+    def open_batch_selected_image(self, _event: object = None) -> None:
+        row = self.selected_batch_row()
+        if row is None:
+            return
+        self.load_path(row.path)
+        self.root.deiconify()
+        self.root.lift()
+
+    def copy_batch_selected_path(self) -> None:
+        row = self.selected_batch_row()
+        if row is None:
+            return
+        self.root.clipboard_clear()
+        self.root.clipboard_append(str(row.path))
 
     def recognize_current_image_arrows_only(self) -> None:
         self.recognition_mode_var.set(RECOGNITION_MODE_CONTOUR)
@@ -2301,6 +2954,10 @@ class PictureViewerApp:
             yaw_assisted = False
             yaw_direction_error: float | None = None
             yaw_direction_source = ""
+            centroid_is_white = component_centroid_is_foreground(
+                component,
+                self.binary,
+            )
 
             if target_only == TARGET_ARROW:
                 (
@@ -2326,19 +2983,10 @@ class PictureViewerApp:
                 else:
                     failures.extend(arrow_failures)
             elif target_only == TARGET_BEACON:
-                beacon_decision = evaluate_contour_metrics(
-                    contour_metrics,
-                    thresholds[TARGET_BEACON],
-                )
-                attempts.append(
-                    f"信标{'通过' if beacon_decision.passed else '失败'}"
-                )
-                if beacon_decision.passed:
-                    accepted_kind = TARGET_BEACON
+                if not centroid_is_white:
+                    attempts.append("信标跳过（质心二值点为黑色）")
+                    failures.append("信标：质心二值点为黑色")
                 else:
-                    failures.extend(beacon_decision.failures)
-            else:
-                if beacon_found_count < beacon_accept_limit:
                     beacon_decision = evaluate_contour_metrics(
                         contour_metrics,
                         thresholds[TARGET_BEACON],
@@ -2348,12 +2996,29 @@ class PictureViewerApp:
                     )
                     if beacon_decision.passed:
                         accepted_kind = TARGET_BEACON
-                        beacon_found_count += 1
                     else:
-                        failures.extend(
-                            f"信标：{failure}"
-                            for failure in beacon_decision.failures
+                        failures.extend(beacon_decision.failures)
+            else:
+                if beacon_found_count < beacon_accept_limit:
+                    if not centroid_is_white:
+                        attempts.append("信标跳过（质心二值点为黑色）")
+                        failures.append("信标：质心二值点为黑色")
+                    else:
+                        beacon_decision = evaluate_contour_metrics(
+                            contour_metrics,
+                            thresholds[TARGET_BEACON],
                         )
+                        attempts.append(
+                            f"信标{'通过' if beacon_decision.passed else '失败'}"
+                        )
+                        if beacon_decision.passed:
+                            accepted_kind = TARGET_BEACON
+                            beacon_found_count += 1
+                        else:
+                            failures.extend(
+                                f"信标：{failure}"
+                                for failure in beacon_decision.failures
+                            )
                 else:
                     attempts.append(
                         f"信标跳过（已达到上限 {beacon_accept_limit}）"
@@ -2666,6 +3331,13 @@ class PictureViewerApp:
                     failures.append(
                         f"信标：已达到单帧上限 {beacon_accept_limit}"
                     )
+                    continue
+                if (
+                    target_kind == TARGET_BEACON
+                    and not component_centroid_is_foreground(component, self.binary)
+                ):
+                    attempts.append("信标跳过（质心二值点为黑色）")
+                    failures.append("信标：质心二值点为黑色")
                     continue
                 current = evaluate_target(component, target_kind)
                 last_result = current
@@ -3847,4 +4519,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

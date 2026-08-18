@@ -1,6 +1,6 @@
 {
-  "folder": "D:\\code\\project\\Seekfree_CYT4BB_Opensource_Library_视觉算法优化\\vision\\capture",
-  "threshold": 109,
+  "folder": "D:/code/project/Seekfree_CYT4BB_Opensource_Library_视觉算法优化/vision/capture",
+  "threshold": 120,
   "min_area": 6,
   "connectivity": 8,
   "candidate_mode": "八邻域轮廓爬线",
@@ -9,7 +9,7 @@
   "beacon_accept_limit": 7,
   "ideal_target": {
     "type": "理想箭头",
-    "background": "去畸变灰度图",
+    "background": "单阈值二值图",
     "roll_deg": 1.077956,
     "pitch_deg": 3.100144,
     "uav_yaw_deg": -60.745052,
@@ -118,12 +118,38 @@
       "min_vertex_angle_deg": 25.0,
       "max_vertex_angle_deg": 130.0,
       "min_arm_balance": 0.25,
-      "direction_window_points": 7,
+      "direction_window_points": 6,
       "min_endpoint_turn_deg": 120.0,
       "min_vertex_turn_deg": 70.0,
       "max_vertex_turn_deg": 100.0,
       "min_notch_turn_deg": 10.0,
-      "max_negative_turn_deg": 180.0
+      "max_negative_turn_deg": 180.0,
+      "enabled": [
+        "min_contour_points",
+        "min_gray_contrast",
+        "min_aspect_ratio",
+        "max_aspect_ratio",
+        "min_circularity",
+        "max_circularity",
+        "min_solidity",
+        "max_solidity",
+        "min_radial_cv",
+        "max_radial_cv",
+        "min_concavity_ratio",
+        "max_concavity_ratio",
+        "min_direction_entropy",
+        "max_direction_entropy",
+        "min_dominant_axis_ratio",
+        "max_dominant_axis_ratio",
+        "min_vertex_angle_deg",
+        "max_vertex_angle_deg",
+        "min_arm_balance",
+        "min_endpoint_turn_deg",
+        "min_vertex_turn_deg",
+        "max_vertex_turn_deg",
+        "min_notch_turn_deg",
+        "max_negative_turn_deg"
+      ]
     },
     "beacon": {
       "min_contour_points": 8,
@@ -150,11 +176,23 @@
       "min_vertex_turn_deg": 0.0,
       "max_vertex_turn_deg": 180.0,
       "min_notch_turn_deg": 0.0,
-      "max_negative_turn_deg": 90.0
+      "max_negative_turn_deg": 50.0,
+      "enabled": [
+        "min_contour_points",
+        "min_circularity",
+        "max_circularity",
+        "min_solidity",
+        "max_solidity",
+        "max_negative_turn_deg"
+      ]
     },
     "yaw_assist": {
       "enabled": true,
-      "tolerance_deg": 20.0
+      "tolerance_deg": 30.0
     }
+  },
+  "batch_recognition": {
+    "mode": "仅测箭头",
+    "filtered_only": false
   }
 }
