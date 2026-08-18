@@ -123,6 +123,9 @@ class BeaconRecognitionResult:
     binary_threshold: int | None = None
     contour_metrics: ContourMetrics | None = None
     recognition_engine: str = ""
+    yaw_assisted: bool = False
+    yaw_direction_error_deg: float | None = None
+    yaw_direction_source: str = ""
 
 
 FIRMWARE_ROUTE_ARROW_MIN_AREA = 30
@@ -172,6 +175,9 @@ class PictureViewerApp:
         contour_settings = settings.get("contour_thresholds", {})
         if not isinstance(contour_settings, dict):
             contour_settings = {}
+        contour_yaw_settings = contour_settings.get("yaw_assist", {})
+        if not isinstance(contour_yaw_settings, dict):
+            contour_yaw_settings = {}
         sampling_settings = ideal_settings.get("sampling", {})
         if not isinstance(sampling_settings, dict):
             sampling_settings = {}
@@ -364,6 +370,12 @@ class PictureViewerApp:
                 field_name: tk.StringVar(value=str(getattr(config, field_name)))
                 for field_name, _label in CONTOUR_THRESHOLD_FIELDS
             }
+        self.contour_yaw_assist_enabled_var = tk.BooleanVar(
+            value=bool(contour_yaw_settings.get("enabled", True))
+        )
+        self.contour_yaw_tolerance_var = tk.StringVar(
+            value=str(contour_yaw_settings.get("tolerance_deg", "20"))
+        )
         self.ideal_source_var = tk.StringVar(value="姿态：手动；小车Yaw：手动")
         self.ideal_status_var = tk.StringVar(value="选择目标后可在图像中左键拖动")
         self.sampling_summary_var = tk.StringVar(
@@ -757,6 +769,16 @@ class PictureViewerApp:
             text="一键识别",
             command=self.recognize_current_image_targets,
         ).pack(side=tk.LEFT)
+        ttk.Button(
+            candidate_actions,
+            text="仅测箭头",
+            command=self.recognize_current_image_arrows_only,
+        ).pack(side=tk.LEFT, padx=(6, 0))
+        ttk.Button(
+            candidate_actions,
+            text="仅测信标",
+            command=self.recognize_current_image_beacons_only,
+        ).pack(side=tk.LEFT, padx=(6, 0))
 
         columns = (
             "area",
@@ -865,6 +887,14 @@ class PictureViewerApp:
             except ValueError:
                 contour_thresholds = self.contour_defaults[target_kind]
             contour_threshold_settings[target_kind] = contour_thresholds.to_mapping()
+        try:
+            yaw_assist_enabled, yaw_tolerance = self.current_contour_yaw_assist()
+        except ValueError:
+            yaw_assist_enabled, yaw_tolerance = True, 20.0
+        contour_threshold_settings["yaw_assist"] = {
+            "enabled": yaw_assist_enabled,
+            "tolerance_deg": yaw_tolerance,
+        }
         matching_settings["arrow_shape_gate"] = {
             "enabled": bool(self.arrow_shape_gate_enabled_var.get()),
             "max_occupancy": self.safe_ratio(
@@ -1418,6 +1448,15 @@ class PictureViewerApp:
         thresholds.validate()
         return thresholds
 
+    def current_contour_yaw_assist(self) -> tuple[bool, float]:
+        try:
+            tolerance = float(self.contour_yaw_tolerance_var.get())
+        except (TypeError, ValueError, tk.TclError) as exc:
+            raise ValueError("Yaw辅助方向误差必须是有效数字") from exc
+        if not math.isfinite(tolerance) or not 1.0 <= tolerance <= 90.0:
+            raise ValueError("Yaw辅助方向误差必须在1到90度之间")
+        return bool(self.contour_yaw_assist_enabled_var.get()), tolerance
+
     def open_contour_matching_window(self) -> None:
         if (
             self.contour_matching_window is not None
@@ -1436,15 +1475,34 @@ class PictureViewerApp:
         ttk.Label(
             content,
             text=(
-                "轮廓模式不使用理想投影、姿态、高度或车辆Yaw。"
-                "当前数值为宽松初值，用于先观察各项几何特征。"
+                "基础轮廓门控不依赖姿态或Yaw；只有方向点不完整时，"
+                "可使用车辆Yaw投影进行有限补救。"
             ),
             justify=tk.LEFT,
             wraplength=450,
         ).grid(row=0, column=0, sticky="w", pady=(0, 7))
 
+        yaw_controls = ttk.Frame(content)
+        yaw_controls.grid(row=1, column=0, sticky="ew", pady=(0, 7))
+        ttk.Checkbutton(
+            yaw_controls,
+            text="启用Yaw辅助箭头补救",
+            variable=self.contour_yaw_assist_enabled_var,
+            command=self.contour_parameter_changed,
+        ).pack(side=tk.LEFT)
+        ttk.Label(yaw_controls, text="方向误差上限(°)").pack(
+            side=tk.LEFT, padx=(12, 4)
+        )
+        yaw_tolerance_entry = ttk.Entry(
+            yaw_controls,
+            width=7,
+            textvariable=self.contour_yaw_tolerance_var,
+        )
+        yaw_tolerance_entry.pack(side=tk.LEFT)
+        yaw_tolerance_entry.bind("<KeyRelease>", self.contour_parameter_changed)
+
         notebook = ttk.Notebook(content)
-        notebook.grid(row=1, column=0, sticky="nsew")
+        notebook.grid(row=2, column=0, sticky="nsew")
         for target_kind in MATCHING_TARGET_KINDS:
             tab = ttk.Frame(notebook, padding=8)
             notebook.add(tab, text=MATCHING_TARGET_NAMES[target_kind])
@@ -1462,7 +1520,7 @@ class PictureViewerApp:
                 entry.bind("<KeyRelease>", self.contour_parameter_changed)
 
         actions = ttk.Frame(content)
-        actions.grid(row=2, column=0, sticky="e", pady=(9, 0))
+        actions.grid(row=3, column=0, sticky="e", pady=(9, 0))
         ttk.Button(
             actions,
             text="恢复宽松初值",
@@ -1490,6 +1548,8 @@ class PictureViewerApp:
                 self.contour_threshold_vars[target_kind][field_name].set(
                     str(getattr(defaults, field_name))
                 )
+        self.contour_yaw_assist_enabled_var.set(True)
+        self.contour_yaw_tolerance_var.set("20")
         self.invalidate_beacon_recognition()
         self.update_component_tree()
         self.redraw_canvas()
@@ -1986,7 +2046,190 @@ class PictureViewerApp:
             f"二值阈值 {binary_threshold} | 信标直径 {diameter:.1f} cm"
         )
 
-    def recognize_current_image_contours(self) -> None:
+    @staticmethod
+    def _direction_error_deg(
+        expected: tuple[float, float],
+        observed: tuple[float, float],
+    ) -> float | None:
+        expected_length = math.hypot(*expected)
+        observed_length = math.hypot(*observed)
+        if expected_length <= 1e-9 or observed_length <= 1e-9:
+            return None
+        dot = expected[0] * observed[0] + expected[1] * observed[1]
+        cross = expected[0] * observed[1] - expected[1] * observed[0]
+        return math.degrees(math.atan2(abs(cross), dot))
+
+    def contour_yaw_direction_error(
+        self,
+        component: ConnectedComponent,
+        metrics: ContourMetrics,
+    ) -> tuple[float, str]:
+        if len(metrics.arm_tip_points) != 2:
+            raise ValueError("需要两个端点")
+        direction_points = (
+            ("V", metrics.vertex_point),
+            ("N", metrics.deepest_point),
+        )
+        available_points = [
+            (name, point) for name, point in direction_points if point is not None
+        ]
+        if not available_points:
+            raise ValueError("缺少外顶点V和内凹口N")
+
+        try:
+            roll = float(self.roll_var.get())
+            pitch = float(self.pitch_var.get())
+            height = float(self.height_var.get())
+            uav_yaw = float(self.uav_yaw_var.get())
+            car_yaw = float(self.car_yaw_var.get())
+            plane_height = float(self.arrow_plane_height_var.get())
+            arm_length = float(self.arrow_arm_length_var.get())
+            arrow_angle = float(self.arrow_angle_var.get())
+            opening_offset = float(self.arrow_opening_offset_var.get())
+            mount_roll = float(self.mount_roll_var.get())
+            mount_pitch = float(self.mount_pitch_var.get())
+            mount_yaw = float(self.mount_yaw_var.get())
+        except (TypeError, ValueError, tk.TclError) as exc:
+            raise ValueError("姿态、Yaw或箭头参数不是有效数字") from exc
+        values = (
+            roll,
+            pitch,
+            height,
+            uav_yaw,
+            car_yaw,
+            plane_height,
+            arm_length,
+            arrow_angle,
+            opening_offset,
+            mount_roll,
+            mount_pitch,
+            mount_yaw,
+        )
+        if not all(math.isfinite(value) for value in values):
+            raise ValueError("姿态、Yaw和箭头参数必须是有限数值")
+        if height <= 0.0 or plane_height < 0.0:
+            raise ValueError("高度和箭头平面高度无效")
+        if plane_height >= height - self.projection_calibration.offset_z_cm:
+            raise ValueError("箭头平面必须低于相机")
+
+        self.target_projector.set_mount_angles(mount_roll, mount_pitch, mount_yaw)
+        center_image = (component.centroid_x, component.centroid_y)
+        center_plane = self.target_projector.image_to_plane(
+            center_image,
+            roll,
+            pitch,
+            height,
+            plane_height,
+        )
+        if center_plane is None:
+            raise ValueError("候选质心无法投影到箭头平面")
+        relative_yaw = wrap_degrees(
+            car_yaw if self.car_yaw_relative_var.get() else car_yaw - uav_yaw
+        )
+        physical_points = build_ideal_chevron_points(
+            center_plane,
+            arm_length,
+            arrow_angle,
+            wrap_degrees(relative_yaw + opening_offset),
+        )
+        projected_apex = self.target_projector.plane_to_image(
+            physical_points["apex"],
+            roll,
+            pitch,
+            height,
+            plane_height,
+        )
+        if projected_apex is None:
+            raise ValueError("理论箭头顶点位于相机后方")
+        expected = (
+            projected_apex[0] - center_image[0],
+            projected_apex[1] - center_image[1],
+        )
+        first_tip, second_tip = metrics.arm_tip_points
+        endpoint_center = (
+            (first_tip[0] + second_tip[0]) * 0.5,
+            (first_tip[1] + second_tip[1]) * 0.5,
+        )
+        errors: list[tuple[float, str]] = []
+        for name, point in available_points:
+            assert point is not None
+            error = self._direction_error_deg(
+                expected,
+                (point[0] - endpoint_center[0], point[1] - endpoint_center[1]),
+            )
+            if error is not None:
+                errors.append((error, name))
+        if not errors:
+            raise ValueError("方向点与端点中点重合")
+        return min(errors, key=lambda item: item[0])
+
+    def evaluate_contour_arrow_with_yaw(
+        self,
+        component: ConnectedComponent,
+        metrics: ContourMetrics,
+        thresholds: ContourThresholds,
+        yaw_assist_enabled: bool,
+        yaw_tolerance_deg: float,
+    ) -> tuple[bool, tuple[str, ...], bool, float | None, str]:
+        decision = evaluate_contour_metrics(metrics, thresholds)
+        if decision.passed:
+            return True, (), False, None, ""
+        if not yaw_assist_enabled or len(metrics.arm_tip_points) != 2:
+            return False, decision.failures, False, None, ""
+        if metrics.vertex_point is None and metrics.deepest_point is None:
+            return False, decision.failures, False, None, ""
+
+        direction_free_thresholds = replace(
+            thresholds,
+            min_vertex_angle_deg=0.0,
+            max_vertex_angle_deg=180.0,
+            min_arm_balance=0.0,
+            min_endpoint_turn_deg=0.0,
+            min_vertex_turn_deg=0.0,
+            max_vertex_turn_deg=180.0,
+            min_notch_turn_deg=0.0,
+            max_negative_turn_deg=180.0,
+        )
+        base_decision = evaluate_contour_metrics(metrics, direction_free_thresholds)
+        if not base_decision.passed:
+            return False, decision.failures, False, None, ""
+        try:
+            direction_error, direction_source = self.contour_yaw_direction_error(
+                component,
+                metrics,
+            )
+        except ValueError as exc:
+            return (
+                False,
+                (*decision.failures, f"Yaw辅助不可用：{exc}"),
+                False,
+                None,
+                "",
+            )
+        if direction_error <= yaw_tolerance_deg:
+            return True, (), True, direction_error, direction_source
+        return (
+            False,
+            (
+                *decision.failures,
+                f"Yaw方向误差 {direction_error:.3f} > {yaw_tolerance_deg:.3f}",
+            ),
+            False,
+            direction_error,
+            direction_source,
+        )
+
+    def recognize_current_image_arrows_only(self) -> None:
+        self.recognition_mode_var.set(RECOGNITION_MODE_CONTOUR)
+        self.recognize_current_image_contours(TARGET_ARROW)
+
+    def recognize_current_image_beacons_only(self) -> None:
+        self.recognition_mode_var.set(RECOGNITION_MODE_CONTOUR)
+        self.recognize_current_image_contours(TARGET_BEACON)
+
+    def recognize_current_image_contours(self, target_only: str | None = None) -> None:
+        if target_only not in (None, TARGET_ARROW, TARGET_BEACON):
+            raise ValueError("轮廓单类型测试目标无效")
         if self.undistorted is None or self.binary is None:
             messagebox.showinfo("轮廓识别", "请先加载一张图像。")
             return
@@ -2012,6 +2255,9 @@ class PictureViewerApp:
                 target_kind: self.current_contour_thresholds(target_kind)
                 for target_kind in MATCHING_TARGET_KINDS
             }
+            yaw_assist_enabled, yaw_tolerance_deg = (
+                self.current_contour_yaw_assist()
+            )
         except ValueError as exc:
             messagebox.showerror("轮廓识别参数错误", str(exc))
             self.status_var.set(f"轮廓识别失败：{exc}")
@@ -2029,13 +2275,20 @@ class PictureViewerApp:
                     self.undistorted,
                     self.binary,
                     thresholds[TARGET_ARROW],
+                    negative_turn_window_points=(
+                        thresholds[TARGET_BEACON].direction_window_points
+                    ),
                 )
             except (ValueError, OverflowError) as exc:
                 results[component.label] = BeaconRecognitionResult(
                     metrics=None,
                     passed=False,
                     failures=(f"轮廓指标计算失败：{exc}",),
-                    route="信标优先",
+                    route=(
+                        f"仅测{MATCHING_TARGET_NAMES[target_only]}"
+                        if target_only is not None
+                        else "信标优先"
+                    ),
                     attempts=(),
                     binary_threshold=binary_threshold,
                     recognition_engine=RECOGNITION_MODE_CONTOUR,
@@ -2045,7 +2298,34 @@ class PictureViewerApp:
             attempts: list[str] = []
             failures: list[str] = []
             accepted_kind: str | None = None
-            if beacon_found_count < beacon_accept_limit:
+            yaw_assisted = False
+            yaw_direction_error: float | None = None
+            yaw_direction_source = ""
+
+            if target_only == TARGET_ARROW:
+                (
+                    arrow_passed,
+                    arrow_failures,
+                    yaw_assisted,
+                    yaw_direction_error,
+                    yaw_direction_source,
+                ) = self.evaluate_contour_arrow_with_yaw(
+                    component,
+                    contour_metrics,
+                    thresholds[TARGET_ARROW],
+                    yaw_assist_enabled,
+                    yaw_tolerance_deg,
+                )
+                attempts.append(
+                    "箭头Yaw辅助通过"
+                    if yaw_assisted
+                    else f"箭头{'通过' if arrow_passed else '失败'}"
+                )
+                if arrow_passed:
+                    accepted_kind = TARGET_ARROW
+                else:
+                    failures.extend(arrow_failures)
+            elif target_only == TARGET_BEACON:
                 beacon_decision = evaluate_contour_metrics(
                     contour_metrics,
                     thresholds[TARGET_BEACON],
@@ -2055,38 +2335,63 @@ class PictureViewerApp:
                 )
                 if beacon_decision.passed:
                     accepted_kind = TARGET_BEACON
-                    beacon_found_count += 1
                 else:
-                    failures.extend(
-                        f"信标：{failure}" for failure in beacon_decision.failures
-                    )
+                    failures.extend(beacon_decision.failures)
             else:
-                attempts.append(
-                    f"信标跳过（已达到上限 {beacon_accept_limit}）"
-                )
-                failures.append(
-                    f"信标：已达到单帧上限 {beacon_accept_limit}"
-                )
-
-            if accepted_kind is None:
-                if arrow_found:
-                    attempts.append("箭头跳过（本帧已有箭头）")
-                    failures.append("箭头：本帧已有箭头")
-                else:
-                    arrow_decision = evaluate_contour_metrics(
+                if beacon_found_count < beacon_accept_limit:
+                    beacon_decision = evaluate_contour_metrics(
                         contour_metrics,
-                        thresholds[TARGET_ARROW],
+                        thresholds[TARGET_BEACON],
                     )
                     attempts.append(
-                        f"箭头{'通过' if arrow_decision.passed else '失败'}"
+                        f"信标{'通过' if beacon_decision.passed else '失败'}"
                     )
-                    if arrow_decision.passed:
-                        accepted_kind = TARGET_ARROW
-                        arrow_found = True
+                    if beacon_decision.passed:
+                        accepted_kind = TARGET_BEACON
+                        beacon_found_count += 1
                     else:
                         failures.extend(
-                            f"箭头：{failure}" for failure in arrow_decision.failures
+                            f"信标：{failure}"
+                            for failure in beacon_decision.failures
                         )
+                else:
+                    attempts.append(
+                        f"信标跳过（已达到上限 {beacon_accept_limit}）"
+                    )
+                    failures.append(
+                        f"信标：已达到单帧上限 {beacon_accept_limit}"
+                    )
+
+                if accepted_kind is None:
+                    if arrow_found:
+                        attempts.append("箭头跳过（本帧已有箭头）")
+                        failures.append("箭头：本帧已有箭头")
+                    else:
+                        (
+                            arrow_passed,
+                            arrow_failures,
+                            yaw_assisted,
+                            yaw_direction_error,
+                            yaw_direction_source,
+                        ) = self.evaluate_contour_arrow_with_yaw(
+                            component,
+                            contour_metrics,
+                            thresholds[TARGET_ARROW],
+                            yaw_assist_enabled,
+                            yaw_tolerance_deg,
+                        )
+                        attempts.append(
+                            "箭头Yaw辅助通过"
+                            if yaw_assisted
+                            else f"箭头{'通过' if arrow_passed else '失败'}"
+                        )
+                        if arrow_passed:
+                            accepted_kind = TARGET_ARROW
+                            arrow_found = True
+                        else:
+                            failures.extend(
+                                f"箭头：{failure}" for failure in arrow_failures
+                            )
 
             results[component.label] = BeaconRecognitionResult(
                 metrics=None,
@@ -2094,11 +2399,18 @@ class PictureViewerApp:
                 failures=() if accepted_kind is not None else tuple(failures),
                 box_clipped=contour_metrics.boundary_clipped,
                 target_kind=accepted_kind,
-                route="信标优先",
+                route=(
+                    f"仅测{MATCHING_TARGET_NAMES[target_only]}"
+                    if target_only is not None
+                    else "信标优先"
+                ),
                 attempts=tuple(attempts),
                 binary_threshold=binary_threshold,
                 contour_metrics=contour_metrics,
                 recognition_engine=RECOGNITION_MODE_CONTOUR,
+                yaw_assisted=yaw_assisted,
+                yaw_direction_error_deg=yaw_direction_error,
+                yaw_direction_source=yaw_direction_source,
             )
 
         self.beacon_recognition_results = results
@@ -2113,10 +2425,20 @@ class PictureViewerApp:
             result.passed and result.target_kind == TARGET_BEACON
             for result in results.values()
         )
+        test_mode = (
+            f"仅测{MATCHING_TARGET_NAMES[target_only]}"
+            if target_only is not None
+            else "混合识别"
+        )
+        yaw_status = (
+            "不适用"
+            if target_only == TARGET_BEACON
+            else f"开({yaw_tolerance_deg:.1f}°)" if yaw_assist_enabled else "关"
+        )
         self.status_var.set(
-            f"轮廓几何识别完成：箭头 {arrow_count}，信标 {beacon_count}，"
-            f"候选 {len(results)} | 固定阈值 {binary_threshold} | "
-            "不使用姿态、高度、车辆Yaw和理想投影"
+            f"轮廓几何识别完成[{test_mode}]：箭头 {arrow_count}，"
+            f"信标 {beacon_count}，候选 {len(results)} | "
+            f"固定阈值 {binary_threshold} | Yaw辅助 {yaw_status}"
         )
 
     def recognize_current_image_targets(self) -> None:
@@ -2558,6 +2880,8 @@ class PictureViewerApp:
                 f"{'/'.join(f'{value:.1f}°' for value in metrics.endpoint_turn_angles) or '--'}    "
                 f"外顶点方向差 {optional_metric(metrics.vertex_turn_angle)}°    "
                 f"内凹口方向差 {optional_metric(metrics.notch_turn_angle)}°\n"
+                f"最大反向转角 {metrics.max_negative_turn_deg:.3f}°"
+                f"（窗口 {metrics.negative_turn_window_points} 点）    "
                 f"箭头物理夹角 {optional_metric(metrics.vertex_angle_deg)}°    "
                 f"候选两臂平衡度 {optional_metric(metrics.arm_balance)}\n"
                 f"前景灰度 {optional_metric(metrics.foreground_mean)}"
@@ -2567,6 +2891,16 @@ class PictureViewerApp:
                 f"灰度差 {optional_metric(metrics.gray_contrast)}\n"
                 "说明：凸包仅用于计算轮廓凹陷和填充率；目标面积仍采用候选轮廓扫描线面积。"
             )
+            if recognition.yaw_assisted:
+                details += (
+                    f"\nYaw辅助：通过    方向点 {recognition.yaw_direction_source}    "
+                    f"方向误差 {optional_metric(recognition.yaw_direction_error_deg)}°"
+                )
+            elif recognition.yaw_direction_error_deg is not None:
+                details += (
+                    f"\nYaw辅助：未通过    方向点 {recognition.yaw_direction_source}    "
+                    f"方向误差 {recognition.yaw_direction_error_deg:.3f}°"
+                )
             if recognition.failures:
                 details += "\n原因：\n  - " + "\n  - ".join(recognition.failures)
         elif recognition.metrics is None:

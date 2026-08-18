@@ -1,12 +1,12 @@
 {
   "folder": "D:\\code\\project\\Seekfree_CYT4BB_Opensource_Library_视觉算法优化\\vision\\capture",
-  "threshold": 100,
+  "threshold": 109,
   "min_area": 6,
   "connectivity": 8,
   "candidate_mode": "八邻域轮廓爬线",
   "undistort_mode": "定点双线性",
   "recognition_mode": "轮廓几何识别",
-  "beacon_accept_limit": 3,
+  "beacon_accept_limit": 7,
   "ideal_target": {
     "type": "理想箭头",
     "background": "去畸变灰度图",
@@ -14,7 +14,7 @@
     "pitch_deg": 3.100144,
     "uav_yaw_deg": -60.745052,
     "height_cm": 149.477875,
-    "car_yaw_deg": -40.0,
+    "car_yaw_deg": 0.1,
     "car_yaw_relative": false,
     "mount_roll_deg": -15.0,
     "mount_pitch_deg": 0.0,
@@ -112,17 +112,18 @@
       "min_concavity_ratio": 0.03,
       "max_concavity_ratio": 1.0,
       "min_direction_entropy": 0.0,
-      "max_direction_entropy": 0.99,
+      "max_direction_entropy": 1.0,
       "min_dominant_axis_ratio": 0.5,
       "max_dominant_axis_ratio": 1.0,
       "min_vertex_angle_deg": 25.0,
       "max_vertex_angle_deg": 130.0,
       "min_arm_balance": 0.25,
-      "direction_window_points": 12,
-      "min_endpoint_turn_deg": 135.0,
-      "min_vertex_turn_deg": 80.0,
-      "max_vertex_turn_deg": 135.0,
-      "min_notch_turn_deg": 60.0
+      "direction_window_points": 7,
+      "min_endpoint_turn_deg": 120.0,
+      "min_vertex_turn_deg": 70.0,
+      "max_vertex_turn_deg": 100.0,
+      "min_notch_turn_deg": 10.0,
+      "max_negative_turn_deg": 180.0
     },
     "beacon": {
       "min_contour_points": 8,
@@ -148,7 +149,12 @@
       "min_endpoint_turn_deg": 0.0,
       "min_vertex_turn_deg": 0.0,
       "max_vertex_turn_deg": 180.0,
-      "min_notch_turn_deg": 0.0
+      "min_notch_turn_deg": 0.0,
+      "max_negative_turn_deg": 90.0
+    },
+    "yaw_assist": {
+      "enabled": true,
+      "tolerance_deg": 20.0
     }
   }
 }

@@ -40,6 +40,7 @@ CONTOUR_THRESHOLD_FIELDS = (
     ("min_vertex_turn_deg", "外顶点方向差下限(°)"),
     ("max_vertex_turn_deg", "外顶点方向差上限(°)"),
     ("min_notch_turn_deg", "内凹口反向差下限(°)"),
+    ("max_negative_turn_deg", "最大反向转角上限(°)"),
 )
 
 
@@ -69,6 +70,7 @@ class ContourThresholds:
     min_vertex_turn_deg: float
     max_vertex_turn_deg: float
     min_notch_turn_deg: float
+    max_negative_turn_deg: float
 
     def validate(self) -> None:
         if self.min_contour_points < 1:
@@ -107,6 +109,7 @@ class ContourThresholds:
             self.min_vertex_turn_deg,
             self.max_vertex_turn_deg,
             self.min_notch_turn_deg,
+            self.max_negative_turn_deg,
         )
         if not all(math.isfinite(value) and 0.0 <= value <= 180.0 for value in turn_values):
             raise ValueError("轮廓方向差阈值必须在0到180度之间")
@@ -176,6 +179,7 @@ ARROW_DEFAULT_THRESHOLDS = ContourThresholds(
     min_vertex_turn_deg=80.0,
     max_vertex_turn_deg=135.0,
     min_notch_turn_deg=60.0,
+    max_negative_turn_deg=180.0,
 )
 
 BEACON_DEFAULT_THRESHOLDS = ContourThresholds(
@@ -203,6 +207,7 @@ BEACON_DEFAULT_THRESHOLDS = ContourThresholds(
     min_vertex_turn_deg=0.0,
     max_vertex_turn_deg=180.0,
     min_notch_turn_deg=0.0,
+    max_negative_turn_deg=90.0,
 )
 
 
@@ -226,6 +231,8 @@ class ContourMetrics:
     endpoint_turn_angles: tuple[float, ...]
     vertex_turn_angle: float | None
     notch_turn_angle: float | None
+    max_negative_turn_deg: float
+    negative_turn_window_points: int
     vertex_point: tuple[int, int] | None
     deepest_point: tuple[int, int] | None
     arm_tip_points: tuple[tuple[int, int], ...]
@@ -440,6 +447,7 @@ def _extract_arrow_turn_geometry(
     float | None,
     tuple[int, int] | None,
     float | None,
+    float,
     float | None,
     float | None,
 ]:
@@ -448,7 +456,8 @@ def _extract_arrow_turn_geometry(
         thresholds.direction_window_points,
     )
     if window == 0:
-        return 0, (), (), None, None, None, None, None, None
+        return 0, (), (), None, None, None, None, 0.0, None, None
+    max_negative_turn = max(0.0, -min(signed_angles, default=0.0))
     convex_regions = _build_turn_regions(
         signed_angles,
         thresholds.min_vertex_turn_deg,
@@ -535,6 +544,7 @@ def _extract_arrow_turn_geometry(
         vertex_turn,
         notch_point,
         notch_angle,
+        max_negative_turn,
         physical_angle,
         arm_balance,
     )
@@ -598,6 +608,7 @@ def calculate_contour_metrics(
     gray: Image.Image,
     binary: Image.Image,
     turn_thresholds: ContourThresholds | None = None,
+    negative_turn_window_points: int | None = None,
 ) -> ContourMetrics:
     points = list(component.contour_points)
     if len(points) >= 2 and points[0] == points[-1]:
@@ -636,9 +647,23 @@ def calculate_contour_metrics(
         vertex_turn_angle,
         deepest_point,
         notch_turn_angle,
+        max_negative_turn_deg,
         vertex_angle_deg,
         arm_balance,
     ) = _extract_arrow_turn_geometry(points, geometry_thresholds)
+    effective_negative_window = effective_window
+    if (
+        negative_turn_window_points is not None
+        and int(negative_turn_window_points) != effective_window
+    ):
+        effective_negative_window, negative_angles = _signed_direction_differences(
+            points,
+            int(negative_turn_window_points),
+        )
+        max_negative_turn_deg = max(
+            0.0,
+            -min(negative_angles, default=0.0),
+        )
 
     radial_distances = [
         math.hypot(x - component.centroid_x, y - component.centroid_y)
@@ -710,6 +735,8 @@ def calculate_contour_metrics(
         endpoint_turn_angles=endpoint_turn_angles,
         vertex_turn_angle=vertex_turn_angle,
         notch_turn_angle=notch_turn_angle,
+        max_negative_turn_deg=max_negative_turn_deg,
+        negative_turn_window_points=effective_negative_window,
         vertex_point=vertex_point,
         deepest_point=deepest_point,
         arm_tip_points=arm_tip_points,
@@ -764,6 +791,11 @@ def evaluate_contour_metrics(
             failures.append(f"{label} {value:.3f} < {minimum:.3f}")
         elif value > maximum:
             failures.append(f"{label} {value:.3f} > {maximum:.3f}")
+    if metrics.max_negative_turn_deg > thresholds.max_negative_turn_deg:
+        failures.append(
+            f"最大反向转角 {metrics.max_negative_turn_deg:.3f} > "
+            f"{thresholds.max_negative_turn_deg:.3f}"
+        )
     angle_is_enabled = (
         thresholds.min_vertex_angle_deg > 0.0
         or thresholds.max_vertex_angle_deg < 180.0
@@ -834,6 +866,7 @@ def self_test() -> None:
     chevron_metrics = calculate_contour_metrics(chevron_component, chevron, chevron)
     assert chevron_metrics.contour_closed
     assert chevron_metrics.concavity_ratio > circle_metrics.concavity_ratio
+    assert chevron_metrics.max_negative_turn_deg > circle_metrics.max_negative_turn_deg
     assert chevron_metrics.solidity < circle_metrics.solidity
     assert len(chevron_metrics.endpoint_turn_angles) == 2
     assert all(
