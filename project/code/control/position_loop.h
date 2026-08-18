@@ -9,12 +9,11 @@
 #define POSITION_LOOP_STATUS_CAR_FF_VALID        (0x10U)
 #define POSITION_LOOP_STATUS_TARGET_READY        (0x20U)
 #define POSITION_LOOP_STATUS_TIMING_VALID        (0x40U)
-#define POSITION_LOOP_STATUS_BRAKE_MONITORING    (0x80U)
+#define POSITION_LOOP_STATUS_BRAKE_LIMITED       (0x80U)
 
 #define POSITION_LOOP_BRAKE_DIAG_CAR_VELOCITY_VALID (0x01U)
 #define POSITION_LOOP_BRAKE_DIAG_CLOSING_ACTIVE     (0x02U)
-#define POSITION_LOOP_BRAKE_DIAG_MARGIN_LOW         (0x04U)
-#define POSITION_LOOP_BRAKE_DIAG_STATIC_FALLBACK    (0x08U)
+#define POSITION_LOOP_BRAKE_DIAG_STATIC_FALLBACK    (0x04U)
 
 #define POSITION_LOOP_OBSERVATION_INVALID      (0U)
 #define POSITION_LOOP_OBSERVATION_LIVE         (1U)
@@ -92,13 +91,11 @@ typedef struct
     float sqrt_speed_cms;
     float relative_closing_speed_cms;
     float filtered_closing_speed_cms;
-    float brake_schedule_ratio;
     float relative_velocity_x_cms;
     float relative_velocity_y_cms;
     float relative_speed_cms;
-    float stopping_distance_cm;
     float brake_delay_distance_cm;
-    float brake_margin_cm;
+    float brake_allowed_speed_cms;
     float trajectory_dt_s;
     float vision_innovation_cm;
     uint32 trajectory_reset_count;
@@ -115,7 +112,6 @@ typedef struct
     uint8 timing_valid;
     uint8 trajectory_reset_reason;
     uint8 brake_diag_flags;
-    uint8 brake_schedule_active;
     uint8 sqrt_controller_active;
     uint8 frozen_hold_active;
 } PositionLoopDiag_t;

@@ -13,12 +13,12 @@
 #define POSITION_LOOP_VISION_HOLD_MS               (200U)   // 视觉断帧后相对位置预测保持时间，单位ms
 #define POSITION_LOOP_EPSILON                      (0.0001f) // 二维距离归一化时的除零保护阈值
 #define POSITION_LOOP_YAW_RESET_THRESHOLD_DEG      (30.0f)   // 单个水平控制周期内超过该变化视为Yaw参考系重置
-#define POSITION_LOOP_EFFECTIVE_ACCEL_DEFAULT_CMS2  (170.0f)  // N1：单一停车模型有效加速度，单位cm/s^2
-#define POSITION_LOOP_EFFECTIVE_JERK_DEFAULT_CMS3   (350.0f) // N2：单一停车模型有效Jerk，单位cm/s^3
-#define POSITION_LOOP_CONTROL_DELAY_DEFAULT_MS      (120.0f) // N3：控制系统等效延迟，单位ms
-#define POSITION_LOOP_SAFETY_BUFFER_DEFAULT_CM      (5.0f)  // N4：停车安全余量，单位cm
-#define POSITION_LOOP_BOOST_MARGIN_DEFAULT_CM       (15.0f)  // N5：停车余量内纠偏速度连续衰减区宽度，单位cm
-#define POSITION_LOOP_CLOSING_SPEED_LPF_HZ          (3.0f)    // 径向接近速度调度低通截止频率，单位Hz
+#define POSITION_LOOP_EFFECTIVE_ACCEL_DEFAULT_CMS2  (170.0f)  // N1：A/J安全速度模型的有效加速度，单位cm/s^2
+#define POSITION_LOOP_EFFECTIVE_JERK_DEFAULT_CMS3   (350.0f) // N2：A/J安全速度模型的有效Jerk，单位cm/s^3
+#define POSITION_LOOP_CONTROL_DELAY_DEFAULT_MS      (0.0f)   // N3：控制系统等效延迟，单位ms
+#define POSITION_LOOP_SAFETY_BUFFER_DEFAULT_CM      (0.0f)   // N4：安全余量，单位cm
+#define POSITION_LOOP_BOOST_MARGIN_DEFAULT_CM       (0.0f)   // N5：速度包络提前收紧宽度，单位cm
+#define POSITION_LOOP_CLOSING_SPEED_LPF_HZ          (3.0f)    // 径向接近速度诊断低通截止频率，单位Hz
 #define POSITION_LOOP_TWO_PI                        (6.28318530718f) // 一阶低通系数计算使用的2π常量
 static volatile uint8 g_enabled = 0U;
 static volatile PositionLoopTrajectoryConfig_t g_config = {
@@ -49,7 +49,6 @@ static float g_last_yaw_deg = 0.0f;
 static uint8 g_yaw_initialized = 0U;
 static float g_filtered_closing_speed_cms = 0.0f;
 static uint8 g_closing_speed_initialized = 0U;
-static float g_brake_schedule_ratio = 0.0f;
 
 static uint8 g_last_pose_valid = 0U;
 static uint8 g_predict_hold_active = 0U;
@@ -119,29 +118,42 @@ static void position_loop_reset_brake_supervisor(void)
 {
     g_filtered_closing_speed_cms = 0.0f;
     g_closing_speed_initialized = 0U;
-    g_brake_schedule_ratio = 0.0f;
 }
 
-/* 从零加速度开始并以零加速度停止时，按A/J约束计算完整S曲线停止距离。 */
-static float position_loop_stopping_distance(float speed,
-                                             float acceleration_limit,
-                                             float jerk_limit)
+/* 按A/J约束将剩余有效距离反解为允许的最大相对接近速度。 */
+static float position_loop_allowed_speed_from_distance(float distance,
+                                                        float acceleration_limit,
+                                                        float jerk_limit)
 {
     float switch_speed;
+    float switch_distance;
+    float radicand;
 
-    if(!isfinite(speed) || !isfinite(acceleration_limit) ||
-       !isfinite(jerk_limit) || !(speed > 0.0f) ||
+    if(!isfinite(distance) || !isfinite(acceleration_limit) ||
+       !isfinite(jerk_limit) || !(distance > 0.0f) ||
        !(acceleration_limit > 0.0f) || !(jerk_limit > 0.0f))
     {
         return 0.0f;
     }
+
     switch_speed = acceleration_limit * acceleration_limit / jerk_limit;
-    if(speed <= switch_speed)
+    switch_distance = acceleration_limit * acceleration_limit *
+                      acceleration_limit / (jerk_limit * jerk_limit);
+    if(distance <= switch_distance)
     {
-        return speed * sqrtf(speed / jerk_limit);
+        return powf(distance * distance * jerk_limit, 1.0f / 3.0f);
     }
-    return speed * speed / (2.0f * acceleration_limit) +
-           speed * acceleration_limit / (2.0f * jerk_limit);
+
+    radicand = acceleration_limit * acceleration_limit *
+               acceleration_limit * acceleration_limit /
+               (4.0f * jerk_limit * jerk_limit) +
+               2.0f * acceleration_limit * distance;
+    if(!(radicand > 0.0f))
+    {
+        return switch_speed;
+    }
+    return sqrtf(radicand) -
+           acceleration_limit * acceleration_limit / (2.0f * jerk_limit);
 }
 
 static void position_loop_update_brake_supervisor(
@@ -149,18 +161,14 @@ static void position_loop_update_brake_supervisor(
     float distance,
     float dt_s,
     const PositionLoopBrakeConfig_t *brake,
-    float *schedule_ratio,
-    float *stopping_distance,
     float *delay_distance,
-    float *margin)
+    float *allowed_speed)
 {
     float alpha;
     float positive_closing;
-    float target_ratio = 0.0f;
 
-    if((brake == NULL) || (schedule_ratio == NULL) ||
-       (stopping_distance == NULL) || (delay_distance == NULL) ||
-       (margin == NULL))
+    if((brake == NULL) || (delay_distance == NULL) ||
+       (allowed_speed == NULL))
     {
         return;
     }
@@ -169,10 +177,8 @@ static void position_loop_update_brake_supervisor(
        !isfinite(dt_s) || !(dt_s > 0.0f))
     {
         position_loop_reset_brake_supervisor();
-        *schedule_ratio = 0.0f;
-        *stopping_distance = 0.0f;
         *delay_distance = 0.0f;
-        *margin = 0.0f;
+        *allowed_speed = 0.0f;
         return;
     }
 
@@ -192,29 +198,13 @@ static void position_loop_update_brake_supervisor(
 
     positive_closing = (g_filtered_closing_speed_cms > 0.0f) ?
                        g_filtered_closing_speed_cms : 0.0f;
-    *stopping_distance = position_loop_stopping_distance(
-        positive_closing,
+    *delay_distance = positive_closing * brake->control_delay_ms * 0.001f;
+    /* N1/N2只建立安全速度边界，不再生成独立的停车距离或余量诊断量。 */
+    *allowed_speed = position_loop_allowed_speed_from_distance(
+        distance - *delay_distance - brake->safety_buffer_cm -
+        brake->boost_margin_cm,
         brake->effective_accel_cms2,
         brake->effective_jerk_cms3);
-    *delay_distance = positive_closing * brake->control_delay_ms * 0.001f;
-    *margin = distance - *stopping_distance -
-              *delay_distance - brake->safety_buffer_cm;
-
-    if((positive_closing > POSITION_LOOP_EPSILON) &&
-       (brake->boost_margin_cm > POSITION_LOOP_EPSILON))
-    {
-        target_ratio = (brake->boost_margin_cm - *margin) /
-                       brake->boost_margin_cm;
-        target_ratio = position_loop_limit_float(target_ratio, 0.0f, 1.0f);
-        target_ratio = target_ratio * target_ratio * (3.0f - 2.0f * target_ratio);
-    }
-
-    alpha = 1.0f - expf(-POSITION_LOOP_TWO_PI *
-                        POSITION_LOOP_CLOSING_SPEED_LPF_HZ * dt_s);
-    alpha = position_loop_limit_float(alpha, 0.0f, 1.0f);
-    g_brake_schedule_ratio += alpha * (target_ratio - g_brake_schedule_ratio);
-
-    *schedule_ratio = g_brake_schedule_ratio;
 }
 
 static void position_loop_reset_reacquisition(void)
@@ -234,6 +224,7 @@ static void position_loop_reset_predict_hold(void)
 
 void Position_Loop_Reset_Car_Velocity_Feedforward(void)
 {
+    position_loop_reset_brake_supervisor();
     g_diag.car_ff_raw_vx_cms = 0.0f;
     g_diag.car_ff_raw_vy_cms = 0.0f;
     g_diag.car_ff_filtered_vx_cms = 0.0f;
@@ -269,21 +260,18 @@ void Position_Loop_Reset_Trajectory(uint8 reason)
     g_diag.target_accel_y_cms2 = 0.0f;
     g_diag.relative_closing_speed_cms = 0.0f;
     g_diag.filtered_closing_speed_cms = 0.0f;
-    g_diag.brake_schedule_ratio = 0.0f;
-    g_diag.brake_schedule_active = 0U;
     g_diag.relative_velocity_x_cms = 0.0f;
     g_diag.relative_velocity_y_cms = 0.0f;
     g_diag.relative_speed_cms = 0.0f;
     g_diag.proportional_speed_cms = 0.0f;
     g_diag.sqrt_speed_cms = 0.0f;
-    g_diag.stopping_distance_cm = 0.0f;
     g_diag.brake_delay_distance_cm = 0.0f;
-    g_diag.brake_margin_cm = 0.0f;
+    g_diag.brake_allowed_speed_cms = 0.0f;
     g_diag.brake_diag_flags = 0U;
     g_diag.sqrt_controller_active = 0U;
     g_diag.limit_flags &= (uint8)~(POSITION_LOOP_STATUS_TARGET_READY |
                                   POSITION_LOOP_STATUS_TIMING_VALID |
-                                  POSITION_LOOP_STATUS_BRAKE_MONITORING);
+                                  POSITION_LOOP_STATUS_BRAKE_LIMITED);
     g_diag.trajectory_reset_reason = reason;
     g_diag.trajectory_reset_count = g_trajectory_reset_count;
 }
@@ -583,7 +571,7 @@ uint8 Position_Loop_Set_Brake_Config(const PositionLoopBrakeConfig_t *config)
        (config->effective_jerk_cms3 > 1000.0f) ||
        (config->control_delay_ms < 0.0f) || (config->control_delay_ms > 500.0f) ||
        (config->safety_buffer_cm < 0.0f) || (config->safety_buffer_cm > 100.0f) ||
-       (config->boost_margin_cm < 1.0f) || (config->boost_margin_cm > 100.0f))
+       (config->boost_margin_cm < 0.0f) || (config->boost_margin_cm > 100.0f))
     {
         return 0U;
     }
@@ -643,10 +631,8 @@ void Position_Loop_Update_Velocity_Target(uint8 velocity_ready,
     float closing_speed = 0.0f;
     float target_direction_x = 0.0f;
     float target_direction_y = 0.0f;
-    float brake_schedule_ratio = 0.0f;
-    float stopping_distance = 0.0f;
     float brake_delay_distance = 0.0f;
-    float brake_margin = 0.0f;
+    float brake_allowed_speed = 0.0f;
     float envelope_speed = 0.0f;
     float proportional_speed = 0.0f;
     uint8 position_valid = 0U;
@@ -654,7 +640,6 @@ void Position_Loop_Update_Velocity_Target(uint8 velocity_ready,
     uint8 car_acceleration_valid = 0U;
     uint8 flags = 0U;
     uint8 brake_diag_flags = 0U;
-    uint8 brake_schedule_active = 0U;
     uint8 sqrt_controller_active = 0U;
     uint8 raw_visual_valid;
     uint8 new_visual_pose;
@@ -685,12 +670,12 @@ void Position_Loop_Update_Velocity_Target(uint8 velocity_ready,
     {
         *target_vx_earth_cms = g_target_vx_earth_cms;
         *target_vy_earth_cms = g_target_vy_earth_cms;
+        position_loop_reset_brake_supervisor();
         g_target_ax_earth_cms2 = 0.0f;
         g_target_ay_earth_cms2 = 0.0f;
         g_diag.velocity_ready = velocity_ready;
         g_diag.timing_valid = 0U;
         g_diag.trajectory_dt_s = dt_s;
-        g_diag.brake_schedule_active = 0U;
         g_diag.limit_flags &= (uint8)~POSITION_LOOP_STATUS_TIMING_VALID;
         return;
     }
@@ -814,7 +799,7 @@ void Position_Loop_Update_Velocity_Target(uint8 velocity_ready,
 
     if(position_valid)
     {
-        /* 真实位置误差只进入P/Sqrt纠偏；停止距离仅用于制动余量监督。 */
+        /* 真实位置误差进入P/Sqrt；停车包络只约束朝向小车的目标速度。 */
         distance = sqrtf(position_x * position_x + position_y * position_y);
         relative_velocity_x = measured_vx_earth -
                               (car_velocity_valid ? car_actual_vx_earth : 0.0f);
@@ -843,29 +828,25 @@ void Position_Loop_Update_Velocity_Target(uint8 velocity_ready,
                 distance,
                 dt_s,
                 &brake_config,
-                &brake_schedule_ratio,
-                &stopping_distance,
                 &brake_delay_distance,
-                &brake_margin);
+                &brake_allowed_speed);
 
             if(g_filtered_closing_speed_cms > POSITION_LOOP_EPSILON)
             {
                 brake_diag_flags |= POSITION_LOOP_BRAKE_DIAG_CLOSING_ACTIVE;
-                flags |= POSITION_LOOP_STATUS_BRAKE_MONITORING;
             }
-            if(brake_margin <= 0.0f)
-            {
-                brake_diag_flags |= POSITION_LOOP_BRAKE_DIAG_MARGIN_LOW;
-            }
-
             correction_speed = position_loop_correction_speed(
                 distance,
                 &config,
                 &proportional_speed,
                 &envelope_speed,
                 &sqrt_controller_active);
-            correction_speed *= (1.0f - brake_schedule_ratio);
-
+            /* A/J只限制位置纠偏径向速度，小车速度前馈保持完整叠加。 */
+            if(correction_speed > brake_allowed_speed)
+            {
+                correction_speed = brake_allowed_speed;
+                flags |= POSITION_LOOP_STATUS_BRAKE_LIMITED;
+            }
             correction_vx = correction_speed * target_direction_x;
             correction_vy = correction_speed * target_direction_y;
             if(correction_speed >= (config.correction_speed_max_cms - 0.001f))
@@ -880,12 +861,13 @@ void Position_Loop_Update_Velocity_Target(uint8 velocity_ready,
         {
             flags |= POSITION_LOOP_STATUS_TARGET_LIMITED;
         }
+
     }
 
     if(!position_valid)
     {
         position_loop_reset_brake_supervisor();
-        brake_schedule_ratio = 0.0f;
+        brake_allowed_speed = 0.0f;
     }
 
     g_target_vx_earth_cms = position_valid ? desired_vx : 0.0f;
@@ -903,8 +885,6 @@ void Position_Loop_Update_Velocity_Target(uint8 velocity_ready,
     {
         g_trajectory_reset_reason = POSITION_LOOP_RESET_VELOCITY_RECOVERED;
     }
-    brake_schedule_active = (uint8)(position_valid &&
-        (brake_schedule_ratio > POSITION_LOOP_EPSILON));
     flags |= POSITION_LOOP_STATUS_TARGET_READY;
 
     *target_vx_earth_cms = g_target_vx_earth_cms;
@@ -942,14 +922,11 @@ void Position_Loop_Update_Velocity_Target(uint8 velocity_ready,
     g_diag.sqrt_speed_cms = envelope_speed;
     g_diag.relative_closing_speed_cms = closing_speed;
     g_diag.filtered_closing_speed_cms = g_filtered_closing_speed_cms;
-    g_diag.brake_schedule_ratio = brake_schedule_ratio;
-    g_diag.brake_schedule_active = brake_schedule_active;
     g_diag.relative_velocity_x_cms = relative_velocity_x;
     g_diag.relative_velocity_y_cms = relative_velocity_y;
     g_diag.relative_speed_cms = relative_speed;
-    g_diag.stopping_distance_cm = stopping_distance;
     g_diag.brake_delay_distance_cm = brake_delay_distance;
-    g_diag.brake_margin_cm = brake_margin;
+    g_diag.brake_allowed_speed_cms = brake_allowed_speed;
     g_diag.trajectory_dt_s = dt_s;
     g_diag.vision_innovation_cm = g_vision_innovation_cm;
     g_diag.vision_hold_age_ms = g_hold_elapsed_ms;

@@ -1923,7 +1923,7 @@ void send_date_back(void)
             {
                 status_flags |= 0x20U;
             }
-            if(pos_diag.brake_schedule_active)
+            if(pos_diag.limit_flags & POSITION_LOOP_STATUS_BRAKE_LIMITED)
             {
                 status_flags |= 0x08U;
             }
@@ -2013,15 +2013,16 @@ void send_date_back(void)
                               pos_diag.relative_speed_cms,
                               pos_diag.relative_closing_speed_cms,
                               pos_diag.filtered_closing_speed_cms,
-                              pos_diag.stopping_distance_cm,
-                              pos_diag.brake_delay_distance_cm,
-                              pos_diag.brake_margin_cm,
-                              pos_diag.proportional_speed_cms,
-                              pos_diag.sqrt_speed_cms,
+                              pos_diag.brake_allowed_speed_cms,
                               pos_diag.correction_vx_cms,
                               pos_diag.correction_vy_cms,
-                              pos_diag.brake_schedule_ratio,
-                              (float)pos_diag.brake_diag_flags);
+                              pos_diag.position_error_distance_cm,
+                              pos_diag.brake_delay_distance_cm,
+                              pos_diag.desired_vx_cms,
+                              pos_diag.desired_vy_cms,
+                              (float)pos_diag.brake_diag_flags,
+                              (pos_diag.limit_flags & POSITION_LOOP_STATUS_BRAKE_LIMITED) ?
+                              1.0f : 0.0f);
             break;
         }
 
@@ -2031,20 +2032,22 @@ void send_date_back(void)
             Position_Loop_Get_Diag(&pos_diag);
             send_sixteen_date(pos_diag.relative_closing_speed_cms,
                               pos_diag.filtered_closing_speed_cms,
-                              pos_diag.brake_schedule_ratio,
-                              (float)pos_diag.brake_schedule_active,
+                              pos_diag.brake_allowed_speed_cms,
+                              (pos_diag.limit_flags & POSITION_LOOP_STATUS_BRAKE_LIMITED) ?
+                              1.0f : 0.0f,
                               pos_diag.car_ff_raw_ax_cms2,
                               pos_diag.car_ff_raw_ay_cms2,
                               pos_diag.car_ff_applied_ax_cms2,
                               pos_diag.car_ff_applied_ay_cms2,
-                              pos_diag.stopping_distance_cm,
                               pos_diag.brake_delay_distance_cm,
-                              pos_diag.brake_margin_cm,
-                              (float)pos_diag.brake_diag_flags,
+                              pos_diag.position_error_distance_cm,
                               pos_diag.target_accel_x_cms2,
                               pos_diag.target_accel_y_cms2,
-                              pos_diag.position_error_distance_cm,
-                              0.0f);
+                              pos_diag.relative_speed_cms,
+                              pos_diag.position_correction_speed_cms,
+                              (float)pos_diag.brake_diag_flags,
+                              (pos_diag.limit_flags & POSITION_LOOP_STATUS_BRAKE_LIMITED) ?
+                              1.0f : 0.0f);
             break;
         }
 
