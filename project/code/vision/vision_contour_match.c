@@ -39,6 +39,7 @@ static uint8 s_threshold;
 static uint32 s_sample_count;
 static uint32 s_trace_steps;
 static uint32 s_overflow_count;
+static uint8 s_global_search_phase;
 static float s_forward_x;
 static float s_forward_y;
 
@@ -993,22 +994,66 @@ static void contour_global_center_search(const VisionContourFrameConfig_t *confi
 {
     int cx = (int)VISION_RUNTIME_FINE_WIDTH / 2;
     int cy = (int)VISION_RUNTIME_FINE_HEIGHT / 2;
-    int max_radius = (cx > cy) ? cx : cy;
+    int right_radius = (int)VISION_RUNTIME_FINE_WIDTH - 1 - cx;
+    int bottom_radius = (int)VISION_RUNTIME_FINE_HEIGHT - 1 - cy;
+    int max_x_radius = (cx > right_radius) ? cx : right_radius;
+    int max_y_radius = (cy > bottom_radius) ? cy : bottom_radius;
+    int max_radius = (max_x_radius > max_y_radius) ?
+                     max_x_radius : max_y_radius;
+    uint8 phase = s_global_search_phase;
     int radius;
     result->used_global_search = 1U;
     for(radius = 0; radius <= max_radius; ++radius)
     {
+        int left = cx - radius;
+        int right = cx + radius;
+        int top = cy - radius;
+        int bottom = cy + radius;
+        int min_x = (left < 0) ? 0 : left;
+        int max_x = (right >= (int)VISION_RUNTIME_FINE_WIDTH) ?
+                    (int)VISION_RUNTIME_FINE_WIDTH - 1 : right;
+        int min_y = (top < 0) ? 0 : top;
+        int max_y = (bottom >= (int)VISION_RUNTIME_FINE_HEIGHT) ?
+                    (int)VISION_RUNTIME_FINE_HEIGHT - 1 : bottom;
         int x;
         int y;
-        for(x = cx - radius; x <= cx + radius; ++x)
+
+        /* 只扫描本圈仍在图像内的新边，避免矩形图像外的无效寻点。 */
+        if(top >= 0)
         {
-            (void)contour_try_point(x, cy - radius, config, result);
-            if(radius != 0) (void)contour_try_point(x, cy + radius, config, result);
+            for(x = min_x; x <= max_x; ++x)
+            {
+                if((((uint32)(x + top) + phase) & 1U) == 0U)
+                    (void)contour_try_point(x, top, config, result);
+            }
         }
-        for(y = cy - radius + 1; y < cy + radius; ++y)
+        if(bottom < (int)VISION_RUNTIME_FINE_HEIGHT && bottom != top)
         {
-            (void)contour_try_point(cx - radius, y, config, result);
-            if(radius != 0) (void)contour_try_point(cx + radius, y, config, result);
+            for(x = min_x; x <= max_x; ++x)
+            {
+                if((((uint32)(x + bottom) + phase) & 1U) == 0U)
+                    (void)contour_try_point(x, bottom, config, result);
+            }
+        }
+
+        /* 上下边的角点已扫描；超出上下边界后则覆盖整列。 */
+        if(top >= 0) ++min_y;
+        if(bottom < (int)VISION_RUNTIME_FINE_HEIGHT) --max_y;
+        if(left >= 0)
+        {
+            for(y = min_y; y <= max_y; ++y)
+            {
+                if((((uint32)(left + y) + phase) & 1U) == 0U)
+                    (void)contour_try_point(left, y, config, result);
+            }
+        }
+        if(right < (int)VISION_RUNTIME_FINE_WIDTH && right != left)
+        {
+            for(y = min_y; y <= max_y; ++y)
+            {
+                if((((uint32)(right + y) + phase) & 1U) == 0U)
+                    (void)contour_try_point(right, y, config, result);
+            }
         }
         if(result->candidate_count >= VISION_RUNTIME_MAX_CANDIDATES ||
            (result->arrow_count != 0U &&
@@ -1050,6 +1095,7 @@ void VisionContourMatch_Process(const VisionContourFrameConfig_t *config,
     result->sampled_pixels = s_sample_count;
     result->traced_steps = s_trace_steps;
     result->overflow_count = s_overflow_count;
+    s_global_search_phase ^= 1U;
 }
 
 const uint8 *VisionContourMatch_GetBinaryImage(void)
