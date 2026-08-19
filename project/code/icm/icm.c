@@ -10,6 +10,8 @@
 #define ACC_VEL_GYRO_GATE_DPS       (100.0f)           // skip velocity integration when any filtered gyro axis exceeds this rate
 #define ACC_VEL_NORM_GATE_MG        (1000.0f)          // skip integration when |acc_norm - 1000mg| exceeds this value
 #define ACC_VEL_MAX_INTEGRATE_MG    (300.0f)           // clamp horizontal acceleration before integration to limit velocity spikes
+#define ACC_FUSION_LPF_CUTOFF_HZ    (20)               // 水平速度融合专用加速度低通截止频率
+#define ACC_FUSION_LPF_Q            (0.7071f)           // 二阶Butterworth低通Q值
 #define ACC_LEVEL_BIAS_FLASH_SECTOR (0U)               // flash sector used to store leveled horizontal acceleration bias
 #define ACC_LEVEL_BIAS_FLASH_PAGE   (12U)              // flash page used to store leveled horizontal acceleration bias
 #define ACC_LEVEL_BIAS_FLASH_WORDS  (3U)               // stored words: magic + x bias + y bias
@@ -94,6 +96,7 @@ uint8 Horizontal_Accel_Valid = 0U;          // 仅表示本周期数值有限，
 biquad_state X_V_biquad, Y_V_biquad;
 biquad_state Pitch_g_biquad, Roll_g_biquad, Yaw_g_biquad;
 biquad_state Pitch_acc_biquad, Roll_acc_biquad, Yaw_acc_biquad;
+biquad_state Horizontal_acc_x_biquad, Horizontal_acc_y_biquad;
 
 static ICM_Health_t s_icm_health = {0};
 static uint8 s_icm_dwt_ready = 0U;
@@ -126,6 +129,8 @@ volatile PID_t PIDK_YV = {0, 0, 15};       // Yaw速度
 float invSqrt(float x);
 void normalize_vector(float *v, int n);
 int invert_3x3(const float A[3][3], float Ainv[3][3]);
+static void icm_biquad_reset_history(biquad_state *state);
+static void icm_velocity_estimate_reset(void);
 
 typedef enum
 {
@@ -486,12 +491,8 @@ void ICM_Calculate_Init(void)
     Pitch_A0 = Pitch_a;
     Yaw_Lock_a = Yaw_a;
 
-    // 7. 清零速度估计
-    X_V = 0.0f; Y_V = 0.0f;
-    X_V_F = 0.0f; Y_V_F = 0.0f;
-    Horizontal_Accel_X_Cms2 = 0.0f;
-    Horizontal_Accel_Y_Cms2 = 0.0f;
-    Horizontal_Accel_Valid = 0U;
+    // 7. 清零速度估计及其滤波历史
+    icm_velocity_estimate_reset();
 
     ips200_show_string(0, 16*3, "ICM Ready!        ");
     system_delay_ms(500);
@@ -518,6 +519,18 @@ void Filter_Init(void)
     biquad_filter_init(&Pitch_acc_biquad, BIQUAD_LOWPASS, (int)ICM_SAMPLE_RATE_HZ, 30, 0.7071f);
     biquad_filter_init(&Roll_acc_biquad, BIQUAD_LOWPASS, (int)ICM_SAMPLE_RATE_HZ, 30, 0.7071f);
     biquad_filter_init(&Yaw_acc_biquad, BIQUAD_LOWPASS, (int)ICM_SAMPLE_RATE_HZ, 30, 0.7071f);
+
+    // 速度融合专用水平加速度滤波器(4000Hz采样, 20Hz截止频率)
+    biquad_filter_init(&Horizontal_acc_x_biquad,
+                       BIQUAD_LOWPASS,
+                       (int)ICM_SAMPLE_RATE_HZ,
+                       ACC_FUSION_LPF_CUTOFF_HZ,
+                       ACC_FUSION_LPF_Q);
+    biquad_filter_init(&Horizontal_acc_y_biquad,
+                       BIQUAD_LOWPASS,
+                       (int)ICM_SAMPLE_RATE_HZ,
+                       ACC_FUSION_LPF_CUTOFF_HZ,
+                       ACC_FUSION_LPF_Q);
 }
 
 /**
@@ -1003,11 +1016,13 @@ void Update_Velocity_Estimate(void)
     float ax_level_mg;
     float ay_level_mg;
     float az_level_mg;
+    float ax_fusion_mg;
+    float ay_fusion_mg;
     float acc_norm_mg;
 
     /*
-     * Velocity integration uses the raw accelerometer path here.
-     * Keep the filtered accelerometer only for attitude estimation.
+     * 先用原始加速度完成水平化和静态零偏扣除，再通过速度融合专用20 Hz低通。
+     * 姿态解算使用的30 Hz加速度滤波器保持独立，避免两条链路共享滤波历史。
      */
     Body_To_RollPitch_Level_Frame(Roll_acc, Pitch_acc, Yaw_acc,
                                   &ax_level_mg, &ay_level_mg, &az_level_mg);
@@ -1023,10 +1038,23 @@ void Update_Velocity_Estimate(void)
      */
     if(isfinite(ax_level_mg) && isfinite(ay_level_mg))
     {
+        ax_fusion_mg = biquad(&Horizontal_acc_x_biquad, ax_level_mg);
+        ay_fusion_mg = biquad(&Horizontal_acc_y_biquad, ay_level_mg);
+
+        if(!isfinite(ax_fusion_mg) || !isfinite(ay_fusion_mg))
+        {
+            icm_biquad_reset_history(&Horizontal_acc_x_biquad);
+            icm_biquad_reset_history(&Horizontal_acc_y_biquad);
+            Horizontal_Accel_X_Cms2 = 0.0f;
+            Horizontal_Accel_Y_Cms2 = 0.0f;
+            Horizontal_Accel_Valid = 0U;
+            return;
+        }
+
         Horizontal_Accel_X_Cms2 =
-            ax_level_mg * ACC_MG_TO_MPS2 * ACC_VEL_MPS_TO_CMS;
+            ax_fusion_mg * ACC_MG_TO_MPS2 * ACC_VEL_MPS_TO_CMS;
         Horizontal_Accel_Y_Cms2 =
-            ay_level_mg * ACC_MG_TO_MPS2 * ACC_VEL_MPS_TO_CMS;
+            ay_fusion_mg * ACC_MG_TO_MPS2 * ACC_VEL_MPS_TO_CMS;
         Horizontal_Accel_Valid = 1U;
     }
     else
@@ -1189,7 +1217,20 @@ static void icm_acc_level_bias_save_to_flash(void)
                                  ACC_LEVEL_BIAS_FLASH_WORDS);
 }
 
-static void icm_acc_level_bias_reset_velocity(void)
+static void icm_biquad_reset_history(biquad_state *state)
+{
+    if(state == NULL)
+    {
+        return;
+    }
+
+    state->x1 = 0.0f;
+    state->x2 = 0.0f;
+    state->y1 = 0.0f;
+    state->y2 = 0.0f;
+}
+
+static void icm_velocity_estimate_reset(void)
 {
     X_V = 0.0f;
     Y_V = 0.0f;
@@ -1198,14 +1239,10 @@ static void icm_acc_level_bias_reset_velocity(void)
     Horizontal_Accel_X_Cms2 = 0.0f;
     Horizontal_Accel_Y_Cms2 = 0.0f;
     Horizontal_Accel_Valid = 0U;
-    X_V_biquad.x1 = 0.0f;
-    X_V_biquad.x2 = 0.0f;
-    X_V_biquad.y1 = 0.0f;
-    X_V_biquad.y2 = 0.0f;
-    Y_V_biquad.x1 = 0.0f;
-    Y_V_biquad.x2 = 0.0f;
-    Y_V_biquad.y1 = 0.0f;
-    Y_V_biquad.y2 = 0.0f;
+    icm_biquad_reset_history(&X_V_biquad);
+    icm_biquad_reset_history(&Y_V_biquad);
+    icm_biquad_reset_history(&Horizontal_acc_x_biquad);
+    icm_biquad_reset_history(&Horizontal_acc_y_biquad);
 }
 
 static void icm_acc_level_bias_settle_attitude(void)
@@ -1221,7 +1258,7 @@ static void icm_acc_level_bias_settle_attitude(void)
         system_delay_us(1000000U / ACC_LEVEL_BIAS_SAMPLE_HZ);
     }
 
-    icm_acc_level_bias_reset_velocity();
+    icm_velocity_estimate_reset();
 }
 
 void Acc_Level_Calibration(void)
@@ -1254,7 +1291,7 @@ void Acc_Level_Calibration(void)
     acc_level_y_bias_mg = sum_y_mg / (float)sample_count;
 
     icm_acc_level_bias_save_to_flash();
-    icm_acc_level_bias_reset_velocity();
+    icm_velocity_estimate_reset();
 
     ips200_show_string(0, 16*3, "Acc bias saved   ");
     ips200_show_float(96, 80, acc_level_x_bias_mg, 3, 3);
@@ -1275,7 +1312,7 @@ static void icm_acc_level_bias_load_or_calibrate(uint8 force_calibration)
     ips200_show_string(0, 16*3, "Using Acc Bias   ");
     ips200_show_float(96, 80, acc_level_x_bias_mg, 3, 3);
     ips200_show_float(96, 104, acc_level_y_bias_mg, 3, 3);
-    icm_acc_level_bias_reset_velocity();
+    icm_velocity_estimate_reset();
     system_delay_ms(300);
 }
 
@@ -1502,11 +1539,7 @@ void ICM_Attitude_Reset(void)
     q0 = 1.0f; q1 = 0.0f; q2 = 0.0f; q3 = 0.0f;
     q01 = 1.0f; q11 = 0.0f; q21 = 0.0f; q31 = 0.0f;
     integralFBx = 0.0f; integralFBy = 0.0f; integralFBz = 0.0f;
-    X_V = 0.0f; Y_V = 0.0f;
-    X_V_F = 0.0f; Y_V_F = 0.0f;
-    Horizontal_Accel_X_Cms2 = 0.0f;
-    Horizontal_Accel_Y_Cms2 = 0.0f;
-    Horizontal_Accel_Valid = 0U;
+    icm_velocity_estimate_reset();
     s_last_valid_q[0] = 1.0f;
     s_last_valid_q[1] = 0.0f;
     s_last_valid_q[2] = 0.0f;
