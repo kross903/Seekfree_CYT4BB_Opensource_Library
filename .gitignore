@@ -25,3 +25,6 @@ project/iar/settings/*.wsdt
 # OS
 Thumbs.db
 .DS_Store
+
+# Local vision captures
+/vision/capture/
