@@ -17,9 +17,18 @@
 typedef struct
 {
     float previous_velocity_cms;          /* 上一帧速度反馈，用于计算测量加速度 */
-    float filtered_negative_accel_cms2;   /* 低通后的负测量加速度，作为D项输入 */
+    float filtered_negative_accel_cms2;   /* 二阶低通后的负测量加速度，作为D项输入 */
     volatile float cutoff_hz;             /* D支路低通截止频率，可由VOFA调整 */
     uint8 initialized;                    /* 首帧只初始化，不产生D项 */
+    float b0;
+    float b1;
+    float b2;
+    float a1;
+    float a2;
+    float x1;
+    float x2;
+    float y1;
+    float y2;
 } VelocityLoopDState_t;
 
 PID_Controller vel_pid_x;
@@ -46,8 +55,10 @@ static VelocityLoopRateFeedforwardDiag_t g_rate_ff_diag;
 static volatile VelocityLoopAxisDiag_t g_axis_diag[2];
 static volatile VelocityLoopHorizontalDiag_t g_horizontal_diag;
 static VelocityLoopDState_t g_d_state[2] = {
-    {0.0f, 0.0f, VELOCITY_LOOP_D_FILTER_DEFAULT_HZ, 0U},
-    {0.0f, 0.0f, VELOCITY_LOOP_D_FILTER_DEFAULT_HZ, 0U}
+    {0.0f, 0.0f, VELOCITY_LOOP_D_FILTER_DEFAULT_HZ, 0U,
+     0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f},
+    {0.0f, 0.0f, VELOCITY_LOOP_D_FILTER_DEFAULT_HZ, 0U,
+     0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f}
 };
 
 /* 标量限幅，保证PID输出和调参值不会超过允许范围。 */
@@ -109,6 +120,50 @@ static void velocity_loop_reset_d_axis(VelocityLoopDState_t *state)
     state->previous_velocity_cms = 0.0f;
     state->filtered_negative_accel_cms2 = 0.0f;
     state->initialized = 0U;
+    state->x1 = 0.0f;
+    state->x2 = 0.0f;
+    state->y1 = 0.0f;
+    state->y2 = 0.0f;
+}
+
+static void velocity_loop_configure_d_axis(VelocityLoopDState_t *state,
+                                           float cutoff_hz)
+{
+    float w0;
+    float sin_w0;
+    float cos_w0;
+    float alpha;
+    float a0;
+
+    w0 = VELOCITY_LOOP_TWO_PI * cutoff_hz /
+         VELOCITY_LOOP_D_BIQUAD_SAMPLE_HZ;
+    sin_w0 = sinf(w0);
+    cos_w0 = cosf(w0);
+    alpha = sin_w0 / (2.0f * VELOCITY_LOOP_D_BIQUAD_Q_DEFAULT);
+    a0 = 1.0f + alpha;
+
+    state->b0 = ((1.0f - cos_w0) * 0.5f) / a0;
+    state->b1 = (1.0f - cos_w0) / a0;
+    state->b2 = state->b0;
+    state->a1 = (-2.0f * cos_w0) / a0;
+    state->a2 = (1.0f - alpha) / a0;
+    velocity_loop_reset_d_axis(state);
+}
+
+static float velocity_loop_update_d_biquad(VelocityLoopDState_t *state,
+                                           float input)
+{
+    float output = state->b0 * input +
+                   state->b1 * state->x1 +
+                   state->b2 * state->x2 -
+                   state->a1 * state->y1 -
+                   state->a2 * state->y2;
+
+    state->x2 = state->x1;
+    state->x1 = input;
+    state->y2 = state->y1;
+    state->y1 = output;
+    return output;
 }
 
 static void velocity_loop_reset_d_state(void)
@@ -117,17 +172,21 @@ static void velocity_loop_reset_d_state(void)
     velocity_loop_reset_d_axis(&g_d_state[VELOCITY_LOOP_AXIS_Y]);
 }
 
-/* D项使用测量速度变化率，带低通滤波，降低光流噪声放大。 */
+/* D项使用测量速度变化率，先限幅再经过250Hz设计的二阶低通。 */
 static float velocity_loop_update_d(uint8 axis,
                                     float measured_velocity_cms,
                                     float dt_s)
 {
     VelocityLoopDState_t *state = &g_d_state[axis];
     float raw_negative_accel;
-    float alpha;
+    float filtered;
 
     if(!state->initialized)
     {
+        if(!(state->b0 > 0.0f))
+        {
+            velocity_loop_configure_d_axis(state, state->cutoff_hz);
+        }
         state->previous_velocity_cms = measured_velocity_cms;
         state->initialized = 1U;
         return 0.0f;
@@ -135,11 +194,13 @@ static float velocity_loop_update_d(uint8 axis,
     raw_negative_accel = -(measured_velocity_cms - state->previous_velocity_cms) /
                          dt_s;
     state->previous_velocity_cms = measured_velocity_cms;
-    alpha = 1.0f - expf(-VELOCITY_LOOP_TWO_PI * state->cutoff_hz *
-                        dt_s);
-    state->filtered_negative_accel_cms2 += alpha *
-        (raw_negative_accel - state->filtered_negative_accel_cms2);
-    return state->filtered_negative_accel_cms2;
+    raw_negative_accel = velocity_loop_limit_float(
+        raw_negative_accel,
+        -VELOCITY_LOOP_D_RAW_ACCEL_LIMIT_DEFAULT,
+        VELOCITY_LOOP_D_RAW_ACCEL_LIMIT_DEFAULT);
+    filtered = velocity_loop_update_d_biquad(state, raw_negative_accel);
+    state->filtered_negative_accel_cms2 = filtered;
+    return filtered;
 }
 
 /* 清空速度环给角度环提供的角速度前馈。 */
@@ -270,6 +331,7 @@ uint8 Velocity_Loop_Set_D_Filter_Hz(uint8 axis, float cutoff_hz)
         return 0U;
     }
     g_d_state[axis].cutoff_hz = cutoff_hz;
+    velocity_loop_configure_d_axis(&g_d_state[axis], cutoff_hz);
     return 1U;
 }
 
@@ -414,6 +476,12 @@ void Velocity_Loop_Update_Attitude_Target(uint8 velocity_ready,
     p_y = vel_pid_y.Kp * error_y;
     d_x = vel_pid_x.Kd * d_measure_x;
     d_y = vel_pid_y.Kd * d_measure_y;
+    d_x = velocity_loop_limit_float(d_x,
+                                    -VELOCITY_LOOP_D_OUTPUT_LIMIT_DEFAULT,
+                                    VELOCITY_LOOP_D_OUTPUT_LIMIT_DEFAULT);
+    d_y = velocity_loop_limit_float(d_y,
+                                    -VELOCITY_LOOP_D_OUTPUT_LIMIT_DEFAULT,
+                                    VELOCITY_LOOP_D_OUTPUT_LIMIT_DEFAULT);
     previous_i_x = vel_pid_x.integral;
     previous_i_y = vel_pid_y.integral;
 
