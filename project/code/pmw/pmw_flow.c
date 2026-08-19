@@ -614,6 +614,7 @@ static float pmw_flow_pi_update_axis(PMWFlowPIAxis_t *axis,
                                      float dt_s)
 {
     float innovation_cms;
+    float correction_innovation_cms;
     float correction_cms;
     float correction_dt_s;
     float correction_limit_cms;
@@ -626,12 +627,19 @@ static float pmw_flow_pi_update_axis(PMWFlowPIAxis_t *axis,
     innovation_cms = measurement_cms - prediction_cms;
     pmw_flow_pi_update_evidence(axis, innovation_cms, dt_s);
 
+    /*
+     * 原始创新量保留给诊断和证据计算；实际比例修正使用已有的创新低通，
+     * 避免单个光流噪声帧直接形成融合速度台阶。IMU预测支路不经过这里，
+     * 因此不会降低对真实短时加速度的响应速度。
+     */
+    correction_innovation_cms = axis->innovation_lp_cms;
+
     axis->alpha = pmw_flow_pi_calc_alpha(dt_s);
     axis->bias_ki = PMW_FLOW_FUSION_BIAS_KI;
 
     correction_dt_s = (dt_s > 0.0f) ? dt_s : FLOW_SENSOR_NOMINAL_DT_S;
     correction_limit_cms = PMW_FLOW_FUSION_CORRECTION_LIMIT_CMS2 * correction_dt_s;
-    correction_cms = pmw_flow_limit_float(axis->alpha * innovation_cms,
+    correction_cms = pmw_flow_limit_float(axis->alpha * correction_innovation_cms,
                                           -correction_limit_cms,
                                           correction_limit_cms);
 
