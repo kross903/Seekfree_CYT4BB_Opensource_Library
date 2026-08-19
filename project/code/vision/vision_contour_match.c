@@ -7,6 +7,7 @@
 #if CY_CORE_CM7_1
 
 #define CONTOUR_SEARCH_RADIUS       (32)
+#define CONTOUR_SEED_SEARCH_DIRECTION (4) /* 固定向下寻边，方向与 Moore 初始背景方向一致 */
 #define CONTOUR_SCAN_INTERSECTIONS  (64U)
 #define CONTOUR_HULL_SAMPLE_POINTS  (96U)
 #define CONTOUR_MIN_AREA            (6U)
@@ -163,16 +164,16 @@ static uint32 contour_perimeter_q8(const VisionContour_t *contour)
 }
 
 static uint8 contour_trace(int start_x, int start_y,
+                           int initial_back_x, int initial_back_y,
                            VisionContourCandidate_t *candidate)
 {
     int current_x = start_x;
     int current_y = start_y;
-    int back_x = start_x - 1;
-    int back_y = start_y;
+    int back_x = initial_back_x;
+    int back_y = initial_back_y;
     int first_next_x = -1;
     int first_next_y = -1;
     uint32 steps;
-    int direction;
 
     if(candidate == NULL || !contour_sample(start_x, start_y)) return 0U;
     memset(candidate, 0, sizeof(*candidate));
@@ -184,17 +185,6 @@ static uint8 contour_trace(int start_x, int start_y,
     candidate->endpoint_x[1] = VISION_CONTOUR_POINT_INVALID;
     candidate->endpoint_y[0] = VISION_CONTOUR_POINT_INVALID;
     candidate->endpoint_y[1] = VISION_CONTOUR_POINT_INVALID;
-    for(direction = 0; direction < 8; ++direction)
-    {
-        int bx = start_x + s_dir_x[direction];
-        int by = start_y + s_dir_y[direction];
-        if(!contour_sample(bx, by))
-        {
-            back_x = bx;
-            back_y = by;
-            break;
-        }
-    }
     for(steps = 0U; steps < (uint32)VISION_RUNTIME_CONTOUR_MAX_POINTS * 8U; ++steps)
     {
         int search_start;
@@ -245,9 +235,8 @@ static uint8 contour_trace(int start_x, int start_y,
             candidate->contour_closed = 1U;
             break;
         }
-        direction = (found_direction + 7) & 7;
-        back_x = current_x + s_dir_x[direction];
-        back_y = current_y + s_dir_y[direction];
+        back_x = current_x + s_dir_x[(found_direction + 7) & 7];
+        back_y = current_y + s_dir_y[(found_direction + 7) & 7];
         current_x = next_x;
         current_y = next_y;
     }
@@ -894,17 +883,37 @@ static void contour_classify(VisionContourCandidate_t *candidate,
     }
 }
 
+/* 任意白色种子沿固定射线寻找边界，并保存相邻黑点作为 Moore 背景点。 */
 static uint8 contour_find_boundary(int seed_x, int seed_y,
-                                   int *boundary_x, int *boundary_y)
+                                   int *boundary_x, int *boundary_y,
+                                   int *back_x, int *back_y)
 {
     int x;
+    int y;
+    int next_x;
+    int next_y;
     if(boundary_x == NULL || boundary_y == NULL ||
+       back_x == NULL || back_y == NULL ||
+       !contour_in_bounds(seed_x, seed_y) ||
        !contour_sample(seed_x, seed_y)) return 0U;
     x = seed_x;
-    while(x > 0 && contour_sample(x - 1, seed_y)) --x;
-    *boundary_x = x;
-    *boundary_y = seed_y;
-    return 1U;
+    y = seed_y;
+    for(;;)
+    {
+        next_x = x + s_dir_x[CONTOUR_SEED_SEARCH_DIRECTION];
+        next_y = y + s_dir_y[CONTOUR_SEED_SEARCH_DIRECTION];
+        if(!contour_in_bounds(next_x, next_y) ||
+           !contour_sample(next_x, next_y))
+        {
+            *boundary_x = x;
+            *boundary_y = y;
+            *back_x = next_x;
+            *back_y = next_y;
+            return 1U;
+        }
+        x = next_x;
+        y = next_y;
+    }
 }
 
 static uint8 contour_try_point(int x, int y,
@@ -914,14 +923,18 @@ static uint8 contour_try_point(int x, int y,
     VisionContourCandidate_t *candidate;
     int boundary_x;
     int boundary_y;
+    int back_x;
+    int back_y;
 
     if(!contour_in_bounds(x, y) || BIT_GET(s_processed, x, y) ||
        !contour_sample(x, y)) return 0U;
-    if(!contour_find_boundary(x, y, &boundary_x, &boundary_y) ||
+    if(!contour_find_boundary(x, y, &boundary_x, &boundary_y,
+                              &back_x, &back_y) ||
        BIT_GET(s_processed, boundary_x, boundary_y)) return 0U;
     if(result->candidate_count >= VISION_RUNTIME_MAX_CANDIDATES) return 0U;
     candidate = &result->candidate[result->candidate_count];
-    if(!contour_trace(boundary_x, boundary_y, candidate)) return 0U;
+    if(!contour_trace(boundary_x, boundary_y, back_x, back_y, candidate))
+        return 0U;
     contour_fill_blob(candidate);
     contour_mark_processed(&candidate->contour);
     if(candidate->blob.area < CONTOUR_MIN_AREA) return 0U;
@@ -999,8 +1012,7 @@ static void contour_global_center_search(const VisionContourFrameConfig_t *confi
         }
         if(result->candidate_count >= VISION_RUNTIME_MAX_CANDIDATES ||
            (result->arrow_count != 0U &&
-            (!config->beacon_enabled ||
-             result->beacon_count >= config->beacon_limit))) return;
+            result->beacon_count >= config->beacon_limit)) return;
     }
 }
 
@@ -1031,8 +1043,7 @@ void VisionContourMatch_Process(const VisionContourFrameConfig_t *config,
         contour_search_around_seed(&config->seeds[i], config, result);
         if(result->candidate_count > before) ++result->seed_hits;
     }
-    if(config->force_global_search ||
-       (result->beacon_count == 0U && result->arrow_count == 0U))
+    if(config->force_global_search || result->beacon_count == 0U)
     {
         contour_global_center_search(config, result);
     }
