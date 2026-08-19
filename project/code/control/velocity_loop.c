@@ -84,21 +84,6 @@ static uint8 velocity_loop_limit_vector(float *x, float *y, float limit)
     return 1U;
 }
 
-/* 机体系速度转惯性系速度，Yaw为IMU绝对偏航角。 */
-static void velocity_loop_body_to_earth(float body_x,
-                                        float body_y,
-                                        float yaw_deg,
-                                        float *earth_x,
-                                        float *earth_y)
-{
-    float yaw_rad = yaw_deg * VELOCITY_LOOP_DEG2RAD;
-    float cosine = cosf(yaw_rad);
-    float sine = sinf(yaw_rad);
-
-    *earth_x = cosine * body_x - sine * body_y;
-    *earth_y = sine * body_x + cosine * body_y;
-}
-
 /* 惯性系加速度转机体系加速度，供后续换算Roll/Pitch目标角。 */
 static void velocity_loop_earth_to_body(float earth_x,
                                         float earth_y,
@@ -414,8 +399,8 @@ void Velocity_Loop_Get_Horizontal_Diag(VelocityLoopHorizontalDiag_t *diag)
 }
 
 void Velocity_Loop_Update_Attitude_Target(uint8 velocity_ready,
-                                          float measured_vx_body_cms,
-                                          float measured_vy_body_cms,
+                                          float measured_vx_earth_cms,
+                                          float measured_vy_earth_cms,
                                           float yaw_deg,
                                           float dt_s,
                                           float captured_roll,
@@ -423,8 +408,6 @@ void Velocity_Loop_Update_Attitude_Target(uint8 velocity_ready,
                                           float *target_roll,
                                           float *target_pitch)
 {
-    float measured_vx_earth;
-    float measured_vy_earth;
     float error_x;
     float error_y;
     float d_measure_x;
@@ -453,7 +436,7 @@ void Velocity_Loop_Update_Attitude_Target(uint8 velocity_ready,
     /* 速度反馈或控制周期无效时，回到起飞捕获角，防止脏数据进入姿态环。 */
     if(!g_enabled || !velocity_ready || !isfinite(yaw_deg) ||
        !isfinite(dt_s) || (dt_s < 0.002f) || (dt_s > 0.008f) ||
-       !isfinite(measured_vx_body_cms) || !isfinite(measured_vy_body_cms))
+       !isfinite(measured_vx_earth_cms) || !isfinite(measured_vy_earth_cms))
     {
         *target_roll = captured_roll;
         *target_pitch = captured_pitch;
@@ -461,16 +444,14 @@ void Velocity_Loop_Update_Attitude_Target(uint8 velocity_ready,
         return;
     }
 
-    velocity_loop_body_to_earth(measured_vx_body_cms, measured_vy_body_cms,
-                                yaw_deg, &measured_vx_earth, &measured_vy_earth);
     /* 速度环统一在惯性系计算，避免Yaw变化时目标方向跟着机头漂移。 */
-    error_x = g_target_vx_earth_cms - measured_vx_earth;
-    error_y = g_target_vy_earth_cms - measured_vy_earth;
+    error_x = g_target_vx_earth_cms - measured_vx_earth_cms;
+    error_y = g_target_vy_earth_cms - measured_vy_earth_cms;
     d_measure_x = velocity_loop_update_d(VELOCITY_LOOP_AXIS_X,
-                                         measured_vx_earth,
+                                         measured_vx_earth_cms,
                                          dt_s);
     d_measure_y = velocity_loop_update_d(VELOCITY_LOOP_AXIS_Y,
-                                         measured_vy_earth,
+                                         measured_vy_earth_cms,
                                          dt_s);
     p_x = vel_pid_x.Kp * error_x;
     p_y = vel_pid_y.Kp * error_y;
@@ -576,7 +557,7 @@ void Velocity_Loop_Update_Attitude_Target(uint8 velocity_ready,
     velocity_loop_update_rate_feedforward(g_roll_corr_deg, g_pitch_corr_deg, dt_s);
 
     g_axis_diag[0].target_velocity_cms = g_target_vx_earth_cms;
-    g_axis_diag[0].actual_velocity_cms = measured_vx_earth;
+    g_axis_diag[0].actual_velocity_cms = measured_vx_earth_cms;
     g_axis_diag[0].error_velocity_cms = error_x;
     g_axis_diag[0].p_output_cms2 = p_x;
     g_axis_diag[0].i_output_cms2 = candidate_i_x;
@@ -587,7 +568,7 @@ void Velocity_Loop_Update_Attitude_Target(uint8 velocity_ready,
     g_axis_diag[0].saturated = accel_limited;
     g_axis_diag[0].active = 1U;
     g_axis_diag[1].target_velocity_cms = g_target_vy_earth_cms;
-    g_axis_diag[1].actual_velocity_cms = measured_vy_earth;
+    g_axis_diag[1].actual_velocity_cms = measured_vy_earth_cms;
     g_axis_diag[1].error_velocity_cms = error_y;
     g_axis_diag[1].p_output_cms2 = p_y;
     g_axis_diag[1].i_output_cms2 = candidate_i_y;
@@ -599,8 +580,8 @@ void Velocity_Loop_Update_Attitude_Target(uint8 velocity_ready,
     g_axis_diag[1].active = 1U;
     g_horizontal_diag.target_vx_earth_cms = g_target_vx_earth_cms;
     g_horizontal_diag.target_vy_earth_cms = g_target_vy_earth_cms;
-    g_horizontal_diag.actual_vx_earth_cms = measured_vx_earth;
-    g_horizontal_diag.actual_vy_earth_cms = measured_vy_earth;
+    g_horizontal_diag.actual_vx_earth_cms = measured_vx_earth_cms;
+    g_horizontal_diag.actual_vy_earth_cms = measured_vy_earth_cms;
     g_horizontal_diag.acceleration_ff_x_earth_cms2 = g_target_ax_earth_cms2;
     g_horizontal_diag.acceleration_ff_y_earth_cms2 = g_target_ay_earth_cms2;
     g_horizontal_diag.acceleration_correction_x_earth_cms2 = correction_x;
@@ -612,8 +593,8 @@ void Velocity_Loop_Update_Attitude_Target(uint8 velocity_ready,
     g_horizontal_diag.dt_s = dt_s;
     g_horizontal_diag.status_flags = status;
     g_horizontal_diag.timing_valid = 1U;
-    g_fb_vx_earth_cms = measured_vx_earth;
-    g_fb_vy_earth_cms = measured_vy_earth;
+    g_fb_vx_earth_cms = measured_vx_earth_cms;
+    g_fb_vy_earth_cms = measured_vy_earth_cms;
     g_active = 1U;
 }
 

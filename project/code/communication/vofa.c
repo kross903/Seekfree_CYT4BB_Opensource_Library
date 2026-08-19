@@ -1429,7 +1429,10 @@ void USART_PID_Adjust(void)
                 case 'T':
                 case 't': send_back_flag = 42; break;
                 case 'U':
-                case 'u': send_back_flag = 29; break;
+                case 'u':
+                    /* FU1!/FU!查看惯性系X轴，FU2!查看惯性系Y轴。 */
+                    send_back_flag = (fifo_get_data[2] == '2') ? 44 : 29;
+                    break;
                 case 'V':
                 case 'v': send_back_flag = 20; break;
                 case 'W':
@@ -2156,21 +2159,46 @@ void send_date_back(void)
 
             PMW_Flow_GetState(&pmw_flow_state);
 
-            send_sixteen_date(pmw_flow_state.velocity_x_cms,
-                              pmw_flow_state.fusion_imu_velocity_x_cms,
+            send_sixteen_date(pmw_flow_state.velocity_x_fused_cms,
+                              pmw_flow_state.velocity_x_flow_earth_cms,
+                              pmw_flow_state.fusion_acceleration_x_cms2,
                               pmw_flow_state.fusion_imu_delta_x_cms,
                               pmw_flow_state.fusion_prediction_x_cms,
                               pmw_flow_state.fusion_residual_x_cms,
                               pmw_flow_state.fusion_correction_x_cms,
                               pmw_flow_state.fusion_output_x_cms,
-                              (float)pmw_flow_state.flow_used,
-                              pmw_flow_state.velocity_y_cms,
-                              pmw_flow_state.fusion_imu_velocity_y_cms,
+                              pmw_flow_state.fusion_alpha_x,
+                              pmw_flow_state.fusion_accel_bias_x_cms2,
+                              (float)pmw_flow_state.flow_frame_seq,
+                              (float)pmw_flow_state.flow_last_accepted_frame_seq,
+                              pmw_flow_state.flow_observation_age_s * 1000.0f,
+                              (float)pmw_flow_state.flow_last_received_accepted,
+                              (float)pmw_flow_state.fusion_mode,
+                              (float)pmw_flow_state.fused_velocity_valid);
+            break;
+        }
+
+        case 44:
+        {
+            PMWFlowState_t pmw_flow_state = {0};
+
+            PMW_Flow_GetState(&pmw_flow_state);
+
+            send_sixteen_date(pmw_flow_state.velocity_y_fused_cms,
+                              pmw_flow_state.velocity_y_flow_earth_cms,
+                              pmw_flow_state.fusion_acceleration_y_cms2,
                               pmw_flow_state.fusion_imu_delta_y_cms,
                               pmw_flow_state.fusion_prediction_y_cms,
                               pmw_flow_state.fusion_residual_y_cms,
                               pmw_flow_state.fusion_correction_y_cms,
                               pmw_flow_state.fusion_output_y_cms,
+                              pmw_flow_state.fusion_alpha_y,
+                              pmw_flow_state.fusion_accel_bias_y_cms2,
+                              (float)pmw_flow_state.flow_frame_seq,
+                              (float)pmw_flow_state.flow_last_accepted_frame_seq,
+                              pmw_flow_state.flow_observation_age_s * 1000.0f,
+                              (float)pmw_flow_state.flow_last_received_accepted,
+                              (float)pmw_flow_state.fusion_mode,
                               (float)pmw_flow_state.fused_velocity_valid);
             break;
         }
@@ -2181,7 +2209,7 @@ void send_date_back(void)
 
             PMW_Flow_GetState(&flow_state);
             send_sixteen_date(flow_state.fusion_prediction_x_cms,
-                              flow_state.velocity_x_cms,
+                              flow_state.velocity_x_flow_earth_cms,
                               flow_state.fusion_residual_x_cms,
                               flow_state.fusion_innovation_evidence_x,
                               flow_state.fusion_alpha_x,
@@ -2189,7 +2217,7 @@ void send_date_back(void)
                               flow_state.fusion_accel_bias_x_cms2,
                               flow_state.fusion_output_x_cms,
                               flow_state.fusion_prediction_y_cms,
-                              flow_state.velocity_y_cms,
+                              flow_state.velocity_y_flow_earth_cms,
                               flow_state.fusion_residual_y_cms,
                               flow_state.fusion_innovation_evidence_y,
                               flow_state.fusion_alpha_y,

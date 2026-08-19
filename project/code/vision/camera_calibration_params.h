@@ -25,7 +25,7 @@
 #define CAMERA_CALIBRATION_K4                       (-0.00718848343f)
 #define CAMERA_CALIBRATION_VALID_RADIUS_PX          (0.0f)
 //旋转外参补偿
-#define CAMERA_MOUNT_ROLL_OFFSET_DEG                (-15.0f)
+#define CAMERA_MOUNT_ROLL_OFFSET_DEG                (15.0f)
 #define CAMERA_MOUNT_PITCH_OFFSET_DEG               (0.0f)
 #define CAMERA_MOUNT_YAW_OFFSET_DEG                 (180.0f)
 //平移外参补偿

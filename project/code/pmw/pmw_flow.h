@@ -8,6 +8,11 @@
 #define PMW_FLOW_TOF_SOURCE_LIVE       (1U)
 #define PMW_FLOW_TOF_SOURCE_HOLD       (2U)
 
+#define PMW_FLOW_FUSION_MODE_UNINITIALIZED  (0U)
+#define PMW_FLOW_FUSION_MODE_FLOW_TRACKING  (1U)
+#define PMW_FLOW_FUSION_MODE_INERTIAL_HOLD  (2U)
+#define PMW_FLOW_FUSION_MODE_FAULT          (3U)
+
 typedef struct
 {
     uint8 valid;
@@ -49,7 +54,9 @@ typedef struct
     float velocity_y_output_slew_cms;
     float velocity_x_cms;
     float velocity_y_cms;
-    /* ICM-predicted + optical-flow-corrected velocity used by the speed loop. */
+    float velocity_x_flow_earth_cms;
+    float velocity_y_flow_earth_cms;
+    /* 惯性系融合速度，位置环和速度环直接使用，不得再次按Yaw旋转。 */
     float velocity_x_fused_cms;
     float velocity_y_fused_cms;
     float velocity_x_fused_residual_cms;
@@ -66,8 +73,8 @@ typedef struct
     float fusion_innovation_evidence_x;
     float fusion_innovation_evidence_y;
     /* 最近一次光流反馈更新时的融合分解快照。 */
-    float fusion_imu_velocity_x_cms;
-    float fusion_imu_velocity_y_cms;
+    float fusion_acceleration_x_cms2;
+    float fusion_acceleration_y_cms2;
     float fusion_imu_delta_x_cms;
     float fusion_imu_delta_y_cms;
     float fusion_prediction_x_cms;
@@ -105,6 +112,10 @@ typedef struct
     uint16 flow_dropped_frame_count;
     uint16 flow_sync_error_count;
     float flow_observation_age_s;
+    float flow_capture_yaw_deg;
+    uint32 flow_last_accepted_frame_seq;
+    uint8 flow_last_received_accepted;
+    uint8 fusion_mode;
 } PMWFlowState_t;
 
 void PMW_Flow_Init(void);
@@ -112,13 +123,19 @@ void PMW_Flow_Reset(void);
 void PMW_Flow_AccumulateGyro(float gyro_x_rate_dps,
                              float gyro_y_rate_dps,
                              float gyro_z_rate_dps,
+                             float yaw_deg,
                              float dt_s);
-void PMW_Flow_PredictVelocity(float imu_velocity_x_cms, float imu_velocity_y_cms, float dt_s);
+void PMW_Flow_PredictVelocity(float accel_x_body_cms2,
+                              float accel_y_body_cms2,
+                              float yaw_deg,
+                              uint8 acceleration_valid,
+                              float dt_s);
 void PMW_Flow_ClearFault(void);
 uint8 PMW_Flow_GetGyroSnapshotAtCycle(uint32 target_cycle,
                                       float *total_x_rad,
                                       float *total_y_rad,
-                                      float *total_z_rad);
+                                      float *total_z_rad,
+                                      float *yaw_deg);
 void PMW_Flow_GetAccumulatedGyroDelta(float *gyro_x_delta_rad,
                                       float *gyro_y_delta_rad,
                                       float *gyro_z_delta_rad);
@@ -134,11 +151,10 @@ void PMW_Flow_UpdateSample(int16 flow_delta_x,
                            int16 flow_delta_y,
                            float roll_deg,
                            float pitch_deg,
+                           float flow_yaw_deg,
                            float tof_height_cm,
                            uint8 tof_source,
                            float dt_s,
-                           float imu_velocity_x_cms,
-                           float imu_velocity_y_cms,
                            float gyro_flow_x_delta_rad,
                            float gyro_flow_y_delta_rad,
                            float gyro_flow_z_delta_rad);

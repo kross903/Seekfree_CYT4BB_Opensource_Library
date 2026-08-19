@@ -51,6 +51,7 @@ static void optical_flow_process_sample(int16 flow_delta_x,
                                         float gyro_flow_x_delta_rad,
                                         float gyro_flow_y_delta_rad,
                                         float gyro_flow_z_delta_rad,
+                                        float flow_yaw_deg,
                                         HeightTofSnapshot_t *tof_snapshot,
                                         uint32 frame_seq,
                                         float rx_dt_ms,
@@ -94,11 +95,10 @@ static void optical_flow_process_sample(int16 flow_delta_x,
                           flow_delta_y,
                           current_roll,
                           current_pitch,
+                          flow_yaw_deg,
                           flow_height_cm,
                           tof_source,
                           flow_sample_dt_s,
-                          X_V_F,
-                          Y_V_F,
                           gyro_flow_x_delta_rad,
                           gyro_flow_y_delta_rad,
                           gyro_flow_z_delta_rad);
@@ -135,6 +135,7 @@ void OpticalFlowFeed_Task(void)
                                 gyro_x_delta_rad,
                                 gyro_y_delta_rad,
                                 gyro_z_delta_rad,
+                                current_yaw,
                                 &tof_snapshot,
                                 0U,
                                 FLOW_SENSOR_NOMINAL_DT_S * 1000.0f,
@@ -158,7 +159,8 @@ void OpticalFlowFeed_Task(void)
         float gyro_window_dt_ms = rx_dt_ms;
         float consumer_delay_ms =
             flow_cycles_to_ms(DWT->CYCCNT - frame.frame_start_cycle);
-        uint8 sync_valid = frame.gyro_window_valid;
+        uint8 sync_valid = (uint8)(frame.gyro_window_valid &&
+                                   frame.yaw_window_valid);
         uint8 baseline_only = (uint8)!g_upflow302_timing_initialized;
 
         if(sync_valid && !flow_dt_pair_is_valid(rx_dt_ms, sensor_dt_ms))
@@ -193,6 +195,7 @@ void OpticalFlowFeed_Task(void)
                                     frame.gyro_x_delta_rad,
                                     frame.gyro_y_delta_rad,
                                     frame.gyro_z_delta_rad,
+                                    frame.yaw_mid_deg,
                                     &tof_snapshot,
                                     frame.frame_seq,
                                     rx_dt_ms,

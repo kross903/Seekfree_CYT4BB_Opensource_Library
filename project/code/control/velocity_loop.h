@@ -94,8 +94,8 @@ uint8 Velocity_Loop_Get_Axis_Diag(uint8 axis, VelocityLoopAxisDiag_t *diag);
 void Velocity_Loop_Get_Horizontal_Diag(VelocityLoopHorizontalDiag_t *diag);
 /* 主控制入口：根据速度误差输出Roll/Pitch目标角。 */
 void Velocity_Loop_Update_Attitude_Target(uint8 velocity_ready,
-                                          float measured_vx_body_cms,
-                                          float measured_vy_body_cms,
+                                          float measured_vx_earth_cms,
+                                          float measured_vy_earth_cms,
                                           float yaw_deg,
                                           float dt_s,
                                           float captured_roll,

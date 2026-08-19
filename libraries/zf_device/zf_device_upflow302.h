@@ -39,13 +39,16 @@ typedef struct
     float gyro_x_delta_rad;
     float gyro_y_delta_rad;
     float gyro_z_delta_rad;
+    float yaw_mid_deg;
     uint8 gyro_window_valid;
+    uint8 yaw_window_valid;
 } upflow302_frame_t;
 
 typedef uint8 (*upflow302_gyro_snapshot_callback_t)(uint32 target_cycle,
                                                      float *total_x_rad,
                                                      float *total_y_rad,
-                                                     float *total_z_rad);
+                                                     float *total_z_rad,
+                                                     float *yaw_deg);
 
 extern upflow302_receive_struct upflow302_receive;
 extern uint8 upflow302_receiver_data[UP_FLOW_302_DATA_LEN];

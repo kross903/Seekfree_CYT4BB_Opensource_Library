@@ -155,6 +155,9 @@ extern float X_V, Y_V;                            // 估计线速度
 extern float X_V_F, Y_V_F;                        // 滤波后线速度
 extern float X_V_last, Y_V_last;                  // 历史线速度
 extern float X_V_R_last, Y_V_R_last;              // 相对速度
+extern float Horizontal_Accel_X_Cms2;             // 机头水平系X加速度，cm/s²
+extern float Horizontal_Accel_Y_Cms2;             // 机头水平系Y加速度，cm/s²
+extern uint8 Horizontal_Accel_Valid;               // 当前水平加速度数值有效
 
 // 陀螺仪辅助变量
 extern float Yaw_angle_counter;

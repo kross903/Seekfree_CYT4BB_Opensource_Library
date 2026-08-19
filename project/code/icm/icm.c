@@ -86,6 +86,9 @@ float acc_level_z_scale = 1.0000f;
 float X_V, Y_V;                            // 估计的线速度
 float X_V_F, Y_V_F;                        // 滤波后线速度
 float X_V_last, Y_V_last;
+float Horizontal_Accel_X_Cms2 = 0.0f;      // 机头水平系X加速度，供速度融合直接积分
+float Horizontal_Accel_Y_Cms2 = 0.0f;      // 机头水平系Y加速度，供速度融合直接积分
+uint8 Horizontal_Accel_Valid = 0U;          // 仅表示本周期数值有限，不附加运动门控
 
 // 滤波器状态
 biquad_state X_V_biquad, Y_V_biquad;
@@ -486,6 +489,9 @@ void ICM_Calculate_Init(void)
     // 7. 清零速度估计
     X_V = 0.0f; Y_V = 0.0f;
     X_V_F = 0.0f; Y_V_F = 0.0f;
+    Horizontal_Accel_X_Cms2 = 0.0f;
+    Horizontal_Accel_Y_Cms2 = 0.0f;
+    Horizontal_Accel_Valid = 0U;
 
     ips200_show_string(0, 16*3, "ICM Ready!        ");
     system_delay_ms(500);
@@ -1010,6 +1016,26 @@ void Update_Velocity_Estimate(void)
     ax_level_mg -= acc_level_x_bias_mg;
     ay_level_mg -= acc_level_y_bias_mg;
 
+    /*
+     * 速度融合直接使用当前水平加速度，不再读取带泄漏的X_V_F/Y_V_F差分。
+     * 按当前方案，这一路不施加±300 mg限幅、角速度门控或零速判断；
+     * 只阻止NaN/Inf进入积分器。旧X_V/X_V_F仍保留给原有诊断页面。
+     */
+    if(isfinite(ax_level_mg) && isfinite(ay_level_mg))
+    {
+        Horizontal_Accel_X_Cms2 =
+            ax_level_mg * ACC_MG_TO_MPS2 * ACC_VEL_MPS_TO_CMS;
+        Horizontal_Accel_Y_Cms2 =
+            ay_level_mg * ACC_MG_TO_MPS2 * ACC_VEL_MPS_TO_CMS;
+        Horizontal_Accel_Valid = 1U;
+    }
+    else
+    {
+        Horizontal_Accel_X_Cms2 = 0.0f;
+        Horizontal_Accel_Y_Cms2 = 0.0f;
+        Horizontal_Accel_Valid = 0U;
+    }
+
     if(fabsf(Roll_g_F) > ACC_VEL_GYRO_GATE_DPS ||
        fabsf(Pitch_g_F) > ACC_VEL_GYRO_GATE_DPS ||
        fabsf(Yaw_g_F) > ACC_VEL_GYRO_GATE_DPS)
@@ -1169,6 +1195,9 @@ static void icm_acc_level_bias_reset_velocity(void)
     Y_V = 0.0f;
     X_V_F = 0.0f;
     Y_V_F = 0.0f;
+    Horizontal_Accel_X_Cms2 = 0.0f;
+    Horizontal_Accel_Y_Cms2 = 0.0f;
+    Horizontal_Accel_Valid = 0U;
     X_V_biquad.x1 = 0.0f;
     X_V_biquad.x2 = 0.0f;
     X_V_biquad.y1 = 0.0f;
@@ -1475,6 +1504,9 @@ void ICM_Attitude_Reset(void)
     integralFBx = 0.0f; integralFBy = 0.0f; integralFBz = 0.0f;
     X_V = 0.0f; Y_V = 0.0f;
     X_V_F = 0.0f; Y_V_F = 0.0f;
+    Horizontal_Accel_X_Cms2 = 0.0f;
+    Horizontal_Accel_Y_Cms2 = 0.0f;
+    Horizontal_Accel_Valid = 0U;
     s_last_valid_q[0] = 1.0f;
     s_last_valid_q[1] = 0.0f;
     s_last_valid_q[2] = 0.0f;

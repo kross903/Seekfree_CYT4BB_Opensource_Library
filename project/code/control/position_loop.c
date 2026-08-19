@@ -638,8 +638,8 @@ void Position_Loop_Get_Brake_Config(PositionLoopBrakeConfig_t *config)
 }
 
 void Position_Loop_Update_Velocity_Target(uint8 velocity_ready,
-                                          float measured_vx_body_cms,
-                                          float measured_vy_body_cms,
+                                          float measured_vx_earth_cms,
+                                          float measured_vy_earth_cms,
                                           float yaw_deg,
                                           float dt_s,
                                           uint8 timing_valid,
@@ -651,8 +651,6 @@ void Position_Loop_Update_Velocity_Target(uint8 velocity_ready,
 {
     PositionLoopTrajectoryConfig_t config;
     PositionLoopBrakeConfig_t brake_config;
-    float measured_vx_earth = 0.0f;
-    float measured_vy_earth = 0.0f;
     float car_vx_earth = 0.0f;
     float car_vy_earth = 0.0f;
     float car_actual_vx_earth = 0.0f;
@@ -704,7 +702,7 @@ void Position_Loop_Update_Velocity_Target(uint8 velocity_ready,
         return;
     }
     if(!velocity_ready || !isfinite(yaw_deg) ||
-       !isfinite(measured_vx_body_cms) || !isfinite(measured_vy_body_cms))
+       !isfinite(measured_vx_earth_cms) || !isfinite(measured_vy_earth_cms))
     {
         Position_Loop_Reset_Trajectory(POSITION_LOOP_RESET_VELOCITY_INVALID);
         g_diag.velocity_ready = velocity_ready;
@@ -748,8 +746,6 @@ void Position_Loop_Update_Velocity_Target(uint8 velocity_ready,
 
     config = g_config;
     brake_config = g_brake_config;
-    position_loop_body_to_earth(measured_vx_body_cms, measured_vy_body_cms,
-                                yaw_deg, &measured_vx_earth, &measured_vy_earth);
     if(!g_frozen_hold_active && (feedforward != NULL) &&
        feedforward->velocity_valid &&
        isfinite(feedforward->vx_uav_cms) && isfinite(feedforward->vy_uav_cms))
@@ -795,8 +791,8 @@ void Position_Loop_Update_Velocity_Target(uint8 velocity_ready,
     new_rear_pose = 0U;
     if(g_frozen_hold_active)
     {
-        position_valid = position_loop_update_frozen_hold(measured_vx_earth,
-                                                          measured_vy_earth,
+        position_valid = position_loop_update_frozen_hold(measured_vx_earth_cms,
+                                                          measured_vy_earth_cms,
                                                           dt_s,
                                                           &position_x,
                                                           &position_y);
@@ -951,8 +947,8 @@ void Position_Loop_Update_Velocity_Target(uint8 velocity_ready,
     }
     if(!position_valid && !g_frozen_hold_active)
     {
-        position_valid = position_loop_predict_hold(measured_vx_earth,
-                                                    measured_vy_earth,
+        position_valid = position_loop_predict_hold(measured_vx_earth_cms,
+                                                    measured_vy_earth_cms,
                                                     car_velocity_valid,
                                                     car_actual_vx_earth,
                                                     car_actual_vy_earth,
@@ -965,9 +961,9 @@ void Position_Loop_Update_Velocity_Target(uint8 velocity_ready,
     {
         /* 真实位置误差进入P/Sqrt；停车包络只约束朝向小车的目标速度。 */
         distance = sqrtf(position_x * position_x + position_y * position_y);
-        relative_velocity_x = measured_vx_earth -
+        relative_velocity_x = measured_vx_earth_cms -
                               (car_velocity_valid ? car_actual_vx_earth : 0.0f);
-        relative_velocity_y = measured_vy_earth -
+        relative_velocity_y = measured_vy_earth_cms -
                               (car_velocity_valid ? car_actual_vy_earth : 0.0f);
         relative_speed = sqrtf(relative_velocity_x * relative_velocity_x +
                                relative_velocity_y * relative_velocity_y);

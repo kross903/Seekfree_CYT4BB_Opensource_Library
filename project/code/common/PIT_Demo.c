@@ -842,8 +842,13 @@ static void control_task_update_sensor_feedback(void)
     PMW_Flow_AccumulateGyro(icm42688_gyro_x,
                             icm42688_gyro_y,
                             icm42688_gyro_z,
+                            current_yaw,
                             CONTROL_DT_S);
-    PMW_Flow_PredictVelocity(X_V_F, Y_V_F, CONTROL_DT_S);
+    PMW_Flow_PredictVelocity(Horizontal_Accel_X_Cms2,
+                             Horizontal_Accel_Y_Cms2,
+                             current_yaw,
+                             Horizontal_Accel_Valid,
+                             CONTROL_DT_S);
 }
 
 static uint8 control_task_handle_attitude_safety(void)

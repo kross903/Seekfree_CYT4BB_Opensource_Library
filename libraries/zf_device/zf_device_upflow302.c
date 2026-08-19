@@ -23,11 +23,13 @@ static uint32 upflow302_pending_frame_start_cycle = 0U;
 static float upflow302_pending_gyro_total_x_rad = 0.0f;
 static float upflow302_pending_gyro_total_y_rad = 0.0f;
 static float upflow302_pending_gyro_total_z_rad = 0.0f;
+static float upflow302_pending_yaw_deg = 0.0f;
 static uint8 upflow302_pending_gyro_snapshot_valid = 0U;
 static uint32 upflow302_previous_frame_start_cycle = 0U;
 static float upflow302_previous_gyro_total_x_rad = 0.0f;
 static float upflow302_previous_gyro_total_y_rad = 0.0f;
 static float upflow302_previous_gyro_total_z_rad = 0.0f;
+static float upflow302_previous_yaw_deg = 0.0f;
 static uint8 upflow302_previous_gyro_snapshot_valid = 0U;
 
 static void upflow302_queue_frame(int16 flow_x,
@@ -39,7 +41,9 @@ static void upflow302_queue_frame(int16 flow_x,
                                   float gyro_x_delta_rad,
                                   float gyro_y_delta_rad,
                                   float gyro_z_delta_rad,
-                                  uint8 gyro_window_valid)
+                                  float yaw_mid_deg,
+                                  uint8 gyro_window_valid,
+                                  uint8 yaw_window_valid)
 {
     uint8 next_head = (uint8)((upflow302_frame_queue_head + 1U) % UPFLOW302_FRAME_QUEUE_LEN);
 
@@ -62,7 +66,9 @@ static void upflow302_queue_frame(int16 flow_x,
     upflow302_frame_queue[upflow302_frame_queue_head].gyro_x_delta_rad = gyro_x_delta_rad;
     upflow302_frame_queue[upflow302_frame_queue_head].gyro_y_delta_rad = gyro_y_delta_rad;
     upflow302_frame_queue[upflow302_frame_queue_head].gyro_z_delta_rad = gyro_z_delta_rad;
+    upflow302_frame_queue[upflow302_frame_queue_head].yaw_mid_deg = yaw_mid_deg;
     upflow302_frame_queue[upflow302_frame_queue_head].gyro_window_valid = gyro_window_valid;
+    upflow302_frame_queue[upflow302_frame_queue_head].yaw_window_valid = yaw_window_valid;
     __DMB();
     upflow302_frame_queue_head = next_head;
 }
@@ -78,19 +84,23 @@ static void upflow302_capture_frame_start(void)
             upflow302_gyro_snapshot_callback(upflow302_pending_frame_start_cycle,
                                              &upflow302_pending_gyro_total_x_rad,
                                              &upflow302_pending_gyro_total_y_rad,
-                                             &upflow302_pending_gyro_total_z_rad);
+                                             &upflow302_pending_gyro_total_z_rad,
+                                             &upflow302_pending_yaw_deg);
     }
 }
 
 static uint8 upflow302_finish_gyro_window(float *gyro_x_delta_rad,
                                           float *gyro_y_delta_rad,
                                           float *gyro_z_delta_rad,
-                                          uint32 *gyro_window_cycles)
+                                          uint32 *gyro_window_cycles,
+                                          float *yaw_mid_deg,
+                                          uint8 *yaw_window_valid)
 {
     uint8 window_valid = 0U;
 
     if(gyro_x_delta_rad == NULL || gyro_y_delta_rad == NULL ||
-       gyro_z_delta_rad == NULL || gyro_window_cycles == NULL)
+       gyro_z_delta_rad == NULL || gyro_window_cycles == NULL ||
+       yaw_mid_deg == NULL || yaw_window_valid == NULL)
     {
         return 0U;
     }
@@ -99,6 +109,8 @@ static uint8 upflow302_finish_gyro_window(float *gyro_x_delta_rad,
     *gyro_y_delta_rad = 0.0f;
     *gyro_z_delta_rad = 0.0f;
     *gyro_window_cycles = 0U;
+    *yaw_mid_deg = 0.0f;
+    *yaw_window_valid = 0U;
 
     if(upflow302_pending_gyro_snapshot_valid && upflow302_previous_gyro_snapshot_valid)
     {
@@ -111,6 +123,17 @@ static uint8 upflow302_finish_gyro_window(float *gyro_x_delta_rad,
         *gyro_window_cycles =
             upflow302_pending_frame_start_cycle - upflow302_previous_frame_start_cycle;
         window_valid = 1U;
+
+        {
+            float yaw_delta_deg = upflow302_pending_yaw_deg - upflow302_previous_yaw_deg;
+
+            while(yaw_delta_deg > 180.0f) yaw_delta_deg -= 360.0f;
+            while(yaw_delta_deg < -180.0f) yaw_delta_deg += 360.0f;
+            *yaw_mid_deg = upflow302_previous_yaw_deg + 0.5f * yaw_delta_deg;
+            while(*yaw_mid_deg > 180.0f) *yaw_mid_deg -= 360.0f;
+            while(*yaw_mid_deg < -180.0f) *yaw_mid_deg += 360.0f;
+            *yaw_window_valid = 1U;
+        }
     }
 
     /* 每个完整协议帧都推进时间基线，坏数据不会污染下一帧的窗口长度。 */
@@ -118,6 +141,7 @@ static uint8 upflow302_finish_gyro_window(float *gyro_x_delta_rad,
     upflow302_previous_gyro_total_x_rad = upflow302_pending_gyro_total_x_rad;
     upflow302_previous_gyro_total_y_rad = upflow302_pending_gyro_total_y_rad;
     upflow302_previous_gyro_total_z_rad = upflow302_pending_gyro_total_z_rad;
+    upflow302_previous_yaw_deg = upflow302_pending_yaw_deg;
     upflow302_previous_gyro_snapshot_valid = upflow302_pending_gyro_snapshot_valid;
     return window_valid;
 }
@@ -150,12 +174,16 @@ static void upflow302_parse_byte(uint8 receive_data)
         float gyro_x_delta_rad = 0.0f;
         float gyro_y_delta_rad = 0.0f;
         float gyro_z_delta_rad = 0.0f;
+        float yaw_mid_deg = 0.0f;
         uint32 gyro_window_cycles = 0U;
+        uint8 yaw_window_valid = 0U;
         uint8 gyro_window_valid =
             upflow302_finish_gyro_window(&gyro_x_delta_rad,
                                          &gyro_y_delta_rad,
                                          &gyro_z_delta_rad,
-                                         &gyro_window_cycles);
+                                         &gyro_window_cycles,
+                                         &yaw_mid_deg,
+                                         &yaw_window_valid);
 
         parity_bit = upflow302_receiver_data[12];
         upflow302_receiver_data[12] = 0;
@@ -188,7 +216,9 @@ static void upflow302_parse_byte(uint8 receive_data)
                                       gyro_x_delta_rad,
                                       gyro_y_delta_rad,
                                       gyro_z_delta_rad,
-                                      gyro_window_valid);
+                                      yaw_mid_deg,
+                                      gyro_window_valid,
+                                      yaw_window_valid);
                 upflow302_finsh_flag = 1;
             }
             else
@@ -241,11 +271,13 @@ void upflow302_receive_init(void)
     upflow302_pending_gyro_total_x_rad = 0.0f;
     upflow302_pending_gyro_total_y_rad = 0.0f;
     upflow302_pending_gyro_total_z_rad = 0.0f;
+    upflow302_pending_yaw_deg = 0.0f;
     upflow302_pending_gyro_snapshot_valid = 0U;
     upflow302_previous_frame_start_cycle = 0U;
     upflow302_previous_gyro_total_x_rad = 0.0f;
     upflow302_previous_gyro_total_y_rad = 0.0f;
     upflow302_previous_gyro_total_z_rad = 0.0f;
+    upflow302_previous_yaw_deg = 0.0f;
     upflow302_previous_gyro_snapshot_valid = 0U;
     memset(upflow302_receiver_data, 0, sizeof(upflow302_receiver_data));
     memset((uint8 *)&upflow302_receive, 0, sizeof(upflow302_receive));

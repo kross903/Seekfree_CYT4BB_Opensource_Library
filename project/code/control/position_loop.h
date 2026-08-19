@@ -119,8 +119,8 @@ typedef struct
 void Position_Loop_Set_Enabled(uint8 enabled);
 uint8 Position_Loop_Is_Enabled(void);
 void Position_Loop_Update_Velocity_Target(uint8 velocity_ready,
-                                          float measured_vx_body_cms,
-                                          float measured_vy_body_cms,
+                                          float measured_vx_earth_cms,
+                                          float measured_vy_earth_cms,
                                           float yaw_deg,
                                           float dt_s,
                                           uint8 timing_valid,
