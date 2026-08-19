@@ -45,6 +45,10 @@ typedef struct
 {
     uint32 reference_time_us;
     uint32 reference_frame_seq;
+    uint32 front_capture_time_us;
+    uint32 rear_capture_time_us;
+    uint32 front_frame_seq;
+    uint32 rear_frame_seq;
     uint32 tracker_reset_count;
     float car_x_cm;
     float car_y_cm;
@@ -53,6 +57,9 @@ typedef struct
     float front_car_y_cm;
     float rear_car_x_cm;
     float rear_car_y_cm;
+    float rear_observation_x_cm;
+    float rear_observation_y_cm;
+    float rear_yaw_deg;
     float yaw_deg;
     uint8 valid;
     uint8 paired;
@@ -61,6 +68,9 @@ typedef struct
     uint8 car_raw_valid;
     uint8 front_car_valid;
     uint8 rear_car_valid;
+    uint8 front_car_raw_valid;
+    uint8 rear_car_raw_valid;
+    uint8 rear_yaw_valid;
     uint8 yaw_valid;
     uint8 target_count;
     DualCameraFusionTarget_t target[DUAL_CAMERA_FUSION_MAX_TARGETS];

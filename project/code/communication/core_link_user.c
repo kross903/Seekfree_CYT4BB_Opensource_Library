@@ -409,8 +409,11 @@ static void core_link_user_build_beacon_observations(
     float car_yaw_rel_uav_deg = 0.0f;
 #if (VISION_FUSION_OUTPUT_MODE == VISION_FUSION_OUTPUT_SHADOW)
     float uav_yaw_deg = 0.0f;
+    float follow_x_cm = 0.0f;
+    float follow_y_cm = 0.0f;
     uint8 uav_yaw_valid;
     uint8 car_visible;
+    uint8 follow_valid;
 #endif
     uint8 i;
 
@@ -515,9 +518,12 @@ static void core_link_user_build_beacon_observations(
     }
     core_link_user_update_beacon_tracks(slots, slot_track_id);
     VehicleMarkerLocalization_GetLossDebug(&loss_debug);
+    follow_valid = VehicleMarkerLocalization_GetFollowPoint(
+        &g_vehicle_marker_pose, &follow_x_cm, &follow_y_cm, NULL, NULL);
 
     car_visible = (uint8)(g_vehicle_marker_pose.valid &&
-                          !g_vehicle_marker_position_lost_flag);
+                          !g_vehicle_marker_position_lost_flag &&
+                          follow_valid);
     uav_yaw_valid = CrossCoreCamera_ControlCoreGetVisionYaw(&uav_yaw_deg);
     if(uav_yaw_valid)
     {
@@ -532,8 +538,11 @@ static void core_link_user_build_beacon_observations(
         {
             packet->frame_flags |= CORE_LINK_BEACON_FRAME_FLAG_CAR_RAW_DETECTED;
         }
-        packet->car_x_mm = core_link_user_cm_to_mm_i16(g_vehicle_marker_pose.x);
-        packet->car_y_mm = core_link_user_cm_to_mm_i16(g_vehicle_marker_pose.y);
+        if(follow_valid)
+        {
+            packet->car_x_mm = core_link_user_cm_to_mm_i16(follow_x_cm);
+            packet->car_y_mm = core_link_user_cm_to_mm_i16(follow_y_cm);
+        }
         if(uav_yaw_valid &&
            core_link_user_get_uplink_car_absolute_yaw_deg(&car_absolute_yaw_deg))
         {

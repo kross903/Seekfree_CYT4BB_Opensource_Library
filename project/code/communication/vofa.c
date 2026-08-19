@@ -1411,6 +1411,8 @@ void USART_PID_Adjust(void)
                 case 'g': send_back_flag = 16; break;
                 case 'I':
                 case 'i': send_back_flag = 18; break;
+                case 'J':
+                case 'j': send_back_flag = 45; break;
                 case 'K':
                 case 'k': send_back_flag = 36; break;
                 case 'L':
@@ -2203,6 +2205,30 @@ void send_date_back(void)
                               (float)pmw_flow_state.flow_last_received_accepted,
                               (float)pmw_flow_state.fusion_mode,
                               (float)pmw_flow_state.fused_velocity_valid);
+            break;
+        }
+
+        case 45:
+        {
+            PositionLoopDiag_t pos_diag = {0};
+
+            Position_Loop_Get_Diag(&pos_diag);
+            send_sixteen_date(pos_diag.error_x_cm,
+                              pos_diag.error_y_cm,
+                              pos_diag.vision_observation_x_cm,
+                              pos_diag.vision_observation_y_cm,
+                              pos_diag.vision_innovation_cm,
+                              pos_diag.vision_gate_cm,
+                              pos_diag.vision_covariance_x_cm2,
+                              pos_diag.vision_covariance_y_cm2,
+                              (float)pos_diag.vision_observation_age_ms,
+                              (float)pos_diag.vision_hold_age_ms,
+                              (float)pos_diag.vision_observation_state,
+                              (float)pos_diag.vision_reacquire_count,
+                              (float)pos_diag.vision_observation_accepted,
+                              (float)pos_diag.vision_observation_source,
+                              (float)pos_diag.vision_estimator_initialized,
+                              (float)pos_diag.active);
             break;
         }
 

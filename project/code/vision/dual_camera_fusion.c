@@ -1,4 +1,5 @@
 #include "common/project_headfile.h"
+#include "vision/vehicle_marker_localization.h"
 
 #define DUAL_CAMERA_FUSION_CACHE_SIZE             (4U)
 #define DUAL_CAMERA_FUSION_TRACK_COUNT            (12U)
@@ -553,6 +554,8 @@ void DualCameraFusion_Init(void)
 void DualCameraFusion_PushFrontFrame(const CrossCoreCameraFrontFrame_t *frame)
 {
     DualCameraFusionFrame_t *target;
+    float follow_x_cm = 0.0f;
+    float follow_y_cm = 0.0f;
     uint8 i;
 
     if((frame == NULL) || (frame->frame_seq == 0U)) return;
@@ -563,10 +566,14 @@ void DualCameraFusion_PushFrontFrame(const CrossCoreCameraFrontFrame_t *frame)
     target->capture_time_us = frame->capture_time_us;
     target->yaw_deg = frame->yaw_deg;
     target->yaw_valid = frame->yaw_valid;
-    target->car_valid = frame->car_valid;
-    target->car_raw_valid = frame->car_raw_valid;
-    target->car_x_cm = frame->car_pose.x;
-    target->car_y_cm = frame->car_pose.y;
+    target->car_valid = (uint8)(frame->car_valid &&
+        VehicleMarkerLocalization_GetFollowPoint(&frame->car_pose,
+                                                  &follow_x_cm,
+                                                  &follow_y_cm,
+                                                  NULL, NULL));
+    target->car_raw_valid = (uint8)(frame->car_raw_valid && target->car_valid);
+    target->car_x_cm = follow_x_cm;
+    target->car_y_cm = follow_y_cm;
     for(i = 0U; i < VISION_RUNTIME_BEACON_SLOT_COUNT; i++)
     {
         const VisionRuntimeBeaconSlot_t *source = &frame->beacon_slots[i];
@@ -828,6 +835,22 @@ void DualCameraFusion_BuildSnapshot(uint32 now_us)
         s_snapshot.rear_car_valid = DualCameraFusion_AlignCarToReference(
             display_rear, reference,
             &s_snapshot.rear_car_x_cm, &s_snapshot.rear_car_y_cm);
+        if(display_front != NULL)
+        {
+            s_snapshot.front_frame_seq = display_front->frame_seq;
+            s_snapshot.front_capture_time_us = display_front->capture_time_us;
+            s_snapshot.front_car_raw_valid = display_front->car_raw_valid;
+        }
+        if(display_rear != NULL)
+        {
+            s_snapshot.rear_frame_seq = display_rear->frame_seq;
+            s_snapshot.rear_capture_time_us = display_rear->capture_time_us;
+            s_snapshot.rear_car_raw_valid = display_rear->car_raw_valid;
+            s_snapshot.rear_observation_x_cm = display_rear->car_x_cm;
+            s_snapshot.rear_observation_y_cm = display_rear->car_y_cm;
+            s_snapshot.rear_yaw_deg = display_rear->yaw_deg;
+            s_snapshot.rear_yaw_valid = display_rear->yaw_valid;
+        }
     }
 
     DualCameraFusion_SortCandidates(candidate, candidate_count);
