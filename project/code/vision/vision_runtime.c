@@ -112,6 +112,8 @@ static void vision_insert_area_rank(int area)
 
 static void vision_fill_physical_metrics(VisionBlob_t *blob)
 {
+    float sample_col;
+    float sample_row;
     float x0;
     float y0;
     float xx;
@@ -125,17 +127,20 @@ static void vision_fill_physical_metrics(VisionBlob_t *blob)
     float cell_area;
     float pixel_scale;
 
-    if(blob == NULL ||
-       !IPM_FullRectifiedImage2WorldF(blob->centroid_col, blob->centroid_row,
+    if(blob == NULL || blob->physical_valid) return;
+    /* Use the same integer full-resolution map as the runtime sampler. */
+    sample_col = floorf(blob->centroid_col + 0.5f);
+    sample_row = floorf(blob->centroid_row + 0.5f);
+    if(!IPM_FullRectifiedImage2WorldF(sample_col, sample_row,
                                      &x0, &y0))
         return;
     blob->world_x = x0;
     blob->world_y = y0;
     blob->world_valid = 1U;
-    if(!IPM_FullRectifiedImage2WorldF(blob->centroid_col + 1.0f,
-                                     blob->centroid_row, &xx, &xy) ||
-       !IPM_FullRectifiedImage2WorldF(blob->centroid_col,
-                                     blob->centroid_row + 1.0f, &yx, &yy))
+    if(!IPM_FullRectifiedImage2WorldF(sample_col + 1.0f,
+                                     sample_row, &xx, &xy) ||
+       !IPM_FullRectifiedImage2WorldF(sample_col,
+                                     sample_row + 1.0f, &yx, &yy))
         return;
     ux = xx - x0;
     uy = xy - y0;
@@ -153,6 +158,14 @@ static void vision_fill_physical_metrics(VisionBlob_t *blob)
     blob->physical_occupancy_ratio = blob->occupancy_ratio;
     blob->physical_pixel_count = (uint16)((blob->area > 65535) ? 65535 : blob->area);
     blob->physical_valid = (uint8)(isfinite(pixel_scale));
+}
+
+static uint8 vision_beacon_physical_gate(VisionBlob_t *blob)
+{
+    vision_fill_physical_metrics(blob);
+    return (uint8)(blob != NULL && blob->physical_valid &&
+        blob->physical_area_cm2 >= VISION_RUNTIME_BEACON_MIN_AREA_CM2 &&
+        blob->physical_area_cm2 <= VISION_RUNTIME_BEACON_MAX_AREA_CM2);
 }
 
 static void vision_fill_beacon_confidence(VisionBlob_t *blob)
@@ -451,6 +464,7 @@ static void vision_process_frame_internal(float roll_deg, float pitch_deg,
     config.yaw_tolerance_deg = VISION_YAW_TOLERANCE_DEG;
     config.arrow_thresholds = &s_arrow_thresholds;
     config.beacon_thresholds = &s_beacon_thresholds;
+    config.beacon_physical_gate = vision_beacon_physical_gate;
     config.seed_count = s_previous_seed_count;
     for(i = 0U; i < config.seed_count; ++i) config.seeds[i] = s_previous_seeds[i];
     config.force_global_search = (uint8)(

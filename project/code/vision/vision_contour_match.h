@@ -42,6 +42,7 @@ typedef struct
     uint8 contour_overflow;
     uint8 target;
     uint8 yaw_assisted;
+    uint8 beacon_area_rejected;
     uint16 yaw_error_deg;
 } VisionContourCandidate_t;
 
@@ -56,6 +57,7 @@ typedef struct
     uint16 yaw_tolerance_deg;
     const VisionContourThresholds_t *arrow_thresholds;
     const VisionContourThresholds_t *beacon_thresholds;
+    uint8 (*beacon_physical_gate)(VisionBlob_t *blob);
     VisionContourSeed_t seeds[VISION_CONTOUR_MAX_SEEDS];
     uint8 seed_count;
     uint8 force_global_search;

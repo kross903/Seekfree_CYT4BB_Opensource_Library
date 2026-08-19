@@ -131,6 +131,16 @@ class BeaconRecognitionResult:
     yaw_assisted: bool = False
     yaw_direction_error_deg: float | None = None
     yaw_direction_source: str = ""
+    physical_area_cm2: float | None = None
+    physical_area_min_cm2: float | None = None
+    physical_area_max_cm2: float | None = None
+    physical_area_valid: bool = False
+    split_arrow_member: bool = False
+    split_arrow_primary: bool = False
+    split_arrow_partner_labels: tuple[int, ...] = ()
+    split_arrow_distance_cm: float | None = None
+    split_arrow_angle_deg: float | None = None
+    split_arrow_fit_error_px: float | None = None
 
 
 @dataclass(frozen=True)
@@ -145,6 +155,7 @@ class ContourYawContext:
     arrow_arm_length_cm: float
     arrow_angle_deg: float
     arrow_opening_offset_deg: float
+    beacon_plane_height_cm: float
     mount_roll_deg: float
     mount_pitch_deg: float
     mount_yaw_deg: float
@@ -163,6 +174,14 @@ class BatchRecognitionConfig:
     yaw_assist_enabled: bool
     yaw_tolerance_deg: float
     yaw_context: ContourYawContext | None
+    beacon_diameter_cm: float
+    beacon_area_min_scale: float
+    beacon_area_max_scale: float
+    split_arrow_enabled: bool
+    split_arrow_min_area: int
+    split_arrow_max_distance_cm: float
+    split_arrow_angle_tolerance_deg: float
+    split_arrow_max_fit_error_px: float
 
 
 @dataclass(frozen=True)
@@ -179,6 +198,14 @@ FIRMWARE_ROUTE_ARROW_MIN_AREA = 30
 BEACON_ACCEPT_LIMIT_DEFAULT = 3
 BEACON_ACCEPT_LIMIT_MIN = 1
 BEACON_ACCEPT_LIMIT_MAX = 16
+BEACON_AREA_MIN_SCALE_DEFAULT = 0.75
+BEACON_AREA_MAX_SCALE_DEFAULT = 1.25
+SPLIT_ARROW_DEFAULT_ENABLED = True
+SPLIT_ARROW_MIN_AREA = 15
+SPLIT_ARROW_MAX_CENTROID_DISTANCE_CM = 30.0
+SPLIT_ARROW_ANGLE_TOLERANCE_DEG = 20.0
+SPLIT_ARROW_MAX_FIT_ERROR_PX = 4.0
+SPLIT_ARROW_MIN_AXIS_DOMINANCE = 0.45
 ARROW_SHAPE_GATE_DEFAULT_ENABLED = True
 ARROW_MAX_OCCUPANCY_DEFAULT = 0.5
 ARROW_MAX_HORIZONTAL_RUN_DEFAULT = 0.5
@@ -453,6 +480,43 @@ class PictureViewerApp:
         )
         self.contour_yaw_tolerance_var = tk.StringVar(
             value=str(contour_yaw_settings.get("tolerance_deg", "20"))
+        )
+        beacon_area_settings = contour_settings.get("beacon_physical_area", {})
+        if not isinstance(beacon_area_settings, dict):
+            beacon_area_settings = {}
+        self.beacon_area_min_scale_var = tk.StringVar(
+            value=str(beacon_area_settings.get(
+                "min_scale", BEACON_AREA_MIN_SCALE_DEFAULT
+            ))
+        )
+        self.beacon_area_max_scale_var = tk.StringVar(
+            value=str(beacon_area_settings.get(
+                "max_scale", BEACON_AREA_MAX_SCALE_DEFAULT
+            ))
+        )
+        split_arrow_settings = contour_settings.get("split_arrow", {})
+        if not isinstance(split_arrow_settings, dict):
+            split_arrow_settings = {}
+        self.split_arrow_enabled_var = tk.BooleanVar(
+            value=bool(split_arrow_settings.get("enabled", SPLIT_ARROW_DEFAULT_ENABLED))
+        )
+        self.split_arrow_min_area_var = tk.StringVar(
+            value=str(split_arrow_settings.get("min_area", SPLIT_ARROW_MIN_AREA))
+        )
+        self.split_arrow_max_distance_var = tk.StringVar(
+            value=str(split_arrow_settings.get(
+                "max_centroid_distance_cm", SPLIT_ARROW_MAX_CENTROID_DISTANCE_CM
+            ))
+        )
+        self.split_arrow_angle_tolerance_var = tk.StringVar(
+            value=str(split_arrow_settings.get(
+                "angle_tolerance_deg", SPLIT_ARROW_ANGLE_TOLERANCE_DEG
+            ))
+        )
+        self.split_arrow_max_fit_error_var = tk.StringVar(
+            value=str(split_arrow_settings.get(
+                "max_fit_error_px", SPLIT_ARROW_MAX_FIT_ERROR_PX
+            ))
         )
         batch_mode = str(batch_settings.get("mode", BATCH_MODE_ARROW))
         if batch_mode not in BATCH_MODE_NAMES:
@@ -1022,6 +1086,26 @@ class PictureViewerApp:
             "enabled": yaw_assist_enabled,
             "tolerance_deg": yaw_tolerance,
         }
+        try:
+            _diameter, min_area_scale, max_area_scale = self.current_beacon_area_gate()
+        except ValueError:
+            min_area_scale = BEACON_AREA_MIN_SCALE_DEFAULT
+            max_area_scale = BEACON_AREA_MAX_SCALE_DEFAULT
+        contour_threshold_settings["beacon_physical_area"] = {
+            "min_scale": min_area_scale,
+            "max_scale": max_area_scale,
+        }
+        try:
+            split_settings = self.current_split_arrow_settings()
+        except ValueError:
+            split_settings = {
+                "enabled": SPLIT_ARROW_DEFAULT_ENABLED,
+                "min_area": SPLIT_ARROW_MIN_AREA,
+                "max_centroid_distance_cm": SPLIT_ARROW_MAX_CENTROID_DISTANCE_CM,
+                "angle_tolerance_deg": SPLIT_ARROW_ANGLE_TOLERANCE_DEG,
+                "max_fit_error_px": SPLIT_ARROW_MAX_FIT_ERROR_PX,
+            }
+        contour_threshold_settings["split_arrow"] = split_settings
         matching_settings["arrow_shape_gate"] = {
             "enabled": bool(self.arrow_shape_gate_enabled_var.get()),
             "max_occupancy": self.safe_ratio(
@@ -1597,6 +1681,42 @@ class PictureViewerApp:
             raise ValueError("Yaw辅助方向误差必须在1到90度之间")
         return bool(self.contour_yaw_assist_enabled_var.get()), tolerance
 
+    def current_beacon_area_gate(self) -> tuple[float, float, float]:
+        try:
+            diameter = float(self.beacon_diameter_var.get())
+            min_scale = float(self.beacon_area_min_scale_var.get())
+            max_scale = float(self.beacon_area_max_scale_var.get())
+        except (TypeError, ValueError, tk.TclError) as exc:
+            raise ValueError("信标物理面积参数必须是有效数字") from exc
+        if not all(math.isfinite(value) for value in (diameter, min_scale, max_scale)):
+            raise ValueError("信标物理面积参数必须是有限数值")
+        if diameter <= 0.0 or min_scale <= 0.0 or max_scale < min_scale:
+            raise ValueError("信标直径和面积倍率范围无效")
+        return diameter, min_scale, max_scale
+
+    def current_split_arrow_settings(self) -> dict[str, float | int | bool]:
+        try:
+            min_area = int(float(self.split_arrow_min_area_var.get()))
+            max_distance = float(self.split_arrow_max_distance_var.get())
+            angle_tolerance = float(self.split_arrow_angle_tolerance_var.get())
+            max_fit_error = float(self.split_arrow_max_fit_error_var.get())
+        except (TypeError, ValueError, tk.TclError) as exc:
+            raise ValueError("分段箭头参数必须是有效数字") from exc
+        if (
+            min_area < 1
+            or max_distance <= 0.0
+            or not 0.0 < angle_tolerance <= 90.0
+            or max_fit_error <= 0.0
+        ):
+            raise ValueError("分段箭头参数范围无效")
+        return {
+            "enabled": bool(self.split_arrow_enabled_var.get()),
+            "min_area": min_area,
+            "max_centroid_distance_cm": max_distance,
+            "angle_tolerance_deg": angle_tolerance,
+            "max_fit_error_px": max_fit_error,
+        }
+
     def open_contour_matching_window(self) -> None:
         if (
             self.contour_matching_window is not None
@@ -1641,8 +1761,52 @@ class PictureViewerApp:
         yaw_tolerance_entry.pack(side=tk.LEFT)
         yaw_tolerance_entry.bind("<KeyRelease>", self.contour_parameter_changed)
 
+        area_controls = ttk.Frame(content)
+        area_controls.grid(row=2, column=0, sticky="ew", pady=(0, 7))
+        ttk.Label(area_controls, text="信标物理面积：直径(cm)").pack(side=tk.LEFT)
+        diameter_entry = ttk.Entry(
+            area_controls, width=7, textvariable=self.beacon_diameter_var
+        )
+        diameter_entry.pack(side=tk.LEFT, padx=(4, 10))
+        ttk.Label(area_controls, text="下限倍率").pack(side=tk.LEFT)
+        min_area_entry = ttk.Entry(
+            area_controls, width=6, textvariable=self.beacon_area_min_scale_var
+        )
+        min_area_entry.pack(side=tk.LEFT, padx=(4, 10))
+        ttk.Label(area_controls, text="上限倍率").pack(side=tk.LEFT)
+        max_area_entry = ttk.Entry(
+            area_controls, width=6, textvariable=self.beacon_area_max_scale_var
+        )
+        max_area_entry.pack(side=tk.LEFT, padx=(4, 0))
+        for entry in (diameter_entry, min_area_entry, max_area_entry):
+            entry.bind("<KeyRelease>", self.contour_parameter_changed)
+
+        split_controls = ttk.LabelFrame(content, text="分段箭头组合")
+        split_controls.grid(row=3, column=0, sticky="ew", pady=(0, 7))
+        ttk.Checkbutton(
+            split_controls,
+            text="启用分段箭头组合",
+            variable=self.split_arrow_enabled_var,
+            command=self.contour_parameter_changed,
+        ).grid(row=0, column=0, columnspan=4, sticky="w", padx=4, pady=2)
+        split_fields = (
+            ("最小轮廓像素", self.split_arrow_min_area_var),
+            ("质心最大距离(cm)", self.split_arrow_max_distance_var),
+            ("双臂夹角容差(°)", self.split_arrow_angle_tolerance_var),
+            ("理论双臂最大偏差(px)", self.split_arrow_max_fit_error_var),
+        )
+        for index, (label, variable) in enumerate(split_fields):
+            row, column = divmod(index, 2)
+            column *= 2
+            ttk.Label(split_controls, text=label).grid(
+                row=row + 1, column=column, sticky="w", padx=(4, 2), pady=2
+            )
+            entry = ttk.Entry(split_controls, width=8, textvariable=variable)
+            entry.grid(row=row + 1, column=column + 1, sticky="e", padx=(0, 8), pady=2)
+            entry.bind("<KeyRelease>", self.contour_parameter_changed)
+
         notebook = ttk.Notebook(content)
-        notebook.grid(row=2, column=0, sticky="nsew")
+        notebook.grid(row=4, column=0, sticky="nsew")
         for target_kind in MATCHING_TARGET_KINDS:
             tab = ttk.Frame(notebook, padding=8)
             notebook.add(tab, text=MATCHING_TARGET_NAMES[target_kind])
@@ -1670,7 +1834,7 @@ class PictureViewerApp:
                 entry.bind("<KeyRelease>", self.contour_parameter_changed)
 
         actions = ttk.Frame(content)
-        actions.grid(row=3, column=0, sticky="e", pady=(9, 0))
+        actions.grid(row=5, column=0, sticky="e", pady=(9, 0))
         ttk.Button(
             actions,
             text="恢复宽松初值",
@@ -1704,6 +1868,13 @@ class PictureViewerApp:
                 )
         self.contour_yaw_assist_enabled_var.set(True)
         self.contour_yaw_tolerance_var.set("20")
+        self.beacon_area_min_scale_var.set(str(BEACON_AREA_MIN_SCALE_DEFAULT))
+        self.beacon_area_max_scale_var.set(str(BEACON_AREA_MAX_SCALE_DEFAULT))
+        self.split_arrow_enabled_var.set(SPLIT_ARROW_DEFAULT_ENABLED)
+        self.split_arrow_min_area_var.set(str(SPLIT_ARROW_MIN_AREA))
+        self.split_arrow_max_distance_var.set(str(SPLIT_ARROW_MAX_CENTROID_DISTANCE_CM))
+        self.split_arrow_angle_tolerance_var.set(str(SPLIT_ARROW_ANGLE_TOLERANCE_DEG))
+        self.split_arrow_max_fit_error_var.set(str(SPLIT_ARROW_MAX_FIT_ERROR_PX))
         self.invalidate_beacon_recognition()
         self.update_component_tree()
         self.redraw_canvas()
@@ -2091,6 +2262,9 @@ class PictureViewerApp:
             recognition = self.beacon_recognition_results.get(component.label)
             if recognition is None:
                 recognition_text = "未检测"
+            elif recognition.split_arrow_member and not recognition.split_arrow_primary:
+                partner = recognition.split_arrow_partner_labels[0]
+                recognition_text = f"轮廓·箭头分段（并入#{partner}）"
             elif recognition.passed:
                 target_text = (
                     "箭头通过" if recognition.target_kind == TARGET_ARROW
@@ -2191,6 +2365,10 @@ class PictureViewerApp:
             thresholds = self.current_matching_thresholds(TARGET_BEACON)
             near_negative_width = self.current_near_negative_width()
             binary_threshold = self.safe_int(self.threshold_var, 50, 0, 255)
+            beacon_area_context = self.current_contour_yaw_context()
+            _beacon_diameter, beacon_area_min_scale, beacon_area_max_scale = (
+                self.current_beacon_area_gate()
+            )
         except ValueError as exc:
             messagebox.showerror("信标识别参数错误", str(exc))
             self.status_var.set(f"信标识别失败：{exc}")
@@ -2254,20 +2432,37 @@ class PictureViewerApp:
                     thresholds,
                     target_kind=TARGET_BEACON,
                 )
+                physical_area_valid, physical_area_cm2, physical_area_min_cm2, physical_area_max_cm2, area_failure = (
+                    self.evaluate_beacon_physical_area(
+                        component,
+                        beacon_area_context,
+                        diameter,
+                        beacon_area_min_scale,
+                        beacon_area_max_scale,
+                    )
+                )
+                decision_passed = decision.passed and physical_area_valid
+                failures = decision.failures
+                if not physical_area_valid:
+                    failures = (*failures, area_failure or "信标：物理面积无效")
                 results[component.label] = BeaconRecognitionResult(
                     metrics=metrics,
-                    passed=decision.passed,
-                    failures=decision.failures,
+                    passed=decision_passed,
+                    failures=failures,
                     box_clipped=sampling.box_clipped,
-                    target_kind=TARGET_BEACON if decision.passed else None,
+                    target_kind=TARGET_BEACON if decision_passed else None,
                     projected_outline=(
-                        tuple(projected_outline) if decision.passed else ()
+                        tuple(projected_outline) if decision_passed else ()
                     ),
                     sampling=sampling,
                     sampling_config=sampling_config,
                     binary_threshold=binary_threshold,
+                    physical_area_cm2=physical_area_cm2,
+                    physical_area_min_cm2=physical_area_min_cm2,
+                    physical_area_max_cm2=physical_area_max_cm2,
+                    physical_area_valid=physical_area_valid,
                 )
-                if decision.passed:
+                if decision_passed:
                     accepted += 1
             except (ValueError, OverflowError) as exc:
                 results[component.label] = BeaconRecognitionResult(
@@ -2313,6 +2508,7 @@ class PictureViewerApp:
                 arrow_opening_offset_deg=float(
                     self.arrow_opening_offset_var.get()
                 ),
+                beacon_plane_height_cm=float(self.beacon_plane_height_var.get()),
                 mount_roll_deg=float(self.mount_roll_var.get()),
                 mount_pitch_deg=float(self.mount_pitch_var.get()),
                 mount_yaw_deg=float(self.mount_yaw_var.get()),
@@ -2330,18 +2526,24 @@ class PictureViewerApp:
             context.arrow_arm_length_cm,
             context.arrow_angle_deg,
             context.arrow_opening_offset_deg,
+            context.beacon_plane_height_cm,
             context.mount_roll_deg,
             context.mount_pitch_deg,
             context.mount_yaw_deg,
         )
         if not all(math.isfinite(value) for value in values):
             raise ValueError("姿态、Yaw和箭头参数必须是有限数值")
-        if context.height_cm <= 0.0 or context.arrow_plane_height_cm < 0.0:
+        if (context.height_cm <= 0.0 or context.arrow_plane_height_cm < 0.0 or
+                context.beacon_plane_height_cm < 0.0):
             raise ValueError("高度和箭头平面高度无效")
         if context.arrow_plane_height_cm >= (
             context.height_cm - context.projection_calibration.offset_z_cm
         ):
             raise ValueError("箭头平面必须低于相机")
+        if context.beacon_plane_height_cm >= (
+            context.height_cm - context.projection_calibration.offset_z_cm
+        ):
+            raise ValueError("信标平面必须低于相机")
         return context
 
     def batch_yaw_context_for_path(
@@ -2406,6 +2608,273 @@ class PictureViewerApp:
                 **calibration_replacements,
             )
         return replace(baseline, **replacements)
+
+    @staticmethod
+    def evaluate_beacon_physical_area(
+        component: ConnectedComponent,
+        context: ContourYawContext,
+        diameter_cm: float,
+        min_scale: float,
+        max_scale: float,
+    ) -> tuple[bool, float | None, float, float, str | None]:
+        nominal_area = math.pi * 0.25 * diameter_cm * diameter_cm
+        minimum = nominal_area * min_scale
+        maximum = nominal_area * max_scale
+        projector = TargetPlaneProjector(
+            context.projection_calibration,
+            context.mount_roll_deg,
+            context.mount_pitch_deg,
+            context.mount_yaw_deg,
+        )
+        center = (component.centroid_x, component.centroid_y)
+        points = tuple(
+            projector.image_to_plane(
+                point,
+                context.roll_deg,
+                context.pitch_deg,
+                context.height_cm,
+                context.beacon_plane_height_cm,
+            )
+            for point in (center, (center[0] + 1.0, center[1]),
+                          (center[0], center[1] + 1.0))
+        )
+        if any(point is None for point in points):
+            return False, None, minimum, maximum, "信标：姿态/高度投影无效"
+        center_world, x_world, y_world = points
+        assert center_world is not None and x_world is not None and y_world is not None
+        ux = x_world[0] - center_world[0]
+        uy = x_world[1] - center_world[1]
+        vx = y_world[0] - center_world[0]
+        vy = y_world[1] - center_world[1]
+        cell_area = abs(ux * vy - uy * vx)
+        area = float(component.area) * cell_area
+        if not math.isfinite(area) or cell_area <= 0.0:
+            return False, None, minimum, maximum, "信标：局部物理比例无效"
+        if area < minimum:
+            return False, area, minimum, maximum, (
+                f"信标：物理面积 {area:.1f} cm² < {minimum:.1f} cm²"
+            )
+        if area > maximum:
+            return False, area, minimum, maximum, (
+                f"信标：物理面积 {area:.1f} cm² > {maximum:.1f} cm²"
+            )
+        return True, area, minimum, maximum, None
+
+    @staticmethod
+    def _axis_difference_deg(first: float, second: float) -> float:
+        difference = abs((first - second) % 180.0)
+        return min(difference, 180.0 - difference)
+
+    @staticmethod
+    def _contour_main_axis(
+        component: ConnectedComponent,
+    ) -> tuple[float, float] | None:
+        points = component.contour_points
+        if len(points) < 3:
+            return None
+        mean_x = sum(point[0] for point in points) / len(points)
+        mean_y = sum(point[1] for point in points) / len(points)
+        xx = sum((point[0] - mean_x) ** 2 for point in points)
+        yy = sum((point[1] - mean_y) ** 2 for point in points)
+        xy = sum(
+            (point[0] - mean_x) * (point[1] - mean_y) for point in points
+        )
+        total = xx + yy
+        if total <= 1e-9:
+            return None
+        axis_deg = math.degrees(0.5 * math.atan2(2.0 * xy, xx - yy)) % 180.0
+        anisotropy = min(1.0, math.hypot(xx - yy, 2.0 * xy) / total)
+        # Direction counts are folded into four undirected axes. They provide
+        # a cheap confidence check while PCA supplies a sub-45-degree angle.
+        folded = tuple(
+            component.direction_counts[index]
+            + component.direction_counts[index + 4]
+            for index in range(4)
+        )
+        direction_total = sum(folded)
+        direction_dominance = (
+            max(folded) / direction_total if direction_total else 0.0
+        )
+        return axis_deg, max(anisotropy, direction_dominance)
+
+    @staticmethod
+    def _point_segment_distance(
+        point: tuple[float, float],
+        start: tuple[float, float],
+        end: tuple[float, float],
+    ) -> float:
+        dx = end[0] - start[0]
+        dy = end[1] - start[1]
+        length_sq = dx * dx + dy * dy
+        if length_sq <= 1e-9:
+            return math.dist(point, start)
+        t = max(
+            0.0,
+            min(
+                1.0,
+                ((point[0] - start[0]) * dx + (point[1] - start[1]) * dy)
+                / length_sq,
+            ),
+        )
+        return math.hypot(
+            point[0] - (start[0] + t * dx),
+            point[1] - (start[1] + t * dy),
+        )
+
+    @staticmethod
+    def _project_ideal_arrow_outline(
+        center_image: tuple[float, float],
+        context: ContourYawContext,
+    ) -> tuple[tuple[float, float], ...] | None:
+        center_plane = TargetPlaneProjector(
+            context.projection_calibration,
+            context.mount_roll_deg,
+            context.mount_pitch_deg,
+            context.mount_yaw_deg,
+        ).image_to_plane(
+            center_image,
+            context.roll_deg,
+            context.pitch_deg,
+            context.height_cm,
+            context.arrow_plane_height_cm,
+        )
+        if center_plane is None:
+            return None
+        relative_yaw = wrap_degrees(
+            context.car_yaw_deg
+            if context.car_yaw_relative
+            else context.car_yaw_deg - context.uav_yaw_deg
+        )
+        physical = build_ideal_chevron_points(
+            center_plane,
+            context.arrow_arm_length_cm,
+            context.arrow_angle_deg,
+            wrap_degrees(relative_yaw + context.arrow_opening_offset_deg),
+        )
+        projector = TargetPlaneProjector(
+            context.projection_calibration,
+            context.mount_roll_deg,
+            context.mount_pitch_deg,
+            context.mount_yaw_deg,
+        )
+        projected: list[tuple[float, float]] = []
+        for name in ("left_tip", "apex", "right_tip"):
+            point = projector.plane_to_image(
+                physical[name],
+                context.roll_deg,
+                context.pitch_deg,
+                context.height_cm,
+                context.arrow_plane_height_cm,
+            )
+            if point is None:
+                return None
+            projected.append(point)
+        return tuple(projected)
+
+    def _split_arrow_match(
+        self,
+        first: ConnectedComponent,
+        second: ConnectedComponent,
+        context: ContourYawContext,
+        yaw_tolerance_deg: float,
+        max_distance_cm: float,
+        angle_tolerance_deg: float,
+        max_fit_error_px: float,
+    ) -> dict[str, object] | None:
+        first_axis = self._contour_main_axis(first)
+        second_axis = self._contour_main_axis(second)
+        if first_axis is None or second_axis is None:
+            return None
+        if min(first_axis[1], second_axis[1]) < SPLIT_ARROW_MIN_AXIS_DOMINANCE:
+            return None
+        axis_angle = self._axis_difference_deg(first_axis[0], second_axis[0])
+        if abs(axis_angle - context.arrow_angle_deg) > angle_tolerance_deg:
+            return None
+        projector = TargetPlaneProjector(
+            context.projection_calibration,
+            context.mount_roll_deg,
+            context.mount_pitch_deg,
+            context.mount_yaw_deg,
+        )
+        first_plane = projector.image_to_plane(
+            (first.centroid_x, first.centroid_y),
+            context.roll_deg,
+            context.pitch_deg,
+            context.height_cm,
+            context.arrow_plane_height_cm,
+        )
+        second_plane = projector.image_to_plane(
+            (second.centroid_x, second.centroid_y),
+            context.roll_deg,
+            context.pitch_deg,
+            context.height_cm,
+            context.arrow_plane_height_cm,
+        )
+        if first_plane is None or second_plane is None:
+            return None
+        centroid_distance = math.dist(first_plane, second_plane)
+        if centroid_distance > max_distance_cm:
+            return None
+        total_area = max(1, first.area + second.area)
+        base_center = (
+            (first.centroid_x * first.area + second.centroid_x * second.area)
+            / total_area,
+            (first.centroid_y * first.area + second.centroid_y * second.area)
+            / total_area,
+        )
+        sampled_points = (
+            tuple(first.contour_points[::max(1, len(first.contour_points) // 32)]),
+            tuple(second.contour_points[::max(1, len(second.contour_points) // 32)]),
+        )
+        best: tuple[float, tuple[float, float], float, float, float] | None = None
+        for offset_y in range(-4, 5):
+            for offset_x in range(-4, 5):
+                center = (base_center[0] + offset_x, base_center[1] + offset_y)
+                outline = self._project_ideal_arrow_outline(center, context)
+                if outline is None:
+                    continue
+                left_tip, apex, right_tip = outline
+                ideal_axes = (
+                    math.degrees(math.atan2(
+                        left_tip[1] - apex[1], left_tip[0] - apex[0]
+                    )) % 180.0,
+                    math.degrees(math.atan2(
+                        right_tip[1] - apex[1], right_tip[0] - apex[0]
+                    )) % 180.0,
+                )
+                assignments = (
+                    (ideal_axes[0], ideal_axes[1], (apex, left_tip), (apex, right_tip)),
+                    (ideal_axes[1], ideal_axes[0], (apex, right_tip), (apex, left_tip)),
+                )
+                for ideal_first, ideal_second, first_segment, second_segment in assignments:
+                    first_error = self._axis_difference_deg(first_axis[0], ideal_first)
+                    second_error = self._axis_difference_deg(second_axis[0], ideal_second)
+                    if max(first_error, second_error) > yaw_tolerance_deg:
+                        continue
+                    errors = [
+                        self._point_segment_distance(point, *first_segment)
+                        for point in sampled_points[0]
+                    ] + [
+                        self._point_segment_distance(point, *second_segment)
+                        for point in sampled_points[1]
+                    ]
+                    fit_error = sum(errors) / len(errors) if errors else float("inf")
+                    if fit_error > max_fit_error_px:
+                        continue
+                    score = fit_error + 0.02 * (first_error + second_error)
+                    candidate = (score, center, first_error, second_error, fit_error)
+                    if best is None or candidate[0] < best[0]:
+                        best = candidate
+        if best is None:
+            return None
+        return {
+            "center": best[1],
+            "outline": self._project_ideal_arrow_outline(best[1], context),
+            "distance_cm": centroid_distance,
+            "angle_deg": axis_angle,
+            "fit_error_px": best[4],
+            "yaw_error_deg": max(best[2], best[3]),
+        }
 
     def contour_yaw_direction_error(
         self,
@@ -2684,6 +3153,10 @@ class PictureViewerApp:
         if self.batch_mode_var.get() not in BATCH_MODE_NAMES:
             raise ValueError("批量识别模式无效")
         yaw_assist_enabled, yaw_tolerance_deg = self.current_contour_yaw_assist()
+        beacon_diameter, beacon_area_min_scale, beacon_area_max_scale = (
+            self.current_beacon_area_gate()
+        )
+        split_settings = self.current_split_arrow_settings()
         return BatchRecognitionConfig(
             mode=self.batch_mode_var.get(),
             binary_threshold=self.safe_int(self.threshold_var, 50, 0, 255),
@@ -2699,11 +3172,19 @@ class PictureViewerApp:
             beacon_accept_limit=self.current_beacon_accept_limit(),
             yaw_assist_enabled=yaw_assist_enabled,
             yaw_tolerance_deg=yaw_tolerance_deg,
-            yaw_context=(
-                self.current_contour_yaw_context()
-                if yaw_assist_enabled
-                else None
+            yaw_context=self.current_contour_yaw_context(),
+            beacon_diameter_cm=beacon_diameter,
+            beacon_area_min_scale=beacon_area_min_scale,
+            beacon_area_max_scale=beacon_area_max_scale,
+            split_arrow_enabled=bool(split_settings["enabled"]),
+            split_arrow_min_area=int(split_settings["min_area"]),
+            split_arrow_max_distance_cm=float(
+                split_settings["max_centroid_distance_cm"]
             ),
+            split_arrow_angle_tolerance_deg=float(
+                split_settings["angle_tolerance_deg"]
+            ),
+            split_arrow_max_fit_error_px=float(split_settings["max_fit_error_px"]),
         )
 
     def recognize_batch_path(
@@ -2726,6 +3207,7 @@ class PictureViewerApp:
         arrow_count = 0
         beacon_count = 0
         yaw_assisted_count = 0
+        split_candidates: list[ConnectedComponent] = []
         for component in components:
             metrics = calculate_contour_metrics(
                 component,
@@ -2736,7 +3218,43 @@ class PictureViewerApp:
                     config.beacon_thresholds.direction_window_points
                 ),
             )
-            if config.mode == BATCH_MODE_ARROW:
+            beacon_yaw_rejected, _beacon_yaw_error, _beacon_yaw_source, _ = (
+                self.evaluate_contour_beacon_yaw_rejection(
+                    component,
+                    metrics,
+                    config.arrow_thresholds,
+                    config.yaw_assist_enabled,
+                    config.yaw_tolerance_deg,
+                    yaw_context,
+                )
+            )
+            beacon_area_passed = False
+            if yaw_context is not None:
+                beacon_area_passed, _area, _minimum, _maximum, _reason = (
+                    self.evaluate_beacon_physical_area(
+                        component,
+                        yaw_context,
+                        config.beacon_diameter_cm,
+                        config.beacon_area_min_scale,
+                        config.beacon_area_max_scale,
+                    )
+                )
+            beacon_like = (
+                component_centroid_is_foreground(component, binary)
+                and evaluate_contour_metrics(
+                    metrics,
+                    config.beacon_thresholds,
+                ).passed
+                and not beacon_yaw_rejected
+                and beacon_area_passed
+            )
+            if config.mode != BATCH_MODE_ARROW and beacon_like:
+                if beacon_count < config.beacon_accept_limit:
+                    beacon_count += 1
+                    continue
+            if config.mode == BATCH_MODE_BEACON:
+                continue
+            if arrow_count == 0:
                 arrow_passed, _failures, assisted, _error, _source = (
                     self.evaluate_contour_arrow_with_yaw(
                         component,
@@ -2748,57 +3266,36 @@ class PictureViewerApp:
                     )
                 )
                 if arrow_passed:
-                    arrow_count += 1
+                    arrow_count = 1
                     yaw_assisted_count += int(assisted)
-                continue
-            beacon_yaw_rejected, _beacon_yaw_error, _beacon_yaw_source, _ = (
-                self.evaluate_contour_beacon_yaw_rejection(
-                    component,
-                    metrics,
-                    config.arrow_thresholds,
-                    config.yaw_assist_enabled,
-                    config.yaw_tolerance_deg,
-                    yaw_context,
-                )
-            )
-            if config.mode == BATCH_MODE_BEACON:
-                if (
-                    component_centroid_is_foreground(component, binary)
-                    and evaluate_contour_metrics(
-                        metrics,
-                        config.beacon_thresholds,
-                    ).passed
-                    and not beacon_yaw_rejected
-                ):
-                    beacon_count += 1
-                continue
-
             if (
-                beacon_count < config.beacon_accept_limit
-                and component_centroid_is_foreground(component, binary)
-                and evaluate_contour_metrics(
-                    metrics,
-                    config.beacon_thresholds,
-                ).passed
-                and not beacon_yaw_rejected
+                not beacon_like
+                and component.area > config.split_arrow_min_area
             ):
-                beacon_count += 1
-                continue
-            if arrow_count >= 1:
-                continue
-            arrow_passed, _failures, assisted, _error, _source = (
-                self.evaluate_contour_arrow_with_yaw(
-                    component,
-                    metrics,
-                    config.arrow_thresholds,
-                    config.yaw_assist_enabled,
-                    config.yaw_tolerance_deg,
-                    yaw_context,
-                )
-            )
-            if arrow_passed:
-                arrow_count = 1
-                yaw_assisted_count += int(assisted)
+                split_candidates.append(component)
+
+        if (
+            config.split_arrow_enabled
+            and arrow_count == 0
+            and config.mode != BATCH_MODE_BEACON
+            and yaw_context is not None
+        ):
+            for first_index, first in enumerate(split_candidates):
+                for second in split_candidates[first_index + 1:]:
+                    if self._split_arrow_match(
+                        first,
+                        second,
+                        yaw_context,
+                        config.yaw_tolerance_deg,
+                        config.split_arrow_max_distance_cm,
+                        config.split_arrow_angle_tolerance_deg,
+                        config.split_arrow_max_fit_error_px,
+                    ) is not None:
+                        arrow_count = 1
+                        yaw_assisted_count += 1
+                        break
+                if arrow_count:
+                    break
         return BatchRecognitionRow(
             path=path,
             candidate_count=len(components),
@@ -3194,6 +3691,10 @@ class PictureViewerApp:
             yaw_assist_enabled, yaw_tolerance_deg = (
                 self.current_contour_yaw_assist()
             )
+            beacon_area_context = self.current_contour_yaw_context()
+            beacon_diameter, beacon_area_min_scale, beacon_area_max_scale = (
+                self.current_beacon_area_gate()
+            )
         except ValueError as exc:
             messagebox.showerror("轮廓识别参数错误", str(exc))
             self.status_var.set(f"轮廓识别失败：{exc}")
@@ -3204,6 +3705,7 @@ class PictureViewerApp:
         beacon_found_count = 0
         beacon_accept_limit = self.current_beacon_accept_limit()
         binary_threshold = self.safe_int(self.threshold_var, 50, 0, 255)
+        split_settings = self.current_split_arrow_settings()
         for component in self.components:
             try:
                 contour_metrics = calculate_contour_metrics(
@@ -3237,6 +3739,10 @@ class PictureViewerApp:
             yaw_assisted = False
             yaw_direction_error: float | None = None
             yaw_direction_source = ""
+            physical_area_cm2: float | None = None
+            physical_area_min_cm2: float | None = None
+            physical_area_max_cm2: float | None = None
+            physical_area_valid = False
             centroid_is_white = component_centroid_is_foreground(
                 component,
                 self.binary,
@@ -3263,6 +3769,7 @@ class PictureViewerApp:
                 )
                 if arrow_passed:
                     accepted_kind = TARGET_ARROW
+                    arrow_found = True
                 else:
                     failures.extend(arrow_failures)
             elif target_only == TARGET_BEACON:
@@ -3292,7 +3799,18 @@ class PictureViewerApp:
                         yaw_direction_error = beacon_yaw_error
                         yaw_direction_source = beacon_yaw_source
                     if beacon_decision.passed and not beacon_yaw_rejected:
-                        accepted_kind = TARGET_BEACON
+                        (physical_area_valid, physical_area_cm2,
+                         physical_area_min_cm2, physical_area_max_cm2,
+                         area_failure) = self.evaluate_beacon_physical_area(
+                            component, beacon_area_context, beacon_diameter,
+                            beacon_area_min_scale, beacon_area_max_scale,
+                        )
+                        if physical_area_valid:
+                            accepted_kind = TARGET_BEACON
+                            attempts.append("信标物理面积通过")
+                        elif area_failure is not None:
+                            attempts.append("信标物理面积失败")
+                            failures.append(area_failure)
                     else:
                         failures.extend(beacon_decision.failures)
             else:
@@ -3323,8 +3841,19 @@ class PictureViewerApp:
                             yaw_direction_error = beacon_yaw_error
                             yaw_direction_source = beacon_yaw_source
                         if beacon_decision.passed and not beacon_yaw_rejected:
-                            accepted_kind = TARGET_BEACON
-                            beacon_found_count += 1
+                            (physical_area_valid, physical_area_cm2,
+                             physical_area_min_cm2, physical_area_max_cm2,
+                             area_failure) = self.evaluate_beacon_physical_area(
+                                component, beacon_area_context, beacon_diameter,
+                                beacon_area_min_scale, beacon_area_max_scale,
+                            )
+                            if physical_area_valid:
+                                accepted_kind = TARGET_BEACON
+                                beacon_found_count += 1
+                                attempts.append("信标物理面积通过")
+                            elif area_failure is not None:
+                                attempts.append("信标物理面积失败，继续尝试箭头")
+                                failures.append(area_failure)
                         else:
                             failures.extend(
                                 f"信标：{failure}"
@@ -3369,12 +3898,19 @@ class PictureViewerApp:
                                 f"箭头：{failure}" for failure in arrow_failures
                             )
 
+            projected_outline: tuple[tuple[float, float], ...] = ()
+            if accepted_kind == TARGET_ARROW:
+                projected_outline = self._project_ideal_arrow_outline(
+                    (component.centroid_x, component.centroid_y),
+                    beacon_area_context,
+                ) or ()
             results[component.label] = BeaconRecognitionResult(
                 metrics=None,
                 passed=accepted_kind is not None,
                 failures=() if accepted_kind is not None else tuple(failures),
                 box_clipped=contour_metrics.boundary_clipped,
                 target_kind=accepted_kind,
+                projected_outline=projected_outline,
                 route=(
                     f"仅测{MATCHING_TARGET_NAMES[target_only]}"
                     if target_only is not None
@@ -3387,7 +3923,118 @@ class PictureViewerApp:
                 yaw_assisted=yaw_assisted,
                 yaw_direction_error_deg=yaw_direction_error,
                 yaw_direction_source=yaw_direction_source,
+                physical_area_cm2=physical_area_cm2,
+                physical_area_min_cm2=physical_area_min_cm2,
+                physical_area_max_cm2=physical_area_max_cm2,
+                physical_area_valid=physical_area_valid,
             )
+
+        split_result: tuple[int, int, dict[str, object]] | None = None
+        if split_settings["enabled"] and not arrow_found and target_only != TARGET_BEACON:
+            split_candidates: list[tuple[ConnectedComponent, ContourMetrics]] = []
+            for component in self.components:
+                recognition = results.get(component.label)
+                if (
+                    recognition is None
+                    or recognition.passed
+                    or recognition.contour_metrics is None
+                    or component.area <= int(split_settings["min_area"])
+                ):
+                    continue
+                metrics = recognition.contour_metrics
+                beacon_like = False
+                if component_centroid_is_foreground(component, self.binary):
+                    beacon_decision = evaluate_contour_metrics(
+                        metrics, thresholds[TARGET_BEACON]
+                    )
+                    if beacon_decision.passed:
+                        beacon_yaw_rejected, *_ = self.evaluate_contour_beacon_yaw_rejection(
+                            component,
+                            metrics,
+                            thresholds[TARGET_ARROW],
+                            yaw_assist_enabled,
+                            yaw_tolerance_deg,
+                            beacon_area_context,
+                        )
+                        area_ok, *_area_values = self.evaluate_beacon_physical_area(
+                            component,
+                            beacon_area_context,
+                            beacon_diameter,
+                            beacon_area_min_scale,
+                            beacon_area_max_scale,
+                        )
+                        beacon_like = area_ok and not beacon_yaw_rejected
+                if not beacon_like:
+                    split_candidates.append((component, metrics))
+
+            for first_index, (first, _first_metrics) in enumerate(split_candidates):
+                for second, _second_metrics in split_candidates[first_index + 1:]:
+                    match = self._split_arrow_match(
+                        first,
+                        second,
+                        beacon_area_context,
+                        yaw_tolerance_deg,
+                        float(split_settings["max_centroid_distance_cm"]),
+                        float(split_settings["angle_tolerance_deg"]),
+                        float(split_settings["max_fit_error_px"]),
+                    )
+                    if match is None:
+                        continue
+                    if split_result is None or float(match["fit_error_px"]) < float(
+                        split_result[2]["fit_error_px"]
+                    ):
+                        split_result = (first.label, second.label, match)
+
+        if split_result is not None:
+            first_label, second_label, match = split_result
+            primary_label = (
+                first_label
+                if next(component for component in self.components if component.label == first_label).area
+                >= next(component for component in self.components if component.label == second_label).area
+                else second_label
+            )
+            partner_label = second_label if primary_label == first_label else first_label
+            primary_result = results[primary_label]
+            partner_result = results[partner_label]
+            outline = match["outline"] or ()
+            shared = {
+                "split_arrow_partner_labels": (partner_label,),
+                "split_arrow_distance_cm": float(match["distance_cm"]),
+                "split_arrow_angle_deg": float(match["angle_deg"]),
+                "split_arrow_fit_error_px": float(match["fit_error_px"]),
+            }
+            results[primary_label] = replace(
+                primary_result,
+                passed=True,
+                target_kind=TARGET_ARROW,
+                route="分段箭头组合",
+                attempts=primary_result.attempts + (
+                    f"分段箭头通过：#{partner_label}",
+                ),
+                failures=(),
+                projected_outline=tuple(outline),
+                split_arrow_member=True,
+                split_arrow_primary=True,
+                **shared,
+            )
+            results[partner_label] = replace(
+                partner_result,
+                passed=False,
+                target_kind=None,
+                route="分段箭头组合",
+                attempts=partner_result.attempts + (
+                    f"分段箭头成员：并入#{primary_label}",
+                ),
+                failures=(),
+                projected_outline=(),
+                split_arrow_member=True,
+                split_arrow_primary=False,
+                split_arrow_partner_labels=(primary_label,),
+                split_arrow_distance_cm=float(match["distance_cm"]),
+                split_arrow_angle_deg=float(match["angle_deg"]),
+                split_arrow_fit_error_px=float(match["fit_error_px"]),
+            )
+            arrow_found = True
 
         self.beacon_recognition_results = results
         self.update_component_tree()
@@ -3474,6 +4121,9 @@ class PictureViewerApp:
             relative_yaw = wrap_degrees(
                 car_yaw if self.car_yaw_relative_var.get() else car_yaw - uav_yaw
             )
+            beacon_area_context = self.current_contour_yaw_context()
+            beacon_area_min_scale = float(self.beacon_area_min_scale_var.get())
+            beacon_area_max_scale = float(self.beacon_area_max_scale_var.get())
         except ValueError as exc:
             messagebox.showerror("新方案参数错误", str(exc))
             self.status_var.set(f"新方案识别失败：{exc}")
@@ -3583,17 +4233,43 @@ class PictureViewerApp:
                     self.current_matching_thresholds(target_kind),
                     target_kind=target_kind,
                 )
+                physical_area_cm2 = None
+                physical_area_min_cm2 = None
+                physical_area_max_cm2 = None
+                physical_area_valid = False
+                failures = decision.failures
+                if target_kind == TARGET_BEACON:
+                    (physical_area_valid, physical_area_cm2,
+                     physical_area_min_cm2, physical_area_max_cm2,
+                     area_failure) = self.evaluate_beacon_physical_area(
+                        component,
+                        beacon_area_context,
+                        beacon_diameter,
+                        beacon_area_min_scale,
+                        beacon_area_max_scale,
+                    )
+                    if not physical_area_valid:
+                        failures = (*failures, area_failure or "信标：物理面积无效")
+                        decision_passed = False
+                    else:
+                        decision_passed = decision.passed
+                else:
+                    decision_passed = decision.passed
                 return BeaconRecognitionResult(
                     metrics=metrics,
-                    passed=decision.passed,
-                    failures=decision.failures,
+                    passed=decision_passed,
+                    failures=failures,
                     box_clipped=sampling.box_clipped,
-                    target_kind=target_kind if decision.passed else None,
-                    projected_outline=tuple(outline) if decision.passed else (),
+                    target_kind=target_kind if decision_passed else None,
+                    projected_outline=tuple(outline) if decision_passed else (),
                     sampling=sampling,
                     sampling_config=sampling_config,
                     binary_threshold=binary_threshold,
                     recognition_engine=RECOGNITION_MODE_IDEAL,
+                    physical_area_cm2=physical_area_cm2,
+                    physical_area_min_cm2=physical_area_min_cm2,
+                    physical_area_max_cm2=physical_area_max_cm2,
+                    physical_area_valid=physical_area_valid,
                 )
             except (ValueError, OverflowError) as exc:
                 return BeaconRecognitionResult(
@@ -3874,6 +4550,25 @@ class PictureViewerApp:
                 f"灰度差 {optional_metric(metrics.gray_contrast)}\n"
                 "说明：凸包仅用于计算轮廓凹陷和填充率；目标面积仍采用候选轮廓扫描线面积。"
             )
+            if recognition.physical_area_min_cm2 is not None:
+                area_text = (
+                    f"{recognition.physical_area_cm2:.1f} cm²"
+                    if recognition.physical_area_cm2 is not None else "投影无效"
+                )
+                details += (
+                    f"\n信标物理面积：{area_text}    "
+                    f"允许范围 {recognition.physical_area_min_cm2:.1f}～"
+                    f"{recognition.physical_area_max_cm2:.1f} cm²    "
+                    f"{'通过' if recognition.physical_area_valid else '失败'}"
+                )
+            if recognition.split_arrow_member:
+                details += (
+                    f"\n分段箭头：{'主候选' if recognition.split_arrow_primary else '成员'}    "
+                    f"伙伴 {recognition.split_arrow_partner_labels}    "
+                    f"质心距离 {recognition.split_arrow_distance_cm:.2f} cm    "
+                    f"双臂夹角 {recognition.split_arrow_angle_deg:.2f}°    "
+                    f"理论拟合误差 {recognition.split_arrow_fit_error_px:.2f} px"
+                )
             if recognition.yaw_assisted:
                 details += (
                     f"\nYaw辅助：通过    方向点 {recognition.yaw_direction_source}    "
@@ -4138,10 +4833,18 @@ class PictureViewerApp:
             )
             if accepted_arrow:
                 target_color = arrow_color
-                label = f"箭头 #{component.label}"
+                label = (
+                    f"箭头分段 #{component.label}"
+                    if recognition and recognition.split_arrow_member
+                    else f"箭头 #{component.label}"
+                )
             elif accepted_beacon:
                 target_color = beacon_color
                 label = f"信标 #{component.label}"
+            elif recognition and recognition.split_arrow_member:
+                target_color = arrow_color
+                partner = recognition.split_arrow_partner_labels[0]
+                label = f"箭头分段 #{component.label}→#{partner}"
             elif recognition is None:
                 target_color = pending_color
                 label = f"#{component.label}"
@@ -4160,7 +4863,9 @@ class PictureViewerApp:
                 max_x,
                 max_y,
                 outline=box_color,
-                width=2 if selected or accepted_arrow or accepted_beacon else 1,
+                width=2 if selected or accepted_arrow or accepted_beacon or (
+                    recognition is not None and recognition.split_arrow_member
+                ) else 1,
                 dash=dash,
                 tags="recognition_overlay",
             )
@@ -4215,7 +4920,7 @@ class PictureViewerApp:
             contour_metrics = (
                 recognition.contour_metrics if recognition is not None else None
             )
-            if contour_metrics is not None:
+            if contour_metrics is not None and not accepted_arrow:
                 tip_points = [
                     canvas_point(point) for point in contour_metrics.arm_tip_points
                 ]

@@ -874,8 +874,13 @@ static void contour_classify(VisionContourCandidate_t *candidate,
     candidate->yaw_error_deg = yaw_error;
     if(beacon_shape && contour_centroid_is_foreground(candidate) && !yaw_signature)
     {
-        candidate->target = VISION_CONTOUR_TARGET_BEACON;
-        return;
+        if(config->beacon_physical_gate == NULL ||
+           config->beacon_physical_gate(&candidate->blob))
+        {
+            candidate->target = VISION_CONTOUR_TARGET_BEACON;
+            return;
+        }
+        candidate->beacon_area_rejected = 1U;
     }
     if(!arrow_already_found && arrow_base && (arrow_geometry || yaw_signature))
     {
