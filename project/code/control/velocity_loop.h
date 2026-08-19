@@ -9,9 +9,13 @@ extern PID_Controller vel_pid_y; /* 惯性系Y速度PID，输出Y向加速度修
 
 #define VELOCITY_LOOP_AXIS_X    (0U)   /* 惯性系X轴编号，通常对应前后速度 */
 #define VELOCITY_LOOP_AXIS_Y    (1U)   /* 惯性系Y轴编号，通常对应左右速度 */
-#define VELOCITY_LOOP_D_FILTER_DEFAULT_HZ (8.0f)  /* 速度D支路低通默认截止频率 */
+#define VELOCITY_LOOP_D_FILTER_DEFAULT_HZ (5.0f)  /* 速度D支路低通默认截止频率 */
 #define VELOCITY_LOOP_D_FILTER_MIN_HZ     (1.0f)  /* VOFA允许设置的最小D滤波截止频率 */
 #define VELOCITY_LOOP_D_FILTER_MAX_HZ     (50.0f) /* VOFA允许设置的最大D滤波截止频率 */
+#define VELOCITY_LOOP_D_BIQUAD_SAMPLE_HZ (250.0f) /* 水平速度环实际更新频率 */
+#define VELOCITY_LOOP_D_BIQUAD_Q_DEFAULT (0.7071f) /* Butterworth品质因数 */
+#define VELOCITY_LOOP_D_RAW_ACCEL_LIMIT_DEFAULT (400.0f) /* 微分原始值限幅，cm/s² */
+#define VELOCITY_LOOP_D_OUTPUT_LIMIT_DEFAULT (160.0f) /* D项输出限幅，cm/s² */
 
 #define VELOCITY_LOOP_STATUS_ACCEL_LIMITED  (0x01U) /* 目标加速度被倾角或PID输出限幅 */
 #define VELOCITY_LOOP_STATUS_MOTOR_LIMITED  (0x02U) /* 电机混控已触顶或触底 */

@@ -26,12 +26,6 @@ static volatile uint8 s_core_link_user_screen_mirror_enabled_changed = 0;
 static volatile uint8 s_core_link_user_key_flag_remote = 0;
 static char s_core_link_user_text_receive[CORE_LINK_PAYLOAD_MAX_LEN + 1] = "none";
 static uint16 s_core_link_user_beacon_tx_elapsed_ms = 0U;
-static uint16 s_core_link_user_beacon_uplink_age_ms = 60000U;
-static uint8 s_core_link_user_beacon_uplink_valid = 0U;
-static core_link_beacon_map_uplink_packet_struct s_core_link_user_beacon_uplink = {0};
-static volatile uint16 s_core_link_user_beacon_uplink_write_seq = 0U;
-static uint16 s_core_link_user_car_motion_age_ms = 60000U;
-static uint16 s_core_link_user_car_motion_protocol_error_count = 0U;
 static uint16 s_core_link_user_car_trajectory_age_ms = 60000U;
 static uint16 s_core_link_user_car_trajectory_protocol_error_count = 0U;
 static uint8 s_core_link_user_car_trajectory_valid = 0U;
@@ -99,86 +93,6 @@ static float core_link_user_wrap_angle(float angle_deg)
         angle_deg += 360.0f;
     }
     return angle_deg;
-}
-
-static uint8 core_link_user_get_uplink_snapshot(
-    core_link_beacon_map_uplink_packet_struct *snapshot)
-{
-    uint8 attempt;
-
-    if(NULL == snapshot)
-    {
-        return 0U;
-    }
-    for(attempt = 0U; attempt < 4U; ++attempt)
-    {
-        uint16 seq_begin = s_core_link_user_beacon_uplink_write_seq;
-        uint16 seq_end;
-
-        if(seq_begin & 1U)
-        {
-            continue;
-        }
-        memcpy(snapshot, &s_core_link_user_beacon_uplink, sizeof(*snapshot));
-        seq_end = s_core_link_user_beacon_uplink_write_seq;
-        if((seq_begin == seq_end) && !(seq_end & 1U))
-        {
-            return 1U;
-        }
-    }
-    return 0U;
-}
-
-static void core_link_user_build_search_direction_input(
-    const core_link_beacon_map_uplink_packet_struct *uplink,
-    uint8 uplink_valid,
-    const core_link_car_trajectory_packet_struct *trajectory,
-    uint8 trajectory_valid,
-    BeaconSearchDirectionInput_t *input)
-{
-    uint8 i;
-    uint8 map_count = 0U;
-
-    if(NULL == input)
-    {
-        return;
-    }
-
-    memset(input, 0, sizeof(*input));
-    if(uplink_valid && (NULL != uplink))
-    {
-        input->car_position_valid = uplink->car_visible ? 1U : 0U;
-        input->car_x_mm = uplink->car_x_mm;
-        input->car_y_mm = uplink->car_y_mm;
-        for(i = 0U; i < CORE_LINK_BEACON_MAP_COUNT; ++i)
-        {
-            if((0U == uplink->beacon[i].id) ||
-               (0U == uplink->beacon[i].state))
-            {
-                continue;
-            }
-            input->beacon[map_count] = uplink->beacon[i];
-            map_count++;
-        }
-    }
-
-    input->map_count = map_count;
-    input->map_valid = (map_count > 0U) ? 1U : 0U;
-
-    if(trajectory_valid && (NULL != trajectory) &&
-       (trajectory->flags & CORE_LINK_CAR_TRAJECTORY_FLAG_PREDICTED) &&
-       (0U != trajectory->predicted_beacon_id) &&
-       (CORE_LINK_PREDICTED_BEACON_SOURCE_NONE !=
-        trajectory->predicted_beacon_source))
-    {
-        input->predicted_valid = 1U;
-        input->predicted_id = trajectory->predicted_beacon_id;
-        input->car_absolute_yaw_ddeg = trajectory->car_absolute_yaw_ddeg;
-        input->predicted_beacon_forward_mm =
-            trajectory->predicted_beacon_forward_mm;
-        input->predicted_beacon_left_mm =
-            trajectory->predicted_beacon_left_mm;
-    }
 }
 
 static uint8 core_link_user_get_car_trajectory_snapshot(
@@ -251,7 +165,6 @@ static int16 core_link_user_deg_to_ddeg_i16(float deg)
 
 static uint8 core_link_user_get_uplink_car_absolute_yaw_deg(float *yaw_deg)
 {
-    core_link_beacon_map_uplink_packet_struct snapshot;
     core_link_car_trajectory_packet_struct trajectory;
 
     if(NULL == yaw_deg)
@@ -269,20 +182,7 @@ static uint8 core_link_user_get_uplink_car_absolute_yaw_deg(float *yaw_deg)
             ((float)trajectory.car_absolute_yaw_ddeg) * 0.1f);
         return 1U;
     }
-
-    if(!s_core_link_user_beacon_uplink_valid
-       || (s_core_link_user_beacon_uplink_age_ms > CORE_LINK_USER_BEACON_TIMEOUT_MS)
-       || !core_link_user_get_uplink_snapshot(&snapshot))
-    {
-        return 0U;
-    }
-
-    /* 0x13 carries car IMU/Mahony yaw, not visual marker heading. It remains
-     * valid when car_visible is zero. Car and UAV yaw must use the same
-     * positive direction and an aligned zero reference. */
-    *yaw_deg = core_link_user_wrap_angle(
-        ((float)snapshot.car_absolute_yaw_ddeg) * 0.1f);
-    return 1U;
+    return 0U;
 }
 
 static uint8 core_link_user_track_id_in_use(uint8 track_id)
@@ -757,11 +657,6 @@ void core_link_user_init (void)
     s_core_link_user_screen_mirror_enabled = 0;
     s_core_link_user_screen_mirror_enabled_changed = 0;
     s_core_link_user_beacon_tx_elapsed_ms = 0U;
-    s_core_link_user_beacon_uplink_age_ms = 60000U;
-    s_core_link_user_beacon_uplink_valid = 0U;
-    s_core_link_user_beacon_uplink_write_seq = 0U;
-    s_core_link_user_car_motion_age_ms = 60000U;
-    s_core_link_user_car_motion_protocol_error_count = 0U;
     s_core_link_user_car_trajectory_age_ms = 60000U;
     s_core_link_user_car_trajectory_protocol_error_count = 0U;
     s_core_link_user_car_trajectory_valid = 0U;
@@ -773,7 +668,6 @@ void core_link_user_init (void)
     DualCameraFusion_Init();
     memset(s_core_link_user_beacon_tracks, 0,
            sizeof(s_core_link_user_beacon_tracks));
-    memset((void *)&s_core_link_user_beacon_uplink, 0, sizeof(s_core_link_user_beacon_uplink));
     memset((void *)&s_core_link_user_car_trajectory, 0,
            sizeof(s_core_link_user_car_trajectory));
     memset(s_core_link_user_text_receive, 0, sizeof(s_core_link_user_text_receive));
@@ -804,20 +698,15 @@ void core_link_user_poll (void)
 
 void core_link_user_tick (uint16 elapsed_ms)
 {
-    BeaconSearchDirectionInput_t search_direction = {0};
     BeaconSearchStabilityInput_t search_stability = {0};
     PMWFlowState_t flow_state = {0};
     VehicleMarkerLossDebug_t marker_loss = {0};
-    core_link_beacon_map_uplink_packet_struct uplink_snapshot = {0};
     core_link_car_trajectory_packet_struct trajectory_snapshot = {0};
     float follow_x_cm = 0.0f;
     float follow_y_cm = 0.0f;
     uint8 follow_valid;
-    uint8 car_link_valid;
-    uint8 uplink_snapshot_valid = 0U;
-    uint8 trajectory_snapshot_valid = 0U;
-    uint8 car_motion_valid = 0U;
-    uint8 car_target_valid = 0U;
+    uint8 car_link_valid = 0U;
+    uint8 car_search_requested = 0U;
     uint16 car_link_age_ms = 60000U;
 
     if(s_core_link_user_beacon_tx_elapsed_ms <= (uint16)(60000U - elapsed_ms))
@@ -827,29 +716,6 @@ void core_link_user_tick (uint16 elapsed_ms)
     else
     {
         s_core_link_user_beacon_tx_elapsed_ms = 60000U;
-    }
-
-    if(s_core_link_user_beacon_uplink_age_ms <= (uint16)(60000U - elapsed_ms))
-    {
-        s_core_link_user_beacon_uplink_age_ms += elapsed_ms;
-    }
-    else
-    {
-        s_core_link_user_beacon_uplink_age_ms = 60000U;
-    }
-
-    if(s_core_link_user_beacon_uplink_age_ms > CORE_LINK_USER_BEACON_TIMEOUT_MS)
-    {
-        s_core_link_user_beacon_uplink_valid = 0U;
-    }
-
-    if(s_core_link_user_car_motion_age_ms <= (uint16)(60000U - elapsed_ms))
-    {
-        s_core_link_user_car_motion_age_ms += elapsed_ms;
-    }
-    else
-    {
-        s_core_link_user_car_motion_age_ms = 60000U;
     }
 
     if(s_core_link_user_car_trajectory_age_ms <=
@@ -867,44 +733,18 @@ void core_link_user_tick (uint16 elapsed_ms)
         s_core_link_user_car_trajectory_valid = 0U;
     }
 
-    uplink_snapshot_valid = (uint8)(
-        s_core_link_user_beacon_uplink_valid &&
-        (s_core_link_user_beacon_uplink_age_ms <=
-         CORE_LINK_USER_BEACON_TIMEOUT_MS) &&
-        core_link_user_get_uplink_snapshot(&uplink_snapshot));
-    trajectory_snapshot_valid = (uint8)(
-        s_core_link_user_car_trajectory_valid &&
+    car_link_valid = (uint8)(s_core_link_user_car_trajectory_valid &&
         (s_core_link_user_car_trajectory_age_ms <=
          CORE_LINK_USER_BEACON_TIMEOUT_MS) &&
         core_link_user_get_car_trajectory_snapshot(&trajectory_snapshot));
-
-    core_link_user_build_search_direction_input(
-        &uplink_snapshot, uplink_snapshot_valid,
-        &trajectory_snapshot, trajectory_snapshot_valid,
-        &search_direction);
-
-    car_link_valid = trajectory_snapshot_valid;
     if(car_link_valid)
     {
         car_link_age_ms = s_core_link_user_car_trajectory_age_ms;
-        car_motion_valid = (trajectory_snapshot.flags &
-            CORE_LINK_CAR_TRAJECTORY_FLAG_MOTION_VALID) ? 1U : 0U;
-        car_target_valid = (trajectory_snapshot.flags &
-            CORE_LINK_CAR_TRAJECTORY_FLAG_NAV_TARGET) ? 1U : 0U;
-    }
-    else
-    {
-        car_link_valid = (uint8)((s_core_link_user_car_motion_age_ms <=
-             CORE_LINK_USER_BEACON_TIMEOUT_MS) &&
-            uplink_snapshot_valid);
-        if(car_link_valid)
-        {
-            car_link_age_ms = s_core_link_user_car_motion_age_ms;
-            car_motion_valid = (uplink_snapshot.motion_flags &
-                CORE_LINK_CAR_MOTION_FLAG_VALID) ? 1U : 0U;
-            car_target_valid = (uplink_snapshot.motion_flags &
-                CORE_LINK_CAR_MOTION_FLAG_TARGET_VALID) ? 1U : 0U;
-        }
+        car_search_requested = (uint8)(
+            (trajectory_snapshot.flags &
+             CORE_LINK_CAR_TRAJECTORY_FLAG_MOTION_VALID) &&
+            (trajectory_snapshot.flags &
+             CORE_LINK_CAR_TRAJECTORY_FLAG_SEARCH_REQUEST));
     }
 
     PMW_Flow_GetState(&flow_state);
@@ -932,29 +772,15 @@ void core_link_user_tick (uint16 elapsed_ms)
                       Velocity_Loop_Is_Enabled(),
                       car_link_valid,
                       car_link_age_ms,
-                      car_motion_valid,
-                      car_target_valid,
+                      car_search_requested,
                       current_yaw,
-                      &search_direction,
                       &search_stability);
     BlindBoxTasks_Tick(elapsed_ms);
-}
-
-void core_link_user_get_beacon_diag(CoreLinkBeaconDiag_t *diag)
-{
-    if(NULL == diag)
-    {
-        return;
-    }
-
-    diag->valid = s_core_link_user_beacon_uplink_valid ? 1U : 0U;
-    diag->age_ms = s_core_link_user_beacon_uplink_age_ms;
 }
 
 void core_link_user_get_car_motion_diag(CoreLinkCarMotionDiag_t *diag)
 {
     core_link_car_trajectory_packet_struct trajectory;
-    core_link_beacon_map_uplink_packet_struct legacy;
 
     if(NULL == diag)
     {
@@ -963,6 +789,9 @@ void core_link_user_get_car_motion_diag(CoreLinkCarMotionDiag_t *diag)
 
     memset(diag, 0, sizeof(*diag));
     memset(&trajectory, 0, sizeof(trajectory));
+    diag->age_ms = s_core_link_user_car_trajectory_age_ms;
+    diag->protocol_error_count =
+        s_core_link_user_car_trajectory_protocol_error_count;
     if(s_core_link_user_car_trajectory_valid &&
        (s_core_link_user_car_trajectory_age_ms <=
         CORE_LINK_USER_BEACON_TIMEOUT_MS) &&
@@ -970,113 +799,23 @@ void core_link_user_get_car_motion_diag(CoreLinkCarMotionDiag_t *diag)
     {
         diag->valid = (trajectory.flags &
             CORE_LINK_CAR_TRAJECTORY_FLAG_MOTION_VALID) ? 1U : 0U;
-        if(diag->valid)
-        {
-            diag->flags |= CORE_LINK_CAR_MOTION_FLAG_VALID;
-        }
-        diag->target_valid = (trajectory.flags &
-            CORE_LINK_CAR_TRAJECTORY_FLAG_NAV_TARGET) ? 1U : 0U;
-        if(diag->target_valid)
-        {
-            diag->flags |= CORE_LINK_CAR_MOTION_FLAG_TARGET_VALID;
-        }
+        diag->acceleration_valid = (trajectory.flags &
+            CORE_LINK_CAR_TRAJECTORY_FLAG_PLAN_ACCEL_VALID) ? 1U : 0U;
+        diag->search_requested = (trajectory.flags &
+            CORE_LINK_CAR_TRAJECTORY_FLAG_SEARCH_REQUEST) ? 1U : 0U;
+        diag->flags = trajectory.flags;
         diag->sequence = trajectory.sequence;
-        diag->age_ms = s_core_link_user_car_trajectory_age_ms;
-        diag->protocol_error_count =
-            s_core_link_user_car_trajectory_protocol_error_count;
         diag->forward_speed_cms =
             (float)trajectory.actual_forward_speed_dcms * 0.1f;
         diag->left_speed_cms =
             (float)trajectory.actual_left_speed_dcms * 0.1f;
+        diag->forward_acc_cms2 =
+            (float)trajectory.planned_forward_acc_cms2;
+        diag->left_acc_cms2 =
+            (float)trajectory.planned_left_acc_cms2;
         diag->car_yaw_deg = core_link_user_wrap_angle(
             (float)trajectory.car_absolute_yaw_ddeg * 0.1f);
-        return;
     }
-
-    memset(&legacy, 0, sizeof(legacy));
-    diag->age_ms = s_core_link_user_car_motion_age_ms;
-    diag->protocol_error_count =
-        s_core_link_user_car_motion_protocol_error_count;
-    if((s_core_link_user_car_motion_age_ms >
-        CORE_LINK_USER_BEACON_TIMEOUT_MS) ||
-       !s_core_link_user_beacon_uplink_valid ||
-       !core_link_user_get_uplink_snapshot(&legacy))
-    {
-        return;
-    }
-
-    diag->valid = (legacy.motion_flags &
-        CORE_LINK_CAR_MOTION_FLAG_VALID) ? 1U : 0U;
-    diag->flags = legacy.motion_flags;
-    diag->target_valid = (legacy.motion_flags &
-        CORE_LINK_CAR_MOTION_FLAG_TARGET_VALID) ? 1U : 0U;
-    diag->sequence = legacy.motion_sequence;
-    diag->forward_speed_cms =
-        (float)legacy.car_forward_speed_dcms * 0.1f;
-    diag->left_speed_cms =
-        (float)legacy.car_left_speed_dcms * 0.1f;
-    diag->car_yaw_deg = core_link_user_wrap_angle(
-        (float)legacy.car_absolute_yaw_ddeg * 0.1f);
-}
-
-void core_link_user_get_car_trajectory_diag(CoreLinkCarTrajectoryDiag_t *diag)
-{
-    core_link_car_trajectory_packet_struct snapshot;
-
-    if(NULL == diag)
-    {
-        return;
-    }
-
-    memset(diag, 0, sizeof(*diag));
-    memset(&snapshot, 0, sizeof(snapshot));
-    diag->age_ms = s_core_link_user_car_trajectory_age_ms;
-    diag->protocol_error_count =
-        s_core_link_user_car_trajectory_protocol_error_count;
-    if(!s_core_link_user_car_trajectory_valid ||
-       (s_core_link_user_car_trajectory_age_ms >
-        CORE_LINK_USER_BEACON_TIMEOUT_MS) ||
-       !core_link_user_get_car_trajectory_snapshot(&snapshot))
-    {
-        return;
-    }
-
-    diag->valid = 1U;
-    diag->version = snapshot.version;
-    diag->flags = snapshot.flags;
-    diag->current_segment = snapshot.current_segment;
-    diag->predicted_beacon_source = snapshot.predicted_beacon_source;
-    diag->predicted_beacon_id = snapshot.predicted_beacon_id;
-    diag->sequence = snapshot.sequence;
-    diag->plan_generation = snapshot.plan_generation;
-    diag->car_yaw_deg = core_link_user_wrap_angle(
-        (float)snapshot.car_absolute_yaw_ddeg * 0.1f);
-    diag->actual_forward_speed_cms =
-        (float)snapshot.actual_forward_speed_dcms * 0.1f;
-    diag->actual_left_speed_cms =
-        (float)snapshot.actual_left_speed_dcms * 0.1f;
-    diag->command_forward_speed_cms =
-        (float)snapshot.command_forward_speed_dcms * 0.1f;
-    diag->command_left_speed_cms =
-        (float)snapshot.command_left_speed_dcms * 0.1f;
-    diag->planned_forward_acc_cms2 =
-        (float)snapshot.planned_forward_acc_cms2;
-    diag->planned_left_acc_cms2 =
-        (float)snapshot.planned_left_acc_cms2;
-    diag->planned_forward_jerk_cms3 =
-        (float)snapshot.planned_forward_jerk_cms3;
-    diag->planned_left_jerk_cms3 =
-        (float)snapshot.planned_left_jerk_cms3;
-    diag->trajectory_error_forward_cm =
-        (float)snapshot.trajectory_error_forward_mm * 0.1f;
-    diag->trajectory_error_left_cm =
-        (float)snapshot.trajectory_error_left_mm * 0.1f;
-    diag->target_forward_cm = (float)snapshot.target_forward_mm * 0.1f;
-    diag->target_left_cm = (float)snapshot.target_left_mm * 0.1f;
-    diag->predicted_beacon_forward_cm =
-        (float)snapshot.predicted_beacon_forward_mm * 0.1f;
-    diag->predicted_beacon_left_cm =
-        (float)snapshot.predicted_beacon_left_mm * 0.1f;
 }
 
 void core_link_user_service_beacon_link(void)
@@ -1253,61 +992,6 @@ void core_link_on_param_received (const core_link_param_packet_struct *param)
     }
 }
 
-static void core_link_user_parse_beacon_uplink(const uint8 *payload,
-                                                uint8 length)
-{
-    core_link_beacon_map_uplink_packet_struct parsed;
-    uint8 i;
-
-    if((NULL == payload) ||
-       ((CORE_LINK_BEACON_MAP_UPLINK_PAYLOAD_LEN != length) &&
-        (CORE_LINK_BEACON_MAP_UPLINK_LEGACY_PAYLOAD_LEN != length)))
-    {
-        if(s_core_link_user_car_motion_protocol_error_count < 65535U)
-        {
-            s_core_link_user_car_motion_protocol_error_count++;
-        }
-        return;
-    }
-
-    memset(&parsed, 0, sizeof(parsed));
-    parsed.car_visible = payload[0];
-    parsed.car_x_mm = core_link_user_read_i16_le(&payload[1]);
-    parsed.car_y_mm = core_link_user_read_i16_le(&payload[3]);
-    parsed.car_absolute_yaw_ddeg = core_link_user_read_i16_le(&payload[5]);
-
-    for(i = 0U; i < CORE_LINK_BEACON_MAP_COUNT; ++i)
-    {
-        uint8 offset = (uint8)(7U + i * 6U);
-
-        parsed.beacon[i].id = payload[offset];
-        parsed.beacon[i].x_mm = core_link_user_read_i16_le(&payload[offset + 1U]);
-        parsed.beacon[i].y_mm = core_link_user_read_i16_le(&payload[offset + 3U]);
-        parsed.beacon[i].state = payload[offset + 5U];
-    }
-
-    if(CORE_LINK_BEACON_MAP_UPLINK_LEGACY_PAYLOAD_LEN == length)
-    {
-        parsed.motion_flags = payload[37];
-        parsed.motion_sequence = payload[38];
-        parsed.car_forward_speed_dcms =
-            core_link_user_read_i16_le(&payload[39]);
-        parsed.car_left_speed_dcms =
-            core_link_user_read_i16_le(&payload[41]);
-        s_core_link_user_car_motion_age_ms = 0U;
-    }
-    else
-    {
-        s_core_link_user_car_motion_age_ms = 60000U;
-    }
-
-    s_core_link_user_beacon_uplink_write_seq++;
-    s_core_link_user_beacon_uplink = parsed;
-    s_core_link_user_beacon_uplink_write_seq++;
-    s_core_link_user_beacon_uplink_valid = 1U;
-    s_core_link_user_beacon_uplink_age_ms = 0U;
-}
-
 static void core_link_user_parse_car_trajectory(const uint8 *payload,
                                                  uint8 length)
 {
@@ -1316,8 +1000,10 @@ static void core_link_user_parse_car_trajectory(const uint8 *payload,
     if((NULL == payload) ||
        (CORE_LINK_CAR_TRAJECTORY_PAYLOAD_LEN != length) ||
        (CORE_LINK_CAR_TRAJECTORY_VERSION != payload[0]) ||
-       (payload[7] > CORE_LINK_PREDICTED_BEACON_SOURCE_GUIDE) ||
-       (0U != payload[35]))
+       (payload[1] & (uint8)~(
+            CORE_LINK_CAR_TRAJECTORY_FLAG_MOTION_VALID |
+            CORE_LINK_CAR_TRAJECTORY_FLAG_PLAN_ACCEL_VALID |
+            CORE_LINK_CAR_TRAJECTORY_FLAG_SEARCH_REQUEST)))
     {
         if(s_core_link_user_car_trajectory_protocol_error_count < 65535U)
         {
@@ -1330,38 +1016,11 @@ static void core_link_user_parse_car_trajectory(const uint8 *payload,
     parsed.version = payload[0];
     parsed.flags = payload[1];
     parsed.sequence = core_link_user_read_u16_le(&payload[2]);
-    parsed.plan_generation = core_link_user_read_u16_le(&payload[4]);
-    parsed.current_segment = payload[6];
-    parsed.predicted_beacon_source = payload[7];
-    parsed.car_absolute_yaw_ddeg = core_link_user_read_i16_le(&payload[8]);
-    parsed.actual_forward_speed_dcms = core_link_user_read_i16_le(&payload[10]);
-    parsed.actual_left_speed_dcms = core_link_user_read_i16_le(&payload[12]);
-    parsed.command_forward_speed_dcms = core_link_user_read_i16_le(&payload[14]);
-    parsed.command_left_speed_dcms = core_link_user_read_i16_le(&payload[16]);
-    parsed.planned_forward_acc_cms2 = core_link_user_read_i16_le(&payload[18]);
-    parsed.planned_left_acc_cms2 = core_link_user_read_i16_le(&payload[20]);
-    parsed.planned_forward_jerk_cms3 = core_link_user_read_i16_le(&payload[22]);
-    parsed.planned_left_jerk_cms3 = core_link_user_read_i16_le(&payload[24]);
-    parsed.trajectory_error_forward_mm = core_link_user_read_i16_le(&payload[26]);
-    parsed.trajectory_error_left_mm = core_link_user_read_i16_le(&payload[28]);
-    parsed.target_forward_mm = core_link_user_read_i16_le(&payload[30]);
-    parsed.target_left_mm = core_link_user_read_i16_le(&payload[32]);
-    parsed.predicted_beacon_id = payload[34];
-    parsed.reserved = payload[35];
-    parsed.predicted_beacon_forward_mm = core_link_user_read_i16_le(&payload[36]);
-    parsed.predicted_beacon_left_mm = core_link_user_read_i16_le(&payload[38]);
-
-    if((parsed.flags & CORE_LINK_CAR_TRAJECTORY_FLAG_PREDICTED) &&
-       ((0U == parsed.predicted_beacon_id) ||
-        (CORE_LINK_PREDICTED_BEACON_SOURCE_NONE ==
-         parsed.predicted_beacon_source)))
-    {
-        if(s_core_link_user_car_trajectory_protocol_error_count < 65535U)
-        {
-            s_core_link_user_car_trajectory_protocol_error_count++;
-        }
-        return;
-    }
+    parsed.car_absolute_yaw_ddeg = core_link_user_read_i16_le(&payload[4]);
+    parsed.actual_forward_speed_dcms = core_link_user_read_i16_le(&payload[6]);
+    parsed.actual_left_speed_dcms = core_link_user_read_i16_le(&payload[8]);
+    parsed.planned_forward_acc_cms2 = core_link_user_read_i16_le(&payload[10]);
+    parsed.planned_left_acc_cms2 = core_link_user_read_i16_le(&payload[12]);
 
     s_core_link_user_car_trajectory_write_seq++;
     s_core_link_user_car_trajectory = parsed;
@@ -1372,11 +1031,7 @@ static void core_link_user_parse_car_trajectory(const uint8 *payload,
 
 void core_link_on_frame_received (uint8 protocol_id, const uint8 *payload, uint8 length)
 {
-    if(CORE_LINK_PROTOCOL_BEACON_MAP_UPLINK == protocol_id)
-    {
-        core_link_user_parse_beacon_uplink(payload, length);
-    }
-    else if(CORE_LINK_PROTOCOL_CAR_TRAJECTORY == protocol_id)
+    if(CORE_LINK_PROTOCOL_CAR_TRAJECTORY == protocol_id)
     {
         core_link_user_parse_car_trajectory(payload, length);
     }

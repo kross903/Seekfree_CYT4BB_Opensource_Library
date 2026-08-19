@@ -5,19 +5,15 @@
 
 #define POSITION_LOOP_STATUS_CORRECTION_LIMITED  (0x01U)
 #define POSITION_LOOP_STATUS_TARGET_LIMITED      (0x02U)
-#define POSITION_LOOP_STATUS_ACCEL_LIMITED       (0x04U)
-#define POSITION_LOOP_STATUS_JERK_LIMITED        (0x08U)
+#define POSITION_LOOP_STATUS_ACCEL_FF_VALID      (0x04U)
 #define POSITION_LOOP_STATUS_CAR_FF_VALID        (0x10U)
-#define POSITION_LOOP_STATUS_TRAJECTORY_READY    (0x20U)
+#define POSITION_LOOP_STATUS_TARGET_READY        (0x20U)
 #define POSITION_LOOP_STATUS_TIMING_VALID        (0x40U)
-#define POSITION_LOOP_STATUS_BRAKE_MONITORING    (0x80U)
+#define POSITION_LOOP_STATUS_BRAKE_LIMITED       (0x80U)
 
 #define POSITION_LOOP_BRAKE_DIAG_CAR_VELOCITY_VALID (0x01U)
 #define POSITION_LOOP_BRAKE_DIAG_CLOSING_ACTIVE     (0x02U)
-#define POSITION_LOOP_BRAKE_DIAG_MARGIN_LOW         (0x04U)
-#define POSITION_LOOP_BRAKE_DIAG_STATIC_FALLBACK    (0x08U)
-#define POSITION_LOOP_BRAKE_DIAG_DIRECTION_ACTIVE   (0x10U)
-#define POSITION_LOOP_BRAKE_DIAG_REVERSE_ACTIVE     (0x20U)
+#define POSITION_LOOP_BRAKE_DIAG_STATIC_FALLBACK    (0x04U)
 
 #define POSITION_LOOP_OBSERVATION_INVALID      (0U)
 #define POSITION_LOOP_OBSERVATION_LIVE         (1U)
@@ -38,9 +34,12 @@
 
 typedef struct
 {
-    uint8 valid;
+    uint8 velocity_valid;
+    uint8 acceleration_valid;
     float vx_uav_cms;
     float vy_uav_cms;
+    float ax_uav_cms2;
+    float ay_uav_cms2;
 } PositionLoopFeedforwardInput_t;
 
 typedef struct
@@ -49,8 +48,6 @@ typedef struct
     float correction_accel_max_cms2;
     float correction_speed_max_cms;
     float target_speed_max_cms;
-    float acceleration_max_cms2;
-    float jerk_max_cms3;
 } PositionLoopTrajectoryConfig_t;
 
 typedef struct
@@ -60,8 +57,6 @@ typedef struct
     float control_delay_ms;
     float safety_buffer_cm;
     float boost_margin_cm;
-    float brake_accel_max_cms2;
-    float brake_jerk_max_cms3;
 } PositionLoopBrakeConfig_t;
 
 typedef struct
@@ -80,6 +75,10 @@ typedef struct
     float car_ff_raw_vy_cms;
     float car_ff_filtered_vx_cms;
     float car_ff_filtered_vy_cms;
+    float car_ff_raw_ax_cms2;
+    float car_ff_raw_ay_cms2;
+    float car_ff_applied_ax_cms2;
+    float car_ff_applied_ay_cms2;
     float car_ff_gain_x;
     float car_ff_gain_y;
     float desired_vx_cms;
@@ -92,15 +91,11 @@ typedef struct
     float sqrt_speed_cms;
     float relative_closing_speed_cms;
     float filtered_closing_speed_cms;
-    float brake_schedule_ratio;
-    float brake_accel_limit_cms2;
-    float brake_jerk_limit_cms3;
     float relative_velocity_x_cms;
     float relative_velocity_y_cms;
     float relative_speed_cms;
-    float stopping_distance_cm;
     float brake_delay_distance_cm;
-    float brake_margin_cm;
+    float brake_allowed_speed_cms;
     float trajectory_dt_s;
     float vision_innovation_cm;
     uint32 trajectory_reset_count;
@@ -108,6 +103,7 @@ typedef struct
     uint8 vision_observation_state;
     uint8 vision_reacquire_count;
     uint8 car_ff_valid;
+    uint8 car_accel_ff_valid;
     uint8 limit_flags;
     uint8 enabled;
     uint8 active;
@@ -116,7 +112,6 @@ typedef struct
     uint8 timing_valid;
     uint8 trajectory_reset_reason;
     uint8 brake_diag_flags;
-    uint8 brake_schedule_active;
     uint8 sqrt_controller_active;
     uint8 frozen_hold_active;
 } PositionLoopDiag_t;

@@ -11,9 +11,7 @@
 #define BEACON_SEARCH_MAX_SIGMA_CM                (15U)  /* 信标位置sigma上限，过滤定位发散目标 */
 #define BEACON_SEARCH_ENDPOINT_HOLD_MS           (200U)  /* 到达搜索端点后的短暂停留时间 */
 #define BEACON_SEARCH_ENDPOINT_TOLERANCE_DEG       (2.0f)/* 判定到达目标Yaw端点的角度容差 */
-#define BEACON_SEARCH_PREDICT_HOLD_MS           (1000U)  /* 预测方向到位后的等待时间 */
 #define BEACON_SEARCH_MAX_YAW_STEP_DEG           (10.0f) /* 单周期Yaw跳变过滤阈值，避免IMU突变误计 */
-#define BEACON_SEARCH_DEG_TO_RAD                 (0.01745329252f)
 
 typedef enum
 {
@@ -24,9 +22,7 @@ typedef enum
 
 typedef enum
 {
-    BEACON_SEARCH_SWEEP_ALIGN_PREDICTED = 0,
-    BEACON_SEARCH_SWEEP_HOLD_PREDICTED,
-    BEACON_SEARCH_SWEEP_TO_FIRST,
+    BEACON_SEARCH_SWEEP_TO_FIRST = 0,
     BEACON_SEARCH_SWEEP_HOLD_FIRST,
     BEACON_SEARCH_SWEEP_TO_SECOND,
     BEACON_SEARCH_SWEEP_HOLD_SECOND
@@ -44,18 +40,9 @@ static volatile float s_sweep_half_angle_deg =
 static volatile BeaconSearchSweepPhase_t s_sweep_phase =
     BEACON_SEARCH_SWEEP_TO_FIRST;
 static float s_endpoint_hold_elapsed_s = 0.0f;
-static float s_predicted_hold_elapsed_s = 0.0f;
-static volatile BeaconSearchDirectionMode_t s_direction_mode =
-    BEACON_SEARCH_DIRECTION_DEFAULT;
-static volatile uint8 s_direction_map_count = 0U;
-static volatile uint8 s_direction_predicted_valid = 0U;
-static volatile int8 s_direction_first_sign = 1;
 static volatile float s_search_origin_yaw_deg = 0.0f;
 static volatile float s_first_endpoint_yaw_deg = 90.0f;
 static volatile float s_second_endpoint_yaw_deg = -90.0f;
-static volatile float s_predicted_target_yaw_deg = 0.0f;
-static volatile uint8 s_map_fallback_valid = 0U;
-static int8 s_last_map_tie_first_sign = -1;
 
 static uint8 s_was_armed = 0U;
 static uint8 s_eligible = 0U;
@@ -103,153 +90,6 @@ static float beacon_search_wrap_deg(float angle_deg)
         angle_deg += 360.0f;
     }
     return angle_deg;
-}
-
-/* 相机地面视场长轴沿机体系Y，+Y与-Y是同一条无向长轴。
- * 将任意目标方向折叠为[-90, 90]内的最短Yaw旋转量。 */
-static uint8 beacon_search_get_long_axis_delta(float x, float y,
-                                                float *delta_deg)
-{
-    float bearing_deg;
-    float delta;
-
-    if((NULL == delta_deg) || !isfinite(x) || !isfinite(y) ||
-       ((x * x + y * y) < 1.0f))
-    {
-        return 0U;
-    }
-
-    bearing_deg = atan2f(y, x) / BEACON_SEARCH_DEG_TO_RAD;
-    delta = beacon_search_wrap_deg(bearing_deg - 90.0f);
-    if(delta > 90.0f)
-    {
-        delta -= 180.0f;
-    }
-    else if(delta < -90.0f)
-    {
-        delta += 180.0f;
-    }
-    *delta_deg = delta;
-    return 1U;
-}
-
-/* 所有有效地图信标等权。按最短对准角的正负分组，数量多的一侧先扫；
- * 数量相同时选择组内累计转角较小的一侧，仍相同则固定正转优先。 */
-static int8 beacon_search_choose_map_first_sign(
-    const BeaconSearchDirectionInput_t *input)
-{
-    uint8 positive_count = 0U;
-    uint8 negative_count = 0U;
-    float positive_cost = 0.0f;
-    float negative_cost = 0.0f;
-    uint8 i;
-
-    if((NULL == input) || !input->map_valid)
-    {
-        return 1;
-    }
-
-    for(i = 0U; (i < input->map_count) &&
-                    (i < CORE_LINK_BEACON_MAP_COUNT); ++i)
-    {
-        float delta_deg;
-
-        if((0U == input->beacon[i].id) ||
-           (0U == input->beacon[i].state) ||
-           !beacon_search_get_long_axis_delta(
-               (float)input->beacon[i].x_mm,
-               (float)input->beacon[i].y_mm, &delta_deg))
-        {
-            continue;
-        }
-
-        if(delta_deg > 0.0f)
-        {
-            positive_count++;
-            positive_cost += delta_deg;
-        }
-        else if(delta_deg < 0.0f)
-        {
-            negative_count++;
-            negative_cost -= delta_deg;
-        }
-        else
-        {
-            /* 已经落在长轴方向的信标对两个旋转方向等权。 */
-            positive_count++;
-            negative_count++;
-        }
-    }
-
-    if(positive_count > negative_count)
-    {
-        return 1;
-    }
-    if(negative_count > positive_count)
-    {
-        return -1;
-    }
-    if(negative_cost < positive_cost)
-    {
-        return -1;
-    }
-    if(positive_cost < negative_cost)
-    {
-        return 1;
-    }
-
-    s_last_map_tie_first_sign =
-        (s_last_map_tie_first_sign >= 0) ? -1 : 1;
-    return s_last_map_tie_first_sign;
-}
-
-static uint8 beacon_search_get_predicted_delta(
-    const BeaconSearchDirectionInput_t *input,
-    float current_yaw_deg, float *delta_deg)
-{
-    uint8 i;
-
-    if((NULL == input) || (NULL == delta_deg) ||
-       !input->map_valid || !input->predicted_valid ||
-       (0U == input->predicted_id) || !isfinite(current_yaw_deg))
-    {
-        return 0U;
-    }
-
-    /* 首选同一0x13地图快照中的预测ID位置。 */
-    for(i = 0U; (i < input->map_count) &&
-                    (i < CORE_LINK_BEACON_MAP_COUNT); ++i)
-    {
-        if((input->beacon[i].id == input->predicted_id) &&
-           (0U != input->beacon[i].state) &&
-           beacon_search_get_long_axis_delta(
-               (float)input->beacon[i].x_mm,
-               (float)input->beacon[i].y_mm, delta_deg))
-        {
-            return 1U;
-        }
-    }
-
-    /* 预测ID未进入5个地图槽位时，使用0x15车体系预测向量兜底。
-     * 若0x13同时给出了小车位置，再补偿无人机到小车的水平偏移。 */
-    {
-        float yaw_delta_rad = beacon_search_wrap_deg(
-            (float)input->car_absolute_yaw_ddeg * 0.1f -
-            current_yaw_deg) * BEACON_SEARCH_DEG_TO_RAD;
-        float cos_yaw = cosf(yaw_delta_rad);
-        float sin_yaw = sinf(yaw_delta_rad);
-        float forward_mm = (float)input->predicted_beacon_forward_mm;
-        float left_mm = (float)input->predicted_beacon_left_mm;
-        float x_uav = cos_yaw * forward_mm - sin_yaw * left_mm;
-        float y_uav = sin_yaw * forward_mm + cos_yaw * left_mm;
-
-        if(input->car_position_valid)
-        {
-            x_uav += (float)input->car_x_mm;
-            y_uav += (float)input->car_y_mm;
-        }
-        return beacon_search_get_long_axis_delta(x_uav, y_uav, delta_deg);
-    }
 }
 
 static uint8 beacon_search_yaw_at_endpoint(float current_yaw_deg,
@@ -482,25 +322,15 @@ static void beacon_search_reset_session(void)
     s_failure_reason = BEACON_SEARCH_FAILURE_NONE;
     s_process_count_valid = 0U;
     s_last_process_count = 0U;
-    s_direction_mode = BEACON_SEARCH_DIRECTION_DEFAULT;
-    s_direction_map_count = 0U;
-    s_direction_predicted_valid = 0U;
-    s_direction_first_sign = 1;
     s_search_origin_yaw_deg = 0.0f;
     s_first_endpoint_yaw_deg = 90.0f;
     s_second_endpoint_yaw_deg = -90.0f;
-    s_predicted_target_yaw_deg = 0.0f;
-    s_map_fallback_valid = 0U;
-    s_predicted_hold_elapsed_s = 0.0f;
     beacon_search_clear_candidate();
     beacon_search_reset_stability();
 }
 
-static void beacon_search_begin(
-    float current_yaw_deg,
-    const BeaconSearchDirectionInput_t *direction_input)
+static void beacon_search_begin(float current_yaw_deg)
 {
-    float predicted_delta_deg = 0.0f;
     float half_angle_deg = BeaconSearch_GetSweepHalfAngleDeg();
 
     if(!isfinite(current_yaw_deg))
@@ -514,43 +344,12 @@ static void beacon_search_begin(
     s_failure_reason = BEACON_SEARCH_FAILURE_NONE;
     s_search_generation++;
     s_search_origin_yaw_deg = beacon_search_wrap_deg(current_yaw_deg);
-    s_direction_mode = BEACON_SEARCH_DIRECTION_DEFAULT;
-    s_direction_map_count = 0U;
-    s_direction_predicted_valid = 0U;
-    s_direction_first_sign = 1;
-    s_map_fallback_valid = 0U;
-    s_predicted_hold_elapsed_s = 0.0f;
-
-    if((NULL != direction_input) && direction_input->map_valid)
-    {
-        s_direction_map_count = direction_input->map_count;
-        s_map_fallback_valid = 1U;
-        s_direction_first_sign = beacon_search_choose_map_first_sign(
-            direction_input);
-        s_direction_mode = BEACON_SEARCH_DIRECTION_MAP;
-    }
-
-    if((NULL != direction_input) && direction_input->map_valid &&
-       direction_input->predicted_valid &&
-       beacon_search_get_predicted_delta(direction_input,
-                                         current_yaw_deg,
-                                         &predicted_delta_deg))
-    {
-        s_direction_mode = BEACON_SEARCH_DIRECTION_PREDICTED;
-        s_direction_predicted_valid = 1U;
-        s_predicted_target_yaw_deg = beacon_search_wrap_deg(
-            s_search_origin_yaw_deg + predicted_delta_deg);
-    }
 
     s_first_endpoint_yaw_deg = beacon_search_wrap_deg(
-        s_search_origin_yaw_deg +
-        ((s_direction_first_sign >= 0) ? half_angle_deg : -half_angle_deg));
+        s_search_origin_yaw_deg + half_angle_deg);
     s_second_endpoint_yaw_deg = beacon_search_wrap_deg(
-        s_search_origin_yaw_deg -
-        ((s_direction_first_sign >= 0) ? half_angle_deg : -half_angle_deg));
-    s_sweep_phase = (BEACON_SEARCH_DIRECTION_PREDICTED == s_direction_mode) ?
-                    BEACON_SEARCH_SWEEP_ALIGN_PREDICTED :
-                    BEACON_SEARCH_SWEEP_TO_FIRST;
+        s_search_origin_yaw_deg - half_angle_deg);
+    s_sweep_phase = BEACON_SEARCH_SWEEP_TO_FIRST;
     beacon_search_clear_candidate();
 }
 
@@ -645,7 +444,6 @@ void BeaconSearch_Init(void)
     s_turn_progress_deg = 0.0f;
     s_sweep_phase = BEACON_SEARCH_SWEEP_TO_FIRST;
     s_endpoint_hold_elapsed_s = 0.0f;
-    s_last_map_tie_first_sign = -1;
     s_search_generation = 0U;
     beacon_search_reset_session();
 }
@@ -657,10 +455,8 @@ void BeaconSearch_Tick(uint16 elapsed_ms,
                        uint8 velocity_loop_enabled,
                        uint8 car_link_valid,
                        uint16 car_link_age_ms,
-                       uint8 car_motion_valid,
-                       uint8 car_target_valid,
+                       uint8 car_search_requested,
                        float current_yaw_deg,
-                       const BeaconSearchDirectionInput_t *direction_input,
                        const BeaconSearchStabilityInput_t *stability_input)
 {
     uint8 eligible;
@@ -682,6 +478,7 @@ void BeaconSearch_Tick(uint16 elapsed_ms,
     eligible = (uint8)(angle_mode && flight_ready &&
                        !BlindBoxTasks_IsBeaconSearchPaused() &&
                        velocity_loop_enabled &&
+                       car_link_valid && car_search_requested &&
                        (NULL != stability_input) &&
                        stability_input->position_loop_enabled);
     s_eligible = eligible;
@@ -699,16 +496,8 @@ void BeaconSearch_Tick(uint16 elapsed_ms,
 
     beacon_search_update_stability(elapsed_ms, stability_input);
 
-    /* 只有小车运动状态有效且 TARGET_VALID=0，才累计“无目标”；
-     * 链路或运动状态失效时不把旧标志当作“无目标”。 */
-    if(car_link_valid && car_motion_valid && !car_target_valid)
-    {
-        s_loss_age_ms = beacon_search_add_ms(s_loss_age_ms, elapsed_ms);
-    }
-    else
-    {
-        s_loss_age_ms = 0U;
-    }
+    /* 仅在小车自动任务明确请求时累计；遥控器模式和链路失效不会触发搜索。 */
+    s_loss_age_ms = beacon_search_add_ms(s_loss_age_ms, elapsed_ms);
 
     if(BEACON_SEARCH_DISABLED == s_state)
     {
@@ -762,7 +551,7 @@ void BeaconSearch_Tick(uint16 elapsed_ms,
         {
             if(s_start_gate_ready)
             {
-                beacon_search_begin(current_yaw_deg, direction_input);
+                beacon_search_begin(current_yaw_deg);
             }
         }
     }
@@ -787,6 +576,10 @@ void BeaconSearch_OnObservationFrame(
     s_process_count_valid = 1U;
     s_last_process_count = vision_process_count;
     trusted_track_id = beacon_search_select_trusted_track(packet);
+    if(0U != trusted_track_id)
+    {
+        s_loss_age_ms = 0U;
+    }
 
     if(BEACON_SEARCH_WAIT_FIRST == s_state)
     {
@@ -867,7 +660,8 @@ void BeaconSearch_ControlStep(float dt_s,
 
     if(control != last_control)
     {
-        if((BEACON_SEARCH_CONTROL_SPIN == control) ||
+        if((BEACON_SEARCH_CONTROL_NONE == control) ||
+           (BEACON_SEARCH_CONTROL_SPIN == control) ||
            (BEACON_SEARCH_CONTROL_HOLD == control))
         {
             *target_yaw_deg = current_yaw_deg;
@@ -890,7 +684,6 @@ void BeaconSearch_ControlStep(float dt_s,
             last_search_generation = s_search_generation;
             s_turn_progress_deg = 0.0f;
             s_endpoint_hold_elapsed_s = 0.0f;
-            s_predicted_hold_elapsed_s = 0.0f;
             previous_yaw_deg = current_yaw_deg;
             *target_yaw_deg = current_yaw_deg;
         }
@@ -907,40 +700,6 @@ void BeaconSearch_ControlStep(float dt_s,
 
         switch(s_sweep_phase)
         {
-        case BEACON_SEARCH_SWEEP_ALIGN_PREDICTED:
-            target_at_endpoint = beacon_search_step_target(
-                dt_s, s_predicted_target_yaw_deg,
-                target_yaw_deg);
-            if(target_at_endpoint &&
-               beacon_search_yaw_at_endpoint(current_yaw_deg,
-                                             s_predicted_target_yaw_deg))
-            {
-                s_sweep_phase = BEACON_SEARCH_SWEEP_HOLD_PREDICTED;
-                s_predicted_hold_elapsed_s = 0.0f;
-            }
-            break;
-
-        case BEACON_SEARCH_SWEEP_HOLD_PREDICTED:
-            *target_yaw_deg = s_predicted_target_yaw_deg;
-            if(!beacon_search_yaw_at_endpoint(current_yaw_deg,
-                                              s_predicted_target_yaw_deg))
-            {
-                s_predicted_hold_elapsed_s = 0.0f;
-                s_sweep_phase = BEACON_SEARCH_SWEEP_ALIGN_PREDICTED;
-                break;
-            }
-            s_predicted_hold_elapsed_s += dt_s;
-            if(s_predicted_hold_elapsed_s >=
-               ((float)BEACON_SEARCH_PREDICT_HOLD_MS * 0.001f))
-            {
-                s_predicted_hold_elapsed_s = 0.0f;
-                s_direction_mode = s_map_fallback_valid ?
-                    BEACON_SEARCH_DIRECTION_MAP :
-                    BEACON_SEARCH_DIRECTION_DEFAULT;
-                s_sweep_phase = BEACON_SEARCH_SWEEP_TO_FIRST;
-            }
-            break;
-
         case BEACON_SEARCH_SWEEP_TO_FIRST:
             target_at_endpoint = beacon_search_step_target(
                 dt_s, s_first_endpoint_yaw_deg,
@@ -987,10 +746,7 @@ void BeaconSearch_ControlStep(float dt_s,
             break;
 
         default:
-            s_sweep_phase = (BEACON_SEARCH_DIRECTION_PREDICTED ==
-                             s_direction_mode) ?
-                            BEACON_SEARCH_SWEEP_ALIGN_PREDICTED :
-                            BEACON_SEARCH_SWEEP_TO_FIRST;
+            s_sweep_phase = BEACON_SEARCH_SWEEP_TO_FIRST;
             break;
         }
     }
@@ -1152,24 +908,7 @@ void BeaconSearch_GetDiag(BeaconSearchDiag_t *diag)
     diag->position_sample_valid = s_position_sample_valid;
     diag->fused_velocity_valid = s_fused_velocity_valid;
     diag->start_gate_ready = s_start_gate_ready;
-    diag->direction_mode = (uint8)s_direction_mode;
-    diag->direction_map_count = s_direction_map_count;
-    diag->direction_predicted_valid = s_direction_predicted_valid;
-    diag->direction_first_sign = s_direction_first_sign;
     diag->search_origin_yaw_deg = s_search_origin_yaw_deg;
-    diag->predicted_target_yaw_deg = s_predicted_target_yaw_deg;
-    if(s_predicted_hold_elapsed_s <= 0.0f)
-    {
-        diag->predicted_hold_ms = 0U;
-    }
-    else if(s_predicted_hold_elapsed_s >= 65.535f)
-    {
-        diag->predicted_hold_ms = 65535U;
-    }
-    else
-    {
-        diag->predicted_hold_ms = (uint16)(s_predicted_hold_elapsed_s * 1000.0f);
-    }
     if(0U == irq_state)
     {
         __enable_irq();

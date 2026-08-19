@@ -3,6 +3,7 @@
 #include "common/project_headfile.h"
 #include "control/angle_loop.h"
 #include "control/ground_remote_input.h"
+#include "control/height_manager.h"
 #include "control/motor_mixer.h"
 #include "control/position_loop.h"
 #include "control/rate_loop.h"
@@ -12,6 +13,7 @@
 #include "menu/menu_motor_test.h"
 #include "motor_hardware/motor_hardware.h"
 #include "pmw/optical_flow_feed.h"
+#include "pmw/pmw_flow.h"
 #include <math.h>
 
 // ==================== Configuration constants ====================
@@ -37,6 +39,17 @@
 #define HORIZONTAL_DT_MIN_S            0.002f
 #define HORIZONTAL_DT_MAX_S            0.008f
 #define HORIZONTAL_TIMING_RESET_COUNT  3U
+
+/* 故障保护降落：故障状态下不再运行水平跟踪，只保留可用的姿态/高度链路。 */
+#define FAULT_LANDING_ATTITUDE_RATE_DPS  (15.0f)
+#define FAULT_LANDING_THROTTLE_RATE      (0.08f) /* 油门单位/ms，即80单位/s */
+
+typedef enum
+{
+    FAULT_LANDING_IDLE = 0,
+    FAULT_LANDING_TOF,
+    FAULT_LANDING_NO_TOF
+} FaultLandingMode_t;
 
 /*
  * 真位置闭环参数。
@@ -130,6 +143,10 @@ static uint8 s_horizontal_timing_initialized = 0U;
 static uint8 s_horizontal_timing_valid = 1U;
 static uint8 s_horizontal_timing_error_count = 0U;
 static uint8 s_horizontal_reset_reason = POSITION_LOOP_RESET_NONE;
+
+static volatile FaultLandingMode_t s_fault_landing_mode = FAULT_LANDING_IDLE;
+static volatile float s_fault_landing_yaw_deg = 0.0f;
+static volatile float s_fault_landing_throttle = 0.0f;
 
 static void flight_realtime_init(void)
 {
@@ -387,6 +404,167 @@ static uint8 check_attitude_safety(void)
     return Flight_Safety_Check_Attitude();
 }
 
+static float fault_landing_move_to_zero(float value, float max_step)
+{
+    if(value > max_step)
+    {
+        return value - max_step;
+    }
+    if(value < -max_step)
+    {
+        return value + max_step;
+    }
+    return 0.0f;
+}
+
+static void control_task_start_fault_landing(uint8 tof_valid)
+{
+    uint8 auto_landing_started = 0U;
+
+    if(s_fault_landing_mode != FAULT_LANDING_IDLE)
+    {
+        return;
+    }
+
+    /* 先切断水平任务和小车前馈，避免下一次正常调度重新接管。 */
+    Position_Loop_Set_Enabled(0U);
+    Velocity_Loop_Set_Enabled(0U);
+    Position_Loop_Reset_Car_Velocity_Feedforward();
+    Velocity_Loop_Set_Target_State(0.0f, 0.0f, 0.0f, 0.0f);
+    control_task_reset_horizontal_timing(POSITION_LOOP_RESET_CONTROL_DISABLED);
+
+    target_angle_roll = isfinite(current_roll) ? current_roll : 0.0f;
+    target_angle_pitch = isfinite(current_pitch) ? current_pitch : 0.0f;
+    s_fault_landing_yaw_deg = isfinite(current_yaw) ?
+                              Angle_WrapDeg180(current_yaw) : 0.0f;
+    target_angle_yaw = s_fault_landing_yaw_deg;
+    target_yaw_rate = 0.0f;
+    Angle_Loop_Reset_Rate_Cmd_Lpf();
+    Rate_Loop_Reset_Output();
+    HeightSpeedPID_output = 0.0f;
+    Flight_Takeoff_AbortAt("FAULT LANDING", __FILE__, __LINE__);
+
+    if(tof_valid)
+    {
+        auto_landing_started = HeightManager_BeginAutoLanding();
+    }
+    if(auto_landing_started)
+    {
+        s_fault_landing_mode = FAULT_LANDING_TOF;
+    }
+    else
+    {
+        /* ToF不可用时不伪造高度反馈，只保留姿态环和基础油门斜坡。 */
+        s_fault_landing_mode = FAULT_LANDING_NO_TOF;
+        s_fault_landing_yaw_deg = target_angle_yaw;
+        s_fault_landing_throttle = base_throttle;
+        if(current_throttle > s_fault_landing_throttle)
+        {
+            s_fault_landing_throttle = current_throttle;
+        }
+        target_throttle = 0.0f;
+        current_throttle = Throttle_Runtime_Limit(s_fault_landing_throttle);
+        base_throttle = current_throttle;
+    }
+}
+
+static void control_task_update_fault_landing(uint8 angle_due, uint8 rate_due)
+{
+    if(!armed)
+    {
+        s_fault_landing_mode = FAULT_LANDING_IDLE;
+        return;
+    }
+
+    if((s_fault_landing_mode == FAULT_LANDING_TOF) &&
+       !HeightManager_IsTofValid())
+    {
+        HeightManager_EndAutoLanding();
+        s_fault_landing_mode = FAULT_LANDING_NO_TOF;
+        s_fault_landing_throttle = base_throttle;
+        if(current_throttle > s_fault_landing_throttle)
+        {
+            s_fault_landing_throttle = current_throttle;
+        }
+        HeightSpeedPID_output = 0.0f;
+    }
+
+    target_angle_roll = fault_landing_move_to_zero(target_angle_roll,
+                                                    FAULT_LANDING_ATTITUDE_RATE_DPS * CONTROL_DT_S);
+    target_angle_pitch = fault_landing_move_to_zero(target_angle_pitch,
+                                                     FAULT_LANDING_ATTITUDE_RATE_DPS * CONTROL_DT_S);
+    target_angle_yaw = s_fault_landing_yaw_deg;
+    target_yaw_rate = 0.0f;
+
+    if(s_fault_landing_mode == FAULT_LANDING_NO_TOF)
+    {
+        target_throttle = 0.0f;
+        Throttle_Runtime_Ramp(0.0f,
+                              &current_throttle,
+                              FAULT_LANDING_THROTTLE_RATE,
+                              CONTROL_DT_MS);
+        base_throttle = current_throttle;
+        HeightSpeedPID_output = 0.0f;
+    }
+
+    if(angle_due)
+    {
+        Angle_Loop_Update(target_angle_roll,
+                          target_angle_pitch,
+                          target_angle_yaw,
+                          current_roll,
+                          current_pitch,
+                          current_yaw);
+    }
+    if(rate_due)
+    {
+        Rate_Loop_Update(target_roll_rate,
+                         target_pitch_rate,
+                         0.0f,
+                         current_gyro_roll,
+                         current_gyro_pitch,
+                         current_gyro_yaw);
+        Motor_Mixer_Update(motor_throttle,
+                           armed,
+                           base_throttle,
+                           current_roll,
+                           current_pitch);
+        if(Motor_Mixer_HasInvalidOutput())
+        {
+            Flight_Runtime_Emergency_StopAt(EMERGENCY_STOP_REASON_INVALID_CONTROL,
+                                            "FAULT LAND MIXER NAN",
+                                            __FILE__,
+                                            __LINE__);
+        }
+    }
+
+    if((s_fault_landing_mode == FAULT_LANDING_TOF) &&
+       HeightManager_AutoLandingTouchdownConfirmed())
+    {
+        Flight_Control_Disarm();
+        s_fault_landing_mode = FAULT_LANDING_IDLE;
+    }
+    else if((s_fault_landing_mode == FAULT_LANDING_NO_TOF) &&
+            (current_throttle <= 0.0f))
+    {
+        Flight_Control_Disarm();
+        s_fault_landing_mode = FAULT_LANDING_IDLE;
+    }
+}
+
+static uint8 control_task_handle_flow_safety(void)
+{
+    PMWFlowState_t flow_state = {0};
+
+    if(!armed)
+    {
+        return 0U;
+    }
+
+    PMW_Flow_GetState(&flow_state);
+    return flow_state.flow_fault;
+}
+
 static uint8 check_fly_test_attitude_safety(void)
 {
     return (uint8)(!isfinite(current_roll) || !isfinite(current_pitch) ||
@@ -414,6 +592,9 @@ static float limit_fly_test_attitude_output(float output)
 
 void Flight_Runtime_Reset_All_Throttle_States(void)
 {
+    s_fault_landing_mode = FAULT_LANDING_IDLE;
+    s_fault_landing_yaw_deg = 0.0f;
+    s_fault_landing_throttle = 0.0f;
     Throttle_Runtime_Reset_Throttle_State();
     MenuMotorTest_SetOutputEnable(0U);
     MenuMotorTest_SetThrottle(0U);
@@ -946,13 +1127,23 @@ static void control_task_update_position_target(uint8 takeoff_active)
         float cos_yaw = cosf(yaw_delta_rad);
         float sin_yaw = sinf(yaw_delta_rad);
 
-        feedforward.valid = 1U;
+        feedforward.velocity_valid = 1U;
         feedforward.vx_uav_cms =
             cos_yaw * car_motion.forward_speed_cms -
             sin_yaw * car_motion.left_speed_cms;
         feedforward.vy_uav_cms =
             sin_yaw * car_motion.forward_speed_cms +
             cos_yaw * car_motion.left_speed_cms;
+        if(car_motion.acceleration_valid)
+        {
+            feedforward.acceleration_valid = 1U;
+            feedforward.ax_uav_cms2 =
+                cos_yaw * car_motion.forward_acc_cms2 -
+                sin_yaw * car_motion.left_acc_cms2;
+            feedforward.ay_uav_cms2 =
+                sin_yaw * car_motion.forward_acc_cms2 +
+                cos_yaw * car_motion.left_acc_cms2;
+        }
     }
     Position_Loop_Update_Velocity_Target(flow_snap.fused_velocity_valid,
                                          flow_snap.velocity_x_fused_cms,
@@ -1100,6 +1291,7 @@ static void control_task_finish_cycle(uint8 rate_due)
 void PIT_Control_Task_250us(void)
 {
     uint8 takeoff_active = 0U;
+    uint8 fault_landing_request = 0U;
     uint8 rate_due;
     uint8 angle_due;
     uint8 velocity_due;
@@ -1134,8 +1326,24 @@ void PIT_Control_Task_250us(void)
 
     control_task_update_sensor_feedback();
 
+    /* 先处理IMU严重故障和姿态数据异常，避免其被光流故障分支掩盖。 */
     if(control_task_handle_attitude_safety())
     {
+        control_task_finish_cycle(rate_due);
+        return;
+    }
+
+    fault_landing_request = control_task_handle_flow_safety();
+    if(fault_landing_request ||
+       Flight_Safety_Attitude_Limit_Requested() ||
+       (s_fault_landing_mode != FAULT_LANDING_IDLE))
+    {
+        if(s_fault_landing_mode == FAULT_LANDING_IDLE)
+        {
+            control_task_start_fault_landing(HeightManager_IsTofValid());
+            Flight_Safety_Clear_Attitude_Limit_Request();
+        }
+        control_task_update_fault_landing(angle_due, rate_due);
         control_task_finish_cycle(rate_due);
         return;
     }

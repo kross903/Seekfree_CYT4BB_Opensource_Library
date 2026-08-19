@@ -7,6 +7,7 @@
 #include "menu/menu_motor_test.h"
 #include "motor_hardware/motor_hardware.h"
 #include "motor_hardware/small_driver_uart_control.h"
+#include "pmw/pmw_flow.h"
 #include <math.h>
 #include <stdio.h>
 
@@ -24,6 +25,7 @@ int low_voltage_protect_flag = 0;
 
 static volatile uint16 s_rearm_inhibit_ticks = 0U;
 static uint16 s_yaw_spin_ticks = 0U;
+static volatile uint8 s_attitude_limit_request = 0U;
 static char s_esc_active_text[32] = "ESC FAULT";
 static char s_esc_report_text[32] = "ESC FAULT";
 static volatile uint8 s_esc_report_latched = 0U;
@@ -196,9 +198,12 @@ void Flight_Safety_ResetYawSpinMonitor(void)
 
 uint8 Flight_Safety_Check_Attitude(void)
 {
+    ICM_Health_t imu_health = {0};
+
     if(!armed)
     {
         Flight_Safety_ResetYawSpinMonitor();
+        s_attitude_limit_request = 0U;
         return 0U;
     }
 
@@ -219,15 +224,24 @@ uint8 Flight_Safety_Check_Attitude(void)
         return 1U;
     }
 
+    ICM_GetHealth(&imu_health);
+    if(!imu_health.attitude_valid ||
+       ((imu_health.fault_mask & ICM_HEALTH_CRITICAL_FAULT_MASK) != 0U))
+    {
+        Flight_Runtime_Emergency_StopAt(EMERGENCY_STOP_REASON_INVALID_CONTROL,
+                                        "IMU FAULT",
+                                        __FILE__,
+                                        __LINE__);
+        return 1U;
+    }
+
     if(current_roll > SAFE_MAX_ANGLE_ROLL || current_roll < -SAFE_MAX_ANGLE_ROLL)
     {
-        Flight_Runtime_Emergency_Stop(EMERGENCY_STOP_REASON_ATTITUDE_ROLL);
-        return 1U;
+        s_attitude_limit_request = 1U;
     }
     if(current_pitch > SAFE_MAX_ANGLE_PITCH || current_pitch < -SAFE_MAX_ANGLE_PITCH)
     {
-        Flight_Runtime_Emergency_Stop(EMERGENCY_STOP_REASON_ATTITUDE_PITCH);
-        return 1U;
+        s_attitude_limit_request = 1U;
     }
     if(fabsf(current_gyro_yaw) > YAW_SPIN_RATE_LIMIT_DPS)
     {
@@ -246,6 +260,16 @@ uint8 Flight_Safety_Check_Attitude(void)
         Flight_Safety_ResetYawSpinMonitor();
     }
     return 0U;
+}
+
+uint8 Flight_Safety_Attitude_Limit_Requested(void)
+{
+    return s_attitude_limit_request;
+}
+
+void Flight_Safety_Clear_Attitude_Limit_Request(void)
+{
+    s_attitude_limit_request = 0U;
 }
 
 uint8 Flight_Safety_Can_Arm(FlightArmRejectReason *reason)
@@ -342,6 +366,7 @@ static const char *flight_safety_estop_reason_text(uint8 reason)
         case EMERGENCY_STOP_REASON_YAW_SPIN:        return "ESTOP YAW SPIN";
         case EMERGENCY_STOP_REASON_ESC_FAULT:       return "ESTOP ESC FAULT";
         case EMERGENCY_STOP_REASON_BATTERY_INVALID: return "ESTOP BAT INVALID";
+        case EMERGENCY_STOP_REASON_FLOW_TIMEOUT:    return "ESTOP FLOW TIMEOUT";
         case EMERGENCY_STOP_REASON_NONE:
         default:                                    return "ESTOP UNKNOWN";
     }
@@ -407,6 +432,7 @@ uint8 Flight_Runtime_Clear_Emergency_Stop_Latch(void)
 
     emergency_stop_triggered = 0U;
     emergency_stop_reason = EMERGENCY_STOP_REASON_NONE;
+    PMW_Flow_ClearFault();
     Flight_Safety_ResetYawSpinMonitor();
     return 1U;
 }

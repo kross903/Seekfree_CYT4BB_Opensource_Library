@@ -17,6 +17,7 @@
 #define EMERGENCY_STOP_REASON_YAW_SPIN        7
 #define EMERGENCY_STOP_REASON_ESC_FAULT       8
 #define EMERGENCY_STOP_REASON_BATTERY_INVALID 9
+#define EMERGENCY_STOP_REASON_FLOW_TIMEOUT    10
 
 #define FLIGHT_ESTOP_REARM_INHIBIT_MS          2000U
 
@@ -38,6 +39,8 @@ extern volatile uint8 emergency_stop_reason;
 extern int low_voltage_protect_flag;
 
 uint8 Flight_Safety_Check_Attitude(void);
+uint8 Flight_Safety_Attitude_Limit_Requested(void);
+void Flight_Safety_Clear_Attitude_Limit_Request(void);
 uint8 Flight_Safety_Check_Esc(void);
 uint8 Flight_Safety_Check_Battery(void);
 uint8 Flight_Safety_Can_Arm(FlightArmRejectReason *reason);

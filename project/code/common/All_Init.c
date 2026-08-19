@@ -106,20 +106,20 @@ static void init_default_pid_parameters(void)
 
     PID_Init(&gyro_pid_roll,
              3.5f, 0.0f, 0.0f,
-             250.0f, 10000.0f, 20.0f, 0.8f);
+             250.0f, 10000.0f, 20.0f, 0.8f);  /* Roll角速度内环：1000 Hz，周期1 ms。 */
     PID_Init(&gyro_pid_pitch,
              3.5f, 0.0f, 0.0f,
-             250.0f, 10000.0f, 20.0f, 0.8f);
+             250.0f, 10000.0f, 20.0f, 0.8f);  /* Pitch角速度内环：1000 Hz，周期1 ms。 */
     PID_Init(&gyro_pid_yaw,
              3.00f, 0.0f, 0.0f,
-             200.0f, 5000.0f, 15.0f, 0.8f);
-    PID_Init(&HeightPID, 0.5f, 0.005f, 0.0f, 40.0f, 2000.0f, 20.0f, 0.3f);
-    PID_Init(&HeightVelPID, 2.0f, 0.00f, 4.0f, 150.0f, 2000.0f, 20.0f, 0.3f);
-    PID_Init(&angle_pid_roll,  6.50f, 0.01f, 0.0f, 350.0f, 5000.0f, 5.0f, 0.80f);
-    PID_Init(&angle_pid_pitch, 6.50f, 0.01f, 0.0f, 350.0f, 5000.0f, 5.0f, 0.80f);
-    PID_Init(&angle_pid_yaw,   6.0f, 0.0f, 0.0f, 250.0f, 400.0f, 12.0f, 0.0f);
-    PID_Init(&vel_pid_x, 2.8f, 0.0f, 0.20f, 458.0f, 80.0f, 0.0f, 0.0f);
-    PID_Init(&vel_pid_y, 2.8f, 0.0f, 0.20f, 458.0f, 80.0f, 0.0f, 0.0f);
+             200.0f, 5000.0f, 15.0f, 0.8f);  /* Yaw角速度内环：1000 Hz，周期1 ms。 */
+    PID_Init(&HeightPID, 0.5f, 0.005f, 0.0f, 40.0f, 2000.0f, 20.0f, 0.3f);  /* 高度位置外环：100 Hz，周期10 ms。 */
+    PID_Init(&HeightVelPID, 2.0f, 0.00f, 4.0f, 150.0f, 2000.0f, 20.0f, 0.3f);  /* 垂直速度内环：100 Hz，周期10 ms。 */
+    PID_Init(&angle_pid_roll,  6.50f, 0.01f, 0.0f, 350.0f, 5000.0f, 5.0f, 0.80f);  /* Roll姿态角外环：500 Hz，周期2 ms。 */
+    PID_Init(&angle_pid_pitch, 6.50f, 0.01f, 0.0f, 350.0f, 5000.0f, 5.0f, 0.80f);  /* Pitch姿态角外环：500 Hz，周期2 ms。 */
+    PID_Init(&angle_pid_yaw,   6.0f, 0.0f, 0.0f, 250.0f, 400.0f, 12.0f, 0.0f);  /* Yaw姿态角外环：500 Hz，周期2 ms。 */
+    PID_Init(&vel_pid_x, 2.8f, 0.0f, 0.1f, 458.0f, 2000.0f, 10.0f, 0.0f);  /* 惯性系X速度环：250 Hz，周期4 ms。 */
+    PID_Init(&vel_pid_y, 2.8f, 0.0f, 0.1f, 458.0f, 2000.0f, 10.0f, 0.0f);  /* 惯性系Y速度环：250 Hz，周期4 ms。 */
     /* 速度D由velocity_loop.c独立滤波，末尾legacy alpha不参与速度D计算。 */
     /* 水平速度PID输出单位统一为cm/s^2，积分限幅也表示加速度贡献。
     PID_Init(&vel_pid_x, 2.8f, 1.0f, 0.20f, 458.0f, 80.0f, 0.0f, 0.0f);
@@ -192,7 +192,7 @@ static void init_runtime_modules(void)
     ICM_VisionYaw_Configure(VISION_YAW_FUSION_ENABLE,
                             VISION_MARKER_WORLD_HEADING_DEG,
                             VISION_CAMERA_YAW_OFFSET_DEG);
-    HeightManager_Init(100.0f);
+    HeightManager_Init();
     PMW_Flow_Init();
     init_optical_flow_sensor();
     Flight_Control_Init();

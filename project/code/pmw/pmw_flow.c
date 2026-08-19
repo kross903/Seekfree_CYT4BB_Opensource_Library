@@ -89,8 +89,7 @@
 #define PMW_FLOW_FUSION_RESET_MIN_CONFIDENCE (0.60f)
 #define PMW_FLOW_FUSION_RESET_MIN_ROT_CONFIDENCE (0.75f)
 #define PMW_FLOW_FUSION_RESET_CONFIRM_FRAMES (2U)
-#define PMW_FLOW_FUSION_PREDICT_HOLD_FRAMES (25U)
-#define PMW_FLOW_FUSION_PREDICT_HOLD_S      (0.120f)
+#define PMW_FLOW_FUSION_FAULT_TIMEOUT_S     (5.0f)
 #ifndef PMW_FLOW_KALMAN_ENABLE
 #define PMW_FLOW_KALMAN_ENABLE             (0U)
 #endif
@@ -188,7 +187,8 @@ static float g_pmw_flow_fusion_imu_delta_y_accum_cms = 0.0f;
 static uint8 g_pmw_flow_fusion_init = 0U;
 static uint8 g_pmw_flow_fusion_residual_reset_count = 0U;
 static uint8 g_pmw_flow_fusion_no_observation_frames = 0U;
-static float g_pmw_flow_fusion_observation_age_s = PMW_FLOW_FUSION_PREDICT_HOLD_S;
+static float g_pmw_flow_fusion_observation_age_s = PMW_FLOW_FUSION_FAULT_TIMEOUT_S;
+static uint8 g_pmw_flow_fusion_fault_latched = 0U;
 static PMWFlowPIAxis_t g_pmw_flow_pi_x = {0};
 static PMWFlowPIAxis_t g_pmw_flow_pi_y = {0};
 static float g_pmw_flow_conf_prev_gyro_rate_x_rad_s = 0.0f;
@@ -868,7 +868,7 @@ static void pmw_flow_apply_invalid_velocity_hold(PMWFlowState_t *state)
 static uint8 pmw_flow_fusion_predict_hold_active(void)
 {
     return (uint8)(g_pmw_flow_fusion_init &&
-                   (g_pmw_flow_fusion_observation_age_s < PMW_FLOW_FUSION_PREDICT_HOLD_S));
+                   !g_pmw_flow_fusion_fault_latched);
 }
 
 static void pmw_flow_update_velocity_feedback(PMWFlowState_t *state,
@@ -912,7 +912,8 @@ static void pmw_flow_update_velocity_feedback(PMWFlowState_t *state,
     state->fusion_output_x_cms = g_pmw_flow_fused_vx_cms;
     state->fusion_output_y_cms = g_pmw_flow_fused_vy_cms;
 
-    if(flow_observation_valid &&
+    if(!g_pmw_flow_fusion_fault_latched &&
+       flow_observation_valid &&
        state->valid &&
        state->flow_sync_valid &&
        pmw_flow_is_valid_number(state->velocity_x_cms) &&
@@ -1074,7 +1075,7 @@ static void pmw_flow_update_velocity_feedback(PMWFlowState_t *state,
             g_pmw_flow_fusion_init = 0U;
             g_pmw_flow_fusion_residual_reset_count = 0U;
             g_pmw_flow_fusion_no_observation_frames = 0U;
-            g_pmw_flow_fusion_observation_age_s = PMW_FLOW_FUSION_PREDICT_HOLD_S;
+            g_pmw_flow_fusion_observation_age_s = PMW_FLOW_FUSION_FAULT_TIMEOUT_S;
 #if PMW_FLOW_KALMAN_ENABLE
             pmw_flow_kalman_reset();
 #endif
@@ -1115,7 +1116,7 @@ static void pmw_flow_update_velocity_feedback(PMWFlowState_t *state,
             g_pmw_flow_fused_vy_cms = 0.0f;
             g_pmw_flow_fusion_init = 0U;
             g_pmw_flow_fusion_residual_reset_count = 0U;
-            g_pmw_flow_fusion_no_observation_frames = PMW_FLOW_FUSION_PREDICT_HOLD_FRAMES;
+            g_pmw_flow_fusion_no_observation_frames = 0xFFU;
             g_pmw_flow_fusion_imu_delta_x_accum_cms = 0.0f;
             g_pmw_flow_fusion_imu_delta_y_accum_cms = 0.0f;
             pmw_flow_kalman_reset();
@@ -1144,6 +1145,8 @@ static void pmw_flow_update_velocity_feedback(PMWFlowState_t *state,
     state->flow_used = flow_used;
     state->acc_used = acc_used;
     state->fused_velocity_valid = fused_velocity_valid;
+    state->flow_fault = g_pmw_flow_fusion_fault_latched;
+    state->flow_observation_age_s = g_pmw_flow_fusion_observation_age_s;
     pmw_flow_sync_kalman_diag(state);
     pmw_flow_sync_pi_diag(state);
 }
@@ -1341,7 +1344,8 @@ void PMW_Flow_Reset(void)
     g_pmw_flow_fusion_init = 0U;
     g_pmw_flow_fusion_residual_reset_count = 0U;
     g_pmw_flow_fusion_no_observation_frames = 0U;
-    g_pmw_flow_fusion_observation_age_s = PMW_FLOW_FUSION_PREDICT_HOLD_S;
+    g_pmw_flow_fusion_observation_age_s = PMW_FLOW_FUSION_FAULT_TIMEOUT_S;
+    g_pmw_flow_fusion_fault_latched = 0U;
     pmw_flow_pi_reset_axis(&g_pmw_flow_pi_x);
     pmw_flow_pi_reset_axis(&g_pmw_flow_pi_y);
     g_pmw_flow_conf_prev_gyro_rate_x_rad_s = 0.0f;
@@ -1479,13 +1483,14 @@ void PMW_Flow_PredictVelocity(float imu_velocity_x_cms, float imu_velocity_y_cms
         return;
     }
 
-    if(g_pmw_flow_fusion_init &&
-       g_pmw_flow_fusion_observation_age_s < PMW_FLOW_FUSION_PREDICT_HOLD_S)
+    if(g_pmw_flow_fusion_init && !g_pmw_flow_fusion_fault_latched &&
+       g_pmw_flow_fusion_observation_age_s < PMW_FLOW_FUSION_FAULT_TIMEOUT_S)
     {
         g_pmw_flow_fusion_observation_age_s += dt_s;
-        if(g_pmw_flow_fusion_observation_age_s >= PMW_FLOW_FUSION_PREDICT_HOLD_S)
+        if(g_pmw_flow_fusion_observation_age_s >= PMW_FLOW_FUSION_FAULT_TIMEOUT_S)
         {
-            g_pmw_flow_fusion_observation_age_s = PMW_FLOW_FUSION_PREDICT_HOLD_S;
+            g_pmw_flow_fusion_observation_age_s = PMW_FLOW_FUSION_FAULT_TIMEOUT_S;
+            g_pmw_flow_fusion_fault_latched = 1U;
 #if !PMW_FLOW_KALMAN_ENABLE
             pmw_flow_pi_clear_evidence(&g_pmw_flow_pi_x);
             pmw_flow_pi_clear_evidence(&g_pmw_flow_pi_y);
@@ -1555,6 +1560,19 @@ void PMW_Flow_PredictVelocity(float imu_velocity_x_cms, float imu_velocity_y_cms
         g_pmw_flow_fused_vx_cms - fused_vx_before_cms;
     g_pmw_flow_fusion_imu_delta_y_accum_cms +=
         g_pmw_flow_fused_vy_cms - fused_vy_before_cms;
+}
+
+void PMW_Flow_ClearFault(void)
+{
+    g_pmw_flow_fusion_fault_latched = 0U;
+    g_pmw_flow_fusion_observation_age_s = 0.0f;
+    g_pmw_flow_fusion_init = 0U;
+    g_pmw_flow_fused_vx_cms = 0.0f;
+    g_pmw_flow_fused_vy_cms = 0.0f;
+    g_pmw_flow_fusion_no_observation_frames = 0U;
+    g_pmw_flow_fusion_imu_delta_x_accum_cms = 0.0f;
+    g_pmw_flow_fusion_imu_delta_y_accum_cms = 0.0f;
+    pmw_flow_kalman_reset();
 }
 
 void PMW_Flow_ResetWorldPosition(void)
@@ -1882,6 +1900,8 @@ void PMW_Flow_GetState(PMWFlowState_t *state)
     state->flow_sync_valid = g_pmw_flow_sync_valid;
     state->flow_dropped_frame_count = g_pmw_flow_sync_dropped_frame_count;
     state->flow_sync_error_count = g_pmw_flow_sync_error_count;
+    state->flow_fault = g_pmw_flow_fusion_fault_latched;
+    state->flow_observation_age_s = g_pmw_flow_fusion_observation_age_s;
 
     if(pmw_flow_fusion_predict_hold_active())
     {
@@ -1897,6 +1917,13 @@ void PMW_Flow_GetState(PMWFlowState_t *state)
         state->fused_velocity_valid = 1U;
     }
     else if(g_pmw_flow_fusion_init)
+    {
+        state->flow_used = 0U;
+        state->acc_used = 0U;
+        state->fused_velocity_valid = 0U;
+    }
+
+    if(g_pmw_flow_fusion_fault_latched)
     {
         state->flow_used = 0U;
         state->acc_used = 0U;
