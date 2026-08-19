@@ -79,8 +79,10 @@ typedef struct
     float car_ff_raw_ay_cms2;
     float car_ff_applied_ax_cms2;
     float car_ff_applied_ay_cms2;
-    float car_ff_gain_x;
-    float car_ff_gain_y;
+    float car_velocity_ff_gain_x;
+    float car_velocity_ff_gain_y;
+    float car_accel_ff_gain_x;
+    float car_accel_ff_gain_y;
     float desired_vx_cms;
     float desired_vy_cms;
     float target_accel_x_cms2;
@@ -131,6 +133,8 @@ void Position_Loop_Update_Velocity_Target(uint8 velocity_ready,
                                           float *target_ay_earth_cms2);
 uint8 Position_Loop_Set_Car_Velocity_Feedforward_Gain(uint8 axis, float gain);
 void Position_Loop_Get_Car_Velocity_Feedforward_Gain(float *gain_x, float *gain_y);
+uint8 Position_Loop_Set_Car_Acceleration_Feedforward_Gain(uint8 axis, float gain);
+void Position_Loop_Get_Car_Acceleration_Feedforward_Gain(float *gain_x, float *gain_y);
 void Position_Loop_Reset_Car_Velocity_Feedforward(void);
 uint8 Position_Loop_Begin_Frozen_Hold(void);
 void Position_Loop_End_Frozen_Hold(void);

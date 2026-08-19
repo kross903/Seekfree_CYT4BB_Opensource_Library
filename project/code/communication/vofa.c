@@ -374,7 +374,7 @@ static uint8 set_position_feedforward_value(uint8 item, float value)
 {
     PositionLoopTrajectoryConfig_t trajectory = {0};
 
-    /* M1/M2分别设置X/Y小车速度前馈增益。 */
+    /* M1/M2设置X/Y速度前馈增益，M6/M7设置X/Y加速度前馈增益。 */
     if('1' == item)
     {
         return Position_Loop_Set_Car_Velocity_Feedforward_Gain(0U, value);
@@ -385,14 +385,13 @@ static uint8 set_position_feedforward_value(uint8 item, float value)
     }
 
     Position_Loop_Get_Trajectory_Config(&trajectory);
-    /* M6/M7旧A/J整形参数已删除；M8保留为P/Sqrt纠偏包络A。 */
     switch(item)
     {
         case '3': trajectory.position_kp = value; break;
         case '4': trajectory.correction_speed_max_cms = value; break;
         case '5': trajectory.target_speed_max_cms = value; break;
-        case '6':
-        case '7': return 0U;
+        case '6': return Position_Loop_Set_Car_Acceleration_Feedforward_Gain(0U, value);
+        case '7': return Position_Loop_Set_Car_Acceleration_Feedforward_Gain(1U, value);
         case '8': trajectory.correction_accel_max_cms2 = value; break;
         default: return 0U;
     }
@@ -587,16 +586,20 @@ static void send_pid_data_back(uint8 command)
         case 'M':
         {
             PositionLoopTrajectoryConfig_t trajectory = {0};
+            float accel_gain_x = 0.0f;
+            float accel_gain_y = 0.0f;
 
             Position_Loop_Get_Car_Velocity_Feedforward_Gain(&value_1, &value_2);
+            Position_Loop_Get_Car_Acceleration_Feedforward_Gain(&accel_gain_x,
+                                                                 &accel_gain_y);
             Position_Loop_Get_Trajectory_Config(&trajectory);
             send_four_date(value_1,
                            value_2,
                            trajectory.position_kp,
                            trajectory.correction_speed_max_cms,
                            trajectory.target_speed_max_cms,
-                           0.0f,
-                           0.0f,
+                           accel_gain_x,
+                           accel_gain_y,
                            trajectory.correction_accel_max_cms2);
             return;
         }

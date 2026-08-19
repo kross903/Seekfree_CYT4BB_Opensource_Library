@@ -3,8 +3,10 @@
 #include "vision/dual_camera_fusion.h"
 #include <math.h>
 //P分支由简单P控制切换到Sqrt分支的 切换距离 = M8 / M3²
-#define POSITION_LOOP_CAR_FF_GAIN_DEFAULT          (0.6f)   // M1/M2：小车X/Y速度前馈增益上电默认值
-#define POSITION_LOOP_CAR_FF_GAIN_MAX              (1.0f)    // M1/M2：小车X/Y速度前馈增益允许上限
+#define POSITION_LOOP_CAR_VELOCITY_FF_GAIN_DEFAULT (0.6f)   // M1/M2：小车X/Y速度前馈增益上电默认值
+#define POSITION_LOOP_CAR_VELOCITY_FF_GAIN_MAX     (1.0f)   // M1/M2：小车X/Y速度前馈增益允许上限
+#define POSITION_LOOP_CAR_ACCEL_FF_GAIN_DEFAULT    (0.6f)   // M6/M7：小车X/Y加速度前馈增益上电默认值
+#define POSITION_LOOP_CAR_ACCEL_FF_GAIN_MAX        (1.0f)   // M6/M7：小车X/Y加速度前馈增益允许上限
 #define POSITION_LOOP_POSITION_KP_DEFAULT          (0.22f)    // M3：二维位置P增益默认值，单位s^-1
 #define POSITION_LOOP_CORRECTION_MAX_DEFAULT_CMS   (100.0f)   // M4：位置修正速度模长上限，单位cm/s
 #define POSITION_LOOP_TARGET_MAX_DEFAULT_CMS       (300.0f)   // M5：合成后目标速度模长上限，单位cm/s
@@ -37,8 +39,10 @@ static volatile PositionLoopBrakeConfig_t g_brake_config = {
     POSITION_LOOP_SAFETY_BUFFER_DEFAULT_CM,
     POSITION_LOOP_BOOST_MARGIN_DEFAULT_CM
 };
-static volatile float g_car_ff_gain_x = POSITION_LOOP_CAR_FF_GAIN_DEFAULT;
-static volatile float g_car_ff_gain_y = POSITION_LOOP_CAR_FF_GAIN_DEFAULT;
+static volatile float g_car_velocity_ff_gain_x = POSITION_LOOP_CAR_VELOCITY_FF_GAIN_DEFAULT;
+static volatile float g_car_velocity_ff_gain_y = POSITION_LOOP_CAR_VELOCITY_FF_GAIN_DEFAULT;
+static volatile float g_car_accel_ff_gain_x = POSITION_LOOP_CAR_ACCEL_FF_GAIN_DEFAULT;
+static volatile float g_car_accel_ff_gain_y = POSITION_LOOP_CAR_ACCEL_FF_GAIN_DEFAULT;
 static volatile PositionLoopDiag_t g_diag;
 
 static float g_target_vx_earth_cms = 0.0f;
@@ -302,8 +306,10 @@ static void position_loop_reset_runtime(uint8 reason)
     g_frozen_hold_active = 0U;
     g_diag = empty_diag;
     g_diag.enabled = g_enabled;
-    g_diag.car_ff_gain_x = g_car_ff_gain_x;
-    g_diag.car_ff_gain_y = g_car_ff_gain_y;
+    g_diag.car_velocity_ff_gain_x = g_car_velocity_ff_gain_x;
+    g_diag.car_velocity_ff_gain_y = g_car_velocity_ff_gain_y;
+    g_diag.car_accel_ff_gain_x = g_car_accel_ff_gain_x;
+    g_diag.car_accel_ff_gain_y = g_car_accel_ff_gain_y;
     g_diag.trajectory_reset_reason = g_trajectory_reset_reason;
     g_diag.trajectory_reset_count = g_trajectory_reset_count;
 }
@@ -546,20 +552,40 @@ uint8 Position_Loop_Is_Frozen_Hold_Active(void)
 
 uint8 Position_Loop_Set_Car_Velocity_Feedforward_Gain(uint8 axis, float gain)
 {
-    if(!isfinite(gain) || (gain < 0.0f) || (gain > POSITION_LOOP_CAR_FF_GAIN_MAX))
+    if(!isfinite(gain) || (gain < 0.0f) ||
+       (gain > POSITION_LOOP_CAR_VELOCITY_FF_GAIN_MAX))
     {
         return 0U;
     }
-    if(axis == 0U) g_car_ff_gain_x = gain;
-    else if(axis == 1U) g_car_ff_gain_y = gain;
+    if(axis == 0U) g_car_velocity_ff_gain_x = gain;
+    else if(axis == 1U) g_car_velocity_ff_gain_y = gain;
     else return 0U;
     return 1U;
 }
 
 void Position_Loop_Get_Car_Velocity_Feedforward_Gain(float *gain_x, float *gain_y)
 {
-    if(gain_x != NULL) *gain_x = g_car_ff_gain_x;
-    if(gain_y != NULL) *gain_y = g_car_ff_gain_y;
+    if(gain_x != NULL) *gain_x = g_car_velocity_ff_gain_x;
+    if(gain_y != NULL) *gain_y = g_car_velocity_ff_gain_y;
+}
+
+uint8 Position_Loop_Set_Car_Acceleration_Feedforward_Gain(uint8 axis, float gain)
+{
+    if(!isfinite(gain) || (gain < 0.0f) ||
+       (gain > POSITION_LOOP_CAR_ACCEL_FF_GAIN_MAX))
+    {
+        return 0U;
+    }
+    if(axis == 0U) g_car_accel_ff_gain_x = gain;
+    else if(axis == 1U) g_car_accel_ff_gain_y = gain;
+    else return 0U;
+    return 1U;
+}
+
+void Position_Loop_Get_Car_Acceleration_Feedforward_Gain(float *gain_x, float *gain_y)
+{
+    if(gain_x != NULL) *gain_x = g_car_accel_ff_gain_x;
+    if(gain_y != NULL) *gain_y = g_car_accel_ff_gain_y;
 }
 
 uint8 Position_Loop_Set_Trajectory_Config(const PositionLoopTrajectoryConfig_t *config)
@@ -758,8 +784,8 @@ void Position_Loop_Update_Velocity_Target(uint8 velocity_ready,
                                     yaw_deg,
                                     &car_actual_vx_earth,
                                     &car_actual_vy_earth);
-        gained_body_x = feedforward->vx_uav_cms * g_car_ff_gain_x;
-        gained_body_y = feedforward->vy_uav_cms * g_car_ff_gain_y;
+        gained_body_x = feedforward->vx_uav_cms * g_car_velocity_ff_gain_x;
+        gained_body_y = feedforward->vy_uav_cms * g_car_velocity_ff_gain_y;
         position_loop_body_to_earth(gained_body_x, gained_body_y, yaw_deg,
                                     &car_vx_earth, &car_vy_earth);
         car_velocity_valid = 1U;
@@ -770,8 +796,8 @@ void Position_Loop_Update_Velocity_Target(uint8 velocity_ready,
        isfinite(feedforward->ax_uav_cms2) &&
        isfinite(feedforward->ay_uav_cms2))
     {
-        float gained_body_x = feedforward->ax_uav_cms2 * g_car_ff_gain_x;
-        float gained_body_y = feedforward->ay_uav_cms2 * g_car_ff_gain_y;
+        float gained_body_x = feedforward->ax_uav_cms2 * g_car_accel_ff_gain_x;
+        float gained_body_y = feedforward->ay_uav_cms2 * g_car_accel_ff_gain_y;
 
         position_loop_body_to_earth(feedforward->ax_uav_cms2,
                                     feedforward->ay_uav_cms2,
@@ -1069,8 +1095,10 @@ void Position_Loop_Update_Velocity_Target(uint8 velocity_ready,
     g_diag.car_ff_raw_ay_cms2 = car_actual_ay_earth;
     g_diag.car_ff_applied_ax_cms2 = g_target_ax_earth_cms2;
     g_diag.car_ff_applied_ay_cms2 = g_target_ay_earth_cms2;
-    g_diag.car_ff_gain_x = g_car_ff_gain_x;
-    g_diag.car_ff_gain_y = g_car_ff_gain_y;
+    g_diag.car_velocity_ff_gain_x = g_car_velocity_ff_gain_x;
+    g_diag.car_velocity_ff_gain_y = g_car_velocity_ff_gain_y;
+    g_diag.car_accel_ff_gain_x = g_car_accel_ff_gain_x;
+    g_diag.car_accel_ff_gain_y = g_car_accel_ff_gain_y;
     g_diag.desired_vx_cms = desired_vx;
     g_diag.desired_vy_cms = desired_vy;
     g_diag.target_accel_x_cms2 = g_target_ax_earth_cms2;
