@@ -178,7 +178,8 @@ class BatchRecognitionConfig:
     beacon_area_min_scale: float
     beacon_area_max_scale: float
     split_arrow_enabled: bool
-    split_arrow_min_area: int
+    split_arrow_primary_min_points: int
+    split_arrow_partner_min_points: int
     split_arrow_max_distance_cm: float
     split_arrow_angle_tolerance_deg: float
     split_arrow_max_fit_error_px: float
@@ -205,7 +206,9 @@ BEACON_AREA_DISABLED_RADIUS = 0.80
 BEACON_AREA_EDGE_MIN_SCALE = 0.25
 BEACON_AREA_EDGE_MAX_SCALE = 8.0
 SPLIT_ARROW_DEFAULT_ENABLED = True
-SPLIT_ARROW_MIN_AREA = 15
+SPLIT_ARROW_PRIMARY_MIN_POINTS = 15
+SPLIT_ARROW_PARTNER_MIN_POINTS = 10
+SPLIT_ARROW_MIN_DISTANCE_ARM_SCALE = 0.5
 SPLIT_ARROW_MAX_CENTROID_DISTANCE_CM = 30.0
 SPLIT_ARROW_ANGLE_TOLERANCE_DEG = 20.0
 SPLIT_ARROW_MAX_FIT_ERROR_PX = 4.0
@@ -510,8 +513,18 @@ class PictureViewerApp:
         self.split_arrow_enabled_var = tk.BooleanVar(
             value=bool(split_arrow_settings.get("enabled", SPLIT_ARROW_DEFAULT_ENABLED))
         )
-        self.split_arrow_min_area_var = tk.StringVar(
-            value=str(split_arrow_settings.get("min_area", SPLIT_ARROW_MIN_AREA))
+        self.split_arrow_primary_min_points_var = tk.StringVar(
+            value=str(split_arrow_settings.get(
+                "primary_min_contour_points",
+                split_arrow_settings.get(
+                    "min_area", SPLIT_ARROW_PRIMARY_MIN_POINTS
+                ),
+            ))
+        )
+        self.split_arrow_partner_min_points_var = tk.StringVar(
+            value=str(split_arrow_settings.get(
+                "partner_min_contour_points", SPLIT_ARROW_PARTNER_MIN_POINTS
+            ))
         )
         self.split_arrow_max_distance_var = tk.StringVar(
             value=str(split_arrow_settings.get(
@@ -1110,7 +1123,8 @@ class PictureViewerApp:
         except ValueError:
             split_settings = {
                 "enabled": SPLIT_ARROW_DEFAULT_ENABLED,
-                "min_area": SPLIT_ARROW_MIN_AREA,
+                "primary_min_contour_points": SPLIT_ARROW_PRIMARY_MIN_POINTS,
+                "partner_min_contour_points": SPLIT_ARROW_PARTNER_MIN_POINTS,
                 "max_centroid_distance_cm": SPLIT_ARROW_MAX_CENTROID_DISTANCE_CM,
                 "angle_tolerance_deg": SPLIT_ARROW_ANGLE_TOLERANCE_DEG,
                 "max_fit_error_px": SPLIT_ARROW_MAX_FIT_ERROR_PX,
@@ -1706,14 +1720,21 @@ class PictureViewerApp:
 
     def current_split_arrow_settings(self) -> dict[str, float | int | bool]:
         try:
-            min_area = int(float(self.split_arrow_min_area_var.get()))
+            primary_min_points = int(float(
+                self.split_arrow_primary_min_points_var.get()
+            ))
+            partner_min_points = int(float(
+                self.split_arrow_partner_min_points_var.get()
+            ))
             max_distance = float(self.split_arrow_max_distance_var.get())
             angle_tolerance = float(self.split_arrow_angle_tolerance_var.get())
             max_fit_error = float(self.split_arrow_max_fit_error_var.get())
         except (TypeError, ValueError, tk.TclError) as exc:
             raise ValueError("分段箭头参数必须是有效数字") from exc
         if (
-            min_area < 1
+            primary_min_points < 1
+            or partner_min_points < 1
+            or partner_min_points > primary_min_points
             or max_distance <= 0.0
             or not 0.0 < angle_tolerance <= 90.0
             or max_fit_error <= 0.0
@@ -1721,7 +1742,8 @@ class PictureViewerApp:
             raise ValueError("分段箭头参数范围无效")
         return {
             "enabled": bool(self.split_arrow_enabled_var.get()),
-            "min_area": min_area,
+            "primary_min_contour_points": primary_min_points,
+            "partner_min_contour_points": partner_min_points,
             "max_centroid_distance_cm": max_distance,
             "angle_tolerance_deg": angle_tolerance,
             "max_fit_error_px": max_fit_error,
@@ -1800,7 +1822,8 @@ class PictureViewerApp:
             command=self.contour_parameter_changed,
         ).grid(row=0, column=0, columnspan=4, sticky="w", padx=4, pady=2)
         split_fields = (
-            ("最小轮廓像素", self.split_arrow_min_area_var),
+            ("主段最少轮廓点", self.split_arrow_primary_min_points_var),
+            ("副段最少轮廓点", self.split_arrow_partner_min_points_var),
             ("质心最大距离(cm)", self.split_arrow_max_distance_var),
             ("双臂夹角容差(°)", self.split_arrow_angle_tolerance_var),
             ("理论双臂最大偏差(px)", self.split_arrow_max_fit_error_var),
@@ -1881,7 +1904,12 @@ class PictureViewerApp:
         self.beacon_area_min_scale_var.set(str(BEACON_AREA_MIN_SCALE_DEFAULT))
         self.beacon_area_max_scale_var.set(str(BEACON_AREA_MAX_SCALE_DEFAULT))
         self.split_arrow_enabled_var.set(SPLIT_ARROW_DEFAULT_ENABLED)
-        self.split_arrow_min_area_var.set(str(SPLIT_ARROW_MIN_AREA))
+        self.split_arrow_primary_min_points_var.set(
+            str(SPLIT_ARROW_PRIMARY_MIN_POINTS)
+        )
+        self.split_arrow_partner_min_points_var.set(
+            str(SPLIT_ARROW_PARTNER_MIN_POINTS)
+        )
         self.split_arrow_max_distance_var.set(str(SPLIT_ARROW_MAX_CENTROID_DISTANCE_CM))
         self.split_arrow_angle_tolerance_var.set(str(SPLIT_ARROW_ANGLE_TOLERANCE_DEG))
         self.split_arrow_max_fit_error_var.set(str(SPLIT_ARROW_MAX_FIT_ERROR_PX))

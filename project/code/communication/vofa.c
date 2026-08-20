@@ -2065,24 +2065,34 @@ void send_date_back(void)
 
         case 41:
         {
-            static uint32 last_sent_recognition_frame_seq = 0U;
-            VisionRuntimeDiag_t vision_diag = {0};
+            static uint32 last_sent_build_count = 0U;
+            DualCameraFusionSnapshot_t snapshot = {0};
+            DualCameraFusionDiag_t fusion_diag = {0};
 
-            VisionRuntime_GetDiag(&vision_diag);
-            if(vision_diag.recognition_frame_seq == last_sent_recognition_frame_seq)
+            DualCameraFusion_GetSnapshot(&snapshot);
+            DualCameraFusion_GetDiag(&fusion_diag);
+            if(fusion_diag.build_count == last_sent_build_count)
             {
                 break;
             }
-            last_sent_recognition_frame_seq = vision_diag.recognition_frame_seq;
-            /* FS!: I0=视觉帧序号，I1=该帧完整识别耗时(us)。 */
-            send_four_date((float)vision_diag.recognition_frame_seq,
-                           vision_diag.recognition_time_us,
-                           0.0f,
-                           0.0f,
-                           0.0f,
-                           0.0f,
-                           0.0f,
-                           0.0f);
+            last_sent_build_count = fusion_diag.build_count;
+            /* FS!: front/rear camera-board vision diagnostics. */
+            send_sixteen_date((float)fusion_diag.front_healthy,
+                              (float)fusion_diag.rear_healthy,
+                              (float)fusion_diag.front_beacon_count,
+                              (float)fusion_diag.rear_beacon_count,
+                              (float)fusion_diag.front_age_ms,
+                              (float)fusion_diag.rear_age_ms,
+                              (float)snapshot.front_frame_seq,
+                              (float)snapshot.rear_frame_seq,
+                              snapshot.front_car_x_cm,
+                              snapshot.front_car_y_cm,
+                              snapshot.rear_car_x_cm,
+                              snapshot.rear_car_y_cm,
+                              (float)snapshot.front_car_valid,
+                              (float)snapshot.rear_car_valid,
+                              (float)fusion_diag.pair_valid,
+                              (float)fusion_diag.output_count);
             break;
         }
 
