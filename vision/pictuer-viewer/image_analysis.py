@@ -26,6 +26,7 @@ CONTOUR_DIRECTIONS: tuple[tuple[int, int], ...] = (
     (-1, -1),
 )
 CONTOUR_MAX_STEPS = 65536
+ON_DEMAND_SEED_COMPONENT_LIMIT = 2
 
 
 @dataclass(frozen=True)
@@ -930,28 +931,39 @@ class OnDemandContourExtractor:
         components: list[ConnectedComponent] = []
         seed_hits = 0
         stopped_early = False
-        def process_seed(seed: tuple[float, float]) -> bool:
+        def process_seed(
+            seed: tuple[float, float],
+            component_limit: int = 1,
+        ) -> bool:
             nonlocal seed_hits
             if len(components) >= max(1, int(max_components)):
                 return False
-            boundary_seed = self._find_boundary_seed(seed, search_radius)
-            if boundary_seed is None:
-                return True
-            seed_hits += 1
-            if self._is_processed(*boundary_seed):
-                return True
-            points, directions, closed, overflow = self._trace(boundary_seed)
-            component = self._component_from_trace(
-                points, directions, closed, overflow, min_area
-            )
-            if component is not None:
-                components.append(component)
-            return True
+            initial_count = len(components)
+            boundary_found = False
+            while (
+                len(components) - initial_count < max(1, int(component_limit))
+                and len(components) < max(1, int(max_components))
+            ):
+                boundary_seed = self._find_boundary_seed(seed, search_radius)
+                if boundary_seed is None:
+                    break
+                boundary_found = True
+                if self._is_processed(*boundary_seed):
+                    continue
+                points, directions, closed, overflow = self._trace(boundary_seed)
+                component = self._component_from_trace(
+                    points, directions, closed, overflow, min_area
+                )
+                if component is not None:
+                    components.append(component)
+            if boundary_found:
+                seed_hits += 1
+            return len(components) < max(1, int(max_components))
 
         seeds = list(seed_points)
         if seeds:
             for seed in seeds:
-                if not process_seed(seed):
+                if not process_seed(seed, ON_DEMAND_SEED_COMPONENT_LIMIT):
                     stopped_early = True
                     break
         else:
