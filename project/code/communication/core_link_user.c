@@ -7,6 +7,7 @@
 #define CORE_LINK_USER_BEACON_TIMEOUT_MS    (200U)
 #define CORE_LINK_USER_BEACON_TRACK_GATE_MIN_CM (30.0f)
 #define CORE_LINK_USER_BEACON_TRACK_MAX_MISS_FRAMES (5U)
+#define CORE_LINK_USER_BEACON_CAR_EXCLUSION_RADIUS_CM (20.0f)
 #define CORE_LINK_USER_MOTION_STALE_MS      (80U)
 #define CORE_LINK_USER_MOTION_INVALID_MS    (130U)
 #define CORE_LINK_USER_PLAN_VEL_SLEW_ACCEL_CMS2 (200.0f)
@@ -65,6 +66,27 @@ static uint8 core_link_user_queue_next_index (uint8 index)
     }
 
     return index;
+}
+
+static uint8 core_link_user_beacon_overlaps_car(float beacon_x_cm,
+                                                 float beacon_y_cm,
+                                                 uint8 car_position_valid,
+                                                 float car_x_cm,
+                                                 float car_y_cm)
+{
+    float dx;
+    float dy;
+
+    if(!car_position_valid)
+    {
+        return 0U;
+    }
+
+    dx = beacon_x_cm - car_x_cm;
+    dy = beacon_y_cm - car_y_cm;
+    return (uint8)((dx * dx + dy * dy) <=
+                   (CORE_LINK_USER_BEACON_CAR_EXCLUSION_RADIUS_CM *
+                    CORE_LINK_USER_BEACON_CAR_EXCLUSION_RADIUS_CM));
 }
 
 static int16 core_link_user_read_i16_le(const uint8 *data)
@@ -543,6 +565,15 @@ static void core_link_user_build_beacon_observations(
 
                 if(!fusion_snapshot.target[i].valid ||
                    (fusion_snapshot.target[i].track_id == 0U)) continue;
+                if(core_link_user_beacon_overlaps_car(
+                       fusion_snapshot.target[i].x_cm,
+                       fusion_snapshot.target[i].y_cm,
+                       fusion_snapshot.car_valid,
+                       fusion_snapshot.car_x_cm,
+                       fusion_snapshot.car_y_cm))
+                {
+                    continue;
+                }
                 if(sigma_cm < CORE_LINK_BEACON_POSITION_SIGMA_MIN_CM)
                     sigma_cm = CORE_LINK_BEACON_POSITION_SIGMA_MIN_CM;
                 else if(sigma_cm > CORE_LINK_BEACON_POSITION_SIGMA_MAX_CM)
@@ -640,6 +671,14 @@ static void core_link_user_build_beacon_observations(
         uint8 sigma_cm;
 
         if(!slots[i].valid || (0U == slot_track_id[i]))
+        {
+            continue;
+        }
+        if(core_link_user_beacon_overlaps_car(slots[i].x_cm,
+                                              slots[i].y_cm,
+                                              car_visible,
+                                              follow_x_cm,
+                                              follow_y_cm))
         {
             continue;
         }
