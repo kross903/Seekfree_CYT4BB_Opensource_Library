@@ -72,6 +72,16 @@ typedef struct
     float vy_cmd_cms;
     float correction_vx_cms;
     float correction_vy_cms;
+    float shaped_correction_vx_cms;
+    float shaped_correction_vy_cms;
+    float correction_velocity_error_x_cms;
+    float correction_velocity_error_y_cms;
+    float correction_accel_target_x_cms2;
+    float correction_accel_target_y_cms2;
+    float shaped_correction_ax_cms2;
+    float shaped_correction_ay_cms2;
+    float correction_shaper_accel_max_cms2;
+    float correction_shaper_jerk_max_cms3;
     float car_ff_raw_vx_cms;
     float car_ff_raw_vy_cms;
     float car_ff_filtered_vx_cms;
@@ -131,6 +141,7 @@ typedef struct
     uint8 brake_diag_flags;
     uint8 sqrt_controller_active;
     uint8 frozen_hold_active;
+    uint8 correction_shaper_initialized;
 } PositionLoopDiag_t;
 
 void Position_Loop_Set_Enabled(uint8 enabled);

@@ -45,6 +45,19 @@ static uint8 flow_dt_pair_is_valid(float rx_dt_ms, float sensor_dt_ms)
     return (uint8)(difference_ms <= tolerance_ms);
 }
 
+static float flow_select_sample_dt_s(float rx_dt_ms, float sensor_dt_ms)
+{
+    if(isfinite(rx_dt_ms) && (rx_dt_ms > 0.0f))
+    {
+        return rx_dt_ms * 0.001f;
+    }
+    if(isfinite(sensor_dt_ms) && (sensor_dt_ms > 0.0f))
+    {
+        return sensor_dt_ms * 0.001f;
+    }
+    return FLOW_SENSOR_NOMINAL_DT_S;
+}
+
 static void optical_flow_process_sample(int16 flow_delta_x,
                                         int16 flow_delta_y,
                                         float flow_sample_dt_s,
@@ -65,7 +78,11 @@ static void optical_flow_process_sample(int16 flow_delta_x,
     float flow_height_cm = 0.0f;
     uint8 tof_source = PMW_FLOW_TOF_SRC_NONE;
 
-    if(tof_snapshot != NULL && tof_snapshot->valid)
+    /* 光流只依赖最终处理高度。即使ToF处于保持、重捕获或失效状态，
+     * 只要HeightManager仍提供有限的正高度，就继续使用该高度。 */
+    if((tof_snapshot != NULL) &&
+       isfinite(tof_snapshot->flow_height_cm) &&
+       (tof_snapshot->flow_height_cm > 0.0f))
     {
         flow_height_cm = tof_snapshot->flow_height_cm;
 
@@ -73,8 +90,7 @@ static void optical_flow_process_sample(int16 flow_delta_x,
         {
             tof_source = PMW_FLOW_TOF_SRC_LIVE;
         }
-        else if(tof_snapshot->state == (uint8)HEIGHT_TOF_STATE_HELD_REJECTED ||
-                tof_snapshot->state == (uint8)HEIGHT_TOF_STATE_REACQUIRING)
+        else
         {
             tof_source = PMW_FLOW_TOF_SRC_HOLD;
         }
@@ -161,11 +177,16 @@ void OpticalFlowFeed_Task(void)
             flow_cycles_to_ms(DWT->CYCCNT - frame.frame_start_cycle);
         uint8 sync_valid = (uint8)(frame.gyro_window_valid &&
                                    frame.yaw_window_valid);
+        uint8 dt_pair_valid = flow_dt_pair_is_valid(rx_dt_ms, sensor_dt_ms);
         uint8 baseline_only = (uint8)!g_upflow302_timing_initialized;
+        float flow_sample_dt_s = flow_select_sample_dt_s(rx_dt_ms,
+                                                         sensor_dt_ms);
 
-        if(sync_valid && !flow_dt_pair_is_valid(rx_dt_ms, sensor_dt_ms))
+        /* 时间差只保留诊断，不再拒绝帧；陀螺和Yaw窗口仍是硬门控。 */
+        if(!baseline_only && (!sync_valid || !dt_pair_valid) &&
+           (g_upflow302_sync_error_count < 0xFFFFU))
         {
-            sync_valid = 0U;
+            g_upflow302_sync_error_count++;
         }
         g_upflow302_timing_initialized = 1U;
 
@@ -174,10 +195,6 @@ void OpticalFlowFeed_Task(void)
 
         if(!sync_valid)
         {
-            if(!baseline_only && g_upflow302_sync_error_count < 0xFFFFU)
-            {
-                g_upflow302_sync_error_count++;
-            }
             PMW_Flow_SetSyncDiagnostics(frame.frame_seq,
                                         rx_dt_ms,
                                         sensor_dt_ms,
@@ -191,7 +208,7 @@ void OpticalFlowFeed_Task(void)
 
         optical_flow_process_sample(frame.flow_x,
                                     frame.flow_y,
-                                    rx_dt_ms * 0.001f,
+                                    flow_sample_dt_s,
                                     frame.gyro_x_delta_rad,
                                     frame.gyro_y_delta_rad,
                                     frame.gyro_z_delta_rad,

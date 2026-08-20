@@ -42,8 +42,6 @@
 #define PMW_FLOW_SENSOR_OFFSET_X_CM          FLOW_SENSOR_OFFSET_X_CM
 #define PMW_FLOW_SENSOR_OFFSET_Y_CM          FLOW_SENSOR_OFFSET_Y_CM
 #define PMW_FLOW_SENSOR_OFFSET_Z_CM          FLOW_SENSOR_OFFSET_Z_CM
-#define PMW_FLOW_MIN_DT_S                   (FLOW_SENSOR_NOMINAL_DT_S * 0.5f)
-#define PMW_FLOW_MAX_DT_S                   (FLOW_SENSOR_NOMINAL_DT_S * 2.0f)
 #define PMW_FLOW_MAX_ABS_DELTA_COUNT        (5000)
 #define PMW_FLOW_TWO_PI                     (6.28318530717958647692f)
 
@@ -1691,8 +1689,10 @@ void PMW_Flow_UpdateSample(int16 flow_delta_x,
         new_state.flow_y_rad = (float)flow_input_y * PMW_FLOW_RAD_PER_COUNT_Y * PMW_FLOW_SENSOR_Y_SIGN;
     }
 
-    if(!(dt_s >= PMW_FLOW_MIN_DT_S) ||
-       !(dt_s <= PMW_FLOW_MAX_DT_S) ||
+    /* 暂停使用采样周期范围门控；周期异常由上游回退到可用时间或标称周期。
+     * 此处仅保留除法所需的有限正数检查。 */
+    if(!pmw_flow_is_valid_number(dt_s) ||
+       !(dt_s > 0.0f) ||
        !pmw_flow_is_valid_number(tof_height_cm) ||
        !pmw_flow_is_valid_number(roll_deg) ||
        !pmw_flow_is_valid_number(pitch_deg) ||
@@ -1901,7 +1901,9 @@ void PMW_Flow_UpdateSample(int16 flow_delta_x,
                 cosine * new_state.velocity_y_cms;
         }
         new_state.valid = 1U;
-        flow_observation_valid = (uint8)((tof_source == PMW_FLOW_TOF_SOURCE_LIVE) ? 1U : 0U);
+        /* 只要存在最终处理高度，LIVE或HOLD都允许光流修正融合速度。 */
+        flow_observation_valid =
+            (uint8)((tof_source != PMW_FLOW_TOF_SOURCE_NONE) ? 1U : 0U);
     }
 
     new_state.speed_cms = sqrtf(new_state.velocity_x_cms * new_state.velocity_x_cms +

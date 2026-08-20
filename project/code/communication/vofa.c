@@ -1410,7 +1410,10 @@ void USART_PID_Adjust(void)
                 case 'G':
                 case 'g': send_back_flag = 16; break;
                 case 'H':
-                case 'h': send_back_flag = 46; break;
+                case 'h':
+                    /* FH!/FH1!：小车运动；FH2!：位置纠偏速度整形旁路。 */
+                    send_back_flag = (fifo_get_data[2] == '2') ? 47 : 46;
+                    break;
                 case 'I':
                 case 'i': send_back_flag = 18; break;
                 case 'J':
@@ -2267,6 +2270,47 @@ void send_date_back(void)
                               (float)car_motion.arrival_interval_ms,
                               (float)car_motion.sequence,
                               (float)car_motion.link_state);
+            break;
+        }
+
+        case 47:
+        {
+            PositionLoopDiag_t pos_diag = {0};
+            float raw_speed;
+            float shaped_speed;
+            float shaped_acceleration;
+
+            Position_Loop_Get_Diag(&pos_diag);
+            raw_speed = sqrtf(pos_diag.correction_vx_cms *
+                              pos_diag.correction_vx_cms +
+                              pos_diag.correction_vy_cms *
+                              pos_diag.correction_vy_cms);
+            shaped_speed = sqrtf(pos_diag.shaped_correction_vx_cms *
+                                 pos_diag.shaped_correction_vx_cms +
+                                 pos_diag.shaped_correction_vy_cms *
+                                 pos_diag.shaped_correction_vy_cms);
+            shaped_acceleration = sqrtf(
+                pos_diag.shaped_correction_ax_cms2 *
+                pos_diag.shaped_correction_ax_cms2 +
+                pos_diag.shaped_correction_ay_cms2 *
+                pos_diag.shaped_correction_ay_cms2);
+
+            send_sixteen_date(pos_diag.correction_vx_cms,
+                              pos_diag.shaped_correction_vx_cms,
+                              pos_diag.correction_velocity_error_x_cms,
+                              pos_diag.correction_accel_target_x_cms2,
+                              pos_diag.shaped_correction_ax_cms2,
+                              pos_diag.correction_vy_cms,
+                              pos_diag.shaped_correction_vy_cms,
+                              pos_diag.correction_velocity_error_y_cms,
+                              pos_diag.correction_accel_target_y_cms2,
+                              pos_diag.shaped_correction_ay_cms2,
+                              raw_speed,
+                              shaped_speed,
+                              shaped_acceleration,
+                              pos_diag.correction_shaper_accel_max_cms2,
+                              pos_diag.correction_shaper_jerk_max_cms3,
+                              (float)pos_diag.correction_shaper_initialized);
             break;
         }
 

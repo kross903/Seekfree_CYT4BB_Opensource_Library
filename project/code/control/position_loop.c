@@ -99,6 +99,12 @@ static uint16 g_vision_observation_age_ms = 0U;
 static uint8 g_vision_observation_accepted = 0U;
 static uint8 g_vision_observation_source = POSITION_LOOP_VISION_SOURCE_FRONT;
 static volatile uint8 g_frozen_hold_active = 0U;
+/* 仅用于VOFA验证的纠偏速度整形状态，暂不参与控制目标或加速度前馈。 */
+static float g_shaped_correction_vx_cms = 0.0f;
+static float g_shaped_correction_vy_cms = 0.0f;
+static float g_shaped_correction_ax_cms2 = 0.0f;
+static float g_shaped_correction_ay_cms2 = 0.0f;
+static uint8 g_correction_shaper_initialized = 0U;
 
 static float position_loop_limit_float(float value, float minimum, float maximum)
 {
@@ -126,6 +132,151 @@ static uint8 position_loop_limit_vector(float *x, float *y, float limit)
     *x *= scale;
     *y *= scale;
     return 1U;
+}
+
+static float position_loop_sqrt_controller(float error,
+                                           float proportional_gain,
+                                           float second_order_limit,
+                                           float dt_s)
+{
+    float correction;
+    float linear_error;
+    float maximum_correction;
+
+    if(!isfinite(error) || !isfinite(proportional_gain) ||
+       !isfinite(second_order_limit) || !isfinite(dt_s) ||
+       !(proportional_gain > 0.0f) || !(second_order_limit > 0.0f) ||
+       !(dt_s > 0.0f))
+    {
+        return 0.0f;
+    }
+
+    linear_error = second_order_limit /
+                   (proportional_gain * proportional_gain);
+    if(error > linear_error)
+    {
+        correction = sqrtf(2.0f * second_order_limit *
+                           (error - 0.5f * linear_error));
+    }
+    else if(error < -linear_error)
+    {
+        correction = -sqrtf(2.0f * second_order_limit *
+                            (-error - 0.5f * linear_error));
+    }
+    else
+    {
+        correction = error * proportional_gain;
+    }
+
+    maximum_correction = fabsf(error) / dt_s;
+    return position_loop_limit_float(correction,
+                                     -maximum_correction,
+                                     maximum_correction);
+}
+
+static void position_loop_reset_correction_shaper(void)
+{
+    g_shaped_correction_vx_cms = 0.0f;
+    g_shaped_correction_vy_cms = 0.0f;
+    g_shaped_correction_ax_cms2 = 0.0f;
+    g_shaped_correction_ay_cms2 = 0.0f;
+    g_correction_shaper_initialized = 0U;
+    g_diag.shaped_correction_vx_cms = 0.0f;
+    g_diag.shaped_correction_vy_cms = 0.0f;
+    g_diag.correction_velocity_error_x_cms = 0.0f;
+    g_diag.correction_velocity_error_y_cms = 0.0f;
+    g_diag.correction_accel_target_x_cms2 = 0.0f;
+    g_diag.correction_accel_target_y_cms2 = 0.0f;
+    g_diag.shaped_correction_ax_cms2 = 0.0f;
+    g_diag.shaped_correction_ay_cms2 = 0.0f;
+    g_diag.correction_shaper_accel_max_cms2 = 0.0f;
+    g_diag.correction_shaper_jerk_max_cms3 = 0.0f;
+    g_diag.correction_shaper_initialized = 0U;
+}
+
+static void position_loop_update_correction_shaper(float correction_vx_cms,
+                                                   float correction_vy_cms,
+                                                   float acceleration_max_cms2,
+                                                   float jerk_max_cms3,
+                                                   float dt_s)
+{
+    float velocity_error_x;
+    float velocity_error_y;
+    float velocity_error_length;
+    float acceleration_target_x = 0.0f;
+    float acceleration_target_y = 0.0f;
+    float acceleration_target_length;
+    float acceleration_gain;
+    float acceleration_delta_x;
+    float acceleration_delta_y;
+    float previous_ax;
+    float previous_ay;
+
+    if(!isfinite(correction_vx_cms) || !isfinite(correction_vy_cms) ||
+       !isfinite(acceleration_max_cms2) || !isfinite(jerk_max_cms3) ||
+       !isfinite(dt_s) || !(acceleration_max_cms2 > 0.0f) ||
+       !(jerk_max_cms3 > 0.0f) || !(dt_s > 0.0f))
+    {
+        position_loop_reset_correction_shaper();
+        return;
+    }
+
+    if(!g_correction_shaper_initialized)
+    {
+        g_shaped_correction_vx_cms = 0.0f;
+        g_shaped_correction_vy_cms = 0.0f;
+        g_shaped_correction_ax_cms2 = 0.0f;
+        g_shaped_correction_ay_cms2 = 0.0f;
+        g_correction_shaper_initialized = 1U;
+    }
+
+    velocity_error_x = correction_vx_cms - g_shaped_correction_vx_cms;
+    velocity_error_y = correction_vy_cms - g_shaped_correction_vy_cms;
+    velocity_error_length = sqrtf(velocity_error_x * velocity_error_x +
+                                  velocity_error_y * velocity_error_y);
+    acceleration_gain = jerk_max_cms3 / acceleration_max_cms2;
+    if(velocity_error_length > POSITION_LOOP_EPSILON)
+    {
+        acceleration_target_length = position_loop_sqrt_controller(
+            velocity_error_length, acceleration_gain, jerk_max_cms3, dt_s);
+        acceleration_target_length = position_loop_limit_float(
+            acceleration_target_length, 0.0f, acceleration_max_cms2);
+        acceleration_target_x = velocity_error_x *
+                                (acceleration_target_length /
+                                 velocity_error_length);
+        acceleration_target_y = velocity_error_y *
+                                (acceleration_target_length /
+                                 velocity_error_length);
+    }
+
+    acceleration_delta_x = acceleration_target_x -
+                           g_shaped_correction_ax_cms2;
+    acceleration_delta_y = acceleration_target_y -
+                           g_shaped_correction_ay_cms2;
+    (void)position_loop_limit_vector(&acceleration_delta_x,
+                                     &acceleration_delta_y,
+                                     jerk_max_cms3 * dt_s);
+
+    previous_ax = g_shaped_correction_ax_cms2;
+    previous_ay = g_shaped_correction_ay_cms2;
+    g_shaped_correction_ax_cms2 += acceleration_delta_x;
+    g_shaped_correction_ay_cms2 += acceleration_delta_y;
+    g_shaped_correction_vx_cms +=
+        0.5f * (previous_ax + g_shaped_correction_ax_cms2) * dt_s;
+    g_shaped_correction_vy_cms +=
+        0.5f * (previous_ay + g_shaped_correction_ay_cms2) * dt_s;
+
+    g_diag.shaped_correction_vx_cms = g_shaped_correction_vx_cms;
+    g_diag.shaped_correction_vy_cms = g_shaped_correction_vy_cms;
+    g_diag.correction_velocity_error_x_cms = velocity_error_x;
+    g_diag.correction_velocity_error_y_cms = velocity_error_y;
+    g_diag.correction_accel_target_x_cms2 = acceleration_target_x;
+    g_diag.correction_accel_target_y_cms2 = acceleration_target_y;
+    g_diag.shaped_correction_ax_cms2 = g_shaped_correction_ax_cms2;
+    g_diag.shaped_correction_ay_cms2 = g_shaped_correction_ay_cms2;
+    g_diag.correction_shaper_accel_max_cms2 = acceleration_max_cms2;
+    g_diag.correction_shaper_jerk_max_cms3 = jerk_max_cms3;
+    g_diag.correction_shaper_initialized = g_correction_shaper_initialized;
 }
 
 static void position_loop_body_to_earth(float body_x,
@@ -288,6 +439,7 @@ void Position_Loop_Reset_Trajectory(uint8 reason)
     g_target_initialized = 0U;
     g_trajectory_reset_reason = reason;
     position_loop_reset_brake_supervisor();
+    position_loop_reset_correction_shaper();
     g_diag.vx_cmd_cms = 0.0f;
     g_diag.vy_cmd_cms = 0.0f;
     g_diag.target_accel_x_cms2 = 0.0f;
@@ -935,6 +1087,7 @@ void Position_Loop_Update_Velocity_Target(uint8 velocity_ready,
         *target_vx_earth_cms = g_target_vx_earth_cms;
         *target_vy_earth_cms = g_target_vy_earth_cms;
         position_loop_reset_brake_supervisor();
+        position_loop_reset_correction_shaper();
         g_target_ax_earth_cms2 = 0.0f;
         g_target_ay_earth_cms2 = 0.0f;
         g_diag.velocity_ready = velocity_ready;
@@ -1195,6 +1348,13 @@ void Position_Loop_Update_Velocity_Target(uint8 velocity_ready,
     {
         flags |= POSITION_LOOP_STATUS_TARGET_LIMITED;
     }
+
+    /* 诊断旁路：生成纠偏速度/加速度轨迹，但不接入现有控制目标。 */
+    position_loop_update_correction_shaper(
+        correction_vx, correction_vy,
+        config.correction_accel_max_cms2,
+        brake_config.effective_jerk_cms3,
+        dt_s);
 
     g_target_vx_earth_cms = desired_vx;
     g_target_vy_earth_cms = desired_vy;
