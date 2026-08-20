@@ -3527,6 +3527,7 @@ class PictureViewerApp:
             else None
         )
         arrow_count = 0
+        strong_arrow_found = False
         beacon_count = 0
         yaw_assisted_count = 0
         split_candidates: list[ConnectedComponent] = []
@@ -3578,7 +3579,7 @@ class PictureViewerApp:
                     beacon_labels.add(component.label)
             if config.mode == BATCH_MODE_BEACON:
                 continue
-            if arrow_count == 0 and component.label not in beacon_labels:
+            if not strong_arrow_found and component.label not in beacon_labels:
                 arrow_passed, _failures, assisted, _error, _source = (
                     self.evaluate_contour_arrow_with_yaw(
                         component,
@@ -3590,17 +3591,24 @@ class PictureViewerApp:
                     )
                 )
                 if arrow_passed:
-                    arrow_count = 1
-                    yaw_assisted_count += int(assisted)
+                    if assisted:
+                        if arrow_count == 0:
+                            arrow_count = 1
+                            yaw_assisted_count = 1
+                    else:
+                        arrow_count = 1
+                        strong_arrow_found = True
+                        yaw_assisted_count = 0
             if (
                 len(component.contour_points)
                 >= config.split_arrow_partner_min_points
             ):
                 split_candidates.append(component)
 
+        split_arrow_found = False
         if (
             config.split_arrow_enabled
-            and arrow_count == 0
+            and not strong_arrow_found
             and config.mode != BATCH_MODE_BEACON
             and yaw_context is not None
         ):
@@ -3620,12 +3628,13 @@ class PictureViewerApp:
                         config.split_arrow_max_fit_error_px,
                     ) is not None:
                         arrow_count = 1
-                        yaw_assisted_count += 1
+                        yaw_assisted_count = 1
                         beacon_labels.discard(first.label)
                         beacon_labels.discard(second.label)
                         beacon_count = len(beacon_labels)
+                        split_arrow_found = True
                         break
-                if arrow_count:
+                if split_arrow_found:
                     break
         return BatchRecognitionRow(
             path=path,
@@ -4033,6 +4042,7 @@ class PictureViewerApp:
 
         results: dict[int, BeaconRecognitionResult] = {}
         arrow_found = False
+        strong_arrow_found = False
         beacon_found_count = 0
         beacon_accept_limit = self.current_beacon_accept_limit()
         binary_threshold = self.safe_int(self.threshold_var, 50, 0, 255)
@@ -4102,6 +4112,7 @@ class PictureViewerApp:
                 if arrow_passed:
                     accepted_kind = TARGET_ARROW
                     arrow_found = True
+                    strong_arrow_found = strong_arrow_found or not yaw_assisted
                 else:
                     failures.extend(arrow_failures)
             elif target_only == TARGET_BEACON:
@@ -4192,7 +4203,7 @@ class PictureViewerApp:
                         )
 
                 if accepted_kind is None:
-                    if arrow_found:
+                    if strong_arrow_found:
                         attempts.append("箭头跳过（本帧已有箭头）")
                         failures.append("箭头：本帧已有箭头")
                     else:
@@ -4215,8 +4226,35 @@ class PictureViewerApp:
                             else f"箭头{'通过' if arrow_passed else '失败'}"
                         )
                         if arrow_passed:
-                            accepted_kind = TARGET_ARROW
-                            arrow_found = True
+                            if yaw_assisted and arrow_found:
+                                attempts[-1] = "箭头Yaw辅助候选跳过（已有Yaw辅助箭头）"
+                                failures.append("箭头：本帧已有Yaw辅助箭头")
+                            else:
+                                if not yaw_assisted and arrow_found:
+                                    for label, previous in tuple(results.items()):
+                                        if (
+                                            previous.passed
+                                            and previous.target_kind == TARGET_ARROW
+                                            and previous.yaw_assisted
+                                        ):
+                                            results[label] = replace(
+                                                previous,
+                                                passed=False,
+                                                target_kind=None,
+                                                attempts=previous.attempts + (
+                                                    "Yaw辅助箭头被完整几何箭头替代",
+                                                ),
+                                                failures=(
+                                                    "箭头：被更可靠的完整几何箭头替代",
+                                                ),
+                                                projected_outline=(),
+                                                yaw_assisted=False,
+                                                yaw_direction_error_deg=None,
+                                                yaw_direction_source="",
+                                            )
+                                accepted_kind = TARGET_ARROW
+                                arrow_found = True
+                                strong_arrow_found = not yaw_assisted
                         else:
                             failures.extend(
                                 f"箭头：{failure}" for failure in arrow_failures
@@ -4257,7 +4295,11 @@ class PictureViewerApp:
             )
 
         split_result: tuple[int, int, dict[str, object]] | None = None
-        if split_settings["enabled"] and not arrow_found and target_only != TARGET_BEACON:
+        if (
+            split_settings["enabled"]
+            and not strong_arrow_found
+            and target_only != TARGET_BEACON
+        ):
             split_candidates: list[tuple[ConnectedComponent, ContourMetrics]] = []
             for component in self.components:
                 recognition = results.get(component.label)
@@ -4302,6 +4344,25 @@ class PictureViewerApp:
                 else second_label
             )
             partner_label = second_label if primary_label == first_label else first_label
+            for label, recognition in tuple(results.items()):
+                if (
+                    recognition.passed
+                    and recognition.target_kind == TARGET_ARROW
+                    and recognition.yaw_assisted
+                ):
+                    results[label] = replace(
+                        recognition,
+                        passed=False,
+                        target_kind=None,
+                        attempts=recognition.attempts + (
+                            "Yaw辅助箭头被分段箭头组合替代",
+                        ),
+                        failures=("箭头：被更可靠的分段箭头组合替代",),
+                        projected_outline=(),
+                        yaw_assisted=False,
+                        yaw_direction_error_deg=None,
+                        yaw_direction_source="",
+                    )
             primary_result = results[primary_label]
             partner_result = results[partner_label]
             outline = match["outline"] or ()
@@ -4323,6 +4384,9 @@ class PictureViewerApp:
                 projected_outline=tuple(outline),
                 split_arrow_member=True,
                 split_arrow_primary=True,
+                yaw_assisted=True,
+                yaw_direction_error_deg=float(match["yaw_error_deg"]),
+                yaw_direction_source="分段箭头组合",
                 **shared,
             )
             results[partner_label] = replace(
@@ -4337,6 +4401,9 @@ class PictureViewerApp:
                 projected_outline=(),
                 split_arrow_member=True,
                 split_arrow_primary=False,
+                yaw_assisted=False,
+                yaw_direction_error_deg=None,
+                yaw_direction_source="",
                 split_arrow_partner_labels=(primary_label,),
                 split_arrow_distance_cm=float(match["distance_cm"]),
                 split_arrow_angle_deg=float(match["angle_deg"]),

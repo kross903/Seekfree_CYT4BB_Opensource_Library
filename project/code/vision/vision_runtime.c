@@ -89,9 +89,9 @@ static VisionContourThresholds_t s_arrow_thresholds = {
 static VisionContourThresholds_t s_beacon_thresholds = {
     BEACON_MASK,
     7U,
-    90U,  /* 0.35 */
+    179U, /* 0.70 */
     256U,
-    166U, /* 0.65 */
+    218U, /* 0.85 */
     256U,
     0U,
     180U,
@@ -669,8 +669,13 @@ static uint8 vision_try_split_arrow(VisionContourFrameResult_t *result,
     uint8 first;
     uint8 found = 0U;
 
-    if(result == NULL || output == NULL || primary_index == NULL ||
-       result->arrow_count != 0U) return 0U;
+    if(result == NULL || output == NULL || primary_index == NULL) return 0U;
+    for(first = 0U; first < result->candidate_count; ++first)
+    {
+        if(result->candidate[first].target == VISION_CONTOUR_TARGET_ARROW &&
+           !result->candidate[first].yaw_assisted)
+            return 0U;
+    }
     memset(axes, 0, sizeof(axes));
     for(first = 0U; first < result->candidate_count; ++first)
         (void)vision_split_arrow_axis(&result->candidate[first], &axes[first]);
@@ -727,11 +732,22 @@ static uint8 vision_try_split_arrow(VisionContourFrameResult_t *result,
     }
     if(found)
     {
-        uint8 primary =
+        uint8 primary;
+        uint8 partner;
+        for(first = 0U; first < result->candidate_count; ++first)
+        {
+            if(result->candidate[first].target == VISION_CONTOUR_TARGET_ARROW &&
+               result->candidate[first].yaw_assisted)
+            {
+                result->candidate[first].target = VISION_CONTOUR_TARGET_NONE;
+                result->candidate[first].yaw_assisted = 0U;
+            }
+        }
+        primary =
             (result->candidate[best_first].contour.point_count >=
              result->candidate[best_second].contour.point_count) ?
              best_first : best_second;
-        uint8 partner = (primary == best_first) ? best_second : best_first;
+        partner = (primary == best_first) ? best_second : best_first;
         if(result->candidate[primary].target == VISION_CONTOUR_TARGET_BEACON &&
            result->beacon_count != 0U) --result->beacon_count;
         if(result->candidate[partner].target == VISION_CONTOUR_TARGET_BEACON &&
