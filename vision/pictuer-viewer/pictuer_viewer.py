@@ -2186,14 +2186,15 @@ class PictureViewerApp:
             point = (component.centroid_x, component.centroid_y)
             if point not in ordered:
                 ordered.append(point)
+        for point in self._on_demand_seed_points:
+            if point not in ordered:
+                ordered.append(point)
         return ordered[: max(1, self.current_beacon_accept_limit() + 1)]
 
     def run_on_demand_analysis(self) -> bool:
         if self.original is None:
             return False
         seeds = self._on_demand_prediction_seeds()
-        if not seeds:
-            return False
         threshold = self.safe_int(self.threshold_var, 50, 0, 255)
         min_area = self.safe_int(self.min_area_var, 6, 1, 90240)
         started = perf_counter()
@@ -2211,11 +2212,8 @@ class PictureViewerApp:
         self.on_demand_elapsed_ms = (perf_counter() - started) * 1000.0
         self.on_demand_sampled_pixels = result.sampled_pixels
         self.on_demand_seed_hits = result.seed_hits
-        expected = min(
-            len(seeds),
-            max(1, self.current_beacon_accept_limit() + 1),
-        )
-        if not result.components or result.seed_hits < expected:
+        expected = min(len(seeds), max(1, self.current_beacon_accept_limit() + 1))
+        if not result.components or (expected > 0 and result.seed_hits < expected):
             return False
         self.undistorted = result.gray
         self.binary = result.binary
@@ -2240,11 +2238,24 @@ class PictureViewerApp:
 
     def run_analysis(self) -> None:
         self._threshold_job = None
-        if (
-            self.extraction_mode_var.get() == EXTRACTION_MODE_ON_DEMAND
-            and self.original is not None
-        ):
+        if self.extraction_mode_var.get() == EXTRACTION_MODE_ON_DEMAND:
+            if self.original is None:
+                return
             self.undistorted = self.apply_current_undistortion(self.original)
+            self.binary = None
+            self.components = []
+            self.threshold_elapsed_ms = 0.0
+            self.candidate_elapsed_ms = 0.0
+            self.selected_component = None
+            self.invalidate_beacon_recognition()
+            self.update_component_tree()
+            self.redraw_canvas()
+            file_text = f"{self.current_path.name} | " if self.current_path else ""
+            self.status_var.set(
+                f"{file_text}{self.undistort_mode_var.get()} "
+                f"{self.undistort_elapsed_ms:.1f} ms | 按需轮廓模式：等待种子"
+            )
+            return
         if self.undistorted is None:
             return
         threshold = self.safe_int(self.threshold_var, 50, 0, 255)
@@ -3978,11 +3989,11 @@ class PictureViewerApp:
         on_demand = self.extraction_mode_var.get() == EXTRACTION_MODE_ON_DEMAND
         if on_demand:
             if not self.run_on_demand_analysis():
-                if self.original is None:
-                    messagebox.showinfo("按需轮廓识别", "当前没有可用的原始图像。")
-                    return
-                self.undistorted = self.apply_current_undistortion(self.original)
-                self.run_analysis()
+                self.invalidate_beacon_recognition()
+                self.update_component_tree()
+                self.view_var.set("连通域候选")
+                self.status_var.set("按需轮廓识别完成：未找到有效候选")
+                return
         elif self.undistorted is None or self.binary is None:
             messagebox.showinfo("轮廓识别", "请先加载一张图像。")
             return

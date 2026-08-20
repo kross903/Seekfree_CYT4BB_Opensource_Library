@@ -187,6 +187,48 @@ class FisheyeUndistorter:
             and self.map_y_q8[index] != INVALID_Q8
         )
 
+    def source_to_rectified(self, source_x: float, source_y: float) -> tuple[float, float] | None:
+        """Map one raw camera pixel to the firmware's full rectified canvas."""
+        c = self.calibration
+        if not (0.0 <= source_x <= c.image_width - 1.0 and
+                0.0 <= source_y <= c.image_height - 1.0):
+            return None
+        mx = (source_x - c.cx) / c.fx
+        my = (source_y - c.cy) / c.fy
+        theta_d = math.hypot(mx, my)
+        if theta_d < 1e-12:
+            model_x, model_y = c.cx, c.cy
+        else:
+            theta = theta_d
+            for _ in range(8):
+                theta2 = theta * theta
+                theta4 = theta2 * theta2
+                theta6 = theta4 * theta2
+                theta8 = theta4 * theta4
+                distortion = theta * (
+                    1.0 + c.k1 * theta2 + c.k2 * theta4 +
+                    c.k3 * theta6 + c.k4 * theta8
+                ) - theta_d
+                derivative = (
+                    1.0 + 3.0 * c.k1 * theta2 + 5.0 * c.k2 * theta4 +
+                    7.0 * c.k3 * theta6 + 9.0 * c.k4 * theta8
+                )
+                if abs(derivative) < 1e-12:
+                    break
+                theta = max(0.0, theta - distortion / derivative)
+            tangent = math.tan(theta)
+            model_x = c.cx + c.fx * (mx / theta_d) * tangent
+            model_y = c.cy + c.fy * (my / theta_d) * tangent
+        # The firmware first returns a half-resolution rectified coordinate
+        # and then maps it to the 2x contour canvas.  Express that result
+        # directly on the full-resolution canvas here.
+        rectified_x = (model_x - c.cx) + 0.5 * (c.output_width - 1.0)
+        rectified_y = (model_y - c.cy) + 0.5 * (c.output_height - 1.0)
+        if not (0.0 <= rectified_x <= c.output_width - 1.0 and
+                0.0 <= rectified_y <= c.output_height - 1.0):
+            return None
+        return rectified_x, rectified_y
+
     def sample_bytes(
         self,
         source: bytes,
@@ -450,15 +492,10 @@ def _trace_moore_contour(
         if not is_foreground(*candidate_backtrack):
             backtrack = candidate_backtrack
             break
-    initial_backtrack = backtrack
     points = [start]
     directions: list[int] = []
-    first_edge: tuple[tuple[int, int], tuple[int, int]] | None = None
-    visited_edges: set[tuple[tuple[int, int], tuple[int, int]]] = set()
 
     for _ in range(max_steps):
-        if points != [start] and current == start and backtrack == initial_backtrack:
-            return points, directions, True, False
         back_offset = (backtrack[0] - current[0], backtrack[1] - current[1])
         search_start = direction_by_offset.get(back_offset, 6)
         next_point: tuple[int, int] | None = None
@@ -474,18 +511,7 @@ def _trace_moore_contour(
         if next_point is None:
             return points, directions, len(points) == 1, False
         if next_point == start and len(points) > 1:
-            directions.append(next_direction)
-            points.append(next_point)
             return points, directions, True, False
-
-        edge = (current, next_point)
-        if first_edge is None:
-            first_edge = edge
-        elif edge == first_edge:
-            return points, directions, True, False
-        elif edge in visited_edges:
-            return points, directions, False, False
-        visited_edges.add(edge)
         directions.append(next_direction)
 
         previous_direction = (next_direction - 1) % 8
@@ -758,10 +784,13 @@ class OnDemandContourExtractor:
                 seen.add((x, y))
                 if self._is_processed(x, y) or not self._is_foreground(x, y):
                     continue
-                boundary_x = x
-                while boundary_x > 0 and self._is_foreground(boundary_x - 1, y):
-                    boundary_x -= 1
-                return boundary_x, y
+                current_y = y
+                while True:
+                    next_y = current_y + 1
+                    if (next_y >= self.height or
+                            not self._is_foreground(x, next_y)):
+                        return x, current_y
+                    current_y = next_y
         return None
 
     def _trace(self, start: tuple[int, int]) -> tuple[list[tuple[int, int]], list[int], bool, bool]:
@@ -775,15 +804,10 @@ class OnDemandContourExtractor:
             if not self._is_foreground(*candidate_backtrack):
                 backtrack = candidate_backtrack
                 break
-        initial_backtrack = backtrack
         points = [start]
         directions: list[int] = []
-        first_edge: tuple[tuple[int, int], tuple[int, int]] | None = None
-        visited_edges: set[tuple[tuple[int, int], tuple[int, int]]] = set()
 
         for _ in range(self.max_trace_steps):
-            if points != [start] and current == start and backtrack == initial_backtrack:
-                return points, directions, True, False
             back_offset = (
                 backtrack[0] - current[0],
                 backtrack[1] - current[1],
@@ -802,17 +826,7 @@ class OnDemandContourExtractor:
             if next_point is None:
                 return points, directions, len(points) == 1, False
             if next_point == start and len(points) > 1:
-                directions.append(next_direction)
-                points.append(next_point)
                 return points, directions, True, False
-            edge = (current, next_point)
-            if first_edge is None:
-                first_edge = edge
-            elif edge == first_edge:
-                return points, directions, True, False
-            elif edge in visited_edges:
-                return points, directions, False, False
-            visited_edges.add(edge)
             directions.append(next_direction)
             previous_direction = (next_direction - 1) % 8
             previous_dx, previous_dy = CONTOUR_DIRECTIONS[previous_direction]
@@ -916,26 +930,67 @@ class OnDemandContourExtractor:
         components: list[ConnectedComponent] = []
         seed_hits = 0
         stopped_early = False
-        for seed in seed_points:
+        def process_seed(seed: tuple[float, float]) -> bool:
+            nonlocal seed_hits
             if len(components) >= max(1, int(max_components)):
-                stopped_early = True
-                break
+                return False
             boundary_seed = self._find_boundary_seed(seed, search_radius)
             if boundary_seed is None:
-                continue
+                return True
             seed_hits += 1
             if self._is_processed(*boundary_seed):
-                continue
+                return True
             points, directions, closed, overflow = self._trace(boundary_seed)
             component = self._component_from_trace(
-                points,
-                directions,
-                closed,
-                overflow,
-                min_area,
+                points, directions, closed, overflow, min_area
             )
             if component is not None:
                 components.append(component)
+            return True
+
+        seeds = list(seed_points)
+        if seeds:
+            for seed in seeds:
+                if not process_seed(seed):
+                    stopped_early = True
+                    break
+        else:
+            raw_width = self.undistorter.calibration.image_width
+            raw_height = self.undistorter.calibration.image_height
+            raw_cx = raw_width // 2
+            raw_cy = raw_height // 2
+            max_radius = max(raw_cx, raw_width - 1 - raw_cx,
+                             raw_cy, raw_height - 1 - raw_cy)
+            for radius in range(max_radius + 1):
+                if len(components) >= max(1, int(max_components)):
+                    stopped_early = True
+                    break
+                left = max(0, raw_cx - radius)
+                right = min(raw_width - 1, raw_cx + radius)
+                top = max(0, raw_cy - radius)
+                bottom = min(raw_height - 1, raw_cy + radius)
+                ring: list[tuple[int, int]] = []
+                if top == raw_cy - radius:
+                    ring.extend((x, top) for x in range(left, right + 1))
+                if bottom != top:
+                    ring.extend((x, bottom) for x in range(left, right + 1))
+                if left == raw_cx - radius:
+                    ring.extend((left, y) for y in range(top + 1, bottom))
+                if right != left:
+                    ring.extend((right, y) for y in range(top + 1, bottom))
+                for source_x, source_y in ring:
+                    if self._source[source_y * raw_width + source_x] < self.threshold:
+                        continue
+                    rectified = self.undistorter.source_to_rectified(
+                        float(source_x), float(source_y)
+                    )
+                    if rectified is None:
+                        continue
+                    if not process_seed((rectified[0], rectified[1])):
+                        stopped_early = True
+                        break
+                if stopped_early:
+                    break
         for label, component in enumerate(components, start=1):
             component.label = label
         return OnDemandContourResult(

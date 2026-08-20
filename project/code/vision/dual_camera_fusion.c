@@ -890,6 +890,17 @@ void DualCameraFusion_BuildSnapshot(uint32 now_us)
             s_snapshot.rear_yaw_deg = display_rear->yaw_deg;
             s_snapshot.rear_yaw_valid = display_rear->yaw_valid;
         }
+
+        /* If the front reference has no car, promote the aligned rear car.
+         * Beacon coordinates and the promoted car position remain in the
+         * same reference frame; keep the reference UAV yaw unchanged. */
+        if(!s_snapshot.car_valid && s_snapshot.rear_car_valid)
+        {
+            s_snapshot.car_x_cm = s_snapshot.rear_car_x_cm;
+            s_snapshot.car_y_cm = s_snapshot.rear_car_y_cm;
+            s_snapshot.car_valid = 1U;
+            s_snapshot.car_raw_valid = s_snapshot.rear_car_raw_valid;
+        }
     }
 
     DualCameraFusion_SortCandidates(candidate, candidate_count);

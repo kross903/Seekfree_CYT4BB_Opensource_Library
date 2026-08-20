@@ -200,8 +200,6 @@ static uint8 contour_trace(int start_x, int start_y,
     int current_y = start_y;
     int back_x = initial_back_x;
     int back_y = initial_back_y;
-    int first_next_x = -1;
-    int first_next_y = -1;
     uint32 steps;
 
     if(candidate == NULL || !contour_sample(start_x, start_y)) return 0U;
@@ -252,17 +250,13 @@ static uint8 contour_trace(int start_x, int start_y,
             candidate->contour_closed = 1U;
             break;
         }
-        if(first_next_x < 0)
+        if(current_x != start_x || current_y != start_y)
         {
-            first_next_x = next_x;
-            first_next_y = next_y;
-        }
-        else if(current_x == start_x && current_y == start_y &&
-                next_x == first_next_x && next_y == first_next_y)
-        {
-            --candidate->contour.point_count;
-            candidate->contour_closed = 1U;
-            break;
+            if(next_x == start_x && next_y == start_y)
+            {
+                candidate->contour_closed = 1U;
+                break;
+            }
         }
         back_x = current_x + s_dir_x[(found_direction + 7) & 7];
         back_y = current_y + s_dir_y[(found_direction + 7) & 7];
