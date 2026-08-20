@@ -16,7 +16,7 @@
 #define BEACON_SEARCH_POSITION_WINDOW_FRAMES      (10U)   /* 位置稳定判定滑动窗口帧数 */
 #define BEACON_SEARCH_POSITION_REQUIRED_FRAMES    (5U)    /* 滑动窗口内至少需要合格的位置帧数 */
 #define BEACON_SEARCH_SPEED_GATE_CMS              (25.0f) /* 启动自搜索前，无人机水平速度稳定阈值 */
-#define BEACON_SEARCH_SPEED_STABLE_MS              (300U) /* 水平速度连续稳定达到该时长后允许搜索 */
+#define BEACON_SEARCH_SPEED_STABLE_MS              (150U) /* 水平速度连续稳定达到该时长后允许搜索 */
 #define BEACON_SEARCH_VISION_FRAME_MAX_AGE_MS      (150U) /* 视觉帧最大有效年龄，超时认为视觉信息过旧 */
 
 typedef enum

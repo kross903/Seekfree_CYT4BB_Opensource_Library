@@ -306,7 +306,7 @@ static void beacon_search_update_stability(
     }
 
     /* 自搜索启动只保留无人机水平速度稳定门控；位置窗口和视觉帧新鲜度
-     * 不再阻塞“小车无目标后”的搜索启动。 */
+     * 不再阻塞自动导航许可后的搜索启动。 */
     s_start_gate_ready = (uint8)(
         s_speed_stable_ms >= BEACON_SEARCH_SPEED_STABLE_MS);
 }
