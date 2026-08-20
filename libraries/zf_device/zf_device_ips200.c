@@ -76,6 +76,7 @@ static uint16                   ips200_bgcolor      = IPS200_DEFAULT_BGCOLOR;   
 static ips200_type_enum         ips200_display_type     = IPS200_TYPE_SPI;
 static ips200_dir_enum          ips200_display_dir  = IPS200_DEFAULT_DISPLAY_DIR;       // 显示方向
 static ips200_font_size_enum    ips200_display_font = IPS200_DEFAULT_DISPLAY_FONT;      // 显示字体类型
+static uint8                    ips200_display_suspended = 0U;
 
 static gpio_pin_enum            ips_rst_pin         = IPS200_RST_PIN_SPI;               // 定义复位所用引脚
 static gpio_pin_enum            ips_bl_pin          = IPS200_BLk_PIN_SPI;               // 定义背光所用引脚
@@ -124,7 +125,8 @@ static void ips200_mirror_put_u32(uint8 *buffer, uint32 value)
 
 static void ips200_mirror_record(uint8 command, const uint8 *payload, uint8 length)
 {
-    if(!ips200_mirror_enable || ips200_mirror_suppress)
+    if(!ips200_mirror_enable || ips200_mirror_suppress ||
+       ips200_display_suspended)
     {
         return;
     }
@@ -285,6 +287,12 @@ void ips200_mirror_flush(void)
     uint16 offset = 0U;
     uint8 packet[64];
 
+    if(ips200_display_suspended)
+    {
+        ips200_mirror_clear_buffer();
+        return;
+    }
+
     ips200_mirror_frame_id++;
 
     packet[0] = IPS200_MIRROR_PACKET_BEGIN;
@@ -326,6 +334,26 @@ void ips200_mirror_flush(void)
 
     ips200_mirror_clear_buffer();
 }
+
+/* Suspend all IPS200 writes during flight and switch off the backlight. */
+void ips200_set_suspend(uint8 suspend)
+{
+    uint8 next = suspend ? 1U : 0U;
+    if(ips200_display_suspended == next) return;
+    ips200_display_suspended = next;
+    if(next)
+    {
+        ips200_mirror_set_enable(0U);
+        ips200_mirror_clear_buffer();
+        IPS200_BL(0);
+    }
+    else
+    {
+        IPS200_BL(1);
+        ips200_mirror_clear_buffer();
+    }
+}
+
 #if IPS200_USE_SOFT_SPI
 static soft_spi_info_struct                 ips200_spi;
 //-------------------------------------------------------------------------------------------------------------------
@@ -635,6 +663,7 @@ static void ips200_debug_init (void)
 //-------------------------------------------------------------------------------------------------------------------
 void ips200_clear (void)
 {
+    if(ips200_display_suspended) return;
     uint16 color_buffer[ips200_width_max];
     uint16 i = 0, j = 0;
 
@@ -667,6 +696,7 @@ void ips200_clear (void)
 //-------------------------------------------------------------------------------------------------------------------
 void ips200_full (const uint16 color)
 {
+    if(ips200_display_suspended) return;
     uint16 color_buffer[ips200_width_max];
     uint16 i = 0, j = 0;
 
@@ -757,6 +787,7 @@ void ips200_set_color (const uint16 pen, const uint16 bgcolor)
 //-------------------------------------------------------------------------------------------------------------------
 void ips200_draw_point (uint16 x, uint16 y, const uint16 color)
 {
+    if(ips200_display_suspended) return;
     // 如果程序在输出了断言信息 并且提示出错位置在这里
     // 那么一般是屏幕显示的时候超过屏幕分辨率范围了
     zf_assert(x < ips200_width_max);
@@ -789,6 +820,7 @@ void ips200_draw_point (uint16 x, uint16 y, const uint16 color)
 //-------------------------------------------------------------------------------------------------------------------
 void ips200_draw_line (uint16 x_start, uint16 y_start, uint16 x_end, uint16 y_end, const uint16 color)
 {
+    if(ips200_display_suspended) return;
     // 如果程序在输出了断言信息 并且提示出错位置在这里
     // 那么一般是屏幕显示的时候超过屏幕分辨率范围了
     zf_assert(x_start < ips200_width_max);
@@ -855,6 +887,7 @@ void ips200_draw_line (uint16 x_start, uint16 y_start, uint16 x_end, uint16 y_en
 //-------------------------------------------------------------------------------------------------------------------
 void ips200_show_char (uint16 x, uint16 y, const char dat)
 {
+    if(ips200_display_suspended) return;
     // 如果程序在输出了断言信息 并且提示出错位置在这里
     // 那么一般是屏幕显示的时候超过屏幕分辨率范围了
     zf_assert(x < ips200_width_max);
@@ -949,6 +982,7 @@ void ips200_show_char (uint16 x, uint16 y, const char dat)
 //-------------------------------------------------------------------------------------------------------------------
 void ips200_show_string (uint16 x, uint16 y, const char dat[])
 {
+    if(ips200_display_suspended) return;
     // 如果程序在输出了断言信息 并且提示出错位置在这里
     // 那么一般是屏幕显示的时候超过屏幕分辨率范围了
     zf_assert(x < ips200_width_max);
@@ -982,6 +1016,7 @@ void ips200_show_string (uint16 x, uint16 y, const char dat[])
 //-------------------------------------------------------------------------------------------------------------------
 void ips200_show_int (uint16 x, uint16 y, const int32 dat, uint8 num)
 {
+    if(ips200_display_suspended) return;
     // 如果程序在输出了断言信息 并且提示出错位置在这里
     // 那么一般是屏幕显示的时候超过屏幕分辨率范围了
     zf_assert(x < ips200_width_max);
@@ -1025,6 +1060,7 @@ void ips200_show_int (uint16 x, uint16 y, const int32 dat, uint8 num)
 //-------------------------------------------------------------------------------------------------------------------
 void ips200_show_uint (uint16 x, uint16 y, const uint32 dat, uint8 num)
 {
+    if(ips200_display_suspended) return;
     // 如果程序在输出了断言信息 并且提示出错位置在这里
     // 那么一般是屏幕显示的时候超过屏幕分辨率范围了
     zf_assert(x < ips200_width_max);
@@ -1071,6 +1107,7 @@ void ips200_show_uint (uint16 x, uint16 y, const uint32 dat, uint8 num)
 //-------------------------------------------------------------------------------------------------------------------
 void ips200_show_float (uint16 x, uint16 y, const double dat, uint8 num, uint8 pointnum)
 {
+    if(ips200_display_suspended) return;
     // 如果程序在输出了断言信息 并且提示出错位置在这里
     // 那么一般是屏幕显示的时候超过屏幕分辨率范围了
     zf_assert(x < ips200_width_max);
@@ -1118,6 +1155,7 @@ void ips200_show_float (uint16 x, uint16 y, const double dat, uint8 num, uint8 p
 //-------------------------------------------------------------------------------------------------------------------
 void ips200_show_binary_image (uint16 x, uint16 y, const uint8 *image, uint16 width, uint16 height, uint16 dis_width, uint16 dis_height)
 {
+    if(ips200_display_suspended) return;
     // 如果程序在输出了断言信息 并且提示出错位置在这里
     // 那么一般是屏幕显示的时候超过屏幕分辨率范围了
     zf_assert(x < ips200_width_max);
@@ -1179,6 +1217,7 @@ void ips200_show_binary_image (uint16 x, uint16 y, const uint8 *image, uint16 wi
 //-------------------------------------------------------------------------------------------------------------------
 void ips200_show_gray_image (uint16 x, uint16 y, const uint8 *image, uint16 width, uint16 height, uint16 dis_width, uint16 dis_height, uint8 threshold)
 {
+    if(ips200_display_suspended) return;
     // 如果程序在输出了断言信息 并且提示出错位置在这里
     // 那么一般是屏幕显示的时候超过屏幕分辨率范围了
     zf_assert(x < ips200_width_max);
@@ -1245,6 +1284,7 @@ void ips200_show_gray_image (uint16 x, uint16 y, const uint8 *image, uint16 widt
 //-------------------------------------------------------------------------------------------------------------------
 void ips200_show_rgb565_image (uint16 x, uint16 y, const uint16 *image, uint16 width, uint16 height, uint16 dis_width, uint16 dis_height, uint8 color_mode)
 {
+    if(ips200_display_suspended) return;
     // 如果程序在输出了断言信息 并且提示出错位置在这里
     // 那么一般是屏幕显示的时候超过屏幕分辨率范围了
     zf_assert(x < ips200_width_max);
@@ -1298,6 +1338,7 @@ void ips200_show_rgb565_image (uint16 x, uint16 y, const uint16 *image, uint16 w
 //-------------------------------------------------------------------------------------------------------------------
 void ips200_show_wave (uint16 x, uint16 y, const uint16 *wave, uint16 width, uint16 value_max, uint16 dis_width, uint16 dis_value_max)
 {
+    if(ips200_display_suspended) return;
     // 如果程序在输出了断言信息 并且提示出错位置在这里
     // 那么一般是屏幕显示的时候超过屏幕分辨率范围了
     zf_assert(x < ips200_width_max);
@@ -1348,6 +1389,7 @@ void ips200_show_wave (uint16 x, uint16 y, const uint16 *wave, uint16 width, uin
 //-------------------------------------------------------------------------------------------------------------------
 void ips200_show_chinese (uint16 x, uint16 y, uint8 size, const uint8 *chinese_buffer, uint8 number, const uint16 color)
 {
+    if(ips200_display_suspended) return;
     // 如果程序在输出了断言信息 并且提示出错位置在这里
     // 那么一般是屏幕显示的时候超过屏幕分辨率范围了
     zf_assert(x < ips200_width_max);

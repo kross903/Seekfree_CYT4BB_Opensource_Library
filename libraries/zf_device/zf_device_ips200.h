@@ -179,6 +179,9 @@ void    ips200_mirror_set_enable        (uint8 enable);
 void    ips200_mirror_clear_buffer      (void);
 void    ips200_mirror_flush             (void);
 void    ips200_mirror_send_packet       (const uint8 *payload, uint8 length);
+
+/* Suspend drawing/backlight during flight. */
+void    ips200_set_suspend               (uint8 suspend);
 void    ips200_init                     (ips200_type_enum type_select);                                                         // 2寸 IPS液晶初始化
 //==================================================声明 IPS200 基础函数================================================
 

@@ -143,6 +143,8 @@ static void update_monitor_view(void)
 {
     static uint8 drone_status_tick_div = 0;
     static uint8 local_screen_refresh_div = 0U;
+    static uint8 screen_display_suspended = 0U;
+    static uint8 screen_display_restore_pending = 0U;
     uint8 camera_new_frame = 0U;
     uint8 assistant_image_mode = 0U;
     uint8 link_tick = 0;
@@ -157,6 +159,20 @@ static void update_monitor_view(void)
     CameraBoardLink_MainTask();
 
     build_monitor_runtime_snapshot(&snapshot);
+
+    /* 飞行期间停止本机 IPS200 绘制和屏幕镜像；停机后只恢复并重绘一次。 */
+    if(snapshot.armed && !screen_display_suspended)
+    {
+        ips200_set_suspend(1U);
+        screen_display_suspended = 1U;
+    }
+    else if(!snapshot.armed && screen_display_suspended)
+    {
+        ips200_set_suspend(0U);
+        screen_display_suspended = 0U;
+        screen_display_restore_pending = 1U;
+    }
+
     link_tick = drone_car_link_task();
     screen_mirror_enabled = core_link_user_is_screen_mirror_enabled();
     screen_mirror_enabled_changed = core_link_user_consume_screen_mirror_enabled_changed();
@@ -213,7 +229,14 @@ static void update_monitor_view(void)
         }
     }
 
-    if(screen_mirror_enabled && screen_mirror_enabled_changed)
+    if(screen_display_restore_pending)
+    {
+        drone_screen_mirror_begin(screen_mirror_enabled);
+        screen_monitor_enter_page(g_monitor_page, &snapshot);
+        drone_screen_mirror_end(screen_mirror_enabled);
+        screen_display_restore_pending = 0U;
+    }
+    else if(screen_mirror_enabled && screen_mirror_enabled_changed)
     {
         drone_screen_mirror_begin(1U);
         screen_monitor_enter_page(g_monitor_page, &snapshot);
@@ -231,9 +254,13 @@ static void run_monitor_view_loop(void)
 {
     MonitorRuntimeSnapshot snapshot;
     build_monitor_runtime_snapshot(&snapshot);
-    drone_screen_mirror_begin(core_link_user_is_screen_mirror_enabled());
-    screen_monitor_enter_page(g_monitor_page, &snapshot);
-    drone_screen_mirror_end(core_link_user_is_screen_mirror_enabled());
+    ips200_set_suspend(snapshot.armed ? 1U : 0U);
+    if(!snapshot.armed)
+    {
+        drone_screen_mirror_begin(core_link_user_is_screen_mirror_enabled());
+        screen_monitor_enter_page(g_monitor_page, &snapshot);
+        drone_screen_mirror_end(core_link_user_is_screen_mirror_enabled());
+    }
 
     while(menu_is_monitor_view())
     {
