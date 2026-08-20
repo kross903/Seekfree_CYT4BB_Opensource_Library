@@ -3116,7 +3116,10 @@ class PictureViewerApp:
         if first_plane is None or second_plane is None:
             return None
         centroid_distance = math.dist(first_plane, second_plane)
-        if centroid_distance > max_distance_cm:
+        minimum_distance = (
+            context.arrow_arm_length_cm * SPLIT_ARROW_MIN_DISTANCE_ARM_SCALE
+        )
+        if not minimum_distance <= centroid_distance <= max_distance_cm:
             return None
         total_area = max(1, first.area + second.area)
         base_center = (
@@ -3480,7 +3483,12 @@ class PictureViewerApp:
             beacon_area_min_scale=beacon_area_min_scale,
             beacon_area_max_scale=beacon_area_max_scale,
             split_arrow_enabled=bool(split_settings["enabled"]),
-            split_arrow_min_area=int(split_settings["min_area"]),
+            split_arrow_primary_min_points=int(
+                split_settings["primary_min_contour_points"]
+            ),
+            split_arrow_partner_min_points=int(
+                split_settings["partner_min_contour_points"]
+            ),
             split_arrow_max_distance_cm=float(
                 split_settings["max_centroid_distance_cm"]
             ),
@@ -3511,6 +3519,7 @@ class PictureViewerApp:
         beacon_count = 0
         yaw_assisted_count = 0
         split_candidates: list[ConnectedComponent] = []
+        beacon_labels: set[int] = set()
         for component in components:
             metrics = calculate_contour_metrics(
                 component,
@@ -3555,10 +3564,10 @@ class PictureViewerApp:
             if config.mode != BATCH_MODE_ARROW and beacon_like:
                 if beacon_count < config.beacon_accept_limit:
                     beacon_count += 1
-                    continue
+                    beacon_labels.add(component.label)
             if config.mode == BATCH_MODE_BEACON:
                 continue
-            if arrow_count == 0:
+            if arrow_count == 0 and component.label not in beacon_labels:
                 arrow_passed, _failures, assisted, _error, _source = (
                     self.evaluate_contour_arrow_with_yaw(
                         component,
@@ -3573,8 +3582,8 @@ class PictureViewerApp:
                     arrow_count = 1
                     yaw_assisted_count += int(assisted)
             if (
-                not beacon_like
-                and component.area > config.split_arrow_min_area
+                len(component.contour_points)
+                >= config.split_arrow_partner_min_points
             ):
                 split_candidates.append(component)
 
@@ -3586,6 +3595,10 @@ class PictureViewerApp:
         ):
             for first_index, first in enumerate(split_candidates):
                 for second in split_candidates[first_index + 1:]:
+                    if max(
+                        len(first.contour_points), len(second.contour_points)
+                    ) < config.split_arrow_primary_min_points:
+                        continue
                     if self._split_arrow_match(
                         first,
                         second,
@@ -3597,6 +3610,9 @@ class PictureViewerApp:
                     ) is not None:
                         arrow_count = 1
                         yaw_assisted_count += 1
+                        beacon_labels.discard(first.label)
+                        beacon_labels.discard(second.label)
+                        beacon_count = len(beacon_labels)
                         break
                 if arrow_count:
                     break
@@ -4236,39 +4252,20 @@ class PictureViewerApp:
                 recognition = results.get(component.label)
                 if (
                     recognition is None
-                    or recognition.passed
                     or recognition.contour_metrics is None
-                    or component.area <= int(split_settings["min_area"])
+                    or len(component.contour_points) < int(
+                        split_settings["partner_min_contour_points"]
+                    )
                 ):
                     continue
-                metrics = recognition.contour_metrics
-                beacon_like = False
-                if component_centroid_is_foreground(component, self.binary):
-                    beacon_decision = evaluate_contour_metrics(
-                        metrics, thresholds[TARGET_BEACON]
-                    )
-                    if beacon_decision.passed:
-                        beacon_yaw_rejected, *_ = self.evaluate_contour_beacon_yaw_rejection(
-                            component,
-                            metrics,
-                            thresholds[TARGET_ARROW],
-                            yaw_assist_enabled,
-                            yaw_tolerance_deg,
-                            beacon_area_context,
-                        )
-                        area_ok, *_area_values = self.evaluate_beacon_physical_area(
-                            component,
-                            beacon_area_context,
-                            beacon_diameter,
-                            beacon_area_min_scale,
-                            beacon_area_max_scale,
-                        )
-                        beacon_like = area_ok and not beacon_yaw_rejected
-                if not beacon_like:
-                    split_candidates.append((component, metrics))
+                split_candidates.append((component, recognition.contour_metrics))
 
             for first_index, (first, _first_metrics) in enumerate(split_candidates):
                 for second, _second_metrics in split_candidates[first_index + 1:]:
+                    if max(
+                        len(first.contour_points), len(second.contour_points)
+                    ) < int(split_settings["primary_min_contour_points"]):
+                        continue
                     match = self._split_arrow_match(
                         first,
                         second,

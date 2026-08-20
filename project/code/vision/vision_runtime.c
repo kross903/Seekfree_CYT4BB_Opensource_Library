@@ -20,6 +20,16 @@
 #define VISION_ARROW_MEMBER_CORRIDOR_PX     (5.0f)
 #define VISION_ARROW_MEMBER_MAX_SAMPLES     (24U)
 #define VISION_ARROW_MEMBER_MIN_RATIO_Q8    (77U)
+#define VISION_SPLIT_ARROW_PRIMARY_MIN_POINTS (15U)
+#define VISION_SPLIT_ARROW_PARTNER_MIN_POINTS (10U)
+#define VISION_SPLIT_ARROW_MIN_DISTANCE_CM    (9.5f)
+#define VISION_SPLIT_ARROW_MAX_DISTANCE_CM    (30.0f)
+#define VISION_SPLIT_ARROW_OPENING_DEG         (70.0f)
+#define VISION_SPLIT_ARROW_OPENING_TOLERANCE_DEG (20.0f)
+#define VISION_SPLIT_ARROW_MIN_AXIS_DOMINANCE  (0.45f)
+#define VISION_SPLIT_ARROW_MAX_FIT_ERROR_PX    (4.0f)
+#define VISION_SPLIT_ARROW_CENTER_SEARCH_PX    (4)
+#define VISION_SPLIT_ARROW_MAX_SAMPLES          (32U)
 
 #define ARROW_BASE_MASK (VISION_CONTOUR_GATE_MIN_POINTS | \
     VISION_CONTOUR_GATE_MIN_CIRCULARITY | \
@@ -334,6 +344,142 @@ static float vision_median3(float a, float b, float c)
     return b;
 }
 
+typedef struct
+{
+    float axis_x;
+    float axis_y;
+    float axis_dominance;
+    float world_x;
+    float world_y;
+    uint8 valid;
+} VisionSplitArrowAxis_t;
+
+static uint8 vision_split_arrow_axis(
+    const VisionContourCandidate_t *candidate,
+    VisionSplitArrowAxis_t *axis)
+{
+    float mean_x = 0.0f;
+    float mean_y = 0.0f;
+    float xx = 0.0f;
+    float yy = 0.0f;
+    float xy = 0.0f;
+    float total;
+    float angle;
+    float anisotropy;
+    uint16 direction_count[4] = {0U, 0U, 0U, 0U};
+    uint16 direction_total = 0U;
+    uint16 i;
+
+    if(candidate == NULL || axis == NULL ||
+       candidate->boundary_touched || candidate->contour_overflow ||
+       !candidate->contour_closed ||
+       candidate->contour.point_count < VISION_SPLIT_ARROW_PARTNER_MIN_POINTS)
+        return 0U;
+    memset(axis, 0, sizeof(*axis));
+    for(i = 0U; i < candidate->contour.point_count; ++i)
+    {
+        mean_x += (float)candidate->contour.point_x[i];
+        mean_y += (float)candidate->contour.point_y[i];
+    }
+    mean_x /= (float)candidate->contour.point_count;
+    mean_y /= (float)candidate->contour.point_count;
+    for(i = 0U; i < candidate->contour.point_count; ++i)
+    {
+        uint16 next = (uint16)((i + 1U) % candidate->contour.point_count);
+        float dx = (float)candidate->contour.point_x[i] - mean_x;
+        float dy = (float)candidate->contour.point_y[i] - mean_y;
+        int edge_x = (int)candidate->contour.point_x[next] -
+                     (int)candidate->contour.point_x[i];
+        int edge_y = (int)candidate->contour.point_y[next] -
+                     (int)candidate->contour.point_y[i];
+        xx += dx * dx;
+        yy += dy * dy;
+        xy += dx * dy;
+        if(edge_x == 0 && edge_y != 0) ++direction_count[0];
+        else if(edge_x != 0 && edge_y != 0)
+            ++direction_count[(edge_x * edge_y < 0) ? 1 : 3];
+        else if(edge_x != 0) ++direction_count[2];
+    }
+    total = xx + yy;
+    if(total <= 0.001f ||
+       !IPM_FullRectifiedImage2PlaneF(
+           candidate->blob.centroid_col, candidate->blob.centroid_row,
+           VEHICLE_MARKER_CHEVRON_PLANE_HEIGHT_CM,
+           &axis->world_x, &axis->world_y)) return 0U;
+    angle = 0.5f * atan2f(2.0f * xy, xx - yy);
+    axis->axis_x = cosf(angle);
+    axis->axis_y = sinf(angle);
+    anisotropy = sqrtf((xx - yy) * (xx - yy) + 4.0f * xy * xy) / total;
+    for(i = 0U; i < 4U; ++i) direction_total += direction_count[i];
+    axis->axis_dominance = anisotropy;
+    if(direction_total != 0U)
+    {
+        uint16 maximum = direction_count[0];
+        float direction_dominance;
+        for(i = 1U; i < 4U; ++i)
+            if(direction_count[i] > maximum) maximum = direction_count[i];
+        direction_dominance = (float)maximum / (float)direction_total;
+        if(direction_dominance > axis->axis_dominance)
+            axis->axis_dominance = direction_dominance;
+    }
+    axis->valid = 1U;
+    return 1U;
+}
+
+static float vision_split_axis_error_deg(float first_x, float first_y,
+                                         float second_x, float second_y)
+{
+    float dot = first_x * second_x + first_y * second_y;
+    float cross = first_x * second_y - first_y * second_x;
+    return atan2f(fabsf(cross), fabsf(dot)) *
+           (180.0f / 3.14159265358979323846f);
+}
+
+static float vision_split_point_segment_distance(
+    float point_x, float point_y,
+    const VehicleMarkerPoint2D_t *start,
+    const VehicleMarkerPoint2D_t *end)
+{
+    float dx = end->u - start->u;
+    float dy = end->v - start->v;
+    float px = point_x - start->u;
+    float py = point_y - start->v;
+    float length2 = dx * dx + dy * dy;
+    float projection;
+    if(length2 <= 0.001f) return sqrtf(px * px + py * py);
+    projection = (px * dx + py * dy) / length2;
+    if(projection < 0.0f) projection = 0.0f;
+    else if(projection > 1.0f) projection = 1.0f;
+    px -= projection * dx;
+    py -= projection * dy;
+    return sqrtf(px * px + py * py);
+}
+
+static float vision_split_contour_arm_error(
+    const VisionContourCandidate_t *candidate,
+    const VehicleMarkerPoint2D_t *start,
+    const VehicleMarkerPoint2D_t *end,
+    uint16 *sample_count)
+{
+    uint16 step;
+    uint16 i;
+    float total = 0.0f;
+    if(candidate == NULL || start == NULL || end == NULL ||
+       sample_count == NULL || candidate->contour.point_count == 0U)
+        return 0.0f;
+    step = (uint16)(candidate->contour.point_count /
+                    VISION_SPLIT_ARROW_MAX_SAMPLES);
+    if(step == 0U) step = 1U;
+    for(i = 0U; i < candidate->contour.point_count; i = (uint16)(i + step))
+    {
+        total += vision_split_point_segment_distance(
+            (float)candidate->contour.point_x[i],
+            (float)candidate->contour.point_y[i], start, end);
+        ++(*sample_count);
+    }
+    return total;
+}
+
 static uint8 vision_find_nearest_contour_point(
     const VisionContourCandidate_t *candidate,
     float target_x, float target_y,
@@ -384,6 +530,225 @@ static uint8 vision_project_arrow_points(
         points[i].intensity = 0.0f;
     }
     return 1U;
+}
+
+static uint8 vision_fit_split_arrow_pair(
+    const VisionContourCandidate_t *first,
+    const VisionContourCandidate_t *second,
+    const VisionSplitArrowAxis_t *first_axis,
+    const VisionSplitArrowAxis_t *second_axis,
+    VehicleMarkerPoint2D_t output[3],
+    float *fit_score,
+    float *yaw_error_deg)
+{
+    float total_area;
+    float base_center_x;
+    float base_center_y;
+    float yaw_rad;
+    float forward_x;
+    float forward_y;
+    float side_x;
+    float side_y;
+    float offset_x[3];
+    float offset_y[3];
+    float best_score = 1.0e30f;
+    float best_yaw_error = 180.0f;
+    int offset_col;
+    int offset_row;
+    uint8 found = 0U;
+
+    if(first == NULL || second == NULL || first_axis == NULL ||
+       second_axis == NULL || output == NULL || fit_score == NULL ||
+       yaw_error_deg == NULL) return 0U;
+    total_area = (float)(first->blob.area + second->blob.area);
+    if(total_area <= 0.0f) return 0U;
+    base_center_x = (first->blob.centroid_col * (float)first->blob.area +
+                     second->blob.centroid_col * (float)second->blob.area) /
+                    total_area;
+    base_center_y = (first->blob.centroid_row * (float)first->blob.area +
+                     second->blob.centroid_row * (float)second->blob.area) /
+                    total_area;
+    yaw_rad = s_car_yaw_rel_uav_deg *
+              (3.14159265358979323846f / 180.0f);
+    forward_x = cosf(yaw_rad);
+    forward_y = sinf(yaw_rad);
+    side_x = -forward_y;
+    side_y = forward_x;
+    offset_x[0] = (2.0f * VISION_ARROW_HEIGHT_CM / 3.0f) * forward_x;
+    offset_y[0] = (2.0f * VISION_ARROW_HEIGHT_CM / 3.0f) * forward_y;
+    offset_x[1] = -(VISION_ARROW_HEIGHT_CM / 3.0f) * forward_x +
+                  VISION_ARROW_HALF_BASE_CM * side_x;
+    offset_y[1] = -(VISION_ARROW_HEIGHT_CM / 3.0f) * forward_y +
+                  VISION_ARROW_HALF_BASE_CM * side_y;
+    offset_x[2] = -(VISION_ARROW_HEIGHT_CM / 3.0f) * forward_x -
+                  VISION_ARROW_HALF_BASE_CM * side_x;
+    offset_y[2] = -(VISION_ARROW_HEIGHT_CM / 3.0f) * forward_y -
+                  VISION_ARROW_HALF_BASE_CM * side_y;
+
+    for(offset_row = -VISION_SPLIT_ARROW_CENTER_SEARCH_PX;
+        offset_row <= VISION_SPLIT_ARROW_CENTER_SEARCH_PX; ++offset_row)
+    {
+        for(offset_col = -VISION_SPLIT_ARROW_CENTER_SEARCH_PX;
+            offset_col <= VISION_SPLIT_ARROW_CENTER_SEARCH_PX; ++offset_col)
+        {
+            float center_x;
+            float center_y;
+            VehicleMarkerPoint2D_t projected[3];
+            float left_dx;
+            float left_dy;
+            float right_dx;
+            float right_dy;
+            uint8 assignment;
+            if(!IPM_FullRectifiedImage2PlaneF(
+                   base_center_x + (float)offset_col,
+                   base_center_y + (float)offset_row,
+                   VEHICLE_MARKER_CHEVRON_PLANE_HEIGHT_CM,
+                   &center_x, &center_y) ||
+               !vision_project_arrow_points(center_x, center_y,
+                                             offset_x, offset_y, projected))
+                continue;
+            left_dx = projected[1].u - projected[0].u;
+            left_dy = projected[1].v - projected[0].v;
+            right_dx = projected[2].u - projected[0].u;
+            right_dy = projected[2].v - projected[0].v;
+            for(assignment = 0U; assignment < 2U; ++assignment)
+            {
+                float first_error = vision_split_axis_error_deg(
+                    first_axis->axis_x, first_axis->axis_y,
+                    assignment ? right_dx : left_dx,
+                    assignment ? right_dy : left_dy);
+                float second_error = vision_split_axis_error_deg(
+                    second_axis->axis_x, second_axis->axis_y,
+                    assignment ? left_dx : right_dx,
+                    assignment ? left_dy : right_dy);
+                float error_sum;
+                float fit_error;
+                float score;
+                uint16 samples = 0U;
+                if(first_error > (float)VISION_YAW_TOLERANCE_DEG ||
+                   second_error > (float)VISION_YAW_TOLERANCE_DEG) continue;
+                error_sum = vision_split_contour_arm_error(
+                    first, &projected[0],
+                    assignment ? &projected[2] : &projected[1], &samples);
+                error_sum += vision_split_contour_arm_error(
+                    second, &projected[0],
+                    assignment ? &projected[1] : &projected[2], &samples);
+                if(samples == 0U) continue;
+                fit_error = error_sum / (float)samples;
+                if(fit_error > VISION_SPLIT_ARROW_MAX_FIT_ERROR_PX) continue;
+                score = fit_error + 0.02f * (first_error + second_error);
+                if(!found || score < best_score)
+                {
+                    best_score = score;
+                    best_yaw_error = (first_error > second_error) ?
+                                     first_error : second_error;
+                    output[0] = projected[0];
+                    output[1] = projected[1];
+                    output[2] = projected[2];
+                    found = 1U;
+                }
+            }
+        }
+    }
+    if(!found) return 0U;
+    *fit_score = best_score;
+    *yaw_error_deg = best_yaw_error;
+    return 1U;
+}
+
+static uint8 vision_try_split_arrow(VisionContourFrameResult_t *result,
+                                    VehicleMarkerPoint2D_t output[3],
+                                    uint8 *primary_index)
+{
+    VisionSplitArrowAxis_t axes[VISION_RUNTIME_MAX_CANDIDATES];
+    VehicleMarkerPoint2D_t best_points[3];
+    float best_score = 1.0e30f;
+    float best_yaw_error = 180.0f;
+    uint8 best_first = 0U;
+    uint8 best_second = 0U;
+    uint8 first;
+    uint8 found = 0U;
+
+    if(result == NULL || output == NULL || primary_index == NULL ||
+       result->arrow_count != 0U) return 0U;
+    memset(axes, 0, sizeof(axes));
+    for(first = 0U; first < result->candidate_count; ++first)
+        (void)vision_split_arrow_axis(&result->candidate[first], &axes[first]);
+    for(first = 0U; first < result->candidate_count; ++first)
+    {
+        uint8 second;
+        if(!axes[first].valid ||
+           axes[first].axis_dominance < VISION_SPLIT_ARROW_MIN_AXIS_DOMINANCE)
+            continue;
+        for(second = (uint8)(first + 1U);
+            second < result->candidate_count; ++second)
+        {
+            float opening_error;
+            float dx;
+            float dy;
+            float distance;
+            float score;
+            float yaw_error;
+            VehicleMarkerPoint2D_t points[3];
+            if(!axes[second].valid ||
+               axes[second].axis_dominance <
+                   VISION_SPLIT_ARROW_MIN_AXIS_DOMINANCE ||
+               (result->candidate[first].contour.point_count <
+                    VISION_SPLIT_ARROW_PRIMARY_MIN_POINTS &&
+                result->candidate[second].contour.point_count <
+                    VISION_SPLIT_ARROW_PRIMARY_MIN_POINTS)) continue;
+            opening_error = fabsf(vision_split_axis_error_deg(
+                axes[first].axis_x, axes[first].axis_y,
+                axes[second].axis_x, axes[second].axis_y) -
+                VISION_SPLIT_ARROW_OPENING_DEG);
+            if(opening_error > VISION_SPLIT_ARROW_OPENING_TOLERANCE_DEG)
+                continue;
+            dx = axes[first].world_x - axes[second].world_x;
+            dy = axes[first].world_y - axes[second].world_y;
+            distance = sqrtf(dx * dx + dy * dy);
+            if(distance < VISION_SPLIT_ARROW_MIN_DISTANCE_CM ||
+               distance > VISION_SPLIT_ARROW_MAX_DISTANCE_CM) continue;
+            if(!vision_fit_split_arrow_pair(
+                   &result->candidate[first], &result->candidate[second],
+                   &axes[first], &axes[second], points, &score, &yaw_error))
+                continue;
+            if(!found || score < best_score)
+            {
+                best_score = score;
+                best_yaw_error = yaw_error;
+                best_first = first;
+                best_second = second;
+                best_points[0] = points[0];
+                best_points[1] = points[1];
+                best_points[2] = points[2];
+                found = 1U;
+            }
+        }
+    }
+    if(found)
+    {
+        uint8 primary =
+            (result->candidate[best_first].contour.point_count >=
+             result->candidate[best_second].contour.point_count) ?
+             best_first : best_second;
+        uint8 partner = (primary == best_first) ? best_second : best_first;
+        if(result->candidate[primary].target == VISION_CONTOUR_TARGET_BEACON &&
+           result->beacon_count != 0U) --result->beacon_count;
+        if(result->candidate[partner].target == VISION_CONTOUR_TARGET_BEACON &&
+           result->beacon_count != 0U) --result->beacon_count;
+        result->candidate[primary].target = VISION_CONTOUR_TARGET_ARROW;
+        result->candidate[primary].yaw_assisted = 1U;
+        result->candidate[primary].yaw_error_deg =
+            (uint16)(best_yaw_error + 0.5f);
+        result->candidate[partner].target = VISION_CONTOUR_TARGET_NONE;
+        result->candidate[partner].yaw_assisted = 0U;
+        result->arrow_count = 1U;
+        output[0] = best_points[0];
+        output[1] = best_points[1];
+        output[2] = best_points[2];
+        *primary_index = primary;
+    }
+    return found;
 }
 
 static uint8 vision_build_arrow_points(const VisionContourCandidate_t *candidate,
@@ -600,14 +965,19 @@ static void vision_process_result(VisionContourFrameResult_t *result)
     uint8 beacon_slot = 0U;
     uint8 arrow_committed = 0U;
     uint8 arrow_geometry_valid = 0U;
+    uint8 split_arrow_valid;
+    uint8 split_arrow_primary = 0U;
     VehicleMarkerPoint2D_t arrow_apex = {0};
     VehicleMarkerPoint2D_t arrow_left = {0};
     VehicleMarkerPoint2D_t arrow_right = {0};
+    VehicleMarkerPoint2D_t split_arrow_points[3] = {{0}};
     s_candidate_count = result->candidate_count;
     memset(s_candidate_boxes, 0, sizeof(s_candidate_boxes));
     memset(s_beacon_slots, 0, sizeof(s_beacon_slots));
     memset(s_diag.blob_area_rank, 0, sizeof(s_diag.blob_area_rank));
     s_previous_seed_count = 0U;
+    split_arrow_valid = vision_try_split_arrow(
+        result, split_arrow_points, &split_arrow_primary);
 
     for(i = 0U; i < result->candidate_count; ++i)
     {
@@ -620,8 +990,20 @@ static void vision_process_result(VisionContourFrameResult_t *result)
         if(candidate->target == VISION_CONTOUR_TARGET_ARROW &&
            !arrow_geometry_valid)
         {
-            if(vision_build_arrow_points(candidate, &arrow_apex,
-                                         &arrow_left, &arrow_right))
+            uint8 points_valid;
+            if(split_arrow_valid && i == split_arrow_primary)
+            {
+                arrow_apex = split_arrow_points[0];
+                arrow_left = split_arrow_points[1];
+                arrow_right = split_arrow_points[2];
+                points_valid = 1U;
+            }
+            else
+            {
+                points_valid = vision_build_arrow_points(
+                    candidate, &arrow_apex, &arrow_left, &arrow_right);
+            }
+            if(points_valid)
             {
                 arrow_geometry_valid = 1U;
                 if(VehicleMarkerLocalization_CommitContourArrow(
