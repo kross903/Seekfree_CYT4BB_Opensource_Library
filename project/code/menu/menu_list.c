@@ -141,6 +141,8 @@ static uint8 s_track_light_release_pending = 0U;
 static uint8 s_track_light_exit_pending = 0U;
 static uint8 s_track_light_release_wait_ticks = 0U;
 static uint8 s_track_light_status_tick_div = 0U;
+static uint32 s_track_light_fusion_last_refresh_us = 0U;
+static uint32 s_track_light_fusion_build_count_seen = 0U;
 static uint8 s_sensor_status_page_active = 0U;
 static uint8 s_sensor_status_view = 0U;
 static uint16 s_sensor_status_refresh_ms = 0U;
@@ -1943,6 +1945,34 @@ static uint8 track_light_service_downlink(void)
     return 1U;
 }
 
+static uint8 track_light_service_vision_fusion(void)
+{
+    DualCameraFusionDiag_t diag = {0};
+    uint32 now_us = CameraBoardLink_TimeNowUs();
+
+    /* 与正常飞行共用输入缓存；测试页只补足独立的快照刷新。 */
+    DualCameraFusion_ServiceInputs();
+    DualCameraFusion_GetDiag(&diag);
+    if(diag.build_count != s_track_light_fusion_build_count_seen)
+    {
+        s_track_light_fusion_build_count_seen = diag.build_count;
+        s_track_light_fusion_last_refresh_us = now_us;
+        return 1U;
+    }
+    if((s_track_light_fusion_last_refresh_us != 0U) &&
+       ((uint32)(now_us - s_track_light_fusion_last_refresh_us) <
+        VISION_FUSION_REFRESH_US))
+    {
+        return 0U;
+    }
+
+    DualCameraFusion_BuildSnapshot(now_us);
+    DualCameraFusion_GetDiag(&diag);
+    s_track_light_fusion_build_count_seen = diag.build_count;
+    s_track_light_fusion_last_refresh_us = now_us;
+    return 1U;
+}
+
 static void track_light_reset_page_state(void)
 {
     s_track_light_page_active = 0U;
@@ -1951,6 +1981,8 @@ static void track_light_reset_page_state(void)
     s_track_light_exit_pending = 0U;
     s_track_light_release_wait_ticks = 0U;
     s_track_light_status_tick_div = 0U;
+    s_track_light_fusion_last_refresh_us = 0U;
+    s_track_light_fusion_build_count_seen = 0U;
 }
 
 static void track_light_restore_local_screen(void)
@@ -2036,28 +2068,61 @@ static void track_light_draw_data(void)
     DualCameraFusionSnapshot_t snapshot = {0};
     DualCameraFusionDiag_t diag = {0};
     uint8 snapshot_valid;
+    uint8 car_valid;
+    const char *car_source = "LOST ";
+    float car_x_cm = 0.0f;
+    float car_y_cm = 0.0f;
     uint8 i;
 
     snapshot_valid = DualCameraFusion_GetSnapshot(&snapshot);
     DualCameraFusion_GetDiag(&diag);
+    car_valid = (uint8)(snapshot_valid &&
+        (snapshot.car_valid || snapshot.front_car_valid ||
+         snapshot.rear_car_valid));
+    if(car_valid)
+    {
+        if(snapshot.front_car_valid && snapshot.rear_car_valid)
+        {
+            car_source = "BOTH ";
+        }
+        else if(snapshot.rear_car_valid)
+        {
+            car_source = "REAR ";
+        }
+        else
+        {
+            car_source = "FRONT";
+        }
+
+        if(snapshot.car_valid)
+        {
+            car_x_cm = snapshot.car_x_cm;
+            car_y_cm = snapshot.car_y_cm;
+        }
+        else if(snapshot.rear_car_valid)
+        {
+            car_x_cm = snapshot.rear_car_x_cm;
+            car_y_cm = snapshot.rear_car_y_cm;
+        }
+        else
+        {
+            car_x_cm = snapshot.front_car_x_cm;
+            car_y_cm = snapshot.front_car_y_cm;
+        }
+    }
 
     ips200_set_font(IPS200_8X16_FONT);
     track_light_draw_link(0U, "FRONT:", diag.front_healthy,
                           diag.front_age_ms);
     track_light_draw_link(1U, "REAR:", diag.rear_healthy,
                           diag.rear_age_ms);
-    test_page_show_text(TEST_ROW_Y(2U), "CAR:",
-                        (snapshot_valid && snapshot.car_valid) ?
-                            "VALID" : "LOST ",
-                        (snapshot_valid && snapshot.car_valid) ?
-                            RGB565_GREEN : RGB565_RED);
+    test_page_show_text(TEST_ROW_Y(2U), "CAR:", car_source,
+                        car_valid ? RGB565_GREEN : RGB565_RED);
     test_page_show_float(TEST_ROW_Y(3U), "CAR X CM:",
-                         (snapshot_valid && snapshot.car_valid) ?
-                            snapshot.car_x_cm : 0.0f,
+                         car_valid ? car_x_cm : 0.0f,
                          3U, 1U);
     test_page_show_float(TEST_ROW_Y(4U), "CAR Y CM:",
-                         (snapshot_valid && snapshot.car_valid) ?
-                            snapshot.car_y_cm : 0.0f,
+                         car_valid ? car_y_cm : 0.0f,
                          3U, 1U);
     test_page_show_int(TEST_ROW_Y(5U), "BEACONS:",
                        snapshot_valid ? (int32)snapshot.target_count : 0, 2U);
@@ -2090,6 +2155,7 @@ static uint8 track_light_wait_for_screen_release(void)
 static void track_light_test_page(void)
 {
     uint8 refresh_due = track_light_service_downlink();
+    if(track_light_service_vision_fusion()) refresh_due = 1U;
 
     if(!s_track_light_page_active)
     {
