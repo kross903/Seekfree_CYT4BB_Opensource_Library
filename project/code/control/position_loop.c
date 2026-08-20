@@ -916,38 +916,60 @@ void Position_Loop_Update_Velocity_Target(uint8 velocity_ready,
     brake_config = g_brake_config;
     if(!g_frozen_hold_active && (feedforward != NULL) &&
        feedforward->velocity_valid &&
-       isfinite(feedforward->vx_uav_cms) && isfinite(feedforward->vy_uav_cms))
+       isfinite(feedforward->vx_cms) && isfinite(feedforward->vy_cms))
     {
-        float gained_body_x;
-        float gained_body_y;
+        if(feedforward->earth_frame)
+        {
+            car_actual_vx_earth = feedforward->vx_cms;
+            car_actual_vy_earth = feedforward->vy_cms;
+            car_vx_earth = feedforward->vx_cms * g_car_velocity_ff_gain_x;
+            car_vy_earth = feedforward->vy_cms * g_car_velocity_ff_gain_y;
+        }
+        else
+        {
+            float gained_body_x = feedforward->vx_cms *
+                                  g_car_velocity_ff_gain_x;
+            float gained_body_y = feedforward->vy_cms *
+                                  g_car_velocity_ff_gain_y;
 
-        position_loop_body_to_earth(feedforward->vx_uav_cms,
-                                    feedforward->vy_uav_cms,
-                                    yaw_deg,
-                                    &car_actual_vx_earth,
-                                    &car_actual_vy_earth);
-        gained_body_x = feedforward->vx_uav_cms * g_car_velocity_ff_gain_x;
-        gained_body_y = feedforward->vy_uav_cms * g_car_velocity_ff_gain_y;
-        position_loop_body_to_earth(gained_body_x, gained_body_y, yaw_deg,
-                                    &car_vx_earth, &car_vy_earth);
+            position_loop_body_to_earth(feedforward->vx_cms,
+                                        feedforward->vy_cms,
+                                        yaw_deg,
+                                        &car_actual_vx_earth,
+                                        &car_actual_vy_earth);
+            position_loop_body_to_earth(gained_body_x, gained_body_y, yaw_deg,
+                                        &car_vx_earth, &car_vy_earth);
+        }
         car_velocity_valid = 1U;
         flags |= POSITION_LOOP_STATUS_CAR_FF_VALID;
     }
     if(!g_frozen_hold_active && (feedforward != NULL) &&
        feedforward->acceleration_valid &&
-       isfinite(feedforward->ax_uav_cms2) &&
-       isfinite(feedforward->ay_uav_cms2))
+       isfinite(feedforward->ax_cms2) &&
+       isfinite(feedforward->ay_cms2))
     {
-        float gained_body_x = feedforward->ax_uav_cms2 * g_car_accel_ff_gain_x;
-        float gained_body_y = feedforward->ay_uav_cms2 * g_car_accel_ff_gain_y;
+        if(feedforward->earth_frame)
+        {
+            car_actual_ax_earth = feedforward->ax_cms2;
+            car_actual_ay_earth = feedforward->ay_cms2;
+            car_ax_earth = feedforward->ax_cms2 * g_car_accel_ff_gain_x;
+            car_ay_earth = feedforward->ay_cms2 * g_car_accel_ff_gain_y;
+        }
+        else
+        {
+            float gained_body_x = feedforward->ax_cms2 *
+                                  g_car_accel_ff_gain_x;
+            float gained_body_y = feedforward->ay_cms2 *
+                                  g_car_accel_ff_gain_y;
 
-        position_loop_body_to_earth(feedforward->ax_uav_cms2,
-                                    feedforward->ay_uav_cms2,
-                                    yaw_deg,
-                                    &car_actual_ax_earth,
-                                    &car_actual_ay_earth);
-        position_loop_body_to_earth(gained_body_x, gained_body_y, yaw_deg,
-                                    &car_ax_earth, &car_ay_earth);
+            position_loop_body_to_earth(feedforward->ax_cms2,
+                                        feedforward->ay_cms2,
+                                        yaw_deg,
+                                        &car_actual_ax_earth,
+                                        &car_actual_ay_earth);
+            position_loop_body_to_earth(gained_body_x, gained_body_y, yaw_deg,
+                                        &car_ax_earth, &car_ay_earth);
+        }
         car_acceleration_valid = 1U;
     }
 

@@ -1944,8 +1944,8 @@ void send_date_back(void)
                 status_flags |= 0x80U;
             }
 
-            send_sixteen_date(car_motion.forward_speed_cms,
-                              car_motion.left_speed_cms,
+            send_sixteen_date(car_motion.world_vx_cms,
+                              car_motion.world_vy_cms,
                               car_motion.car_yaw_deg,
                               current_yaw,
                               pos_diag.car_ff_raw_vx_cms,

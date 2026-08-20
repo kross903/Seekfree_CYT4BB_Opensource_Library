@@ -984,7 +984,7 @@ void CrossCoreCamera_ControlCorePublishInput(float roll_deg,
          BeaconSearch_IsPausedByBlindBoxTask()) ? 0U : 1U;
     g_shared_vision_input->car_yaw_deg = car_motion.car_yaw_deg;
     g_shared_vision_input->car_yaw_age_ms = car_motion.age_ms;
-    g_shared_vision_input->car_yaw_valid = car_motion.valid;
+    g_shared_vision_input->car_yaw_valid = car_motion.yaw_valid;
     g_shared_vision_input->reserved = 0U;
     g_shared_vision_input->seq++;
     CrossCoreCamera_CleanInput();

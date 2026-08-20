@@ -36,10 +36,11 @@ typedef struct
 {
     uint8 velocity_valid;
     uint8 acceleration_valid;
-    float vx_uav_cms;
-    float vy_uav_cms;
-    float ax_uav_cms2;
-    float ay_uav_cms2;
+    uint8 earth_frame;
+    float vx_cms;
+    float vy_cms;
+    float ax_cms2;
+    float ay_cms2;
 } PositionLoopFeedforwardInput_t;
 
 typedef struct
