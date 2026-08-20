@@ -104,6 +104,11 @@ typedef struct
     float vision_gate_cm;
     float vision_observation_x_cm;
     float vision_observation_y_cm;
+    float vision_estimate_x_cm;
+    float vision_estimate_y_cm;
+    float vision_control_x_cm;
+    float vision_control_y_cm;
+    float vision_realign_error_cm;
     float vision_covariance_x_cm2;
     float vision_covariance_y_cm2;
     uint32 trajectory_reset_count;
