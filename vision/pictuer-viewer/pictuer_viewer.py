@@ -206,6 +206,9 @@ SPLIT_ARROW_MAX_CENTROID_DISTANCE_CM = 30.0
 SPLIT_ARROW_ANGLE_TOLERANCE_DEG = 20.0
 SPLIT_ARROW_MAX_FIT_ERROR_PX = 4.0
 SPLIT_ARROW_MIN_AXIS_DOMINANCE = 0.45
+ARROW_POINT_SEARCH_RADIUS_PX = 6
+ARROW_CENTER_REFINE_PASSES = 2
+ARROW_CENTER_CONVERGENCE_CM = 0.05
 ARROW_SHAPE_GATE_DEFAULT_ENABLED = True
 ARROW_MAX_OCCUPANCY_DEFAULT = 0.5
 ARROW_MAX_HORIZONTAL_RUN_DEFAULT = 0.5
@@ -2771,6 +2774,194 @@ class PictureViewerApp:
             projected.append(point)
         return tuple(projected)
 
+    @staticmethod
+    def _nearest_contour_point(
+        theoretical: tuple[float, float],
+        contour_points: set[tuple[int, int]],
+        max_radius: int = ARROW_POINT_SEARCH_RADIUS_PX,
+    ) -> tuple[float, float] | None:
+        """Grow square rings around a theoretical point and return the closest hit."""
+        center_x = int(round(theoretical[0]))
+        center_y = int(round(theoretical[1]))
+        for radius in range(max(0, int(max_radius)) + 1):
+            hits: list[tuple[int, int]] = []
+            if radius == 0:
+                if (center_x, center_y) in contour_points:
+                    hits.append((center_x, center_y))
+            else:
+                left = center_x - radius
+                right = center_x + radius
+                top = center_y - radius
+                bottom = center_y + radius
+                for x in range(left, right + 1):
+                    if (x, top) in contour_points:
+                        hits.append((x, top))
+                    if (x, bottom) in contour_points:
+                        hits.append((x, bottom))
+                for y in range(top + 1, bottom):
+                    if (left, y) in contour_points:
+                        hits.append((left, y))
+                    if (right, y) in contour_points:
+                        hits.append((right, y))
+            if hits:
+                closest = min(
+                    hits,
+                    key=lambda point: (
+                        (point[0] - theoretical[0]) ** 2
+                        + (point[1] - theoretical[1]) ** 2
+                    ),
+                )
+                return float(closest[0]), float(closest[1])
+        return None
+
+    @staticmethod
+    def _fuse_arrow_center_estimates(
+        estimates: list[tuple[float, float]],
+    ) -> tuple[float, float] | None:
+        if not estimates:
+            return None
+        if len(estimates) == 1:
+            return estimates[0]
+        if len(estimates) == 2:
+            return (
+                0.5 * (estimates[0][0] + estimates[1][0]),
+                0.5 * (estimates[0][1] + estimates[1][1]),
+            )
+        # Coordinate medians keep one incorrect local attachment from moving the center.
+        return (
+            sorted(point[0] for point in estimates)[len(estimates) // 2],
+            sorted(point[1] for point in estimates)[len(estimates) // 2],
+        )
+
+    def _fit_contour_arrow_outline(
+        self,
+        component: ConnectedComponent,
+        context: ContourYawContext,
+    ) -> tuple[tuple[float, float], ...] | None:
+        """Fit ideal arrow center while preserving the theoretical three-point shape."""
+        projector = TargetPlaneProjector(
+            context.projection_calibration,
+            context.mount_roll_deg,
+            context.mount_pitch_deg,
+            context.mount_yaw_deg,
+        )
+        centroid_plane = projector.image_to_plane(
+            (component.centroid_x, component.centroid_y),
+            context.roll_deg,
+            context.pitch_deg,
+            context.height_cm,
+            context.arrow_plane_height_cm,
+        )
+        if centroid_plane is None:
+            return None
+
+        relative_yaw = wrap_degrees(
+            context.car_yaw_deg
+            if context.car_yaw_relative
+            else context.car_yaw_deg - context.uav_yaw_deg
+        )
+        opening_direction = wrap_degrees(
+            relative_yaw + context.arrow_opening_offset_deg
+        )
+        origin_shape = build_ideal_chevron_points(
+            (0.0, 0.0),
+            context.arrow_arm_length_cm,
+            context.arrow_angle_deg,
+            opening_direction,
+        )
+        point_names = ("left_tip", "apex", "right_tip")
+        point_offsets = tuple(origin_shape[name] for name in point_names)
+
+        # A bright V is a two-line shape. Its pixel centroid lies toward the apex
+        # relative to the triangle centroid expected by build_ideal_chevron_points().
+        line_centroid_offset = (
+            0.25 * (
+                origin_shape["left_tip"][0]
+                + 2.0 * origin_shape["apex"][0]
+                + origin_shape["right_tip"][0]
+            ),
+            0.25 * (
+                origin_shape["left_tip"][1]
+                + 2.0 * origin_shape["apex"][1]
+                + origin_shape["right_tip"][1]
+            ),
+        )
+        center_plane = (
+            centroid_plane[0] - line_centroid_offset[0],
+            centroid_plane[1] - line_centroid_offset[1],
+        )
+        contour_points = set(component.contour_points)
+
+        for _pass in range(ARROW_CENTER_REFINE_PASSES):
+            physical = build_ideal_chevron_points(
+                center_plane,
+                context.arrow_arm_length_cm,
+                context.arrow_angle_deg,
+                opening_direction,
+            )
+            projected: list[tuple[float, float]] = []
+            for name in point_names:
+                image_point = projector.plane_to_image(
+                    physical[name],
+                    context.roll_deg,
+                    context.pitch_deg,
+                    context.height_cm,
+                    context.arrow_plane_height_cm,
+                )
+                if image_point is None:
+                    return None
+                projected.append(image_point)
+
+            estimates: list[tuple[float, float]] = []
+            for theoretical, offset in zip(projected, point_offsets):
+                attached = self._nearest_contour_point(
+                    theoretical,
+                    contour_points,
+                )
+                if attached is None:
+                    continue
+                attached_plane = projector.image_to_plane(
+                    attached,
+                    context.roll_deg,
+                    context.pitch_deg,
+                    context.height_cm,
+                    context.arrow_plane_height_cm,
+                )
+                if attached_plane is not None:
+                    estimates.append(
+                        (
+                            attached_plane[0] - offset[0],
+                            attached_plane[1] - offset[1],
+                        )
+                    )
+            refined_center = self._fuse_arrow_center_estimates(estimates)
+            if refined_center is None:
+                break
+            movement = math.dist(center_plane, refined_center)
+            center_plane = refined_center
+            if movement <= ARROW_CENTER_CONVERGENCE_CM:
+                break
+
+        physical = build_ideal_chevron_points(
+            center_plane,
+            context.arrow_arm_length_cm,
+            context.arrow_angle_deg,
+            opening_direction,
+        )
+        fitted: list[tuple[float, float]] = []
+        for name in point_names:
+            image_point = projector.plane_to_image(
+                physical[name],
+                context.roll_deg,
+                context.pitch_deg,
+                context.height_cm,
+                context.arrow_plane_height_cm,
+            )
+            if image_point is None:
+                return None
+            fitted.append(image_point)
+        return tuple(fitted)
+
     def _split_arrow_match(
         self,
         first: ConnectedComponent,
@@ -3900,7 +4091,10 @@ class PictureViewerApp:
 
             projected_outline: tuple[tuple[float, float], ...] = ()
             if accepted_kind == TARGET_ARROW:
-                projected_outline = self._project_ideal_arrow_outline(
+                projected_outline = self._fit_contour_arrow_outline(
+                    component,
+                    beacon_area_context,
+                ) or self._project_ideal_arrow_outline(
                     (component.centroid_x, component.centroid_y),
                     beacon_area_context,
                 ) or ()

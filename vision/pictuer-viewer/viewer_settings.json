@@ -10,12 +10,12 @@
   "beacon_accept_limit": 7,
   "ideal_target": {
     "type": "理想箭头",
-    "background": "单阈值二值图",
-    "roll_deg": 0.534145,
-    "pitch_deg": 0.16977,
-    "uav_yaw_deg": -106.123131,
-    "height_cm": 78.0718,
-    "car_yaw_deg": 0.1,
+    "background": "去畸变灰度图",
+    "roll_deg": 1.135898,
+    "pitch_deg": -1.175394,
+    "uav_yaw_deg": 3.398825,
+    "height_cm": 115.365646,
+    "car_yaw_deg": 0.0,
     "car_yaw_relative": false,
     "mount_roll_deg": 15.0,
     "mount_pitch_deg": 0.0,
@@ -24,7 +24,7 @@
     "arrow_angle_deg": 70.0,
     "arrow_plane_height_cm": 17.0,
     "arrow_opening_offset_deg": 180.0,
-    "beacon_diameter_cm": 10.0,
+    "beacon_diameter_cm": 15.0,
     "beacon_plane_height_cm": 0.0,
     "near_shape_variance_enabled": false,
     "sampling": {
@@ -181,7 +181,7 @@
     },
     "beacon_physical_area": {
       "min_scale": 0.75,
-      "max_scale": 1.25
+      "max_scale": 2.0
     },
     "split_arrow": {
       "enabled": true,
@@ -192,7 +192,7 @@
     }
   },
   "batch_recognition": {
-    "mode": "仅测箭头",
+    "mode": "仅测信标",
     "filtered_only": false
   }
 }

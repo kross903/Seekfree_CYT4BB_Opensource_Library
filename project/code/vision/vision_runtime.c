@@ -11,8 +11,12 @@
 
 #define VISION_GLOBAL_REFRESH_FRAMES (15U)
 #define VISION_YAW_TOLERANCE_DEG     (30U)
-#define VISION_ARROW_HEIGHT_CM       (14.0f)
-#define VISION_ARROW_HALF_BASE_CM    (14.0f)
+/* 19 cm single arm and 70 degree opening, matching the maintained viewer. */
+#define VISION_ARROW_HEIGHT_CM       (15.564f)
+#define VISION_ARROW_HALF_BASE_CM    (10.898f)
+#define VISION_ARROW_POINT_SEARCH_RADIUS_PX (6.0f)
+#define VISION_ARROW_CENTER_REFINE_PASSES   (2U)
+#define VISION_ARROW_CENTER_CONVERGENCE_CM  (0.05f)
 
 #define ARROW_BASE_MASK (VISION_CONTOUR_GATE_MIN_POINTS | \
     VISION_CONTOUR_GATE_MIN_CIRCULARITY | \
@@ -274,6 +278,66 @@ static void vision_fill_beacon_slot(uint8 slot, const VisionBlob_t *blob)
     output->confidence_edge = blob->confidence_edge;
 }
 
+static float vision_median3(float a, float b, float c)
+{
+    if(a > b) { float t = a; a = b; b = t; }
+    if(b > c) { float t = b; b = c; c = t; }
+    if(a > b) { float t = a; a = b; b = t; }
+    return b;
+}
+
+static uint8 vision_find_nearest_contour_point(
+    const VisionContourCandidate_t *candidate,
+    float target_x, float target_y,
+    float *point_x, float *point_y)
+{
+    float best_distance2 = VISION_ARROW_POINT_SEARCH_RADIUS_PX *
+                           VISION_ARROW_POINT_SEARCH_RADIUS_PX + 1.0f;
+    uint16 i;
+    uint8 found = 0U;
+
+    if(candidate == NULL || point_x == NULL || point_y == NULL) return 0U;
+    /* A single contour pass is equivalent to expanding search rings, but avoids
+       repeatedly scanning the same pixels and cannot attach to another blob. */
+    for(i = 0U; i < candidate->contour.point_count; ++i)
+    {
+        float dx = (float)candidate->contour.point_x[i] - target_x;
+        float dy = (float)candidate->contour.point_y[i] - target_y;
+        float distance2 = dx * dx + dy * dy;
+        if(distance2 <= VISION_ARROW_POINT_SEARCH_RADIUS_PX *
+                        VISION_ARROW_POINT_SEARCH_RADIUS_PX &&
+           (!found || distance2 < best_distance2))
+        {
+            best_distance2 = distance2;
+            *point_x = (float)candidate->contour.point_x[i];
+            *point_y = (float)candidate->contour.point_y[i];
+            found = 1U;
+        }
+    }
+    return found;
+}
+
+static uint8 vision_project_arrow_points(
+    float center_x, float center_y,
+    const float offset_x[3], const float offset_y[3],
+    VehicleMarkerPoint2D_t points[3])
+{
+    uint8 i;
+    for(i = 0U; i < 3U; ++i)
+    {
+        int image_x;
+        int image_y;
+        if(!IPM_Plane2FullRectifiedImage(
+               center_x + offset_x[i], center_y + offset_y[i],
+               VEHICLE_MARKER_CHEVRON_PLANE_HEIGHT_CM,
+               &image_x, &image_y)) return 0U;
+        points[i].u = (float)image_x;
+        points[i].v = (float)image_y;
+        points[i].intensity = 0.0f;
+    }
+    return 1U;
+}
+
 static uint8 vision_build_arrow_points(const VisionContourCandidate_t *candidate,
                                        VehicleMarkerPoint2D_t *apex,
                                        VehicleMarkerPoint2D_t *left,
@@ -286,27 +350,12 @@ static uint8 vision_build_arrow_points(const VisionContourCandidate_t *candidate
     float forward_y;
     float side_x;
     float side_y;
-    float apex_x;
-    float apex_y;
-    float left_x;
-    float left_y;
-    float right_x;
-    float right_y;
-    int image_x;
-    int image_y;
+    float offset_x[3];
+    float offset_y[3];
+    VehicleMarkerPoint2D_t projected[3];
+    uint8 pass;
 
     if(candidate == NULL || apex == NULL || left == NULL || right == NULL) return 0U;
-    if(candidate->vertex_x != VISION_CONTOUR_POINT_INVALID &&
-       candidate->endpoint_count == 2U)
-    {
-        apex->u = candidate->vertex_x;
-        apex->v = candidate->vertex_y;
-        left->u = candidate->endpoint_x[0];
-        left->v = candidate->endpoint_y[0];
-        right->u = candidate->endpoint_x[1];
-        right->v = candidate->endpoint_y[1];
-        return 1U;
-    }
     if(!IPM_FullRectifiedImage2PlaneF(candidate->blob.centroid_col,
             candidate->blob.centroid_row, VEHICLE_MARKER_CHEVRON_PLANE_HEIGHT_CM,
             &center_x, &center_y)) return 0U;
@@ -315,28 +364,84 @@ static uint8 vision_build_arrow_points(const VisionContourCandidate_t *candidate
     forward_y = sinf(yaw_rad);
     side_x = -forward_y;
     side_y = forward_x;
-    apex_x = center_x + (2.0f * VISION_ARROW_HEIGHT_CM / 3.0f) * forward_x;
-    apex_y = center_y + (2.0f * VISION_ARROW_HEIGHT_CM / 3.0f) * forward_y;
-    left_x = center_x - (VISION_ARROW_HEIGHT_CM / 3.0f) * forward_x +
-             VISION_ARROW_HALF_BASE_CM * side_x;
-    left_y = center_y - (VISION_ARROW_HEIGHT_CM / 3.0f) * forward_y +
-             VISION_ARROW_HALF_BASE_CM * side_y;
-    right_x = center_x - (VISION_ARROW_HEIGHT_CM / 3.0f) * forward_x -
-              VISION_ARROW_HALF_BASE_CM * side_x;
-    right_y = center_y - (VISION_ARROW_HEIGHT_CM / 3.0f) * forward_y -
-              VISION_ARROW_HALF_BASE_CM * side_y;
-    if(!IPM_Plane2FullRectifiedImage(apex_x, apex_y,
-            VEHICLE_MARKER_CHEVRON_PLANE_HEIGHT_CM, &image_x, &image_y)) return 0U;
-    apex->u = (float)image_x;
-    apex->v = (float)image_y;
-    if(!IPM_Plane2FullRectifiedImage(left_x, left_y,
-            VEHICLE_MARKER_CHEVRON_PLANE_HEIGHT_CM, &image_x, &image_y)) return 0U;
-    left->u = (float)image_x;
-    left->v = (float)image_y;
-    if(!IPM_Plane2FullRectifiedImage(right_x, right_y,
-            VEHICLE_MARKER_CHEVRON_PLANE_HEIGHT_CM, &image_x, &image_y)) return 0U;
-    right->u = (float)image_x;
-    right->v = (float)image_y;
+
+    /* Point order is apex, left endpoint, right endpoint. */
+    offset_x[0] = (2.0f * VISION_ARROW_HEIGHT_CM / 3.0f) * forward_x;
+    offset_y[0] = (2.0f * VISION_ARROW_HEIGHT_CM / 3.0f) * forward_y;
+    offset_x[1] = -(VISION_ARROW_HEIGHT_CM / 3.0f) * forward_x +
+                  VISION_ARROW_HALF_BASE_CM * side_x;
+    offset_y[1] = -(VISION_ARROW_HEIGHT_CM / 3.0f) * forward_y +
+                  VISION_ARROW_HALF_BASE_CM * side_y;
+    offset_x[2] = -(VISION_ARROW_HEIGHT_CM / 3.0f) * forward_x -
+                  VISION_ARROW_HALF_BASE_CM * side_x;
+    offset_y[2] = -(VISION_ARROW_HEIGHT_CM / 3.0f) * forward_y -
+                  VISION_ARROW_HALF_BASE_CM * side_y;
+
+    /* The centroid of two uniformly bright arms is height/6 toward the apex
+       from the triangle centroid used by the theoretical three-point model. */
+    center_x -= (VISION_ARROW_HEIGHT_CM / 6.0f) * forward_x;
+    center_y -= (VISION_ARROW_HEIGHT_CM / 6.0f) * forward_y;
+
+    for(pass = 0U; pass < VISION_ARROW_CENTER_REFINE_PASSES; ++pass)
+    {
+        float estimate_x[3];
+        float estimate_y[3];
+        uint8 estimate_count = 0U;
+        uint8 i;
+        float refined_x;
+        float refined_y;
+        float movement_x;
+        float movement_y;
+
+        if(!vision_project_arrow_points(center_x, center_y,
+                                        offset_x, offset_y, projected)) return 0U;
+        for(i = 0U; i < 3U; ++i)
+        {
+            float contour_x;
+            float contour_y;
+            float point_world_x;
+            float point_world_y;
+            if(!vision_find_nearest_contour_point(candidate,
+                    projected[i].u, projected[i].v,
+                    &contour_x, &contour_y)) continue;
+            if(!IPM_FullRectifiedImage2PlaneF(
+                    contour_x, contour_y,
+                    VEHICLE_MARKER_CHEVRON_PLANE_HEIGHT_CM,
+                    &point_world_x, &point_world_y)) continue;
+            estimate_x[estimate_count] = point_world_x - offset_x[i];
+            estimate_y[estimate_count] = point_world_y - offset_y[i];
+            ++estimate_count;
+        }
+        if(estimate_count == 0U) break;
+        if(estimate_count == 1U)
+        {
+            refined_x = estimate_x[0];
+            refined_y = estimate_y[0];
+        }
+        else if(estimate_count == 2U)
+        {
+            refined_x = 0.5f * (estimate_x[0] + estimate_x[1]);
+            refined_y = 0.5f * (estimate_y[0] + estimate_y[1]);
+        }
+        else
+        {
+            refined_x = vision_median3(estimate_x[0], estimate_x[1], estimate_x[2]);
+            refined_y = vision_median3(estimate_y[0], estimate_y[1], estimate_y[2]);
+        }
+        movement_x = refined_x - center_x;
+        movement_y = refined_y - center_y;
+        center_x = refined_x;
+        center_y = refined_y;
+        if(movement_x * movement_x + movement_y * movement_y <=
+           VISION_ARROW_CENTER_CONVERGENCE_CM *
+           VISION_ARROW_CENTER_CONVERGENCE_CM) break;
+    }
+
+    if(!vision_project_arrow_points(center_x, center_y,
+                                    offset_x, offset_y, projected)) return 0U;
+    *apex = projected[0];
+    *left = projected[1];
+    *right = projected[2];
     return 1U;
 }
 
