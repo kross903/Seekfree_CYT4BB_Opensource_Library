@@ -39,10 +39,10 @@
 #define VISION_RUNTIME_BLOB_AREA_COUNT         (16U)
 #define VISION_RUNTIME_YAW_MAX_AGE_MS          (500U)
 
-/* 10 cm beacon: accept 0.75x..1.25x of its nominal physical area. */
-#define VISION_RUNTIME_BEACON_DIAMETER_CM       (10.0f)
-#define VISION_RUNTIME_BEACON_AREA_MIN_SCALE    (0.75f)
-#define VISION_RUNTIME_BEACON_AREA_MAX_SCALE    (1.25f)
+/* 20 cm beacon: accept 0.30x..3.00x of its nominal physical area. */
+#define VISION_RUNTIME_BEACON_DIAMETER_CM       (20.0f)
+#define VISION_RUNTIME_BEACON_AREA_MIN_SCALE    (0.30f)
+#define VISION_RUNTIME_BEACON_AREA_MAX_SCALE    (3.00f)
 /* 去畸变图中心使用严格面积门控，中间逐步放宽，外围关闭面积拒绝。 */
 #define VISION_RUNTIME_BEACON_AREA_STRICT_RADIUS   (0.35f)
 #define VISION_RUNTIME_BEACON_AREA_DISABLED_RADIUS (0.80f)
@@ -71,6 +71,7 @@
 #define VISION_CONTOUR_GATE_MAX_VERTEX_TURN    (1UL << 9)
 #define VISION_CONTOUR_GATE_MIN_NOTCH_TURN     (1UL << 10)
 #define VISION_CONTOUR_GATE_MAX_NEGATIVE_TURN  (1UL << 11)
+#define VISION_CONTOUR_GATE_MIN_ASPECT_RATIO   (1UL << 12)
 
 typedef struct
 {
@@ -87,6 +88,7 @@ typedef struct
     uint16 max_vertex_turn_deg;
     uint16 min_notch_turn_deg;
     uint16 max_negative_turn_deg;
+    uint16 min_aspect_ratio_q8;
     uint8 direction_window_points;
 } VisionContourThresholds_t;
 

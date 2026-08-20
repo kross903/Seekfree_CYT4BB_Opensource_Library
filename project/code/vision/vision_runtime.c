@@ -38,7 +38,8 @@
     VISION_CONTOUR_GATE_MAX_CIRCULARITY | \
     VISION_CONTOUR_GATE_MIN_SOLIDITY | \
     VISION_CONTOUR_GATE_MAX_SOLIDITY | \
-    VISION_CONTOUR_GATE_MAX_NEGATIVE_TURN)
+    VISION_CONTOUR_GATE_MAX_NEGATIVE_TURN | \
+    VISION_CONTOUR_GATE_MIN_ASPECT_RATIO)
 
 static VisionRuntimeDiag_t s_diag;
 static VisionRuntimeBeaconSlot_t s_beacon_slots[VISION_RUNTIME_BEACON_SLOT_COUNT];
@@ -59,9 +60,9 @@ static uint32 s_contour_overflow_count;
 
 static VisionContourThresholds_t s_arrow_thresholds = {
     ARROW_BASE_MASK | ARROW_DIRECTION_MASK,
-    8U,
+    20U,
     0U,
-    210U, /* 0.82 */
+    230U, /* 0.90 */
     0U,
     236U, /* 0.92 */
     25U,
@@ -71,12 +72,13 @@ static VisionContourThresholds_t s_arrow_thresholds = {
     100U,
     10U,
     180U,
+    0U,
     6U
 };
 
 static VisionContourThresholds_t s_beacon_thresholds = {
     BEACON_MASK,
-    8U,
+    7U,
     90U,  /* 0.35 */
     256U,
     166U, /* 0.65 */
@@ -88,6 +90,7 @@ static VisionContourThresholds_t s_beacon_thresholds = {
     180U,
     0U,
     50U,
+    102U, /* 0.40 */
     12U
 };
 

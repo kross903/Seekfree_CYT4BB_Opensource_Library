@@ -11,10 +11,10 @@
   "ideal_target": {
     "type": "理想箭头",
     "background": "去畸变灰度图",
-    "roll_deg": -3.894145,
-    "pitch_deg": -4.050711,
-    "uav_yaw_deg": 45.947006,
-    "height_cm": 25.924427,
+    "roll_deg": -2.140851,
+    "pitch_deg": 2.159482,
+    "uav_yaw_deg": 103.485458,
+    "height_cm": 144.655548,
     "car_yaw_deg": 0.0,
     "car_yaw_relative": false,
     "mount_roll_deg": 15.0,
@@ -131,7 +131,6 @@
         "max_circularity",
         "min_solidity",
         "max_solidity",
-        "max_concavity_ratio",
         "min_vertex_angle_deg",
         "max_vertex_angle_deg",
         "min_endpoint_turn_deg",
@@ -174,7 +173,6 @@
         "max_circularity",
         "min_solidity",
         "max_solidity",
-        "max_concavity_ratio",
         "max_negative_turn_deg"
       ]
     },

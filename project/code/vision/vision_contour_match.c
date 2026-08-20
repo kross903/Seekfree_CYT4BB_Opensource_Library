@@ -731,6 +731,9 @@ static uint8 contour_base_gate(const VisionContourCandidate_t *candidate,
        candidate->solidity_q8 < thresholds->min_solidity_q8) return 0U;
     if((mask & VISION_CONTOUR_GATE_MAX_SOLIDITY) &&
        candidate->solidity_q8 > thresholds->max_solidity_q8) return 0U;
+    if((mask & VISION_CONTOUR_GATE_MIN_ASPECT_RATIO) &&
+       candidate->blob.aspect_ratio * 256.0f <
+           (float)thresholds->min_aspect_ratio_q8) return 0U;
     return 1U;
 }
 
