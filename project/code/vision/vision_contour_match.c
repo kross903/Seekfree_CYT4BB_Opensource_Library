@@ -7,6 +7,7 @@
 #if CY_CORE_CM7_1
 
 #define CONTOUR_SEARCH_RADIUS       (32)
+#define CONTOUR_SOURCE_SEED_REFINE_RADIUS (2)
 #define CONTOUR_SEED_SEARCH_DIRECTION (4) /* 固定向下寻边，方向与 Moore 初始背景方向一致 */
 #define CONTOUR_SCAN_INTERSECTIONS  (64U)
 #define CONTOUR_HULL_SAMPLE_POINTS  (96U)
@@ -39,7 +40,6 @@ static uint8 s_threshold;
 static uint32 s_sample_count;
 static uint32 s_trace_steps;
 static uint32 s_overflow_count;
-static uint8 s_global_search_phase;
 static float s_forward_x;
 static float s_forward_y;
 
@@ -104,6 +104,26 @@ static uint8 contour_sample(int x, int y)
         return 1U;
     }
     return 0U;
+}
+
+/*
+ * 历史种子粗寻点只做去畸变查表和最近邻读取，不写入精确二值缓存。
+ * 命中后仍由 contour_sample() 双线性确认，避免粗采样污染轮廓。
+ */
+static uint8 contour_coarse_rectified_foreground(int x, int y)
+{
+    uint16 sx_q8;
+    uint16 sy_q8;
+    uint32 sx;
+    uint32 sy;
+
+    if(!contour_in_bounds(x, y) || s_image == NULL) return 0U;
+    if(!CameraCalibration_FullRectifiedPixelToSourceQ8(
+           x, y, &sx_q8, &sy_q8)) return 0U;
+    sx = ((uint32)sx_q8 + 128U) >> 8;
+    sy = ((uint32)sy_q8 + 128U) >> 8;
+    if(sx >= MT9V03X_W || sy >= MT9V03X_H) return 0U;
+    return (uint8)(s_image[sy][sx] >= s_threshold);
 }
 
 static int contour_direction(int dx, int dy)
@@ -1002,6 +1022,66 @@ static uint8 contour_try_point(int x, int y,
     return 1U;
 }
 
+static uint8 contour_try_coarse_rectified_point(
+    int x, int y,
+    const VisionContourFrameConfig_t *config,
+    VisionContourFrameResult_t *result)
+{
+    if(result->candidate_count >= VISION_RUNTIME_MAX_CANDIDATES ||
+       (result->arrow_count != 0U &&
+        result->beacon_count >= config->beacon_limit) ||
+       !contour_in_bounds(x, y) || BIT_GET(s_processed, x, y) ||
+       !contour_coarse_rectified_foreground(x, y)) return 0U;
+    return contour_try_point(x, y, config, result);
+}
+
+/*
+ * 全局回退直接在 188x120 原图找白点。只有粗白点需要映射到完整
+ * 去畸变坐标，并在取整位置附近用双线性采样确认。
+ */
+static uint8 contour_try_source_point(
+    int source_x, int source_y,
+    const VisionContourFrameConfig_t *config,
+    VisionContourFrameResult_t *result)
+{
+    float rectified_x;
+    float rectified_y;
+    int fine_x;
+    int fine_y;
+    int radius;
+
+    if(result->candidate_count >= VISION_RUNTIME_MAX_CANDIDATES ||
+       (result->arrow_count != 0U &&
+        result->beacon_count >= config->beacon_limit) ||
+       source_x < 0 || source_y < 0 ||
+       source_x >= MT9V03X_W || source_y >= MT9V03X_H ||
+       s_image[source_y][source_x] < s_threshold) return 0U;
+    if(!CameraCalibration_SourcePointToRectified(
+           (float)source_x, (float)source_y,
+           &rectified_x, &rectified_y)) return 0U;
+    fine_x = (int)(rectified_x * 2.0f + 0.5f);
+    fine_y = (int)(rectified_y * 2.0f + 0.5f);
+
+    for(radius = 0; radius <= CONTOUR_SOURCE_SEED_REFINE_RADIUS; ++radius)
+    {
+        int x;
+        int y;
+        for(x = fine_x - radius; x <= fine_x + radius; ++x)
+        {
+            if(contour_try_point(x, fine_y - radius, config, result)) return 1U;
+            if(radius != 0 &&
+               contour_try_point(x, fine_y + radius, config, result)) return 1U;
+        }
+        for(y = fine_y - radius + 1; y < fine_y + radius; ++y)
+        {
+            if(contour_try_point(fine_x - radius, y, config, result)) return 1U;
+            if(radius != 0 &&
+               contour_try_point(fine_x + radius, y, config, result)) return 1U;
+        }
+    }
+    return 0U;
+}
+
 static void contour_search_around_seed(const VisionContourSeed_t *seed,
                                        const VisionContourFrameConfig_t *config,
                                        VisionContourFrameResult_t *result)
@@ -1016,13 +1096,19 @@ static void contour_search_around_seed(const VisionContourSeed_t *seed,
         int y;
         for(x = cx - radius; x <= cx + radius; ++x)
         {
-            (void)contour_try_point(x, cy - radius, config, result);
-            if(radius != 0) (void)contour_try_point(x, cy + radius, config, result);
+            (void)contour_try_coarse_rectified_point(
+                x, cy - radius, config, result);
+            if(radius != 0)
+                (void)contour_try_coarse_rectified_point(
+                    x, cy + radius, config, result);
         }
         for(y = cy - radius + 1; y < cy + radius; ++y)
         {
-            (void)contour_try_point(cx - radius, y, config, result);
-            if(radius != 0) (void)contour_try_point(cx + radius, y, config, result);
+            (void)contour_try_coarse_rectified_point(
+                cx - radius, y, config, result);
+            if(radius != 0)
+                (void)contour_try_coarse_rectified_point(
+                    cx + radius, y, config, result);
         }
         {
             uint8 index;
@@ -1039,15 +1125,14 @@ static void contour_search_around_seed(const VisionContourSeed_t *seed,
 static void contour_global_center_search(const VisionContourFrameConfig_t *config,
                                          VisionContourFrameResult_t *result)
 {
-    int cx = (int)VISION_RUNTIME_FINE_WIDTH / 2;
-    int cy = (int)VISION_RUNTIME_FINE_HEIGHT / 2;
-    int right_radius = (int)VISION_RUNTIME_FINE_WIDTH - 1 - cx;
-    int bottom_radius = (int)VISION_RUNTIME_FINE_HEIGHT - 1 - cy;
+    int cx = MT9V03X_W / 2;
+    int cy = MT9V03X_H / 2;
+    int right_radius = MT9V03X_W - 1 - cx;
+    int bottom_radius = MT9V03X_H - 1 - cy;
     int max_x_radius = (cx > right_radius) ? cx : right_radius;
     int max_y_radius = (cy > bottom_radius) ? cy : bottom_radius;
     int max_radius = (max_x_radius > max_y_radius) ?
                      max_x_radius : max_y_radius;
-    uint8 phase = s_global_search_phase;
     int radius;
     result->used_global_search = 1U;
     for(radius = 0; radius <= max_radius; ++radius)
@@ -1057,49 +1142,43 @@ static void contour_global_center_search(const VisionContourFrameConfig_t *confi
         int top = cy - radius;
         int bottom = cy + radius;
         int min_x = (left < 0) ? 0 : left;
-        int max_x = (right >= (int)VISION_RUNTIME_FINE_WIDTH) ?
-                    (int)VISION_RUNTIME_FINE_WIDTH - 1 : right;
+        int max_x = (right >= MT9V03X_W) ? MT9V03X_W - 1 : right;
         int min_y = (top < 0) ? 0 : top;
-        int max_y = (bottom >= (int)VISION_RUNTIME_FINE_HEIGHT) ?
-                    (int)VISION_RUNTIME_FINE_HEIGHT - 1 : bottom;
+        int max_y = (bottom >= MT9V03X_H) ? MT9V03X_H - 1 : bottom;
         int x;
         int y;
 
-        /* 只扫描本圈仍在图像内的新边，避免矩形图像外的无效寻点。 */
+        /* 从原图中心向外逐圈扫描，每个原图像素只比较一次灰度。 */
         if(top >= 0)
         {
             for(x = min_x; x <= max_x; ++x)
             {
-                if((((uint32)(x + top) + phase) & 1U) == 0U)
-                    (void)contour_try_point(x, top, config, result);
+                (void)contour_try_source_point(x, top, config, result);
             }
         }
-        if(bottom < (int)VISION_RUNTIME_FINE_HEIGHT && bottom != top)
+        if(bottom < MT9V03X_H && bottom != top)
         {
             for(x = min_x; x <= max_x; ++x)
             {
-                if((((uint32)(x + bottom) + phase) & 1U) == 0U)
-                    (void)contour_try_point(x, bottom, config, result);
+                (void)contour_try_source_point(x, bottom, config, result);
             }
         }
 
         /* 上下边的角点已扫描；超出上下边界后则覆盖整列。 */
         if(top >= 0) ++min_y;
-        if(bottom < (int)VISION_RUNTIME_FINE_HEIGHT) --max_y;
+        if(bottom < MT9V03X_H) --max_y;
         if(left >= 0)
         {
             for(y = min_y; y <= max_y; ++y)
             {
-                if((((uint32)(left + y) + phase) & 1U) == 0U)
-                    (void)contour_try_point(left, y, config, result);
+                (void)contour_try_source_point(left, y, config, result);
             }
         }
-        if(right < (int)VISION_RUNTIME_FINE_WIDTH && right != left)
+        if(right < MT9V03X_W && right != left)
         {
             for(y = min_y; y <= max_y; ++y)
             {
-                if((((uint32)(right + y) + phase) & 1U) == 0U)
-                    (void)contour_try_point(right, y, config, result);
+                (void)contour_try_source_point(right, y, config, result);
             }
         }
         if(result->candidate_count >= VISION_RUNTIME_MAX_CANDIDATES ||
@@ -1142,7 +1221,6 @@ void VisionContourMatch_Process(const VisionContourFrameConfig_t *config,
     result->sampled_pixels = s_sample_count;
     result->traced_steps = s_trace_steps;
     result->overflow_count = s_overflow_count;
-    s_global_search_phase ^= 1U;
 }
 
 const uint8 *VisionContourMatch_GetBinaryImage(void)
