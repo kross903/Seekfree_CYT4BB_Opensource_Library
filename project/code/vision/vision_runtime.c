@@ -17,6 +17,9 @@
 #define VISION_ARROW_POINT_SEARCH_RADIUS_PX (6.0f)
 #define VISION_ARROW_CENTER_REFINE_PASSES   (2U)
 #define VISION_ARROW_CENTER_CONVERGENCE_CM  (0.05f)
+#define VISION_ARROW_MEMBER_CORRIDOR_PX     (5.0f)
+#define VISION_ARROW_MEMBER_MAX_SAMPLES     (24U)
+#define VISION_ARROW_MEMBER_MIN_RATIO_Q8    (77U)
 
 #define ARROW_BASE_MASK (VISION_CONTOUR_GATE_MIN_POINTS | \
     VISION_CONTOUR_GATE_MIN_CIRCULARITY | \
@@ -445,6 +448,79 @@ static uint8 vision_build_arrow_points(const VisionContourCandidate_t *candidate
     return 1U;
 }
 
+static uint8 vision_point_near_arrow_arm(float point_x, float point_y,
+                                         const VehicleMarkerPoint2D_t *start,
+                                         const VehicleMarkerPoint2D_t *end)
+{
+    float dx;
+    float dy;
+    float px;
+    float py;
+    float length2;
+    float projection;
+    float distance2;
+    float corridor2 = VISION_ARROW_MEMBER_CORRIDOR_PX *
+                      VISION_ARROW_MEMBER_CORRIDOR_PX;
+    if(start == NULL || end == NULL) return 0U;
+    dx = end->u - start->u;
+    dy = end->v - start->v;
+    px = point_x - start->u;
+    py = point_y - start->v;
+    length2 = dx * dx + dy * dy;
+    if(length2 <= 0.001f) return (uint8)(px * px + py * py <= corridor2);
+    projection = px * dx + py * dy;
+    if(projection <= 0.0f)
+    {
+        distance2 = px * px + py * py;
+    }
+    else if(projection >= length2)
+    {
+        px = point_x - end->u;
+        py = point_y - end->v;
+        distance2 = px * px + py * py;
+    }
+    else
+    {
+        float cross = px * dy - py * dx;
+        return (uint8)(cross * cross <= corridor2 * length2);
+    }
+    return (uint8)(distance2 <= corridor2);
+}
+
+static uint8 vision_candidate_follows_arrow_arms(
+    const VisionContourCandidate_t *candidate,
+    const VehicleMarkerPoint2D_t *apex,
+    const VehicleMarkerPoint2D_t *left,
+    const VehicleMarkerPoint2D_t *right)
+{
+    uint16 step;
+    uint16 i;
+    uint16 sampled = 0U;
+    uint16 hits = 0U;
+    if(candidate == NULL || apex == NULL || left == NULL || right == NULL)
+        return 0U;
+    if(vision_point_near_arrow_arm(candidate->blob.centroid_col,
+           candidate->blob.centroid_row, apex, left) ||
+       vision_point_near_arrow_arm(candidate->blob.centroid_col,
+           candidate->blob.centroid_row, apex, right)) return 1U;
+    if(candidate->contour.point_count == 0U) return 0U;
+    step = (uint16)((candidate->contour.point_count +
+                     VISION_ARROW_MEMBER_MAX_SAMPLES - 1U) /
+                    VISION_ARROW_MEMBER_MAX_SAMPLES);
+    if(step == 0U) step = 1U;
+    for(i = 0U; i < candidate->contour.point_count; i = (uint16)(i + step))
+    {
+        float point_x = (float)candidate->contour.point_x[i];
+        float point_y = (float)candidate->contour.point_y[i];
+        ++sampled;
+        if(vision_point_near_arrow_arm(point_x, point_y, apex, left) ||
+           vision_point_near_arrow_arm(point_x, point_y, apex, right)) ++hits;
+    }
+    return (uint8)(sampled != 0U &&
+        (uint32)hits * 256U >=
+        (uint32)sampled * VISION_ARROW_MEMBER_MIN_RATIO_Q8);
+}
+
 static void vision_update_nearest_beacon(uint8 beacon_count)
 {
     uint8 i;
@@ -478,6 +554,10 @@ static void vision_process_result(VisionContourFrameResult_t *result)
     uint8 i;
     uint8 beacon_slot = 0U;
     uint8 arrow_committed = 0U;
+    uint8 arrow_geometry_valid = 0U;
+    VehicleMarkerPoint2D_t arrow_apex = {0};
+    VehicleMarkerPoint2D_t arrow_left = {0};
+    VehicleMarkerPoint2D_t arrow_right = {0};
     s_candidate_count = result->candidate_count;
     memset(s_candidate_boxes, 0, sizeof(s_candidate_boxes));
     memset(s_beacon_slots, 0, sizeof(s_beacon_slots));
@@ -491,28 +571,47 @@ static void vision_process_result(VisionContourFrameResult_t *result)
         vision_fill_physical_metrics(blob);
         if(candidate->target == VISION_CONTOUR_TARGET_BEACON)
             vision_fill_beacon_confidence(blob);
-        vision_fill_candidate_box(i, candidate);
         vision_insert_area_rank(blob->area);
+        if(candidate->target == VISION_CONTOUR_TARGET_ARROW &&
+           !arrow_geometry_valid)
+        {
+            if(vision_build_arrow_points(candidate, &arrow_apex,
+                                         &arrow_left, &arrow_right))
+            {
+                arrow_geometry_valid = 1U;
+                if(VehicleMarkerLocalization_CommitContourArrow(
+                   &arrow_apex, &arrow_left, &arrow_right,
+                   (float)candidate->yaw_error_deg,
+                   candidate->yaw_assisted))
+                    arrow_committed = 1U;
+            }
+        }
+    }
+
+    if(arrow_geometry_valid)
+    {
+        for(i = 0U; i < result->candidate_count; ++i)
+        {
+            VisionContourCandidate_t *candidate = &result->candidate[i];
+            if(candidate->target == VISION_CONTOUR_TARGET_BEACON &&
+               vision_candidate_follows_arrow_arms(
+                   candidate, &arrow_apex, &arrow_left, &arrow_right))
+                candidate->target = VISION_CONTOUR_TARGET_NONE;
+        }
+    }
+
+    result->beacon_count = 0U;
+    for(i = 0U; i < result->candidate_count; ++i)
+    {
+        VisionContourCandidate_t *candidate = &result->candidate[i];
+        VisionBlob_t *blob = &candidate->blob;
+        vision_fill_candidate_box(i, candidate);
         if(candidate->target == VISION_CONTOUR_TARGET_BEACON &&
            beacon_slot < s_beacon_limit && blob->world_valid)
         {
             vision_fill_beacon_slot(beacon_slot, blob);
             ++beacon_slot;
-        }
-        else if(candidate->target == VISION_CONTOUR_TARGET_ARROW &&
-                !arrow_committed)
-        {
-            VehicleMarkerPoint2D_t apex = {0};
-            VehicleMarkerPoint2D_t left = {0};
-            VehicleMarkerPoint2D_t right = {0};
-            if(vision_build_arrow_points(candidate, &apex, &left, &right) &&
-               VehicleMarkerLocalization_CommitContourArrow(
-                   &apex, &left, &right,
-                   (float)candidate->yaw_error_deg,
-                   candidate->yaw_assisted))
-            {
-                arrow_committed = 1U;
-            }
+            ++result->beacon_count;
         }
         if(candidate->target != VISION_CONTOUR_TARGET_NONE &&
            s_previous_seed_count < VISION_CONTOUR_MAX_SEEDS)

@@ -1,5 +1,5 @@
 {
-  "folder": "D:\\code\\project\\Seekfree_CYT4BB_Opensource_Library\\vision\\capture\\新图像",
+  "folder": "D:\\code\\project\\Seekfree_CYT4BB_Opensource_Library\\vision\\capture",
   "threshold": 120,
   "min_area": 6,
   "connectivity": 8,
@@ -11,10 +11,10 @@
   "ideal_target": {
     "type": "理想箭头",
     "background": "去畸变灰度图",
-    "roll_deg": 1.135898,
-    "pitch_deg": -1.175394,
-    "uav_yaw_deg": 3.398825,
-    "height_cm": 115.365646,
+    "roll_deg": -0.61908,
+    "pitch_deg": -9.027393,
+    "uav_yaw_deg": -94.891739,
+    "height_cm": 153.973923,
     "car_yaw_deg": 0.0,
     "car_yaw_relative": false,
     "mount_roll_deg": 15.0,
@@ -131,6 +131,7 @@
         "max_circularity",
         "min_solidity",
         "max_solidity",
+        "max_concavity_ratio",
         "min_vertex_angle_deg",
         "max_vertex_angle_deg",
         "min_endpoint_turn_deg",
@@ -143,7 +144,7 @@
     "beacon": {
       "min_contour_points": 8,
       "min_gray_contrast": 5.0,
-      "min_aspect_ratio": 0.45,
+      "min_aspect_ratio": 0.5,
       "max_aspect_ratio": 1.0,
       "min_circularity": 0.35,
       "max_circularity": 1.0,
@@ -152,7 +153,7 @@
       "min_radial_cv": 0.0,
       "max_radial_cv": 0.45,
       "min_concavity_ratio": 0.0,
-      "max_concavity_ratio": 0.18,
+      "max_concavity_ratio": 0.1,
       "min_direction_entropy": 0.55,
       "max_direction_entropy": 1.0,
       "min_dominant_axis_ratio": 0.0,
@@ -168,10 +169,12 @@
       "max_negative_turn_deg": 50.0,
       "enabled": [
         "min_contour_points",
+        "min_aspect_ratio",
         "min_circularity",
         "max_circularity",
         "min_solidity",
         "max_solidity",
+        "max_concavity_ratio",
         "max_negative_turn_deg"
       ]
     },
@@ -180,8 +183,8 @@
       "tolerance_deg": 30.0
     },
     "beacon_physical_area": {
-      "min_scale": 0.75,
-      "max_scale": 2.0
+      "min_scale": 0.3,
+      "max_scale": 10.0
     },
     "split_arrow": {
       "enabled": true,

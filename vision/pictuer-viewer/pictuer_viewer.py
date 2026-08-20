@@ -209,6 +209,9 @@ SPLIT_ARROW_MIN_AXIS_DOMINANCE = 0.45
 ARROW_POINT_SEARCH_RADIUS_PX = 6
 ARROW_CENTER_REFINE_PASSES = 2
 ARROW_CENTER_CONVERGENCE_CM = 0.05
+ARROW_MEMBER_CORRIDOR_PX = 5.0
+ARROW_MEMBER_MIN_CONTOUR_RATIO = 0.30
+ARROW_MEMBER_MAX_CONTOUR_SAMPLES = 24
 ARROW_SHAPE_GATE_DEFAULT_ENABLED = True
 ARROW_MAX_OCCUPANCY_DEFAULT = 0.5
 ARROW_MAX_HORIZONTAL_RUN_DEFAULT = 0.5
@@ -2724,6 +2727,36 @@ class PictureViewerApp:
             point[1] - (start[1] + t * dy),
         )
 
+    def _component_follows_arrow_arms(
+        self,
+        component: ConnectedComponent,
+        outline: tuple[tuple[float, float], ...],
+    ) -> bool:
+        """Reject detached bright fragments that still lie on a confirmed arrow arm."""
+        if len(outline) != 3:
+            return False
+        left_tip, apex, right_tip = outline
+        arms = ((apex, left_tip), (apex, right_tip))
+
+        def near_an_arm(point: tuple[float, float]) -> bool:
+            return any(
+                self._point_segment_distance(point, start, end)
+                <= ARROW_MEMBER_CORRIDOR_PX
+                for start, end in arms
+            )
+
+        if near_an_arm((component.centroid_x, component.centroid_y)):
+            return True
+        points = component.contour_points
+        if not points:
+            return False
+        step = max(1, math.ceil(len(points) / ARROW_MEMBER_MAX_CONTOUR_SAMPLES))
+        sampled = points[::step]
+        hits = sum(near_an_arm(point) for point in sampled)
+        return hits >= math.ceil(
+            len(sampled) * ARROW_MEMBER_MIN_CONTOUR_RATIO
+        )
+
     @staticmethod
     def _project_ideal_arrow_outline(
         center_image: tuple[float, float],
@@ -4005,58 +4038,50 @@ class PictureViewerApp:
                     else:
                         failures.extend(beacon_decision.failures)
             else:
-                if beacon_found_count < beacon_accept_limit:
-                    if not centroid_is_white:
-                        attempts.append("信标跳过（质心二值点为黑色）")
-                        failures.append("信标：质心二值点为黑色")
-                    else:
-                        beacon_decision = evaluate_contour_metrics(
-                            contour_metrics,
-                            thresholds[TARGET_BEACON],
-                        )
-                        attempts.append(
-                            f"信标基础条件{'通过' if beacon_decision.passed else '失败'}"
-                        )
-                        beacon_yaw_rejected, beacon_yaw_error, beacon_yaw_source, _ = (
-                            self.evaluate_contour_beacon_yaw_rejection(
-                                component,
-                                contour_metrics,
-                                thresholds[TARGET_ARROW],
-                                yaw_assist_enabled,
-                                yaw_tolerance_deg,
-                            )
-                        )
-                        if beacon_decision.passed and beacon_yaw_rejected:
-                            attempts.append("信标Yaw拒绝")
-                            failures.append("信标：Yaw拒绝信标：候选符合箭头方向")
-                            yaw_direction_error = beacon_yaw_error
-                            yaw_direction_source = beacon_yaw_source
-                        if beacon_decision.passed and not beacon_yaw_rejected:
-                            (physical_area_valid, physical_area_cm2,
-                             physical_area_min_cm2, physical_area_max_cm2,
-                             area_failure) = self.evaluate_beacon_physical_area(
-                                component, beacon_area_context, beacon_diameter,
-                                beacon_area_min_scale, beacon_area_max_scale,
-                            )
-                            if physical_area_valid:
-                                accepted_kind = TARGET_BEACON
-                                beacon_found_count += 1
-                                attempts.append("信标物理面积通过")
-                            elif area_failure is not None:
-                                attempts.append("信标物理面积失败，继续尝试箭头")
-                                failures.append(area_failure)
-                        else:
-                            failures.extend(
-                                f"信标：{failure}"
-                                for failure in beacon_decision.failures
-                            )
+                if not centroid_is_white:
+                    attempts.append("信标跳过（质心二值点为黑色）")
+                    failures.append("信标：质心二值点为黑色")
                 else:
+                    beacon_decision = evaluate_contour_metrics(
+                        contour_metrics,
+                        thresholds[TARGET_BEACON],
+                    )
                     attempts.append(
-                        f"信标跳过（已达到上限 {beacon_accept_limit}）"
+                        f"信标基础条件{'通过' if beacon_decision.passed else '失败'}"
                     )
-                    failures.append(
-                        f"信标：已达到单帧上限 {beacon_accept_limit}"
+                    beacon_yaw_rejected, beacon_yaw_error, beacon_yaw_source, _ = (
+                        self.evaluate_contour_beacon_yaw_rejection(
+                            component,
+                            contour_metrics,
+                            thresholds[TARGET_ARROW],
+                            yaw_assist_enabled,
+                            yaw_tolerance_deg,
+                        )
                     )
+                    if beacon_decision.passed and beacon_yaw_rejected:
+                        attempts.append("信标Yaw拒绝")
+                        failures.append("信标：Yaw拒绝信标：候选符合箭头方向")
+                        yaw_direction_error = beacon_yaw_error
+                        yaw_direction_source = beacon_yaw_source
+                    if beacon_decision.passed and not beacon_yaw_rejected:
+                        (physical_area_valid, physical_area_cm2,
+                         physical_area_min_cm2, physical_area_max_cm2,
+                         area_failure) = self.evaluate_beacon_physical_area(
+                            component, beacon_area_context, beacon_diameter,
+                            beacon_area_min_scale, beacon_area_max_scale,
+                        )
+                        if physical_area_valid:
+                            accepted_kind = TARGET_BEACON
+                            beacon_found_count += 1
+                            attempts.append("信标物理面积通过（待箭头区域排除）")
+                        elif area_failure is not None:
+                            attempts.append("信标物理面积失败，继续尝试箭头")
+                            failures.append(area_failure)
+                    else:
+                        failures.extend(
+                            f"信标：{failure}"
+                            for failure in beacon_decision.failures
+                        )
 
                 if accepted_kind is None:
                     if arrow_found:
@@ -4229,6 +4254,60 @@ class PictureViewerApp:
                 split_arrow_fit_error_px=float(match["fit_error_px"]),
             )
             arrow_found = True
+
+        if target_only is None:
+            arrow_outlines = tuple(
+                recognition.projected_outline
+                for recognition in results.values()
+                if recognition.passed
+                and recognition.target_kind == TARGET_ARROW
+                and len(recognition.projected_outline) == 3
+            )
+            for component in self.components:
+                recognition = results.get(component.label)
+                if (
+                    recognition is None
+                    or not recognition.passed
+                    or recognition.target_kind != TARGET_BEACON
+                ):
+                    continue
+                if any(
+                    self._component_follows_arrow_arms(component, outline)
+                    for outline in arrow_outlines
+                ):
+                    results[component.label] = replace(
+                        recognition,
+                        passed=False,
+                        target_kind=None,
+                        attempts=recognition.attempts + (
+                            "信标拒绝（位于已确认箭头理论臂区域）",
+                        ),
+                        failures=("信标：位于已确认箭头理论臂区域",),
+                        projected_outline=(),
+                    )
+
+            accepted_beacons = [
+                component
+                for component in self.components
+                if (recognition := results.get(component.label)) is not None
+                and recognition.passed
+                and recognition.target_kind == TARGET_BEACON
+            ]
+            for component in accepted_beacons[beacon_accept_limit:]:
+                recognition = results[component.label]
+                results[component.label] = replace(
+                    recognition,
+                    passed=False,
+                    target_kind=None,
+                    attempts=recognition.attempts + (
+                        f"信标拒绝（已达到上限 {beacon_accept_limit}）",
+                    ),
+                    failures=(
+                        f"信标：已达到单帧上限 {beacon_accept_limit}",
+                    ),
+                    projected_outline=(),
+                )
+            beacon_found_count = min(len(accepted_beacons), beacon_accept_limit)
 
         self.beacon_recognition_results = results
         self.update_component_tree()
