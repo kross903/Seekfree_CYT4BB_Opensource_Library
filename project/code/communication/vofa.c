@@ -1411,8 +1411,9 @@ void USART_PID_Adjust(void)
                 case 'g': send_back_flag = 16; break;
                 case 'H':
                 case 'h':
-                    /* FH!/FH1!：小车运动；FH2!：位置纠偏速度整形旁路。 */
-                    send_back_flag = (fifo_get_data[2] == '2') ? 47 : 46;
+                    /* FH1!：小车运动；FH2!：位置纠偏速度整形旁路。 */
+                    if(fifo_get_data[2] == '1') send_back_flag = 46;
+                    else if(fifo_get_data[2] == '2') send_back_flag = 47;
                     break;
                 case 'I':
                 case 'i': send_back_flag = 18; break;
