@@ -1960,12 +1960,48 @@ static void track_light_restore_local_screen(void)
     ips200_set_font(IPS200_8X16_FONT);
     ips200_clear();
     ips200_set_color(RGB565_YELLOW, RGB565_BLACK);
-    ips200_show_string(TEST_PAGE_X, 20U, "Track Light Test");
+    ips200_show_string(TEST_PAGE_X, 20U, "Track Vision K3 IMG K4 BACK");
 }
 
-static void track_light_draw_beacon_slot(uint8 row,
-                                         uint8 slot,
-                                         const VisionRuntimeBeaconSlot_t *beacon)
+static const char *track_light_fusion_source_text(uint8 source)
+{
+    switch(source)
+    {
+        case DUAL_CAMERA_FUSION_SOURCE_FRONT: return "F ";
+        case DUAL_CAMERA_FUSION_SOURCE_REAR: return "R ";
+        case DUAL_CAMERA_FUSION_SOURCE_BOTH_FRONT:
+        case DUAL_CAMERA_FUSION_SOURCE_BOTH_REAR: return "B ";
+        default: return "--";
+    }
+}
+
+static void track_light_draw_link(uint8 row, const char *label,
+                                  uint8 healthy, uint16 age_ms)
+{
+    uint16 y = TEST_ROW_Y(row);
+
+    test_page_clear_line(y);
+    ips200_set_color(RGB565_WHITE, RGB565_BLACK);
+    ips200_show_string(TEST_PAGE_X, y, (char *)label);
+    ips200_set_color(healthy ? RGB565_GREEN : RGB565_RED, RGB565_BLACK);
+    ips200_show_string((uint16)(TEST_PAGE_X + 56U), y,
+                       healthy ? "LIVE" : "LOST");
+    ips200_set_color(RGB565_WHITE, RGB565_BLACK);
+    ips200_show_string((uint16)(TEST_PAGE_X + 104U), y, "AGE:");
+    if(age_ms == 0xFFFFU)
+    {
+        ips200_show_string((uint16)(TEST_PAGE_X + 144U), y, "---");
+    }
+    else
+    {
+        ips200_show_uint((uint16)(TEST_PAGE_X + 144U), y,
+                         (age_ms > 999U) ? 999U : age_ms, 3U);
+    }
+    ips200_show_string((uint16)(TEST_PAGE_X + 176U), y, "ms");
+}
+
+static void track_light_draw_fusion_target(
+    uint8 row, uint8 slot, const DualCameraFusionTarget_t *target)
 {
     uint16 y = TEST_ROW_Y(row);
 
@@ -1973,47 +2009,66 @@ static void track_light_draw_beacon_slot(uint8 row,
     ips200_set_color(RGB565_WHITE, RGB565_BLACK);
     ips200_show_char(TEST_PAGE_X, y, 'B');
     ips200_show_uint((uint16)(TEST_PAGE_X + 8U), y, (uint32)(slot + 1U), 1U);
-    ips200_set_color(beacon->valid ? RGB565_GREEN : RGB565_RED, RGB565_BLACK);
-    ips200_show_string((uint16)(TEST_PAGE_X + 24U), y, beacon->valid ? "ON " : "OFF");
+    if(target == NULL || !target->valid)
+    {
+        ips200_set_color(RGB565_RED, RGB565_BLACK);
+        ips200_show_string((uint16)(TEST_PAGE_X + 24U), y, "OFF");
+        return;
+    }
+
+    ips200_set_color(RGB565_GREEN, RGB565_BLACK);
+    ips200_show_string((uint16)(TEST_PAGE_X + 24U), y,
+                       track_light_fusion_source_text(target->source));
     ips200_set_color(RGB565_WHITE, RGB565_BLACK);
-    ips200_show_string((uint16)(TEST_PAGE_X + 56U), y, "X:");
-    ips200_show_float((uint16)(TEST_PAGE_X + 72U), y,
-                      beacon->valid ? beacon->x_cm : 0.0f, 3U, 1U);
-    ips200_show_string((uint16)(TEST_PAGE_X + 136U), y, "Y:");
-    ips200_show_float((uint16)(TEST_PAGE_X + 152U), y,
-                      beacon->valid ? beacon->y_cm : 0.0f, 3U, 1U);
+    ips200_show_string((uint16)(TEST_PAGE_X + 48U), y, "X:");
+    ips200_show_float((uint16)(TEST_PAGE_X + 64U), y,
+                      target->x_cm, 3U, 1U);
+    ips200_show_string((uint16)(TEST_PAGE_X + 112U), y, "Y:");
+    ips200_show_float((uint16)(TEST_PAGE_X + 128U), y,
+                      target->y_cm, 3U, 1U);
+    ips200_show_string((uint16)(TEST_PAGE_X + 176U), y, "C:");
+    ips200_show_uint((uint16)(TEST_PAGE_X + 192U), y,
+                     target->detection_confidence, 3U);
 }
 
 static void track_light_draw_data(void)
 {
-    VisionRuntimeDiag_t diag = {0};
-    VisionRuntimeBeaconSlot_t slots[VISION_RUNTIME_BEACON_SLOT_COUNT] = {0};
-    uint8 car_valid;
+    DualCameraFusionSnapshot_t snapshot = {0};
+    DualCameraFusionDiag_t diag = {0};
+    uint8 snapshot_valid;
     uint8 i;
 
-    VisionRuntime_GetDiag(&diag);
-    VisionRuntime_GetBeaconSlots(slots, VISION_RUNTIME_BEACON_SLOT_COUNT);
-    car_valid = (uint8)(g_vehicle_marker_pose.valid
-                        && !g_vehicle_marker_position_lost_flag
-                        && (g_vehicle_marker_pose.detected_point_count >= 3U));
+    snapshot_valid = DualCameraFusion_GetSnapshot(&snapshot);
+    DualCameraFusion_GetDiag(&diag);
 
     ips200_set_font(IPS200_8X16_FONT);
-    test_page_show_text(TEST_ROW_Y(0U), "DOWNLINK:", "RUN  ", RGB565_GREEN);
-    test_page_show_text(TEST_ROW_Y(1U), "IMAGE:", "OFF  ", RGB565_WHITE);
-    test_page_show_text(TEST_ROW_Y(2U), "CAR:", car_valid ? "VALID" : "LOST ",
-                        car_valid ? RGB565_GREEN : RGB565_RED);
-    test_page_show_float(TEST_ROW_Y(3U), "CAR X CM:", car_valid ? g_vehicle_marker_pose.x : 0.0f,
+    track_light_draw_link(0U, "FRONT:", diag.front_healthy,
+                          diag.front_age_ms);
+    track_light_draw_link(1U, "REAR:", diag.rear_healthy,
+                          diag.rear_age_ms);
+    test_page_show_text(TEST_ROW_Y(2U), "CAR:",
+                        (snapshot_valid && snapshot.car_valid) ?
+                            "VALID" : "LOST ",
+                        (snapshot_valid && snapshot.car_valid) ?
+                            RGB565_GREEN : RGB565_RED);
+    test_page_show_float(TEST_ROW_Y(3U), "CAR X CM:",
+                         (snapshot_valid && snapshot.car_valid) ?
+                            snapshot.car_x_cm : 0.0f,
                          3U, 1U);
-    test_page_show_float(TEST_ROW_Y(4U), "CAR Y CM:", car_valid ? g_vehicle_marker_pose.y : 0.0f,
+    test_page_show_float(TEST_ROW_Y(4U), "CAR Y CM:",
+                         (snapshot_valid && snapshot.car_valid) ?
+                            snapshot.car_y_cm : 0.0f,
                          3U, 1U);
-    test_page_show_int(TEST_ROW_Y(5U), "BEACONS:", (int32)diag.beacon_count, 2U);
+    test_page_show_int(TEST_ROW_Y(5U), "BEACONS:",
+                       snapshot_valid ? (int32)snapshot.target_count : 0, 2U);
 
-    for(i = 0U; i < VISION_RUNTIME_BEACON_SLOT_COUNT; ++i)
+    for(i = 0U; i < DUAL_CAMERA_FUSION_MAX_TARGETS; ++i)
     {
-        track_light_draw_beacon_slot((uint8)(6U + i), i, &slots[i]);
+        const DualCameraFusionTarget_t *target =
+            (snapshot_valid && i < snapshot.target_count) ?
+                &snapshot.target[i] : NULL;
+        track_light_draw_fusion_target((uint8)(6U + i), i, target);
     }
-
-    test_page_show_text(TEST_ROW_Y(11U), "K3:", "IMAGE K4 BACK", RGB565_CYAN);
 }
 
 static uint8 track_light_wait_for_screen_release(void)
