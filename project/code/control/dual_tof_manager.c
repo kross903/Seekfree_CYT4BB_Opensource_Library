@@ -18,8 +18,8 @@ extern uint8 dl1b_init_flag;
 #define DUAL_TOF2_SOFT_IIC_DELAY       (100U)
 #define DUAL_TOF2_TIMEOUT_COUNT        (1000U)
 
-#define DUAL_TOF_VALID_MIN_MM          (20U)
-#define DUAL_TOF_VALID_MAX_MM          (2000U)
+#define DUAL_TOF_RAW_VALID_MIN_MM      (20U)
+#define DUAL_TOF_RAW_VALID_MAX_MM      (4000U)
 #define DUAL_TOF_CACHE_TIMEOUT_MS      (100U)
 #define DUAL_TOF_POLL_PERIOD_MS        (10U)
 
@@ -57,10 +57,10 @@ static void dual_tof_increment_age(uint16 *age_ms)
     }
 }
 
-static uint8 dual_tof_range_valid(uint16 distance_mm)
+static uint8 dual_tof_raw_range_valid(uint16 distance_mm)
 {
-    return (uint8)((distance_mm >= DUAL_TOF_VALID_MIN_MM) &&
-                   (distance_mm <= DUAL_TOF_VALID_MAX_MM));
+    return (uint8)((distance_mm >= DUAL_TOF_RAW_VALID_MIN_MM) &&
+                   (distance_mm <= DUAL_TOF_RAW_VALID_MAX_MM));
 }
 
 static void dual_tof2_transfer(const uint8 *write_data, uint32 write_len,
@@ -228,8 +228,8 @@ void DualTof_Poll(DualTofSample_t *sample)
         s_tof1_raw_mm = dl1b_distance_mm;
     }
 
-    tof1_current_valid = (uint8)(tof1_new && dual_tof_range_valid(dl1b_distance_mm));
-    tof2_current_valid = (uint8)(tof2_new && dual_tof_range_valid(s_tof2_distance_mm));
+    tof1_current_valid = (uint8)(tof1_new && dual_tof_raw_range_valid(dl1b_distance_mm));
+    tof2_current_valid = (uint8)(tof2_new && dual_tof_raw_range_valid(s_tof2_distance_mm));
 
     if(tof1_new && !tof1_current_valid)
     {

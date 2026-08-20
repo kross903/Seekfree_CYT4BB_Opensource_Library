@@ -37,8 +37,10 @@ extern volatile uint8 armed;
 #define HEIGHT_VEL_FUSION_ACC_ALPHA       0.20f
 #define HEIGHT_VEL_FB_LPF_ALPHA           0.5f
 
-#define TOF_VALID_MIN_M                   0.02f
-#define TOF_VALID_MAX_M                   2.0f
+#define TOF_COMPENSATED_VALID_MIN_CM      2.0f
+#define TOF_COMPENSATED_VALID_MAX_CM      200.0f
+#define HEIGHT_TARGET_MIN_CM              2.0f
+#define HEIGHT_TARGET_MAX_CM              200.0f
 #define TOF_NO_UPDATE_TIMEOUT_TICKS       10U
 #define TOF_PREDICT_MAX_SPEED_CMS         100.0f
 #define TOF_INNOVATION_BASE_GATE_CM       5.0f
@@ -308,13 +310,13 @@ static void publish_height_result(float height_cm, float velocity_cms)
 
 void HeightManager_Set_Target(float target_cm)
 {
-    if(target_cm < TOF_VALID_MIN_M * 100.0f)
+    if(target_cm < HEIGHT_TARGET_MIN_CM)
     {
-        target_cm = TOF_VALID_MIN_M * 100.0f;
+        target_cm = HEIGHT_TARGET_MIN_CM;
     }
-    else if(target_cm > TOF_VALID_MAX_M * 100.0f)
+    else if(target_cm > HEIGHT_TARGET_MAX_CM)
     {
-        target_cm = TOF_VALID_MAX_M * 100.0f;
+        target_cm = HEIGHT_TARGET_MAX_CM;
     }
 
     g_height_target_cm = target_cm;
@@ -394,13 +396,13 @@ void HeightManager_BeginSoftTakeoff(void)
 
     HeightManager_Set_Target(HEIGHT_TARGET_DEFAULT_CM);
 
-    if(start_height_cm < TOF_VALID_MIN_M * 100.0f)
+    if(start_height_cm < HEIGHT_TARGET_MIN_CM)
     {
-        start_height_cm = TOF_VALID_MIN_M * 100.0f;
+        start_height_cm = HEIGHT_TARGET_MIN_CM;
     }
-    else if(start_height_cm > TOF_VALID_MAX_M * 100.0f)
+    else if(start_height_cm > HEIGHT_TARGET_MAX_CM)
     {
-        start_height_cm = TOF_VALID_MAX_M * 100.0f;
+        start_height_cm = HEIGHT_TARGET_MAX_CM;
     }
 
     s_soft_takeoff_prepared = 1U;
@@ -945,12 +947,8 @@ void HeightManager_Task_10ms(void)
     {
         tof1_raw_cm = (float)tof_sample.tof1_raw_mm * 0.1f;
         tof2_raw_cm = (float)tof_sample.tof2_raw_mm * 0.1f;
-        tof1_range_valid = (uint8)(tof_sample.tof1_valid &&
-                                   (tof1_raw_cm >= TOF_VALID_MIN_M * 100.0f) &&
-                                   (tof1_raw_cm <= TOF_VALID_MAX_M * 100.0f));
-        tof2_range_valid = (uint8)(tof_sample.tof2_valid &&
-                                   (tof2_raw_cm >= TOF_VALID_MIN_M * 100.0f) &&
-                                   (tof2_raw_cm <= TOF_VALID_MAX_M * 100.0f));
+        tof1_range_valid = tof_sample.tof1_valid;
+        tof2_range_valid = tof_sample.tof2_valid;
         selected_source = DUAL_TOF_SOURCE_NONE;
         selected_center_cm = 0.0f;
         selected_flow_cm = 0.0f;
@@ -962,9 +960,14 @@ void HeightManager_Task_10ms(void)
                                                                   current_pitch,
                                                                   TOF1_SENSOR_OFFSET_Y_CM,
                                                                   TOF1_SENSOR_TILT_Y_DEG);
-            tof1_flow_cm = height_get_flow_height_from_center_cm(tof1_center_cm,
-                                                                 current_roll,
-                                                                 current_pitch);
+            tof1_range_valid = (uint8)((tof1_center_cm >= TOF_COMPENSATED_VALID_MIN_CM) &&
+                                       (tof1_center_cm <= TOF_COMPENSATED_VALID_MAX_CM));
+            if(tof1_range_valid)
+            {
+                tof1_flow_cm = height_get_flow_height_from_center_cm(tof1_center_cm,
+                                                                     current_roll,
+                                                                     current_pitch);
+            }
         }
         if(tof2_range_valid)
         {
@@ -973,9 +976,14 @@ void HeightManager_Task_10ms(void)
                                                                   current_pitch,
                                                                   TOF2_SENSOR_OFFSET_Y_CM,
                                                                   TOF2_SENSOR_TILT_Y_DEG);
-            tof2_flow_cm = height_get_flow_height_from_center_cm(tof2_center_cm,
-                                                                 current_roll,
-                                                                 current_pitch);
+            tof2_range_valid = (uint8)((tof2_center_cm >= TOF_COMPENSATED_VALID_MIN_CM) &&
+                                       (tof2_center_cm <= TOF_COMPENSATED_VALID_MAX_CM));
+            if(tof2_range_valid)
+            {
+                tof2_flow_cm = height_get_flow_height_from_center_cm(tof2_center_cm,
+                                                                     current_roll,
+                                                                     current_pitch);
+            }
         }
 
         /* Select the larger height after each ToF has been mapped to the
