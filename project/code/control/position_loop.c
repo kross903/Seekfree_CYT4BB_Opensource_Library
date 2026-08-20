@@ -40,6 +40,12 @@
 #define POSITION_LOOP_TWO_PI                        (6.28318530718f) // 一阶低通系数计算使用的2π常量
 #define POSITION_LOOP_VISION_SOURCE_FRONT           (0U)
 #define POSITION_LOOP_VISION_SOURCE_REAR            (1U)
+#define POSITION_LOOP_CORRECTION_SHAPER_PHASE_RESET    (0U)
+#define POSITION_LOOP_CORRECTION_SHAPER_PHASE_HOLD     (1U)
+#define POSITION_LOOP_CORRECTION_SHAPER_PHASE_ACCEL    (2U)
+#define POSITION_LOOP_CORRECTION_SHAPER_PHASE_CRUISE   (3U)
+#define POSITION_LOOP_CORRECTION_SHAPER_PHASE_BRAKE    (4U)
+#define POSITION_LOOP_CORRECTION_SHAPER_PHASE_TERMINAL (5U)
 static volatile uint8 g_enabled = 0U;
 static volatile PositionLoopTrajectoryConfig_t g_config = {
     POSITION_LOOP_POSITION_KP_DEFAULT,
@@ -105,6 +111,9 @@ static float g_shaped_correction_vy_cms = 0.0f;
 static float g_shaped_correction_ax_cms2 = 0.0f;
 static float g_shaped_correction_ay_cms2 = 0.0f;
 static uint8 g_correction_shaper_initialized = 0U;
+static uint8 g_correction_shaper_terminal_pending = 0U;
+static float g_correction_shaper_terminal_vx_cms = 0.0f;
+static float g_correction_shaper_terminal_vy_cms = 0.0f;
 
 static float position_loop_limit_float(float value, float minimum, float maximum)
 {
@@ -134,46 +143,6 @@ static uint8 position_loop_limit_vector(float *x, float *y, float limit)
     return 1U;
 }
 
-static float position_loop_sqrt_controller(float error,
-                                           float proportional_gain,
-                                           float second_order_limit,
-                                           float dt_s)
-{
-    float correction;
-    float linear_error;
-    float maximum_correction;
-
-    if(!isfinite(error) || !isfinite(proportional_gain) ||
-       !isfinite(second_order_limit) || !isfinite(dt_s) ||
-       !(proportional_gain > 0.0f) || !(second_order_limit > 0.0f) ||
-       !(dt_s > 0.0f))
-    {
-        return 0.0f;
-    }
-
-    linear_error = second_order_limit /
-                   (proportional_gain * proportional_gain);
-    if(error > linear_error)
-    {
-        correction = sqrtf(2.0f * second_order_limit *
-                           (error - 0.5f * linear_error));
-    }
-    else if(error < -linear_error)
-    {
-        correction = -sqrtf(2.0f * second_order_limit *
-                            (-error - 0.5f * linear_error));
-    }
-    else
-    {
-        correction = error * proportional_gain;
-    }
-
-    maximum_correction = fabsf(error) / dt_s;
-    return position_loop_limit_float(correction,
-                                     -maximum_correction,
-                                     maximum_correction);
-}
-
 static void position_loop_reset_correction_shaper(void)
 {
     g_shaped_correction_vx_cms = 0.0f;
@@ -181,6 +150,9 @@ static void position_loop_reset_correction_shaper(void)
     g_shaped_correction_ax_cms2 = 0.0f;
     g_shaped_correction_ay_cms2 = 0.0f;
     g_correction_shaper_initialized = 0U;
+    g_correction_shaper_terminal_pending = 0U;
+    g_correction_shaper_terminal_vx_cms = 0.0f;
+    g_correction_shaper_terminal_vy_cms = 0.0f;
     g_diag.shaped_correction_vx_cms = 0.0f;
     g_diag.shaped_correction_vy_cms = 0.0f;
     g_diag.correction_velocity_error_x_cms = 0.0f;
@@ -189,9 +161,12 @@ static void position_loop_reset_correction_shaper(void)
     g_diag.correction_accel_target_y_cms2 = 0.0f;
     g_diag.shaped_correction_ax_cms2 = 0.0f;
     g_diag.shaped_correction_ay_cms2 = 0.0f;
+    g_diag.correction_shaper_jerk_x_cms3 = 0.0f;
+    g_diag.correction_shaper_jerk_y_cms3 = 0.0f;
     g_diag.correction_shaper_accel_max_cms2 = 0.0f;
     g_diag.correction_shaper_jerk_max_cms3 = 0.0f;
     g_diag.correction_shaper_initialized = 0U;
+    g_diag.correction_shaper_phase = POSITION_LOOP_CORRECTION_SHAPER_PHASE_RESET;
 }
 
 static void position_loop_update_correction_shaper(float correction_vx_cms,
@@ -206,11 +181,30 @@ static void position_loop_update_correction_shaper(float correction_vx_cms,
     float acceleration_target_x = 0.0f;
     float acceleration_target_y = 0.0f;
     float acceleration_target_length;
-    float acceleration_gain;
     float acceleration_delta_x;
     float acceleration_delta_y;
     float previous_ax;
     float previous_ay;
+    float previous_acceleration_length;
+    float shaped_acceleration_length;
+    float jerk_x;
+    float jerk_y;
+    float terminal_mid_ax;
+    float terminal_mid_ay;
+    float terminal_first_delta_x;
+    float terminal_first_delta_y;
+    float terminal_first_delta_length;
+    float terminal_second_delta_length;
+    float terminal_target_delta_x;
+    float terminal_target_delta_y;
+    float terminal_target_delta_length;
+    float terminal_second_vx;
+    float terminal_second_vy;
+    float terminal_second_error_x;
+    float terminal_second_error_y;
+    float terminal_second_error_length;
+    uint8 phase = POSITION_LOOP_CORRECTION_SHAPER_PHASE_HOLD;
+    uint8 update_completed = 0U;
 
     if(!isfinite(correction_vx_cms) || !isfinite(correction_vy_cms) ||
        !isfinite(acceleration_max_cms2) || !isfinite(jerk_max_cms3) ||
@@ -228,43 +222,169 @@ static void position_loop_update_correction_shaper(float correction_vx_cms,
         g_shaped_correction_ax_cms2 = 0.0f;
         g_shaped_correction_ay_cms2 = 0.0f;
         g_correction_shaper_initialized = 1U;
+        g_correction_shaper_terminal_pending = 0U;
+    }
+
+    previous_ax = g_shaped_correction_ax_cms2;
+    previous_ay = g_shaped_correction_ay_cms2;
+    previous_acceleration_length = sqrtf(previous_ax * previous_ax +
+                                         previous_ay * previous_ay);
+
+    /* 终端第二拍：实测 dt 可变，必须重新核验Jerk和积分余差。 */
+    if(g_correction_shaper_terminal_pending)
+    {
+        terminal_target_delta_x = correction_vx_cms -
+                                  g_correction_shaper_terminal_vx_cms;
+        terminal_target_delta_y = correction_vy_cms -
+                                  g_correction_shaper_terminal_vy_cms;
+        terminal_target_delta_length = sqrtf(
+            terminal_target_delta_x * terminal_target_delta_x +
+            terminal_target_delta_y * terminal_target_delta_y);
+        terminal_second_vx = g_shaped_correction_vx_cms +
+                             0.5f * previous_ax * dt_s;
+        terminal_second_vy = g_shaped_correction_vy_cms +
+                             0.5f * previous_ay * dt_s;
+        terminal_second_error_x = g_correction_shaper_terminal_vx_cms -
+                                  terminal_second_vx;
+        terminal_second_error_y = g_correction_shaper_terminal_vy_cms -
+                                  terminal_second_vy;
+        terminal_second_error_length = sqrtf(
+            terminal_second_error_x * terminal_second_error_x +
+            terminal_second_error_y * terminal_second_error_y);
+        if((terminal_target_delta_length <= POSITION_LOOP_EPSILON) &&
+           (previous_acceleration_length <=
+            (jerk_max_cms3 * dt_s + POSITION_LOOP_EPSILON)) &&
+           (terminal_second_error_length <= POSITION_LOOP_EPSILON))
+        {
+            acceleration_target_x = 0.0f;
+            acceleration_target_y = 0.0f;
+            g_shaped_correction_ax_cms2 = 0.0f;
+            g_shaped_correction_ay_cms2 = 0.0f;
+            g_shaped_correction_vx_cms = terminal_second_vx;
+            g_shaped_correction_vy_cms = terminal_second_vy;
+            /* 仅消除已核验不超过EPSILON的浮点余差。 */
+            g_shaped_correction_vx_cms =
+                g_correction_shaper_terminal_vx_cms;
+            g_shaped_correction_vy_cms =
+                g_correction_shaper_terminal_vy_cms;
+            phase = POSITION_LOOP_CORRECTION_SHAPER_PHASE_TERMINAL;
+            update_completed = 1U;
+        }
+        g_correction_shaper_terminal_pending = 0U;
     }
 
     velocity_error_x = correction_vx_cms - g_shaped_correction_vx_cms;
     velocity_error_y = correction_vy_cms - g_shaped_correction_vy_cms;
     velocity_error_length = sqrtf(velocity_error_x * velocity_error_x +
                                   velocity_error_y * velocity_error_y);
-    acceleration_gain = jerk_max_cms3 / acceleration_max_cms2;
-    if(velocity_error_length > POSITION_LOOP_EPSILON)
+
+    if(!update_completed && !(velocity_error_length > 0.0f) &&
+       !(previous_acceleration_length > 0.0f))
     {
-        acceleration_target_length = position_loop_sqrt_controller(
-            velocity_error_length, acceleration_gain, jerk_max_cms3, dt_s);
-        acceleration_target_length = position_loop_limit_float(
-            acceleration_target_length, 0.0f, acceleration_max_cms2);
-        acceleration_target_x = velocity_error_x *
-                                (acceleration_target_length /
-                                 velocity_error_length);
-        acceleration_target_y = velocity_error_y *
-                                (acceleration_target_length /
-                                 velocity_error_length);
+        phase = POSITION_LOOP_CORRECTION_SHAPER_PHASE_HOLD;
+        update_completed = 1U;
     }
 
-    acceleration_delta_x = acceleration_target_x -
-                           g_shaped_correction_ax_cms2;
-    acceleration_delta_y = acceleration_target_y -
-                           g_shaped_correction_ay_cms2;
-    (void)position_loop_limit_vector(&acceleration_delta_x,
-                                     &acceleration_delta_y,
-                                     jerk_max_cms3 * dt_s);
+    if(!update_completed)
+    {
+        /*
+         * 两拍终端解：第一拍到a_mid，第二拍回到0。
+         * v_target-v = 0.5*a0*dt + a_mid*dt。
+         * 仅在两次加速度变化均满足二维Jerk约束时进入，避免阈值吸附。
+         */
+        terminal_mid_ax = velocity_error_x / dt_s - 0.5f * previous_ax;
+        terminal_mid_ay = velocity_error_y / dt_s - 0.5f * previous_ay;
+        terminal_first_delta_x = terminal_mid_ax - previous_ax;
+        terminal_first_delta_y = terminal_mid_ay - previous_ay;
+        terminal_first_delta_length = sqrtf(
+            terminal_first_delta_x * terminal_first_delta_x +
+            terminal_first_delta_y * terminal_first_delta_y);
+        terminal_second_delta_length = sqrtf(
+            terminal_mid_ax * terminal_mid_ax +
+            terminal_mid_ay * terminal_mid_ay);
 
-    previous_ax = g_shaped_correction_ax_cms2;
-    previous_ay = g_shaped_correction_ay_cms2;
-    g_shaped_correction_ax_cms2 += acceleration_delta_x;
-    g_shaped_correction_ay_cms2 += acceleration_delta_y;
-    g_shaped_correction_vx_cms +=
-        0.5f * (previous_ax + g_shaped_correction_ax_cms2) * dt_s;
-    g_shaped_correction_vy_cms +=
-        0.5f * (previous_ay + g_shaped_correction_ay_cms2) * dt_s;
+        if((terminal_first_delta_length <=
+            (jerk_max_cms3 * dt_s + POSITION_LOOP_EPSILON)) &&
+           (terminal_second_delta_length <=
+            (jerk_max_cms3 * dt_s + POSITION_LOOP_EPSILON)) &&
+           (terminal_second_delta_length <=
+            (acceleration_max_cms2 + POSITION_LOOP_EPSILON)))
+        {
+            acceleration_target_x = terminal_mid_ax;
+            acceleration_target_y = terminal_mid_ay;
+            g_shaped_correction_ax_cms2 = terminal_mid_ax;
+            g_shaped_correction_ay_cms2 = terminal_mid_ay;
+            g_shaped_correction_vx_cms +=
+                0.5f * (previous_ax + terminal_mid_ax) * dt_s;
+            g_shaped_correction_vy_cms +=
+                0.5f * (previous_ay + terminal_mid_ay) * dt_s;
+            g_correction_shaper_terminal_vx_cms = correction_vx_cms;
+            g_correction_shaper_terminal_vy_cms = correction_vy_cms;
+            g_correction_shaper_terminal_pending = 1U;
+            phase = POSITION_LOOP_CORRECTION_SHAPER_PHASE_TERMINAL;
+            update_completed = 1U;
+        }
+    }
+
+    if(!update_completed)
+    {
+        /* 无线性小误差区：目标稳定后由有限时间A/J轨迹进入终端两拍解。 */
+        if(velocity_error_length > 0.0f)
+        {
+            acceleration_target_length = sqrtf(jerk_max_cms3 *
+                                                velocity_error_length);
+            acceleration_target_length = position_loop_limit_float(
+                acceleration_target_length, 0.0f,
+                acceleration_max_cms2);
+            acceleration_target_x = velocity_error_x *
+                                    (acceleration_target_length /
+                                     velocity_error_length);
+            acceleration_target_y = velocity_error_y *
+                                    (acceleration_target_length /
+                                     velocity_error_length);
+        }
+
+        acceleration_delta_x = acceleration_target_x - previous_ax;
+        acceleration_delta_y = acceleration_target_y - previous_ay;
+        (void)position_loop_limit_vector(&acceleration_delta_x,
+                                         &acceleration_delta_y,
+                                         jerk_max_cms3 * dt_s);
+        g_shaped_correction_ax_cms2 = previous_ax + acceleration_delta_x;
+        g_shaped_correction_ay_cms2 = previous_ay + acceleration_delta_y;
+        (void)position_loop_limit_vector(&g_shaped_correction_ax_cms2,
+                                         &g_shaped_correction_ay_cms2,
+                                         acceleration_max_cms2);
+        g_shaped_correction_vx_cms +=
+            0.5f * (previous_ax + g_shaped_correction_ax_cms2) * dt_s;
+        g_shaped_correction_vy_cms +=
+            0.5f * (previous_ay + g_shaped_correction_ay_cms2) * dt_s;
+
+        shaped_acceleration_length = sqrtf(
+            g_shaped_correction_ax_cms2 * g_shaped_correction_ax_cms2 +
+            g_shaped_correction_ay_cms2 * g_shaped_correction_ay_cms2);
+        if((shaped_acceleration_length >=
+            (acceleration_max_cms2 - POSITION_LOOP_EPSILON)) &&
+           (fabsf(acceleration_delta_x) <= POSITION_LOOP_EPSILON) &&
+           (fabsf(acceleration_delta_y) <= POSITION_LOOP_EPSILON))
+        {
+            phase = POSITION_LOOP_CORRECTION_SHAPER_PHASE_CRUISE;
+        }
+        else if(shaped_acceleration_length >
+                (previous_acceleration_length + POSITION_LOOP_EPSILON))
+        {
+            phase = POSITION_LOOP_CORRECTION_SHAPER_PHASE_ACCEL;
+        }
+        else
+        {
+            phase = POSITION_LOOP_CORRECTION_SHAPER_PHASE_BRAKE;
+        }
+    }
+
+    jerk_x = (g_shaped_correction_ax_cms2 - previous_ax) / dt_s;
+    jerk_y = (g_shaped_correction_ay_cms2 - previous_ay) / dt_s;
+
+    velocity_error_x = correction_vx_cms - g_shaped_correction_vx_cms;
+    velocity_error_y = correction_vy_cms - g_shaped_correction_vy_cms;
 
     g_diag.shaped_correction_vx_cms = g_shaped_correction_vx_cms;
     g_diag.shaped_correction_vy_cms = g_shaped_correction_vy_cms;
@@ -274,9 +394,12 @@ static void position_loop_update_correction_shaper(float correction_vx_cms,
     g_diag.correction_accel_target_y_cms2 = acceleration_target_y;
     g_diag.shaped_correction_ax_cms2 = g_shaped_correction_ax_cms2;
     g_diag.shaped_correction_ay_cms2 = g_shaped_correction_ay_cms2;
+    g_diag.correction_shaper_jerk_x_cms3 = jerk_x;
+    g_diag.correction_shaper_jerk_y_cms3 = jerk_y;
     g_diag.correction_shaper_accel_max_cms2 = acceleration_max_cms2;
     g_diag.correction_shaper_jerk_max_cms3 = jerk_max_cms3;
     g_diag.correction_shaper_initialized = g_correction_shaper_initialized;
+    g_diag.correction_shaper_phase = phase;
 }
 
 static void position_loop_body_to_earth(float body_x,

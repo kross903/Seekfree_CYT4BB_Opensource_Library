@@ -465,6 +465,11 @@ static uint8 set_pmw_flow_gyro_gain_value(uint8 item, float value)
     }
 }
 
+static uint8 set_pmw_flow_fusion_tuning_value(uint8 item, float value)
+{
+    return PMW_Flow_SetFusionTuning(item, value);
+}
+
 static uint8 set_beacon_search_value(uint8 item, float value)
 {
     switch(item)
@@ -647,6 +652,25 @@ static void send_pid_data_back(uint8 command)
             float gy_now = 0.0f;
             PMW_Flow_GetGyroCompGain(&gx_now, &gy_now);
             send_four_date(gx_now, gy_now, 0, 0, 0, 0, 0, 0);
+            return;
+        }
+
+        case 'K':
+        {
+            float settle95_s = 0.0f;
+            float correction_limit_cms2 = 0.0f;
+            float innovation_lp_tau_s = 0.0f;
+            float bias_ki = 0.0f;
+
+            PMW_Flow_GetFusionTuning(&settle95_s,
+                                     &correction_limit_cms2,
+                                     &innovation_lp_tau_s,
+                                     &bias_ki);
+            send_four_date(settle95_s,
+                           correction_limit_cms2,
+                           innovation_lp_tau_s,
+                           bias_ki,
+                           0, 0, 0, 0);
             return;
         }
 
@@ -1493,6 +1517,15 @@ void USART_PID_Adjust(void)
             reply_command = 'G';
             break;
 
+        case 'K':
+            if(has_value)
+            {
+                write_success = set_pmw_flow_fusion_tuning_value(item, data_get);
+            }
+            send_back_command = 'K';
+            reply_command = 'K';
+            break;
+
         case 'Q':
             if(has_value)
             {
@@ -2277,24 +2310,26 @@ void send_date_back(void)
         case 47:
         {
             PositionLoopDiag_t pos_diag = {0};
-            float raw_speed;
-            float shaped_speed;
+            float velocity_error;
             float shaped_acceleration;
+            float shaped_jerk;
 
             Position_Loop_Get_Diag(&pos_diag);
-            raw_speed = sqrtf(pos_diag.correction_vx_cms *
-                              pos_diag.correction_vx_cms +
-                              pos_diag.correction_vy_cms *
-                              pos_diag.correction_vy_cms);
-            shaped_speed = sqrtf(pos_diag.shaped_correction_vx_cms *
-                                 pos_diag.shaped_correction_vx_cms +
-                                 pos_diag.shaped_correction_vy_cms *
-                                 pos_diag.shaped_correction_vy_cms);
+            velocity_error = sqrtf(
+                pos_diag.correction_velocity_error_x_cms *
+                pos_diag.correction_velocity_error_x_cms +
+                pos_diag.correction_velocity_error_y_cms *
+                pos_diag.correction_velocity_error_y_cms);
             shaped_acceleration = sqrtf(
                 pos_diag.shaped_correction_ax_cms2 *
                 pos_diag.shaped_correction_ax_cms2 +
                 pos_diag.shaped_correction_ay_cms2 *
                 pos_diag.shaped_correction_ay_cms2);
+            shaped_jerk = sqrtf(
+                pos_diag.correction_shaper_jerk_x_cms3 *
+                pos_diag.correction_shaper_jerk_x_cms3 +
+                pos_diag.correction_shaper_jerk_y_cms3 *
+                pos_diag.correction_shaper_jerk_y_cms3);
 
             send_sixteen_date(pos_diag.correction_vx_cms,
                               pos_diag.shaped_correction_vx_cms,
@@ -2306,12 +2341,12 @@ void send_date_back(void)
                               pos_diag.correction_velocity_error_y_cms,
                               pos_diag.correction_accel_target_y_cms2,
                               pos_diag.shaped_correction_ay_cms2,
-                              raw_speed,
-                              shaped_speed,
+                              pos_diag.correction_shaper_jerk_x_cms3,
+                              pos_diag.correction_shaper_jerk_y_cms3,
+                              velocity_error,
                               shaped_acceleration,
-                              pos_diag.correction_shaper_accel_max_cms2,
-                              pos_diag.correction_shaper_jerk_max_cms3,
-                              (float)pos_diag.correction_shaper_initialized);
+                              shaped_jerk,
+                              (float)pos_diag.correction_shaper_phase);
             break;
         }
 
