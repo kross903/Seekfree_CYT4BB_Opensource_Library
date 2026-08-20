@@ -8,6 +8,7 @@
 
 #define CONTOUR_SEARCH_RADIUS       (32)
 #define CONTOUR_SOURCE_SEED_REFINE_RADIUS (2)
+#define CONTOUR_SEED_TARGET_LIMIT   (2U)
 #define CONTOUR_SEED_SEARCH_DIRECTION (4) /* 固定向下寻边，方向与 Moore 初始背景方向一致 */
 #define CONTOUR_SCAN_INTERSECTIONS  (64U)
 #define CONTOUR_HULL_SAMPLE_POINTS  (96U)
@@ -1106,10 +1107,17 @@ static void contour_search_around_seed(const VisionContourSeed_t *seed,
         }
         {
             uint8 index;
+            uint8 target_count = 0U;
             for(index = first_candidate; index < result->candidate_count; ++index)
             {
                 if(result->candidate[index].target != VISION_CONTOUR_TARGET_NONE)
-                    return;
+                {
+                    ++target_count;
+                    if(result->candidate[index].target ==
+                           VISION_CONTOUR_TARGET_ARROW ||
+                       target_count >= CONTOUR_SEED_TARGET_LIMIT)
+                        return;
+                }
             }
         }
         if(result->candidate_count >= VISION_RUNTIME_MAX_CANDIDATES) return;
