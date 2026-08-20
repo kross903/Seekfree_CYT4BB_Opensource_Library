@@ -929,8 +929,31 @@ void HeightManager_Task_10ms(void)
     }
 
     DualTof_Poll(&tof_sample);
-    s_height_diag.tof1_raw_cm = (float)tof_sample.tof1_raw_mm * 0.1f;
-    s_height_diag.tof2_raw_cm = (float)tof_sample.tof2_raw_mm * 0.1f;
+    tof1_raw_cm = (float)tof_sample.tof1_raw_mm * 0.1f;
+    tof2_raw_cm = (float)tof_sample.tof2_raw_mm * 0.1f;
+    tof1_center_cm = 0.0f;
+    tof2_center_cm = 0.0f;
+    if(tof_sample.tof1_valid)
+    {
+        tof1_center_cm = height_get_center_height_from_tof_cm(tof1_raw_cm,
+                                                              current_roll,
+                                                              current_pitch,
+                                                              TOF1_SENSOR_OFFSET_Y_CM,
+                                                              TOF1_SENSOR_TILT_Y_DEG);
+    }
+    if(tof_sample.tof2_valid)
+    {
+        tof2_center_cm = height_get_center_height_from_tof_cm(tof2_raw_cm,
+                                                              current_roll,
+                                                              current_pitch,
+                                                              TOF2_SENSOR_OFFSET_Y_CM,
+                                                              TOF2_SENSOR_TILT_Y_DEG);
+    }
+
+    s_height_diag.tof1_raw_cm = tof1_raw_cm;
+    s_height_diag.tof2_raw_cm = tof2_raw_cm;
+    s_height_diag.tof1_comp_cm = tof1_center_cm;
+    s_height_diag.tof2_comp_cm = tof2_center_cm;
     s_height_diag.tof1_valid = tof_sample.tof1_valid;
     s_height_diag.tof2_valid = tof_sample.tof2_valid;
     s_height_diag.tof_source = tof_sample.source;
@@ -945,8 +968,6 @@ void HeightManager_Task_10ms(void)
 
     if(tof_sample.selected_new_sample && tof_sample.selected_valid)
     {
-        tof1_raw_cm = (float)tof_sample.tof1_raw_mm * 0.1f;
-        tof2_raw_cm = (float)tof_sample.tof2_raw_mm * 0.1f;
         tof1_range_valid = tof_sample.tof1_valid;
         tof2_range_valid = tof_sample.tof2_valid;
         selected_source = DUAL_TOF_SOURCE_NONE;
@@ -955,11 +976,6 @@ void HeightManager_Task_10ms(void)
 
         if(tof1_range_valid)
         {
-            tof1_center_cm = height_get_center_height_from_tof_cm(tof1_raw_cm,
-                                                                  current_roll,
-                                                                  current_pitch,
-                                                                  TOF1_SENSOR_OFFSET_Y_CM,
-                                                                  TOF1_SENSOR_TILT_Y_DEG);
             tof1_range_valid = (uint8)((tof1_center_cm >= TOF_COMPENSATED_VALID_MIN_CM) &&
                                        (tof1_center_cm <= TOF_COMPENSATED_VALID_MAX_CM));
             if(tof1_range_valid)
@@ -971,11 +987,6 @@ void HeightManager_Task_10ms(void)
         }
         if(tof2_range_valid)
         {
-            tof2_center_cm = height_get_center_height_from_tof_cm(tof2_raw_cm,
-                                                                  current_roll,
-                                                                  current_pitch,
-                                                                  TOF2_SENSOR_OFFSET_Y_CM,
-                                                                  TOF2_SENSOR_TILT_Y_DEG);
             tof2_range_valid = (uint8)((tof2_center_cm >= TOF_COMPENSATED_VALID_MIN_CM) &&
                                        (tof2_center_cm <= TOF_COMPENSATED_VALID_MAX_CM));
             if(tof2_range_valid)
@@ -1038,6 +1049,7 @@ void HeightManager_Task_10ms(void)
             s_height_diag.tof_source = (uint8)selected_source;
             s_height_diag.tof_raw_cm = raw_los_cm;
             s_height_diag.tof_selected_cm = raw_los_cm;
+            s_height_diag.tof_selected_comp_cm = selected_center_cm;
             s_tof_raw_age_ticks = 0U;
             height_process_tof_sample(raw_los_cm,
                                       selected_center_cm,
@@ -1049,7 +1061,12 @@ void HeightManager_Task_10ms(void)
         else
         {
             s_height_diag.tof_comp_cm = 0.0f;
+            s_height_diag.tof_selected_comp_cm = 0.0f;
         }
+    }
+    else if(!tof_sample.selected_valid)
+    {
+        s_height_diag.tof_selected_comp_cm = 0.0f;
     }
 
     if(s_tof_raw_age_ticks >= TOF_NO_UPDATE_TIMEOUT_TICKS)

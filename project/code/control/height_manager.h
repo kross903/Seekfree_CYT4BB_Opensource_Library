@@ -57,6 +57,9 @@ typedef struct
     float tof1_raw_cm;
     float tof2_raw_cm;
     float tof_selected_cm;
+    float tof1_comp_cm;
+    float tof2_comp_cm;
+    float tof_selected_comp_cm;
     float tof_disagreement_cm;
     float tof_comp_cm;
     float tof_median_cm;

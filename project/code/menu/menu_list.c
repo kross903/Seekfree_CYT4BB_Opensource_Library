@@ -1189,14 +1189,14 @@ static void sensor_status_draw_tof_flow(void)
     y = TEST_ROW_Y(0U);
     sensor_page_clear_line(y);
     sensor_page_show_float(SENSOR_LEFT_LABEL_X, SENSOR_LEFT_VALUE_X, y,
-                           "T1 CM", height_diag.tof1_raw_cm, 4U, 1U, tof1_color);
+                           "T1 H", height_diag.tof1_comp_cm, 4U, 1U, tof1_color);
     sensor_page_show_float(SENSOR_RIGHT_LABEL_X, SENSOR_RIGHT_VALUE_X, y,
-                           "T2 CM", height_diag.tof2_raw_cm, 4U, 1U, tof2_color);
+                           "T2 H", height_diag.tof2_comp_cm, 4U, 1U, tof2_color);
 
     y = TEST_ROW_Y(1U);
     sensor_page_clear_line(y);
     sensor_page_show_float(SENSOR_LEFT_LABEL_X, SENSOR_LEFT_VALUE_X, y,
-                           "SEL CM", height_diag.tof_selected_cm, 4U, 1U,
+                           "SEL H", height_diag.tof_selected_comp_cm, 4U, 1U,
                            sensor_page_bool_color(height_diag.tof_valid));
     sensor_page_show_text(SENSOR_RIGHT_LABEL_X, SENSOR_RIGHT_VALUE_X, y,
                           "SOURCE", sensor_page_tof_source_name(height_diag.tof_source), RGB565_CYAN);
