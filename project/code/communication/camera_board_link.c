@@ -207,6 +207,19 @@ static uint16 CameraBoardLink_FloatToU16(float value, float scale)
     return (uint16)(scaled + 0.5f);
 }
 
+static float CameraBoardLink_WrapAngle(float angle_deg)
+{
+    while(angle_deg > 180.0f)
+    {
+        angle_deg -= 360.0f;
+    }
+    while(angle_deg < -180.0f)
+    {
+        angle_deg += 360.0f;
+    }
+    return angle_deg;
+}
+
 static void CameraBoardLink_ResetParser(void)
 {
     s_parse_state = CAMERA_BOARD_PARSE_SOF1;
@@ -562,12 +575,15 @@ static void CameraBoardLink_SendMainState(void)
     uint16 flags = CAMERA_BOARD_MAIN_FLAG_VISION_ENABLE;
     ICM_Health_t imu_health = {0};
     HeightTofSnapshot_t height_snapshot = {0};
+    CoreLinkCarMotionDiag_t car_motion = {0};
     float height_cm;
+    float car_yaw_rel_uav_deg = 0.0f;
     uint32 now_us = CameraBoardLink_TimeNowUs();
 
     HeightManager_GetTofSnapshot(&height_snapshot);
     height_cm = height_snapshot.filtered_height_cm;
     ICM_GetHealth(&imu_health);
+    core_link_user_get_car_motion_diag(&car_motion);
     if(imu_health.attitude_valid && isfinite(current_roll) &&
        isfinite(current_pitch) && isfinite(current_yaw))
     {
@@ -583,6 +599,13 @@ static void CameraBoardLink_SendMainState(void)
     {
         flags |= CAMERA_BOARD_MAIN_FLAG_BEACON_ENABLE;
     }
+    if(((flags & CAMERA_BOARD_MAIN_FLAG_POSE_VALID) != 0U) &&
+       car_motion.yaw_valid && isfinite(car_motion.car_yaw_deg))
+    {
+        car_yaw_rel_uav_deg = CameraBoardLink_WrapAngle(
+            car_motion.car_yaw_deg - current_yaw);
+        flags |= CAMERA_BOARD_MAIN_FLAG_CAR_YAW_VALID;
+    }
 
     s_state_sequence++;
     CameraBoardLink_WriteU32(&payload[0], now_us);
@@ -593,6 +616,8 @@ static void CameraBoardLink_SendMainState(void)
     CameraBoardLink_WriteI16(&payload[12], CameraBoardLink_FloatToI16(current_yaw, 100.0f));
     CameraBoardLink_WriteU16(&payload[14], CameraBoardLink_FloatToU16(height_cm, 10.0f));
     CameraBoardLink_WriteU16(&payload[16], flags);
+    CameraBoardLink_WriteI16(&payload[18],
+        CameraBoardLink_FloatToI16(car_yaw_rel_uav_deg, 100.0f));
 
     if(CameraBoardLink_StartFrame(CAMERA_BOARD_MSG_MAIN_STATE,
                                   payload, sizeof(payload)))

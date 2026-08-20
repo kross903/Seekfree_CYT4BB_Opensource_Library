@@ -1898,26 +1898,32 @@ void send_date_back(void)
         case 19:
         {
             HeightManagerDiag_t height_diag = {0};
+            float compensated_disagreement_cm = 0.0f;
 
             HeightManager_Get_Diag(&height_diag);
+            if(height_diag.tof1_valid && height_diag.tof2_valid)
+            {
+                compensated_disagreement_cm = fabsf(height_diag.tof1_comp_cm -
+                                                     height_diag.tof2_comp_cm);
+            }
 
             /* F1 command, internal mode 19: dual ToF input diagnostics. */
             send_sixteen_date(height_diag.tof1_raw_cm,
                               height_diag.tof2_raw_cm,
-                              height_diag.tof_selected_cm,
-                              height_diag.tof_disagreement_cm,
+                              height_diag.tof1_comp_cm,
+                              height_diag.tof2_comp_cm,
+                              height_diag.tof_selected_comp_cm,
+                              height_diag.tof_height_filt_cm,
                               (float)height_diag.tof_source,
                               (float)height_diag.tof1_valid,
                               (float)height_diag.tof2_valid,
                               (float)height_diag.tof1_age_ms,
                               (float)height_diag.tof2_age_ms,
-                              height_diag.tof_raw_cm,
+                              compensated_disagreement_cm,
                               (float)height_diag.tof_state,
-                              (float)height_diag.tof_raw_age_ms,
                               (float)height_diag.tof_valid,
                               (float)height_diag.tof1_invalid_count,
-                              (float)height_diag.tof2_invalid_count,
-                              (float)height_diag.tof2_bus_error_count);
+                              (float)height_diag.tof2_invalid_count);
             break;
         }
 
