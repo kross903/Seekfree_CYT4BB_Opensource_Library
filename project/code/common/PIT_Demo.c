@@ -1125,7 +1125,7 @@ static void control_task_update_position_target(uint8 takeoff_active)
     core_link_user_get_car_motion_diag(&car_motion);
     if(car_motion.valid)
     {
-        /* V3已经使用双方对齐后的共享世界系，禁止再次按Yaw旋转。 */
+        /* V4已经使用双方对齐后的共享世界系，禁止再次按Yaw旋转。 */
         feedforward.velocity_valid = 1U;
         feedforward.earth_frame = 1U;
         feedforward.vx_cms = car_motion.world_vx_cms;

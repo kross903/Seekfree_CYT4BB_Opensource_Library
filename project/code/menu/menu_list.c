@@ -1403,8 +1403,12 @@ static void sensor_status_draw_imu_power(void)
 
     sensor_page_clear_line(TEST_ROW_Y(10U));
     sensor_page_show_text(SENSOR_LEFT_LABEL_X, SENSOR_LEFT_VALUE_X, TEST_ROW_Y(10U),
-                          "CAR LINK", sensor_page_yes_no(car_diag.valid),
-                          sensor_page_bool_color(car_diag.valid));
+                          "CAR LINK", sensor_page_yes_no(
+                              car_diag.link_state !=
+                              CORE_LINK_CAR_MOTION_STATE_INVALID),
+                          sensor_page_bool_color(
+                              car_diag.link_state !=
+                              CORE_LINK_CAR_MOTION_STATE_INVALID));
     sensor_page_show_float(SENSOR_RIGHT_LABEL_X, SENSOR_RIGHT_VALUE_X, TEST_ROW_Y(10U),
                            "IMG FPS", s_sensor_status_image_fps, 3U, 1U,
                            (s_sensor_status_frame_rate_valid && s_sensor_status_image_fps > 0.0f) ?
