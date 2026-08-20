@@ -1409,6 +1409,8 @@ void USART_PID_Adjust(void)
                     break;
                 case 'G':
                 case 'g': send_back_flag = 16; break;
+                case 'H':
+                case 'h': send_back_flag = 46; break;
                 case 'I':
                 case 'i': send_back_flag = 18; break;
                 case 'J':
@@ -1950,8 +1952,8 @@ void send_date_back(void)
                               current_yaw,
                               pos_diag.car_ff_raw_vx_cms,
                               pos_diag.car_ff_raw_vy_cms,
-                              pos_diag.car_ff_filtered_vx_cms,
-                              pos_diag.car_ff_filtered_vy_cms,
+                              pos_diag.car_ff_applied_ax_cms2,
+                              pos_diag.car_ff_applied_ay_cms2,
                               pos_diag.correction_vx_cms,
                               pos_diag.correction_vy_cms,
                               pos_diag.vx_cmd_cms,
@@ -2223,15 +2225,15 @@ void send_date_back(void)
             PositionLoopDiag_t pos_diag = {0};
 
             Position_Loop_Get_Diag(&pos_diag);
-            send_sixteen_date(pos_diag.error_x_cm,
-                              pos_diag.error_y_cm,
+            send_sixteen_date(pos_diag.vision_control_x_cm,
+                              pos_diag.vision_control_y_cm,
+                              pos_diag.vision_estimate_x_cm,
+                              pos_diag.vision_estimate_y_cm,
                               pos_diag.vision_observation_x_cm,
                               pos_diag.vision_observation_y_cm,
                               pos_diag.vision_innovation_cm,
                               pos_diag.vision_gate_cm,
-                              pos_diag.vision_covariance_x_cm2,
-                              pos_diag.vision_covariance_y_cm2,
-                              (float)pos_diag.vision_observation_age_ms,
+                              pos_diag.vision_realign_error_cm,
                               (float)pos_diag.vision_hold_age_ms,
                               (float)pos_diag.vision_observation_state,
                               (float)pos_diag.vision_reacquire_count,
@@ -2239,6 +2241,32 @@ void send_date_back(void)
                               (float)pos_diag.vision_observation_source,
                               (float)pos_diag.vision_estimator_initialized,
                               (float)pos_diag.active);
+            break;
+        }
+
+        case 46:
+        {
+            CoreLinkCarMotionDiag_t car_motion = {0};
+            PositionLoopDiag_t pos_diag = {0};
+
+            core_link_user_get_car_motion_diag(&car_motion);
+            Position_Loop_Get_Diag(&pos_diag);
+            send_sixteen_date(car_motion.raw_world_vx_cms,
+                              car_motion.raw_world_vy_cms,
+                              car_motion.raw_world_ax_cms2,
+                              car_motion.raw_world_ay_cms2,
+                              car_motion.world_vx_cms,
+                              car_motion.world_vy_cms,
+                              car_motion.world_ax_cms2,
+                              car_motion.world_ay_cms2,
+                              pos_diag.car_ff_raw_vx_cms,
+                              pos_diag.car_ff_raw_vy_cms,
+                              pos_diag.car_ff_applied_ax_cms2,
+                              pos_diag.car_ff_applied_ay_cms2,
+                              (float)car_motion.age_ms,
+                              (float)car_motion.arrival_interval_ms,
+                              (float)car_motion.sequence,
+                              (float)car_motion.link_state);
             break;
         }
 

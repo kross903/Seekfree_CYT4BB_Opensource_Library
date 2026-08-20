@@ -6,7 +6,7 @@
 //P分支由简单P控制切换到Sqrt分支的 切换距离 = M8 / M3²
 #define POSITION_LOOP_CAR_VELOCITY_FF_GAIN_DEFAULT (0.6f)   // M1/M2：小车X/Y速度前馈增益上电默认值
 #define POSITION_LOOP_CAR_VELOCITY_FF_GAIN_MAX     (1.0f)   // M1/M2：小车X/Y速度前馈增益允许上限
-#define POSITION_LOOP_CAR_ACCEL_FF_GAIN_DEFAULT    (1.0f)   // M6/M7：小车X/Y加速度前馈增益上电默认值
+#define POSITION_LOOP_CAR_ACCEL_FF_GAIN_DEFAULT    (0.4f)   // M6/M7：小车X/Y计划加速度前馈增益上电默认值
 #define POSITION_LOOP_CAR_ACCEL_FF_GAIN_MAX        (1.0f)   // M6/M7：小车X/Y加速度前馈增益允许上限
 #define POSITION_LOOP_POSITION_KP_DEFAULT          (0.22f)    // M3：二维位置P增益默认值，单位s^-1
 #define POSITION_LOOP_CORRECTION_MAX_DEFAULT_CMS   (100.0f)   // M4：位置修正速度模长上限，单位cm/s
@@ -14,7 +14,7 @@
 #define POSITION_LOOP_CORRECTION_ACCEL_DEFAULT_CMS2 (35.0f)  // M8：P/Sqrt位置纠偏包络加速度，单位cm/s^2
 //P分支由简单P控制切换到Sqrt分支的 切换距离 = M8 / M3² 
 //v_corr = sqrt(2×M8×(e-0.5×M8/M3²))
-#define POSITION_LOOP_VISION_HOLD_MS               (200U)   // 视觉断帧后相对位置预测保持时间，单位ms
+#define POSITION_LOOP_VISION_PREDICT_AGE_MAX_MS  (60000U)   // 连续预测年龄仅用于诊断，60s封顶，不触发位置失效
 #define POSITION_LOOP_VISION_MAX_AGE_MS             (100U)   // 新视觉观测允许参与更新的最大帧龄
 #define POSITION_LOOP_VISION_REACQUIRE_SPAN_MS      (150U)   // 三帧重捕获允许的最大时间跨度
 #define POSITION_LOOP_VISION_REACQUIRE_FRAMES       (3U)     // 重捕获所需连续一致观测数
@@ -26,6 +26,9 @@
 #define POSITION_LOOP_VISION_ACCEL_SIGMA_CMS2       (300.0f) // 未建模相对加速度不确定度
 #define POSITION_LOOP_VISION_POSITION_VARIANCE_CM2  (25.0f)  // 视觉位置标准差5cm对应方差
 #define POSITION_LOOP_VISION_PROCESS_REFERENCE_S    (0.020f) // 50Hz视觉周期，用于连续过程噪声离散化
+#define POSITION_LOOP_VISION_COVARIANCE_MAX_CM2   (10000.0f) // 长期预测协方差上限，避免无界增长
+#define POSITION_LOOP_VISION_REALIGN_TAU_S           (0.15f) // 控制位置追踪估计位置的近端时间常数
+#define POSITION_LOOP_VISION_REALIGN_SPEED_MAX_CMS   (80.0f) // 重捕获后控制位置最大对齐速度
 #define POSITION_LOOP_EPSILON                      (0.0001f) // 二维距离归一化时的除零保护阈值
 #define POSITION_LOOP_YAW_RESET_THRESHOLD_DEG      (60.0f)   // 单个水平控制周期内超过该变化视为Yaw参考系重置
 #define POSITION_LOOP_EFFECTIVE_ACCEL_DEFAULT_CMS2  (200.0f)  // N1：A/J安全速度模型的有效加速度，单位cm/s^2
@@ -72,6 +75,8 @@ static uint8 g_closing_speed_initialized = 0U;
 static uint8 g_last_pose_valid = 0U;
 static float g_last_x_earth_cm = 0.0f;
 static float g_last_y_earth_cm = 0.0f;
+static float g_control_x_earth_cm = 0.0f;
+static float g_control_y_earth_cm = 0.0f;
 static float g_position_covariance_x_cm2 = POSITION_LOOP_VISION_POSITION_VARIANCE_CM2;
 static float g_position_covariance_y_cm2 = POSITION_LOOP_VISION_POSITION_VARIANCE_CM2;
 static uint8 g_position_estimator_initialized = 0U;
@@ -317,6 +322,8 @@ static void position_loop_reset_runtime(uint8 reason)
     position_loop_reset_reacquisition();
     g_last_x_earth_cm = 0.0f;
     g_last_y_earth_cm = 0.0f;
+    g_control_x_earth_cm = 0.0f;
+    g_control_y_earth_cm = 0.0f;
     g_position_covariance_x_cm2 = POSITION_LOOP_VISION_POSITION_VARIANCE_CM2;
     g_position_covariance_y_cm2 = POSITION_LOOP_VISION_POSITION_VARIANCE_CM2;
     g_position_estimator_initialized = 0U;
@@ -417,32 +424,65 @@ static void position_loop_predict_estimator(float relative_vx_earth,
     }
     g_last_x_earth_cm += relative_vx_earth * dt_s;
     g_last_y_earth_cm += relative_vy_earth * dt_s;
+    g_control_x_earth_cm += relative_vx_earth * dt_s;
+    g_control_y_earth_cm += relative_vy_earth * dt_s;
     process_variance = POSITION_LOOP_VISION_VELOCITY_SIGMA_CMS *
                        POSITION_LOOP_VISION_VELOCITY_SIGMA_CMS *
                        POSITION_LOOP_VISION_PROCESS_REFERENCE_S * dt_s;
     g_position_covariance_x_cm2 += process_variance;
     g_position_covariance_y_cm2 += process_variance;
+    g_position_covariance_x_cm2 = position_loop_limit_float(
+        g_position_covariance_x_cm2, 0.0f,
+        POSITION_LOOP_VISION_COVARIANCE_MAX_CM2);
+    g_position_covariance_y_cm2 = position_loop_limit_float(
+        g_position_covariance_y_cm2, 0.0f,
+        POSITION_LOOP_VISION_COVARIANCE_MAX_CM2);
 
     if(!g_last_pose_valid)
     {
         return;
     }
     if(elapsed_ms == 0U) elapsed_ms = 1U;
-    if(((uint32)g_hold_elapsed_ms + elapsed_ms) > POSITION_LOOP_VISION_HOLD_MS)
+    if(((uint32)g_hold_elapsed_ms + elapsed_ms) >
+       POSITION_LOOP_VISION_PREDICT_AGE_MAX_MS)
     {
-        g_last_pose_valid = 0U;
-        g_hold_elapsed_ms = POSITION_LOOP_VISION_HOLD_MS;
-        g_observation_state = (g_reacquire_count > 0U) ?
-            POSITION_LOOP_OBSERVATION_REACQUIRING :
-            POSITION_LOOP_OBSERVATION_INVALID;
-        return;
+        g_hold_elapsed_ms = POSITION_LOOP_VISION_PREDICT_AGE_MAX_MS;
     }
-
-    g_hold_elapsed_ms += elapsed_ms;
+    else
+    {
+        g_hold_elapsed_ms += elapsed_ms;
+    }
     if(g_observation_state != POSITION_LOOP_OBSERVATION_REACQUIRING)
     {
         g_observation_state = POSITION_LOOP_OBSERVATION_HOLD;
     }
+}
+
+static void position_loop_realign_control_position(float dt_s)
+{
+    float error_x;
+    float error_y;
+    float step_x;
+    float step_y;
+    float alpha;
+    float max_step;
+
+    if(!g_position_estimator_initialized || !g_last_pose_valid ||
+       !isfinite(dt_s) || !(dt_s > 0.0f))
+    {
+        return;
+    }
+
+    error_x = g_last_x_earth_cm - g_control_x_earth_cm;
+    error_y = g_last_y_earth_cm - g_control_y_earth_cm;
+    alpha = 1.0f - expf(-dt_s / POSITION_LOOP_VISION_REALIGN_TAU_S);
+    alpha = position_loop_limit_float(alpha, 0.0f, 1.0f);
+    step_x = error_x * alpha;
+    step_y = error_y * alpha;
+    max_step = POSITION_LOOP_VISION_REALIGN_SPEED_MAX_CMS * dt_s;
+    (void)position_loop_limit_vector(&step_x, &step_y, max_step);
+    g_control_x_earth_cm += step_x;
+    g_control_y_earth_cm += step_y;
 }
 
 static uint8 position_loop_update_visual_estimator(float observation_x_earth,
@@ -559,8 +599,17 @@ static uint8 position_loop_update_visual_estimator(float observation_x_earth,
 
     if(g_reacquire_count >= POSITION_LOOP_VISION_REACQUIRE_FRAMES)
     {
+        uint8 initialize_control_position =
+            (uint8)!g_position_estimator_initialized;
+
         g_last_x_earth_cm = observation_x_earth;
         g_last_y_earth_cm = observation_y_earth;
+        if(initialize_control_position)
+        {
+            /* 初次建立位置时没有旧控制轨迹，直接从有效视觉位置起步。 */
+            g_control_x_earth_cm = observation_x_earth;
+            g_control_y_earth_cm = observation_y_earth;
+        }
         g_position_covariance_x_cm2 = POSITION_LOOP_VISION_POSITION_VARIANCE_CM2;
         g_position_covariance_y_cm2 = POSITION_LOOP_VISION_POSITION_VARIANCE_CM2;
         g_position_estimator_initialized = 1U;
@@ -588,10 +637,12 @@ static uint8 position_loop_update_frozen_hold(float measured_vx_earth,
         return 0U;
     }
 
-    g_last_x_earth_cm -= measured_vx_earth * dt_s;
-    g_last_y_earth_cm -= measured_vy_earth * dt_s;
-    *position_x = g_last_x_earth_cm;
-    *position_y = g_last_y_earth_cm;
+    g_control_x_earth_cm -= measured_vx_earth * dt_s;
+    g_control_y_earth_cm -= measured_vy_earth * dt_s;
+    g_last_x_earth_cm = g_control_x_earth_cm;
+    g_last_y_earth_cm = g_control_y_earth_cm;
+    *position_x = g_control_x_earth_cm;
+    *position_y = g_control_y_earth_cm;
     g_hold_elapsed_ms = 0U;
     g_observation_state = POSITION_LOOP_OBSERVATION_HOLD;
     return 1U;
@@ -1060,14 +1111,19 @@ void Position_Loop_Update_Velocity_Target(uint8 velocity_ready,
                 POSITION_LOOP_VISION_SOURCE_REAR);
         }
 
+        /* 视觉估计可快速接纳重捕获结果，控制位置按速度和时间常数有界追踪。 */
+        position_loop_realign_control_position(dt_s);
         position_valid = g_last_pose_valid;
         if(g_position_estimator_initialized)
         {
-            position_x = g_last_x_earth_cm;
-            position_y = g_last_y_earth_cm;
+            position_x = g_control_x_earth_cm;
+            position_y = g_control_y_earth_cm;
         }
     }
 
+    /* 小车运动前馈独立于视觉位置有效性；视觉只决定位置纠偏分量。 */
+    desired_vx = car_velocity_valid ? car_vx_earth : 0.0f;
+    desired_vy = car_velocity_valid ? car_vy_earth : 0.0f;
     if(position_valid)
     {
         /* 真实位置误差进入P/Sqrt；停车包络只约束朝向小车的目标速度。 */
@@ -1125,14 +1181,8 @@ void Position_Loop_Update_Velocity_Target(uint8 velocity_ready,
                 flags |= POSITION_LOOP_STATUS_CORRECTION_LIMITED;
             }
         }
-        desired_vx = car_vx_earth + correction_vx;
-        desired_vy = car_vy_earth + correction_vy;
-        if(position_loop_limit_vector(&desired_vx, &desired_vy,
-                                      config.target_speed_max_cms))
-        {
-            flags |= POSITION_LOOP_STATUS_TARGET_LIMITED;
-        }
-
+        desired_vx += correction_vx;
+        desired_vy += correction_vy;
     }
 
     if(!position_valid)
@@ -1140,14 +1190,17 @@ void Position_Loop_Update_Velocity_Target(uint8 velocity_ready,
         position_loop_reset_brake_supervisor();
         brake_allowed_speed = 0.0f;
     }
+    if(position_loop_limit_vector(&desired_vx, &desired_vy,
+                                  config.target_speed_max_cms))
+    {
+        flags |= POSITION_LOOP_STATUS_TARGET_LIMITED;
+    }
 
-    g_target_vx_earth_cms = position_valid ? desired_vx : 0.0f;
-    g_target_vy_earth_cms = position_valid ? desired_vy : 0.0f;
-    g_target_ax_earth_cms2 = (position_valid && car_acceleration_valid) ?
-                             car_ax_earth : 0.0f;
-    g_target_ay_earth_cms2 = (position_valid && car_acceleration_valid) ?
-                             car_ay_earth : 0.0f;
-    if(position_valid && car_acceleration_valid)
+    g_target_vx_earth_cms = desired_vx;
+    g_target_vy_earth_cms = desired_vy;
+    g_target_ax_earth_cms2 = car_acceleration_valid ? car_ax_earth : 0.0f;
+    g_target_ay_earth_cms2 = car_acceleration_valid ? car_ay_earth : 0.0f;
+    if(car_acceleration_valid)
     {
         flags |= POSITION_LOOP_STATUS_ACCEL_FF_VALID;
     }
@@ -1205,6 +1258,15 @@ void Position_Loop_Update_Velocity_Target(uint8 velocity_ready,
     g_diag.vision_gate_cm = g_vision_gate_cm;
     g_diag.vision_observation_x_cm = g_vision_observation_x_earth_cm;
     g_diag.vision_observation_y_cm = g_vision_observation_y_earth_cm;
+    g_diag.vision_estimate_x_cm = g_last_x_earth_cm;
+    g_diag.vision_estimate_y_cm = g_last_y_earth_cm;
+    g_diag.vision_control_x_cm = g_control_x_earth_cm;
+    g_diag.vision_control_y_cm = g_control_y_earth_cm;
+    g_diag.vision_realign_error_cm = sqrtf(
+        (g_last_x_earth_cm - g_control_x_earth_cm) *
+        (g_last_x_earth_cm - g_control_x_earth_cm) +
+        (g_last_y_earth_cm - g_control_y_earth_cm) *
+        (g_last_y_earth_cm - g_control_y_earth_cm));
     g_diag.vision_covariance_x_cm2 = g_position_covariance_x_cm2;
     g_diag.vision_covariance_y_cm2 = g_position_covariance_y_cm2;
     g_diag.vision_hold_age_ms = g_hold_elapsed_ms;
@@ -1215,8 +1277,7 @@ void Position_Loop_Update_Velocity_Target(uint8 velocity_ready,
     g_diag.vision_observation_source = g_vision_observation_source;
     g_diag.vision_estimator_initialized = g_position_estimator_initialized;
     g_diag.car_ff_valid = car_velocity_valid;
-    g_diag.car_accel_ff_valid = (uint8)(position_valid &&
-                                        car_acceleration_valid);
+    g_diag.car_accel_ff_valid = car_acceleration_valid;
     g_diag.limit_flags = flags;
     g_diag.enabled = g_enabled;
     g_diag.active = position_valid;

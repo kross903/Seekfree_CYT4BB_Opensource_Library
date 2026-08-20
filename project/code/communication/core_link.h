@@ -75,14 +75,12 @@ typedef struct
 
 #define CORE_LINK_BEACON_MAP_COUNT         (5U)
 #define CORE_LINK_BEACON_MAP_PAYLOAD_LEN   (37U)
-#define CORE_LINK_CAR_TRAJECTORY_VERSION            (3U)
-#define CORE_LINK_CAR_TRAJECTORY_PAYLOAD_LEN        (22U)
+#define CORE_LINK_CAR_TRAJECTORY_VERSION            (4U)
+#define CORE_LINK_CAR_TRAJECTORY_PAYLOAD_LEN        (18U)
 #define CORE_LINK_CAR_TRAJECTORY_FLAG_VELOCITY_VALID (0x01U)
 #define CORE_LINK_CAR_TRAJECTORY_FLAG_ACCEL_VALID    (0x02U)
-#define CORE_LINK_CAR_TRAJECTORY_FLAG_JERK_VALID     (0x04U)
-#define CORE_LINK_CAR_TRAJECTORY_FLAG_SEARCH_REQUEST (0x08U)
-#define CORE_LINK_CAR_TRAJECTORY_FLAG_YAW_VALID      (0x10U)
-#define CORE_LINK_CAR_TRAJECTORY_FLAG_TRAJECTORY_RESET (0x20U)
+#define CORE_LINK_CAR_TRAJECTORY_FLAG_SEARCH_REQUEST (0x04U)
+#define CORE_LINK_CAR_TRAJECTORY_FLAG_YAW_VALID      (0x08U)
 #if CORE_LINK_CAR_TRAJECTORY_PAYLOAD_LEN > CORE_LINK_PAYLOAD_MAX_LEN
 #error "Car trajectory payload exceeds core link payload limit"
 #endif
@@ -105,7 +103,8 @@ typedef struct
     core_link_beacon_entry_struct beacon[CORE_LINK_BEACON_MAP_COUNT];
 } core_link_beacon_map_packet_struct;
 
-/* 0x15 V3带采样时间发送共享世界系运动前馈状态。 */
+/* 0x15 V4带采样时间发送共享世界系运动前馈状态。
+ * 速度和加速度均为小车平移整形器的当前计划状态。 */
 typedef struct
 {
     uint8 version;
@@ -113,15 +112,12 @@ typedef struct
     uint16 sequence;
     uint32 sample_time_ms;
     int16 car_absolute_yaw_ddeg;
-    int16 actual_world_vx_dcms;
-    int16 actual_world_vy_dcms;
+    int16 planned_world_vx_dcms;
+    int16 planned_world_vy_dcms;
     int16 planned_world_ax_cms2;
     int16 planned_world_ay_cms2;
-    int16 planned_world_jx_cms3;
-    int16 planned_world_jy_cms3;
     /* 以下字段为无人机接收端运行时元数据，不在线路上传输。 */
     uint32 receive_time_ms;
-    float prediction_age_at_receive_ms;
 } core_link_car_trajectory_packet_struct;
 
 #define CORE_LINK_BEACON_OBSERVATION_MAX_COUNT     (6U)
