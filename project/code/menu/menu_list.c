@@ -142,7 +142,11 @@ static uint8 s_track_light_exit_pending = 0U;
 static uint8 s_track_light_release_wait_ticks = 0U;
 static uint8 s_track_light_status_tick_div = 0U;
 static uint32 s_track_light_fusion_last_refresh_us = 0U;
-static uint32 s_track_light_fusion_build_count_seen = 0U;
+static uint8 s_track_light_row_cursor = 0U;
+static uint8 s_track_light_snapshot_valid = 0U;
+static DualCameraFusionSnapshot_t s_track_light_snapshot;
+static DualCameraFusionDiag_t s_track_light_fusion_diag;
+static CameraBoardLinkDiag_t s_track_light_link_diag;
 static uint8 s_sensor_status_page_active = 0U;
 static uint8 s_sensor_status_view = 0U;
 static uint16 s_sensor_status_refresh_ms = 0U;
@@ -1947,18 +1951,10 @@ static uint8 track_light_service_downlink(void)
 
 static uint8 track_light_service_vision_fusion(void)
 {
-    DualCameraFusionDiag_t diag = {0};
     uint32 now_us = CameraBoardLink_TimeNowUs();
 
-    /* 与正常飞行共用输入缓存；测试页只补足独立的快照刷新。 */
+    /* 与 Vision Fusion 页面一致：先接收输入，再按固定周期构建快照。 */
     DualCameraFusion_ServiceInputs();
-    DualCameraFusion_GetDiag(&diag);
-    if(diag.build_count != s_track_light_fusion_build_count_seen)
-    {
-        s_track_light_fusion_build_count_seen = diag.build_count;
-        s_track_light_fusion_last_refresh_us = now_us;
-        return 1U;
-    }
     if((s_track_light_fusion_last_refresh_us != 0U) &&
        ((uint32)(now_us - s_track_light_fusion_last_refresh_us) <
         VISION_FUSION_REFRESH_US))
@@ -1967,8 +1963,10 @@ static uint8 track_light_service_vision_fusion(void)
     }
 
     DualCameraFusion_BuildSnapshot(now_us);
-    DualCameraFusion_GetDiag(&diag);
-    s_track_light_fusion_build_count_seen = diag.build_count;
+    s_track_light_snapshot_valid =
+        DualCameraFusion_GetSnapshot(&s_track_light_snapshot);
+    DualCameraFusion_GetDiag(&s_track_light_fusion_diag);
+    CameraBoardLink_GetDiag(&s_track_light_link_diag);
     s_track_light_fusion_last_refresh_us = now_us;
     return 1U;
 }
@@ -1982,7 +1980,12 @@ static void track_light_reset_page_state(void)
     s_track_light_release_wait_ticks = 0U;
     s_track_light_status_tick_div = 0U;
     s_track_light_fusion_last_refresh_us = 0U;
-    s_track_light_fusion_build_count_seen = 0U;
+    s_track_light_row_cursor = 0U;
+    s_track_light_snapshot_valid = 0U;
+    memset(&s_track_light_snapshot, 0, sizeof(s_track_light_snapshot));
+    memset(&s_track_light_fusion_diag, 0,
+           sizeof(s_track_light_fusion_diag));
+    memset(&s_track_light_link_diag, 0, sizeof(s_track_light_link_diag));
 }
 
 static void track_light_restore_local_screen(void)
@@ -2007,29 +2010,79 @@ static const char *track_light_fusion_source_text(uint8 source)
     }
 }
 
-static void track_light_draw_link(uint8 row, const char *label,
-                                  uint8 healthy, uint16 age_ms)
+static void track_light_draw_age(uint16 x, uint16 y, uint16 age_ms)
+{
+    if(age_ms == 0xFFFFU)
+    {
+        ips200_show_string(x, y, "---");
+    }
+    else
+    {
+        ips200_show_uint(x, y,
+                         (age_ms > 999U) ? 999U : age_ms, 3U);
+    }
+}
+
+static const char *track_light_rear_use_text(void)
+{
+    if(s_track_light_fusion_diag.rear_healthy)
+    {
+        return "READY";
+    }
+    if(s_track_light_link_diag.last_result_age_ms == 0xFFFFU)
+    {
+        return "NO RX";
+    }
+    if((s_track_light_link_diag.last_result_age_ms > 300U) ||
+       (s_track_light_fusion_diag.rear_age_ms == 0xFFFFU) ||
+       (s_track_light_fusion_diag.rear_age_ms > 300U))
+    {
+        return "STALE";
+    }
+    if(!s_track_light_link_diag.rear_extrinsic_valid)
+    {
+        return "EXT";
+    }
+    if(!s_track_light_link_diag.rear_time_sync_valid)
+    {
+        return "SYNC";
+    }
+    return "WAIT";
+}
+
+static void track_light_draw_front_link(uint8 row)
 {
     uint16 y = TEST_ROW_Y(row);
 
     test_page_clear_line(y);
     ips200_set_color(RGB565_WHITE, RGB565_BLACK);
-    ips200_show_string(TEST_PAGE_X, y, (char *)label);
-    ips200_set_color(healthy ? RGB565_GREEN : RGB565_RED, RGB565_BLACK);
-    ips200_show_string((uint16)(TEST_PAGE_X + 56U), y,
-                       healthy ? "LIVE" : "LOST");
+    ips200_show_string(TEST_PAGE_X, y, "FRONT FRAME:");
+    track_light_draw_age((uint16)(TEST_PAGE_X + 96U), y,
+                         s_track_light_fusion_diag.front_age_ms);
+    ips200_set_color(s_track_light_fusion_diag.front_healthy ?
+                     RGB565_GREEN : RGB565_RED, RGB565_BLACK);
+    ips200_show_string((uint16)(TEST_PAGE_X + 128U), y,
+                       s_track_light_fusion_diag.front_healthy ?
+                       "READY" : "STALE");
+}
+
+static void track_light_draw_rear_link(uint8 row)
+{
+    uint16 y = TEST_ROW_Y(row);
+    const char *use_text = track_light_rear_use_text();
+
+    test_page_clear_line(y);
     ips200_set_color(RGB565_WHITE, RGB565_BLACK);
-    ips200_show_string((uint16)(TEST_PAGE_X + 104U), y, "AGE:");
-    if(age_ms == 0xFFFFU)
-    {
-        ips200_show_string((uint16)(TEST_PAGE_X + 144U), y, "---");
-    }
-    else
-    {
-        ips200_show_uint((uint16)(TEST_PAGE_X + 144U), y,
-                         (age_ms > 999U) ? 999U : age_ms, 3U);
-    }
-    ips200_show_string((uint16)(TEST_PAGE_X + 176U), y, "ms");
+    ips200_show_string(TEST_PAGE_X, y, "REAR RX:");
+    track_light_draw_age((uint16)(TEST_PAGE_X + 64U), y,
+                         s_track_light_link_diag.last_result_age_ms);
+    ips200_show_string((uint16)(TEST_PAGE_X + 88U), y, " F:");
+    track_light_draw_age((uint16)(TEST_PAGE_X + 112U), y,
+                         s_track_light_fusion_diag.rear_age_ms);
+    ips200_show_string((uint16)(TEST_PAGE_X + 136U), y, " USE:");
+    ips200_set_color(s_track_light_fusion_diag.rear_healthy ?
+                     RGB565_GREEN : RGB565_RED, RGB565_BLACK);
+    ips200_show_string((uint16)(TEST_PAGE_X + 176U), y, (char *)use_text);
 }
 
 static void track_light_draw_fusion_target(
@@ -2063,29 +2116,24 @@ static void track_light_draw_fusion_target(
                      target->detection_confidence, 3U);
 }
 
-static void track_light_draw_data(void)
+static void track_light_draw_row(uint8 row)
 {
-    DualCameraFusionSnapshot_t snapshot = {0};
-    DualCameraFusionDiag_t diag = {0};
-    uint8 snapshot_valid;
+    const DualCameraFusionSnapshot_t *snapshot = &s_track_light_snapshot;
     uint8 car_valid;
     const char *car_source = "LOST ";
     float car_x_cm = 0.0f;
     float car_y_cm = 0.0f;
-    uint8 i;
 
-    snapshot_valid = DualCameraFusion_GetSnapshot(&snapshot);
-    DualCameraFusion_GetDiag(&diag);
-    car_valid = (uint8)(snapshot_valid &&
-        (snapshot.car_valid || snapshot.front_car_valid ||
-         snapshot.rear_car_valid));
+    car_valid = (uint8)(s_track_light_snapshot_valid &&
+        (snapshot->car_valid || snapshot->front_car_valid ||
+         snapshot->rear_car_valid));
     if(car_valid)
     {
-        if(snapshot.front_car_valid && snapshot.rear_car_valid)
+        if(snapshot->front_car_valid && snapshot->rear_car_valid)
         {
             car_source = "BOTH ";
         }
-        else if(snapshot.rear_car_valid)
+        else if(snapshot->rear_car_valid)
         {
             car_source = "REAR ";
         }
@@ -2094,45 +2142,69 @@ static void track_light_draw_data(void)
             car_source = "FRONT";
         }
 
-        if(snapshot.car_valid)
+        if(snapshot->car_valid)
         {
-            car_x_cm = snapshot.car_x_cm;
-            car_y_cm = snapshot.car_y_cm;
+            car_x_cm = snapshot->car_x_cm;
+            car_y_cm = snapshot->car_y_cm;
         }
-        else if(snapshot.rear_car_valid)
+        else if(snapshot->rear_car_valid)
         {
-            car_x_cm = snapshot.rear_car_x_cm;
-            car_y_cm = snapshot.rear_car_y_cm;
+            car_x_cm = snapshot->rear_car_x_cm;
+            car_y_cm = snapshot->rear_car_y_cm;
         }
         else
         {
-            car_x_cm = snapshot.front_car_x_cm;
-            car_y_cm = snapshot.front_car_y_cm;
+            car_x_cm = snapshot->front_car_x_cm;
+            car_y_cm = snapshot->front_car_y_cm;
         }
     }
 
     ips200_set_font(IPS200_8X16_FONT);
-    track_light_draw_link(0U, "FRONT:", diag.front_healthy,
-                          diag.front_age_ms);
-    track_light_draw_link(1U, "REAR:", diag.rear_healthy,
-                          diag.rear_age_ms);
-    test_page_show_text(TEST_ROW_Y(2U), "CAR:", car_source,
-                        car_valid ? RGB565_GREEN : RGB565_RED);
-    test_page_show_float(TEST_ROW_Y(3U), "CAR X CM:",
-                         car_valid ? car_x_cm : 0.0f,
-                         3U, 1U);
-    test_page_show_float(TEST_ROW_Y(4U), "CAR Y CM:",
-                         car_valid ? car_y_cm : 0.0f,
-                         3U, 1U);
-    test_page_show_int(TEST_ROW_Y(5U), "BEACONS:",
-                       snapshot_valid ? (int32)snapshot.target_count : 0, 2U);
-
-    for(i = 0U; i < DUAL_CAMERA_FUSION_MAX_TARGETS; ++i)
+    switch(row)
     {
-        const DualCameraFusionTarget_t *target =
-            (snapshot_valid && i < snapshot.target_count) ?
-                &snapshot.target[i] : NULL;
-        track_light_draw_fusion_target((uint8)(6U + i), i, target);
+        case 0U:
+            track_light_draw_front_link(row);
+            break;
+        case 1U:
+            track_light_draw_rear_link(row);
+            break;
+        case 2U:
+            test_page_show_text(TEST_ROW_Y(row), "CAR:", car_source,
+                                car_valid ? RGB565_GREEN : RGB565_RED);
+            break;
+        case 3U:
+            test_page_show_float(TEST_ROW_Y(row), "CAR X CM:",
+                                 car_valid ? car_x_cm : 0.0f, 3U, 1U);
+            break;
+        case 4U:
+            test_page_show_float(TEST_ROW_Y(row), "CAR Y CM:",
+                                 car_valid ? car_y_cm : 0.0f, 3U, 1U);
+            break;
+        case 5U:
+            test_page_show_int(TEST_ROW_Y(row), "BEACONS:",
+                s_track_light_snapshot_valid ?
+                    (int32)snapshot->target_count : 0, 2U);
+            break;
+        default:
+        {
+            uint8 target_index = (uint8)(row - 6U);
+            const DualCameraFusionTarget_t *target =
+                (s_track_light_snapshot_valid &&
+                 target_index < snapshot->target_count) ?
+                    &snapshot->target[target_index] : NULL;
+            track_light_draw_fusion_target(row, target_index, target);
+            break;
+        }
+    }
+}
+
+static void track_light_draw_next_row(void)
+{
+    track_light_draw_row(s_track_light_row_cursor);
+    s_track_light_row_cursor++;
+    if(s_track_light_row_cursor >= 12U)
+    {
+        s_track_light_row_cursor = 0U;
     }
 }
 
@@ -2154,17 +2226,16 @@ static uint8 track_light_wait_for_screen_release(void)
 
 static void track_light_test_page(void)
 {
-    uint8 refresh_due = track_light_service_downlink();
-    if(track_light_service_vision_fusion()) refresh_due = 1U;
-
     if(!s_track_light_page_active)
     {
         track_light_reset_page_state();
         s_track_light_page_active = 1U;
         track_light_restore_local_screen();
-        track_light_draw_data();
         key_flag = 0U;
     }
+
+    (void)track_light_service_downlink();
+    (void)track_light_service_vision_fusion();
 
     if(key_flag == Button_4 && !s_track_light_exit_pending)
     {
@@ -2210,7 +2281,7 @@ static void track_light_test_page(void)
         track_light_restore_local_screen();
         s_track_light_release_pending = 0U;
         s_track_light_release_wait_ticks = 0U;
-        track_light_draw_data();
+        s_track_light_row_cursor = 0U;
         return;
     }
 
@@ -2239,10 +2310,8 @@ static void track_light_test_page(void)
         return;
     }
 
-    if(refresh_due)
-    {
-        track_light_draw_data();
-    }
+    /* 每轮只绘制一行，确保两次 UART5 解析之间不会被整页SPI刷新阻塞。 */
+    track_light_draw_next_row();
 }
 
 static void fly_test_page(void)
