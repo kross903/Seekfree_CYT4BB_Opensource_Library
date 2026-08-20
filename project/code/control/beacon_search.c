@@ -9,7 +9,7 @@
 #define BEACON_SEARCH_MIN_CONFIDENCE              (96U)  /* 信标可信判断的最低识别置信度 */
 #define BEACON_SEARCH_MIN_SIGMA_CM                 (5U)  /* 信标位置sigma下限，过滤异常过小估计 */
 #define BEACON_SEARCH_MAX_SIGMA_CM                (15U)  /* 信标位置sigma上限，过滤定位发散目标 */
-#define BEACON_SEARCH_ENDPOINT_HOLD_MS           (200U)  /* 到达搜索端点后的短暂停留时间 */
+#define BEACON_SEARCH_ENDPOINT_HOLD_MS           (300U)  /* 后续搜索到达端点后的停留时间 */
 #define BEACON_SEARCH_ENDPOINT_TOLERANCE_DEG       (2.0f)/* 判定到达目标Yaw端点的角度容差 */
 #define BEACON_SEARCH_MAX_YAW_STEP_DEG           (10.0f) /* 单周期Yaw跳变过滤阈值，避免IMU突变误计 */
 
@@ -46,7 +46,7 @@ static volatile float s_second_endpoint_yaw_deg = -90.0f;
 
 static uint8 s_was_armed = 0U;
 static uint8 s_eligible = 0U;
-static uint8 s_ever_seen = 0U;
+static volatile uint8 s_ever_seen = 0U;
 static uint8 s_candidate_track_id = 0U;
 static uint8 s_candidate_confirm_count = 0U;
 static uint8 s_verify_from_failed = 0U;
@@ -597,6 +597,7 @@ void BeaconSearch_OnObservationFrame(
     {
         if(0U != trusted_track_id)
         {
+            s_ever_seen = 1U;
             s_state = BEACON_SEARCH_TRACKING;
             beacon_search_clear_candidate();
         }
@@ -714,6 +715,14 @@ void BeaconSearch_ControlStep(float dt_s,
             break;
 
         case BEACON_SEARCH_SWEEP_HOLD_FIRST:
+            /* 每次解锁后首次搜索：到第一个90度端点后持续等灯，
+             * 保持SPINNING状态以继续接收并确认信标观测。 */
+            if(!s_ever_seen)
+            {
+                *target_yaw_deg = s_first_endpoint_yaw_deg;
+                s_endpoint_hold_elapsed_s = 0.0f;
+                break;
+            }
             if(beacon_search_hold_endpoint(dt_s, current_yaw_deg,
                                            s_first_endpoint_yaw_deg,
                                            target_yaw_deg))
@@ -740,7 +749,8 @@ void BeaconSearch_ControlStep(float dt_s,
                                            s_second_endpoint_yaw_deg,
                                            target_yaw_deg))
             {
-                /* 不设搜索轮数上限：+/-90度端点持续往返，直到可信目标出现。 */
+                /* 首次找到过灯后：+/-90度端点停300 ms往返，
+                 * 不设搜索轮数上限，直到可信目标出现。 */
                 s_sweep_phase = BEACON_SEARCH_SWEEP_TO_FIRST;
             }
             break;

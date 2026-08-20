@@ -411,7 +411,11 @@ static uint8 set_position_brake_value(uint8 item, float value)
         case '4': brake.safety_buffer_cm = value; break;
         case '5': brake.boost_margin_cm = value; break;
         case '6':
-        case '7': return 0U;
+            if(!isfinite(value) || (value < 0.0f) || (value > 1.0f)) return 0U;
+            brake.correction_shaper_control_enabled =
+                (value > 0.5f) ? 1U : 0U;
+            break;
+        case '7': brake.correction_accel_ff_gain = value; break;
         default: return 0U;
     }
     return Position_Loop_Set_Brake_Config(&brake);
@@ -612,16 +616,20 @@ static void send_pid_data_back(uint8 command)
         case 'N':
         {
             PositionLoopBrakeConfig_t brake = {0};
+            PositionLoopDiag_t pos_diag = {0};
 
             Position_Loop_Get_Brake_Config(&brake);
+            Position_Loop_Get_Diag(&pos_diag);
             send_sixteen_date(brake.effective_accel_cms2,
                               brake.effective_jerk_cms3,
                               brake.control_delay_ms,
                               brake.safety_buffer_cm,
                               brake.boost_margin_cm,
-                              0.0f,
-                              0.0f,
-                              0.0f, 0.0f, 0.0f, 0.0f,
+                              (float)brake.correction_shaper_control_enabled,
+                              brake.correction_accel_ff_gain,
+                              pos_diag.correction_accel_ff_gain_applied,
+                              (float)pos_diag.correction_shaper_control_active,
+                              0.0f, 0.0f,
                               0.0f, 0.0f, 0.0f, 0.0f, 0.0f);
             return;
         }
@@ -1435,7 +1443,7 @@ void USART_PID_Adjust(void)
                 case 'g': send_back_flag = 16; break;
                 case 'H':
                 case 'h':
-                    /* FH1!：小车运动；FH2!：位置纠偏速度整形旁路。 */
+                    /* FH1!：小车运动；FH2!：位置纠偏速度A/J整形。 */
                     if(fifo_get_data[2] == '1') send_back_flag = 46;
                     else if(fifo_get_data[2] == '2') send_back_flag = 47;
                     break;

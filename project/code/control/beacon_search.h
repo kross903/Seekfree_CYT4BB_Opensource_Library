@@ -4,7 +4,7 @@
 #include "zf_common_headfile.h"
 #include "communication/core_link.h"
 
-#define BEACON_SEARCH_YAW_RATE_DEFAULT_DPS        (90.0f) /* 自搜索Yaw速度默认值，单位deg/s */
+#define BEACON_SEARCH_YAW_RATE_DEFAULT_DPS        (60.0f) /* 自搜索Yaw速度默认值，单位deg/s */
 #define BEACON_SEARCH_YAW_RATE_MIN_DPS            (30.0f) /* VOFA允许设置的最小自搜索Yaw速度 */
 #define BEACON_SEARCH_YAW_RATE_MAX_DPS           (120.0f) /* VOFA允许设置的最大自搜索Yaw速度 */
 #define BEACON_SEARCH_SWEEP_HALF_ANGLE_DEFAULT_DEG (90.0f)/* 相机长轴覆盖：默认从起始Yaw向两侧各90度 */

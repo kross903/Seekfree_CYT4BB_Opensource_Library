@@ -49,7 +49,7 @@
  * 光流速度鲁棒化参数：坏数据先门控，速度变化只做重力加速度量级的斜率限制。
  * UP-FLOW-302 当前约 40Hz / dt=25ms，VEL_LPF_CUTOFF_HZ=8Hz 时 alpha 约 0.72。
  */
-#define PMW_FLOW_RANGE_LPF_ALPHA            (0.40f)
+#define PMW_FLOW_RANGE_LPF_ALPHA            (0.80f)
 #define PMW_FLOW_GRAVITY_CMS2               (980.665f)
 #define PMW_FLOW_VEL_LPF_CUTOFF_HZ          (15.0f)
 #define PMW_FLOW_TILT_GATE_DEG              (30.0f)

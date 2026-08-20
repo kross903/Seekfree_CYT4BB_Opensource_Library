@@ -58,6 +58,8 @@ typedef struct
     float control_delay_ms;
     float safety_buffer_cm;
     float boost_margin_cm;
+    float correction_accel_ff_gain;
+    uint8 correction_shaper_control_enabled;
 } PositionLoopBrakeConfig_t;
 
 typedef struct
@@ -84,6 +86,8 @@ typedef struct
     float correction_shaper_jerk_y_cms3;
     float correction_shaper_accel_max_cms2;
     float correction_shaper_jerk_max_cms3;
+    float correction_accel_ff_gain_configured;
+    float correction_accel_ff_gain_applied;
     float car_ff_raw_vx_cms;
     float car_ff_raw_vy_cms;
     float car_ff_filtered_vx_cms;
@@ -145,6 +149,8 @@ typedef struct
     uint8 frozen_hold_active;
     uint8 correction_shaper_initialized;
     uint8 correction_shaper_phase;
+    uint8 correction_shaper_control_requested;
+    uint8 correction_shaper_control_active;
 } PositionLoopDiag_t;
 
 void Position_Loop_Set_Enabled(uint8 enabled);

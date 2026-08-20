@@ -8,7 +8,7 @@
 #define POSITION_LOOP_CAR_VELOCITY_FF_GAIN_MAX     (1.0f)   // M1/M2：小车X/Y速度前馈增益允许上限
 #define POSITION_LOOP_CAR_ACCEL_FF_GAIN_DEFAULT    (0.4f)   // M6/M7：小车X/Y计划加速度前馈增益上电默认值
 #define POSITION_LOOP_CAR_ACCEL_FF_GAIN_MAX        (1.0f)   // M6/M7：小车X/Y加速度前馈增益允许上限
-#define POSITION_LOOP_POSITION_KP_DEFAULT          (0.4f)    // M3：二维位置P增益默认值，单位s^-1
+#define POSITION_LOOP_POSITION_KP_DEFAULT          (0.2f)    // M3：二维位置P增益默认值，单位s^-1
 #define POSITION_LOOP_CORRECTION_MAX_DEFAULT_CMS   (100.0f)   // M4：位置修正速度模长上限，单位cm/s
 #define POSITION_LOOP_TARGET_MAX_DEFAULT_CMS       (300.0f)   // M5：合成后目标速度模长上限，单位cm/s
 #define POSITION_LOOP_CORRECTION_ACCEL_DEFAULT_CMS2 (35.0f)  // M8：P/Sqrt位置纠偏包络加速度，单位cm/s^2
@@ -36,6 +36,10 @@
 #define POSITION_LOOP_CONTROL_DELAY_DEFAULT_MS      (0.0f)   // N3：控制系统等效延迟，单位ms
 #define POSITION_LOOP_SAFETY_BUFFER_DEFAULT_CM      (0.0f)   // N4：安全余量，单位cm
 #define POSITION_LOOP_BOOST_MARGIN_DEFAULT_CM       (0.0f)   // N5：速度包络提前收紧宽度，单位cm
+#define POSITION_LOOP_CORRECTION_SHAPER_CONTROL_DEFAULT (0U) // N6：默认保持旧的原始纠偏速度
+#define POSITION_LOOP_CORRECTION_ACCEL_FF_GAIN_DEFAULT (0.0f) // N7：自身纠偏加速度前馈默认关闭
+#define POSITION_LOOP_CORRECTION_ACCEL_FF_GAIN_MAX  (1.0f)
+#define POSITION_LOOP_CORRECTION_ACCEL_FF_GAIN_SLEW_PER_S (1.0f)
 #define POSITION_LOOP_CLOSING_SPEED_LPF_HZ          (3.0f)    // 径向接近速度诊断低通截止频率，单位Hz
 #define POSITION_LOOP_TWO_PI                        (6.28318530718f) // 一阶低通系数计算使用的2π常量
 #define POSITION_LOOP_VISION_SOURCE_FRONT           (0U)
@@ -58,7 +62,9 @@ static volatile PositionLoopBrakeConfig_t g_brake_config = {
     POSITION_LOOP_EFFECTIVE_JERK_DEFAULT_CMS3,
     POSITION_LOOP_CONTROL_DELAY_DEFAULT_MS,
     POSITION_LOOP_SAFETY_BUFFER_DEFAULT_CM,
-    POSITION_LOOP_BOOST_MARGIN_DEFAULT_CM
+    POSITION_LOOP_BOOST_MARGIN_DEFAULT_CM,
+    POSITION_LOOP_CORRECTION_ACCEL_FF_GAIN_DEFAULT,
+    POSITION_LOOP_CORRECTION_SHAPER_CONTROL_DEFAULT
 };
 static volatile float g_car_velocity_ff_gain_x = POSITION_LOOP_CAR_VELOCITY_FF_GAIN_DEFAULT;
 static volatile float g_car_velocity_ff_gain_y = POSITION_LOOP_CAR_VELOCITY_FF_GAIN_DEFAULT;
@@ -105,7 +111,7 @@ static uint16 g_vision_observation_age_ms = 0U;
 static uint8 g_vision_observation_accepted = 0U;
 static uint8 g_vision_observation_source = POSITION_LOOP_VISION_SOURCE_FRONT;
 static volatile uint8 g_frozen_hold_active = 0U;
-/* 仅用于VOFA验证的纠偏速度整形状态，暂不参与控制目标或加速度前馈。 */
+/* 纠偏速度和加速度必须作为同一条轨迹切换，N6/N7上电默认不改变旧控制。 */
 static float g_shaped_correction_vx_cms = 0.0f;
 static float g_shaped_correction_vy_cms = 0.0f;
 static float g_shaped_correction_ax_cms2 = 0.0f;
@@ -114,6 +120,8 @@ static uint8 g_correction_shaper_initialized = 0U;
 static uint8 g_correction_shaper_terminal_pending = 0U;
 static float g_correction_shaper_terminal_vx_cms = 0.0f;
 static float g_correction_shaper_terminal_vy_cms = 0.0f;
+static uint8 g_correction_shaper_control_active = 0U;
+static float g_correction_accel_ff_gain_applied = 0.0f;
 
 static float position_loop_limit_float(float value, float minimum, float maximum)
 {
@@ -143,6 +151,50 @@ static uint8 position_loop_limit_vector(float *x, float *y, float limit)
     return 1U;
 }
 
+/* M5对速度做径向投影时，用同一投影的导数处理前馈加速度。 */
+static uint8 position_loop_limit_velocity_state(float *vx,
+                                                float *vy,
+                                                float *ax,
+                                                float *ay,
+                                                float speed_limit)
+{
+    float speed_squared;
+    float speed;
+    float scale;
+    float radial_rate;
+    float raw_vx;
+    float raw_vy;
+    float raw_ax;
+    float raw_ay;
+
+    if((vx == NULL) || (vy == NULL) || (ax == NULL) || (ay == NULL) ||
+       !isfinite(*vx) || !isfinite(*vy) ||
+       !isfinite(*ax) || !isfinite(*ay) ||
+       !isfinite(speed_limit) || !(speed_limit > 0.0f))
+    {
+        return 0U;
+    }
+
+    raw_vx = *vx;
+    raw_vy = *vy;
+    raw_ax = *ax;
+    raw_ay = *ay;
+    speed_squared = raw_vx * raw_vx + raw_vy * raw_vy;
+    if(!(speed_squared > speed_limit * speed_limit))
+    {
+        return 0U;
+    }
+
+    speed = sqrtf(speed_squared);
+    scale = speed_limit / speed;
+    radial_rate = (raw_vx * raw_ax + raw_vy * raw_ay) / speed_squared;
+    *vx = raw_vx * scale;
+    *vy = raw_vy * scale;
+    *ax = scale * (raw_ax - radial_rate * raw_vx);
+    *ay = scale * (raw_ay - radial_rate * raw_vy);
+    return 1U;
+}
+
 static void position_loop_reset_correction_shaper(void)
 {
     g_shaped_correction_vx_cms = 0.0f;
@@ -153,6 +205,8 @@ static void position_loop_reset_correction_shaper(void)
     g_correction_shaper_terminal_pending = 0U;
     g_correction_shaper_terminal_vx_cms = 0.0f;
     g_correction_shaper_terminal_vy_cms = 0.0f;
+    g_correction_shaper_control_active = 0U;
+    g_correction_accel_ff_gain_applied = 0.0f;
     g_diag.shaped_correction_vx_cms = 0.0f;
     g_diag.shaped_correction_vy_cms = 0.0f;
     g_diag.correction_velocity_error_x_cms = 0.0f;
@@ -165,8 +219,59 @@ static void position_loop_reset_correction_shaper(void)
     g_diag.correction_shaper_jerk_y_cms3 = 0.0f;
     g_diag.correction_shaper_accel_max_cms2 = 0.0f;
     g_diag.correction_shaper_jerk_max_cms3 = 0.0f;
+    g_diag.correction_accel_ff_gain_configured = 0.0f;
+    g_diag.correction_accel_ff_gain_applied = 0.0f;
     g_diag.correction_shaper_initialized = 0U;
     g_diag.correction_shaper_phase = POSITION_LOOP_CORRECTION_SHAPER_PHASE_RESET;
+    g_diag.correction_shaper_control_requested = 0U;
+    g_diag.correction_shaper_control_active = 0U;
+}
+
+static void position_loop_seed_correction_shaper(float correction_vx_cms,
+                                                 float correction_vy_cms)
+{
+    g_shaped_correction_vx_cms = correction_vx_cms;
+    g_shaped_correction_vy_cms = correction_vy_cms;
+    g_shaped_correction_ax_cms2 = 0.0f;
+    g_shaped_correction_ay_cms2 = 0.0f;
+    g_correction_shaper_initialized = 1U;
+    g_correction_shaper_terminal_pending = 0U;
+    g_correction_shaper_terminal_vx_cms = correction_vx_cms;
+    g_correction_shaper_terminal_vy_cms = correction_vy_cms;
+}
+
+/* 时序无效时保持已输出速度，只撤销无法按有效dt积分的加速度。 */
+static void position_loop_hold_correction_shaper(void)
+{
+    g_shaped_correction_ax_cms2 = 0.0f;
+    g_shaped_correction_ay_cms2 = 0.0f;
+    g_correction_shaper_terminal_pending = 0U;
+    g_diag.correction_accel_target_x_cms2 = 0.0f;
+    g_diag.correction_accel_target_y_cms2 = 0.0f;
+    g_diag.shaped_correction_ax_cms2 = 0.0f;
+    g_diag.shaped_correction_ay_cms2 = 0.0f;
+    g_diag.correction_shaper_jerk_x_cms3 = 0.0f;
+    g_diag.correction_shaper_jerk_y_cms3 = 0.0f;
+    if(g_correction_shaper_initialized)
+    {
+        g_diag.correction_shaper_phase = POSITION_LOOP_CORRECTION_SHAPER_PHASE_HOLD;
+    }
+}
+
+static void position_loop_update_correction_ff_gain(float configured_gain,
+                                                    uint8 control_requested,
+                                                    float dt_s)
+{
+    float target_gain = control_requested ? configured_gain : 0.0f;
+    float gain_delta = target_gain - g_correction_accel_ff_gain_applied;
+    float gain_step = POSITION_LOOP_CORRECTION_ACCEL_FF_GAIN_SLEW_PER_S * dt_s;
+
+    gain_delta = position_loop_limit_float(gain_delta, -gain_step, gain_step);
+    g_correction_accel_ff_gain_applied += gain_delta;
+    g_correction_accel_ff_gain_applied = position_loop_limit_float(
+        g_correction_accel_ff_gain_applied,
+        0.0f,
+        POSITION_LOOP_CORRECTION_ACCEL_FF_GAIN_MAX);
 }
 
 static void position_loop_update_correction_shaper(float correction_vx_cms,
@@ -1100,13 +1205,18 @@ uint8 Position_Loop_Set_Brake_Config(const PositionLoopBrakeConfig_t *config)
        !isfinite(config->control_delay_ms) ||
        !isfinite(config->safety_buffer_cm) ||
        !isfinite(config->boost_margin_cm) ||
+       !isfinite(config->correction_accel_ff_gain) ||
        (config->effective_accel_cms2 < 10.0f) ||
        (config->effective_accel_cms2 > 400.0f) ||
        (config->effective_jerk_cms3 < 20.0f) ||
        (config->effective_jerk_cms3 > 1000.0f) ||
        (config->control_delay_ms < 0.0f) || (config->control_delay_ms > 500.0f) ||
        (config->safety_buffer_cm < 0.0f) || (config->safety_buffer_cm > 100.0f) ||
-       (config->boost_margin_cm < 0.0f) || (config->boost_margin_cm > 100.0f))
+       (config->boost_margin_cm < 0.0f) || (config->boost_margin_cm > 100.0f) ||
+       (config->correction_accel_ff_gain < 0.0f) ||
+       (config->correction_accel_ff_gain >
+        POSITION_LOOP_CORRECTION_ACCEL_FF_GAIN_MAX) ||
+       (config->correction_shaper_control_enabled > 1U))
     {
         return 0U;
     }
@@ -1159,6 +1269,12 @@ void Position_Loop_Update_Velocity_Target(uint8 velocity_ready,
     float desired_vy = 0.0f;
     float correction_vx = 0.0f;
     float correction_vy = 0.0f;
+    float applied_correction_vx = 0.0f;
+    float applied_correction_vy = 0.0f;
+    float car_accel_ff_x = 0.0f;
+    float car_accel_ff_y = 0.0f;
+    float correction_tracking_error;
+    float correction_acceleration_length;
     float distance = 0.0f;
     float relative_velocity_x = 0.0f;
     float relative_velocity_y = 0.0f;
@@ -1176,6 +1292,7 @@ void Position_Loop_Update_Velocity_Target(uint8 velocity_ready,
     uint8 flags = 0U;
     uint8 brake_diag_flags = 0U;
     uint8 sqrt_controller_active = 0U;
+    uint8 correction_shaper_requested;
     uint8 new_visual_pose;
     uint8 rear_frame_valid = 0U;
     uint8 new_rear_pose;
@@ -1210,9 +1327,11 @@ void Position_Loop_Update_Velocity_Target(uint8 velocity_ready,
         *target_vx_earth_cms = g_target_vx_earth_cms;
         *target_vy_earth_cms = g_target_vy_earth_cms;
         position_loop_reset_brake_supervisor();
-        position_loop_reset_correction_shaper();
+        position_loop_hold_correction_shaper();
         g_target_ax_earth_cms2 = 0.0f;
         g_target_ay_earth_cms2 = 0.0f;
+        g_diag.target_accel_x_cms2 = 0.0f;
+        g_diag.target_accel_y_cms2 = 0.0f;
         g_diag.velocity_ready = velocity_ready;
         g_diag.timing_valid = 0U;
         g_diag.trajectory_dt_s = dt_s;
@@ -1398,8 +1517,6 @@ void Position_Loop_Update_Velocity_Target(uint8 velocity_ready,
     }
 
     /* 小车运动前馈独立于视觉位置有效性；视觉只决定位置纠偏分量。 */
-    desired_vx = car_velocity_valid ? car_vx_earth : 0.0f;
-    desired_vy = car_velocity_valid ? car_vy_earth : 0.0f;
     if(position_valid)
     {
         /* 真实位置误差进入P/Sqrt；停车包络只约束朝向小车的目标速度。 */
@@ -1457,8 +1574,6 @@ void Position_Loop_Update_Velocity_Target(uint8 velocity_ready,
                 flags |= POSITION_LOOP_STATUS_CORRECTION_LIMITED;
             }
         }
-        desired_vx += correction_vx;
-        desired_vy += correction_vy;
     }
 
     if(!position_valid)
@@ -1466,23 +1581,78 @@ void Position_Loop_Update_Velocity_Target(uint8 velocity_ready,
         position_loop_reset_brake_supervisor();
         brake_allowed_speed = 0.0f;
     }
-    if(position_loop_limit_vector(&desired_vx, &desired_vy,
-                                  config.target_speed_max_cms))
+    correction_shaper_requested =
+        brake_config.correction_shaper_control_enabled ? 1U : 0U;
+    if(correction_shaper_requested && !g_correction_shaper_control_active)
     {
-        flags |= POSITION_LOOP_STATUS_TARGET_LIMITED;
+        /* 从当前原始纠偏速度起步，开启时不改变本周期速度目标。 */
+        position_loop_seed_correction_shaper(correction_vx, correction_vy);
+        g_correction_shaper_control_active = 1U;
     }
 
-    /* 诊断旁路：生成纠偏速度/加速度轨迹，但不接入现有控制目标。 */
     position_loop_update_correction_shaper(
         correction_vx, correction_vy,
         config.correction_accel_max_cms2,
         brake_config.effective_jerk_cms3,
         dt_s);
 
+    correction_tracking_error = sqrtf(
+        (correction_vx - g_shaped_correction_vx_cms) *
+        (correction_vx - g_shaped_correction_vx_cms) +
+        (correction_vy - g_shaped_correction_vy_cms) *
+        (correction_vy - g_shaped_correction_vy_cms));
+    correction_acceleration_length = sqrtf(
+        g_shaped_correction_ax_cms2 * g_shaped_correction_ax_cms2 +
+        g_shaped_correction_ay_cms2 * g_shaped_correction_ay_cms2);
+    if(!correction_shaper_requested && g_correction_shaper_control_active &&
+       (correction_tracking_error <= POSITION_LOOP_EPSILON) &&
+       (correction_acceleration_length <= POSITION_LOOP_EPSILON))
+    {
+        /* 关闭时等待规划轨迹追上原始目标，避免切回时速度跳变。 */
+        g_correction_shaper_control_active = 0U;
+    }
+
+    position_loop_update_correction_ff_gain(
+        brake_config.correction_accel_ff_gain,
+        correction_shaper_requested,
+        dt_s);
+    if(g_correction_shaper_control_active)
+    {
+        applied_correction_vx = g_shaped_correction_vx_cms;
+        applied_correction_vy = g_shaped_correction_vy_cms;
+    }
+    else
+    {
+        applied_correction_vx = correction_vx;
+        applied_correction_vy = correction_vy;
+    }
+
+    desired_vx = (car_velocity_valid ? car_vx_earth : 0.0f) +
+                 applied_correction_vx;
+    desired_vy = (car_velocity_valid ? car_vy_earth : 0.0f) +
+                 applied_correction_vy;
+    car_accel_ff_x = car_acceleration_valid ? car_ax_earth : 0.0f;
+    car_accel_ff_y = car_acceleration_valid ? car_ay_earth : 0.0f;
+    g_target_ax_earth_cms2 = car_accel_ff_x;
+    g_target_ay_earth_cms2 = car_accel_ff_y;
+    if(g_correction_shaper_control_active)
+    {
+        g_target_ax_earth_cms2 += g_correction_accel_ff_gain_applied *
+                                  g_shaped_correction_ax_cms2;
+        g_target_ay_earth_cms2 += g_correction_accel_ff_gain_applied *
+                                  g_shaped_correction_ay_cms2;
+    }
+
+    if(position_loop_limit_velocity_state(&desired_vx, &desired_vy,
+                                          &g_target_ax_earth_cms2,
+                                          &g_target_ay_earth_cms2,
+                                          config.target_speed_max_cms))
+    {
+        flags |= POSITION_LOOP_STATUS_TARGET_LIMITED;
+    }
+
     g_target_vx_earth_cms = desired_vx;
     g_target_vy_earth_cms = desired_vy;
-    g_target_ax_earth_cms2 = car_acceleration_valid ? car_ax_earth : 0.0f;
-    g_target_ay_earth_cms2 = car_acceleration_valid ? car_ay_earth : 0.0f;
     if(car_acceleration_valid)
     {
         flags |= POSITION_LOOP_STATUS_ACCEL_FF_VALID;
@@ -1514,12 +1684,20 @@ void Position_Loop_Update_Velocity_Target(uint8 velocity_ready,
     g_diag.car_ff_filtered_vy_cms = car_vy_earth;
     g_diag.car_ff_raw_ax_cms2 = car_actual_ax_earth;
     g_diag.car_ff_raw_ay_cms2 = car_actual_ay_earth;
-    g_diag.car_ff_applied_ax_cms2 = g_target_ax_earth_cms2;
-    g_diag.car_ff_applied_ay_cms2 = g_target_ay_earth_cms2;
+    g_diag.car_ff_applied_ax_cms2 = car_accel_ff_x;
+    g_diag.car_ff_applied_ay_cms2 = car_accel_ff_y;
     g_diag.car_velocity_ff_gain_x = g_car_velocity_ff_gain_x;
     g_diag.car_velocity_ff_gain_y = g_car_velocity_ff_gain_y;
     g_diag.car_accel_ff_gain_x = g_car_accel_ff_gain_x;
     g_diag.car_accel_ff_gain_y = g_car_accel_ff_gain_y;
+    g_diag.correction_accel_ff_gain_configured =
+        brake_config.correction_accel_ff_gain;
+    g_diag.correction_accel_ff_gain_applied =
+        g_correction_accel_ff_gain_applied;
+    g_diag.correction_shaper_control_requested =
+        correction_shaper_requested;
+    g_diag.correction_shaper_control_active =
+        g_correction_shaper_control_active;
     g_diag.desired_vx_cms = desired_vx;
     g_diag.desired_vy_cms = desired_vy;
     g_diag.target_accel_x_cms2 = g_target_ax_earth_cms2;
