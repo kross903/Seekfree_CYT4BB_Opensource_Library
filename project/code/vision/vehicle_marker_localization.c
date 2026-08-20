@@ -3,17 +3,7 @@
 #include <math.h>
 #include <string.h>
 
-#define MARKER_KALMAN_INITIAL_P (1.0f)
-#define MARKER_KALMAN_Q         (0.10f)
-#define MARKER_KALMAN_R         (6.0f)
 #define MARKER_EPSILON          (1e-3f)
-
-typedef struct
-{
-    float value;
-    float covariance;
-    uint8 initialized;
-} MarkerFilter_t;
 
 VehicleMarkerPose_t g_vehicle_marker_pose = {0};
 volatile uint8 g_vehicle_marker_position_lost_flag = 1U;
@@ -23,38 +13,10 @@ volatile uint32 g_vehicle_marker_pose_update_seq = 0U;
 
 static VehicleMarkerChevronDebug_t s_debug;
 static VehicleMarkerLossDebug_t s_loss;
-static MarkerFilter_t s_filter_x;
-static MarkerFilter_t s_filter_y;
 static float s_yaw_prior_deg;
 static uint8 s_yaw_prior_valid;
 static uint8 s_detected_this_frame;
 static uint32 s_accept_count;
-
-static void marker_filter_reset(MarkerFilter_t *filter)
-{
-    if(filter == NULL) return;
-    filter->value = 0.0f;
-    filter->covariance = MARKER_KALMAN_INITIAL_P;
-    filter->initialized = 0U;
-}
-
-static float marker_filter_update(MarkerFilter_t *filter, float measurement)
-{
-    float gain;
-    if(filter == NULL) return measurement;
-    if(!filter->initialized)
-    {
-        filter->value = measurement;
-        filter->covariance = MARKER_KALMAN_INITIAL_P;
-        filter->initialized = 1U;
-        return measurement;
-    }
-    filter->covariance += MARKER_KALMAN_Q;
-    gain = filter->covariance / (filter->covariance + MARKER_KALMAN_R);
-    filter->value += gain * (measurement - filter->value);
-    filter->covariance *= 1.0f - gain;
-    return filter->value;
-}
 
 static void marker_clear_track(void)
 {
@@ -75,8 +37,6 @@ static void marker_mark_lost(void)
     s_loss.lost_flag = 1U;
     s_loss.lost_elapsed_ms = VEHICLE_MARKER_POSITION_LOST_HOLD_MS;
     ++s_loss.mark_lost_count;
-    marker_filter_reset(&s_filter_x);
-    marker_filter_reset(&s_filter_y);
     marker_clear_track();
 }
 
@@ -85,8 +45,6 @@ void VehicleMarkerLocalization_Init(void)
     memset(&g_vehicle_marker_pose, 0, sizeof(g_vehicle_marker_pose));
     memset(&s_debug, 0, sizeof(s_debug));
     memset(&s_loss, 0, sizeof(s_loss));
-    marker_filter_reset(&s_filter_x);
-    marker_filter_reset(&s_filter_y);
     s_yaw_prior_deg = 0.0f;
     s_yaw_prior_valid = 1U;
     s_detected_this_frame = 0U;
@@ -204,8 +162,9 @@ uint8 VehicleMarkerLocalization_CommitContourArrow(
     memset(&g_vehicle_marker_pose, 0, sizeof(g_vehicle_marker_pose));
     g_vehicle_marker_pose.raw_x = raw_x;
     g_vehicle_marker_pose.raw_y = raw_y;
-    g_vehicle_marker_pose.x = marker_filter_update(&s_filter_x, raw_x);
-    g_vehicle_marker_pose.y = marker_filter_update(&s_filter_y, raw_y);
+    /* 跨帧位置滤波必须在同帧Yaw转换后的惯性系中完成。 */
+    g_vehicle_marker_pose.x = raw_x;
+    g_vehicle_marker_pose.y = raw_y;
     g_vehicle_marker_pose.z = VEHICLE_MARKER_CHEVRON_PLANE_HEIGHT_CM;
     g_vehicle_marker_pose.heading_deg =
         atan2f(apex.y - rear_y, apex.x - rear_x) *

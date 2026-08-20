@@ -1112,7 +1112,6 @@ static void control_task_update_position_target(uint8 takeoff_active)
     float position_target_ay_cms2 = 0.0f;
     CoreLinkCarMotionDiag_t car_motion = {0};
     PositionLoopFeedforwardInput_t feedforward = {0};
-    ICM_Health_t imu_health = {0};
     PMWFlowState_t flow_snap;
 
     if(takeoff_active)
@@ -1124,30 +1123,18 @@ static void control_task_update_position_target(uint8 takeoff_active)
 
     PMW_Flow_GetState(&flow_snap);
     core_link_user_get_car_motion_diag(&car_motion);
-    ICM_GetHealth(&imu_health);
-    if(car_motion.valid && imu_health.attitude_valid && isfinite(current_yaw))
+    if(car_motion.valid)
     {
-        float yaw_delta_rad = Angle_WrapDeg180(car_motion.car_yaw_deg - current_yaw) *
-                              0.01745329252f;
-        float cos_yaw = cosf(yaw_delta_rad);
-        float sin_yaw = sinf(yaw_delta_rad);
-
+        /* V3已经使用双方对齐后的共享世界系，禁止再次按Yaw旋转。 */
         feedforward.velocity_valid = 1U;
-        feedforward.vx_uav_cms =
-            cos_yaw * car_motion.forward_speed_cms -
-            sin_yaw * car_motion.left_speed_cms;
-        feedforward.vy_uav_cms =
-            sin_yaw * car_motion.forward_speed_cms +
-            cos_yaw * car_motion.left_speed_cms;
+        feedforward.earth_frame = 1U;
+        feedforward.vx_cms = car_motion.world_vx_cms;
+        feedforward.vy_cms = car_motion.world_vy_cms;
         if(car_motion.acceleration_valid)
         {
             feedforward.acceleration_valid = 1U;
-            feedforward.ax_uav_cms2 =
-                cos_yaw * car_motion.forward_acc_cms2 -
-                sin_yaw * car_motion.left_acc_cms2;
-            feedforward.ay_uav_cms2 =
-                sin_yaw * car_motion.forward_acc_cms2 +
-                cos_yaw * car_motion.left_acc_cms2;
+            feedforward.ax_cms2 = car_motion.world_ax_cms2;
+            feedforward.ay_cms2 = car_motion.world_ay_cms2;
         }
     }
     Position_Loop_Update_Velocity_Target(flow_snap.fused_velocity_valid,
@@ -1304,6 +1291,11 @@ void PIT_Control_Task_250us(void)
 
     MotorHardware_InitOnce();
     control_scheduler_begin_tick(&rate_due, &angle_due, &velocity_due, &position_due);
+    if(position_due)
+    {
+        core_link_user_motion_tick((uint16)((CONTROL_PERIOD_US *
+                                   VELOCITY_SLOT_DIVISOR) / 1000U));
+    }
 
     if(Flight_Safety_Check_Esc())
     {

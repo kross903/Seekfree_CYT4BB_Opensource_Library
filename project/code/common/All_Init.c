@@ -118,8 +118,8 @@ static void init_default_pid_parameters(void)
     PID_Init(&angle_pid_roll,  6.50f, 0.01f, 0.0f, 350.0f, 5000.0f, 5.0f, 0.80f);  /* Roll姿态角外环：500 Hz，周期2 ms。 */
     PID_Init(&angle_pid_pitch, 6.50f, 0.01f, 0.0f, 350.0f, 5000.0f, 5.0f, 0.80f);  /* Pitch姿态角外环：500 Hz，周期2 ms。 */
     PID_Init(&angle_pid_yaw,   6.0f, 0.0f, 0.0f, 250.0f, 400.0f, 12.0f, 0.0f);  /* Yaw姿态角外环：500 Hz，周期2 ms。 */
-    PID_Init(&vel_pid_x, 3.0f, 0.4f, 0.1f, 458.0f, 300.0f, 30.0f, 0.0f);  /* 惯性系X速度环：250 Hz，周期4 ms。 */
-    PID_Init(&vel_pid_y, 3.0f, 0.4f, 0.1f, 458.0f, 300.0f, 30.0f, 0.0f);  /* 惯性系Y速度环：250 Hz，周期4 ms。 */
+    PID_Init(&vel_pid_x, 3.0f, 0.1f, 0.1f, 458.0f, 300.0f, 30.0f, 0.0f);  /* 惯性系X速度环：250 Hz，周期4 ms。 */
+    PID_Init(&vel_pid_y, 3.0f, 0.1f, 0.1f, 458.0f, 300.0f, 10.0f, 0.0f);  /* 惯性系Y速度环：250 Hz，周期4 ms。 */
     /* 速度D由velocity_loop.c独立滤波，末尾legacy alpha不参与速度D计算。 */
     /* 水平速度PID输出单位统一为cm/s^2，积分限幅也表示加速度贡献。
     PID_Init(&vel_pid_x, 2.8f, 1.0f, 0.20f, 458.0f, 80.0f, 0.0f, 0.0f);

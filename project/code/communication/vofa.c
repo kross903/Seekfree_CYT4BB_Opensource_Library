@@ -374,7 +374,7 @@ static uint8 set_position_feedforward_value(uint8 item, float value)
 {
     PositionLoopTrajectoryConfig_t trajectory = {0};
 
-    /* M1/M2分别设置X/Y小车速度前馈增益。 */
+    /* M1/M2设置X/Y速度前馈增益，M6/M7设置X/Y加速度前馈增益。 */
     if('1' == item)
     {
         return Position_Loop_Set_Car_Velocity_Feedforward_Gain(0U, value);
@@ -385,14 +385,13 @@ static uint8 set_position_feedforward_value(uint8 item, float value)
     }
 
     Position_Loop_Get_Trajectory_Config(&trajectory);
-    /* M6/M7旧A/J整形参数已删除；M8保留为P/Sqrt纠偏包络A。 */
     switch(item)
     {
         case '3': trajectory.position_kp = value; break;
         case '4': trajectory.correction_speed_max_cms = value; break;
         case '5': trajectory.target_speed_max_cms = value; break;
-        case '6':
-        case '7': return 0U;
+        case '6': return Position_Loop_Set_Car_Acceleration_Feedforward_Gain(0U, value);
+        case '7': return Position_Loop_Set_Car_Acceleration_Feedforward_Gain(1U, value);
         case '8': trajectory.correction_accel_max_cms2 = value; break;
         default: return 0U;
     }
@@ -587,16 +586,20 @@ static void send_pid_data_back(uint8 command)
         case 'M':
         {
             PositionLoopTrajectoryConfig_t trajectory = {0};
+            float accel_gain_x = 0.0f;
+            float accel_gain_y = 0.0f;
 
             Position_Loop_Get_Car_Velocity_Feedforward_Gain(&value_1, &value_2);
+            Position_Loop_Get_Car_Acceleration_Feedforward_Gain(&accel_gain_x,
+                                                                 &accel_gain_y);
             Position_Loop_Get_Trajectory_Config(&trajectory);
             send_four_date(value_1,
                            value_2,
                            trajectory.position_kp,
                            trajectory.correction_speed_max_cms,
                            trajectory.target_speed_max_cms,
-                           0.0f,
-                           0.0f,
+                           accel_gain_x,
+                           accel_gain_y,
                            trajectory.correction_accel_max_cms2);
             return;
         }
@@ -1408,6 +1411,8 @@ void USART_PID_Adjust(void)
                 case 'g': send_back_flag = 16; break;
                 case 'I':
                 case 'i': send_back_flag = 18; break;
+                case 'J':
+                case 'j': send_back_flag = 45; break;
                 case 'K':
                 case 'k': send_back_flag = 36; break;
                 case 'L':
@@ -1939,8 +1944,8 @@ void send_date_back(void)
                 status_flags |= 0x80U;
             }
 
-            send_sixteen_date(car_motion.forward_speed_cms,
-                              car_motion.left_speed_cms,
+            send_sixteen_date(car_motion.world_vx_cms,
+                              car_motion.world_vy_cms,
                               car_motion.car_yaw_deg,
                               current_yaw,
                               pos_diag.car_ff_raw_vx_cms,
@@ -2200,6 +2205,30 @@ void send_date_back(void)
                               (float)pmw_flow_state.flow_last_received_accepted,
                               (float)pmw_flow_state.fusion_mode,
                               (float)pmw_flow_state.fused_velocity_valid);
+            break;
+        }
+
+        case 45:
+        {
+            PositionLoopDiag_t pos_diag = {0};
+
+            Position_Loop_Get_Diag(&pos_diag);
+            send_sixteen_date(pos_diag.error_x_cm,
+                              pos_diag.error_y_cm,
+                              pos_diag.vision_observation_x_cm,
+                              pos_diag.vision_observation_y_cm,
+                              pos_diag.vision_innovation_cm,
+                              pos_diag.vision_gate_cm,
+                              pos_diag.vision_covariance_x_cm2,
+                              pos_diag.vision_covariance_y_cm2,
+                              (float)pos_diag.vision_observation_age_ms,
+                              (float)pos_diag.vision_hold_age_ms,
+                              (float)pos_diag.vision_observation_state,
+                              (float)pos_diag.vision_reacquire_count,
+                              (float)pos_diag.vision_observation_accepted,
+                              (float)pos_diag.vision_observation_source,
+                              (float)pos_diag.vision_estimator_initialized,
+                              (float)pos_diag.active);
             break;
         }
 

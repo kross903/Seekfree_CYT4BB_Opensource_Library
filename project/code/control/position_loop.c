@@ -1,10 +1,13 @@
 #include "control/position_loop.h"
+#include "communication/camera_board_link.h"
 #include "vision/vehicle_marker_localization.h"
 #include "vision/dual_camera_fusion.h"
 #include <math.h>
 //P分支由简单P控制切换到Sqrt分支的 切换距离 = M8 / M3²
-#define POSITION_LOOP_CAR_FF_GAIN_DEFAULT          (0.6f)   // M1/M2：小车X/Y速度前馈增益上电默认值
-#define POSITION_LOOP_CAR_FF_GAIN_MAX              (1.0f)    // M1/M2：小车X/Y速度前馈增益允许上限
+#define POSITION_LOOP_CAR_VELOCITY_FF_GAIN_DEFAULT (0.6f)   // M1/M2：小车X/Y速度前馈增益上电默认值
+#define POSITION_LOOP_CAR_VELOCITY_FF_GAIN_MAX     (1.0f)   // M1/M2：小车X/Y速度前馈增益允许上限
+#define POSITION_LOOP_CAR_ACCEL_FF_GAIN_DEFAULT    (1.0f)   // M6/M7：小车X/Y加速度前馈增益上电默认值
+#define POSITION_LOOP_CAR_ACCEL_FF_GAIN_MAX        (1.0f)   // M6/M7：小车X/Y加速度前馈增益允许上限
 #define POSITION_LOOP_POSITION_KP_DEFAULT          (0.22f)    // M3：二维位置P增益默认值，单位s^-1
 #define POSITION_LOOP_CORRECTION_MAX_DEFAULT_CMS   (100.0f)   // M4：位置修正速度模长上限，单位cm/s
 #define POSITION_LOOP_TARGET_MAX_DEFAULT_CMS       (300.0f)   // M5：合成后目标速度模长上限，单位cm/s
@@ -12,6 +15,17 @@
 //P分支由简单P控制切换到Sqrt分支的 切换距离 = M8 / M3² 
 //v_corr = sqrt(2×M8×(e-0.5×M8/M3²))
 #define POSITION_LOOP_VISION_HOLD_MS               (200U)   // 视觉断帧后相对位置预测保持时间，单位ms
+#define POSITION_LOOP_VISION_MAX_AGE_MS             (100U)   // 新视觉观测允许参与更新的最大帧龄
+#define POSITION_LOOP_VISION_REACQUIRE_SPAN_MS      (150U)   // 三帧重捕获允许的最大时间跨度
+#define POSITION_LOOP_VISION_REACQUIRE_FRAMES       (3U)     // 重捕获所需连续一致观测数
+#define POSITION_LOOP_VISION_LIVE_GATE_BASE_CM      (20.0f)  // 正常跟踪创新门基础值
+#define POSITION_LOOP_VISION_LIVE_GATE_MAX_CM       (40.0f)  // 正常跟踪创新门上限
+#define POSITION_LOOP_VISION_REACQUIRE_GATE_BASE_CM (10.0f)  // 重捕获帧间一致性基础门限
+#define POSITION_LOOP_VISION_REACQUIRE_GATE_MAX_CM  (20.0f)  // 重捕获帧间一致性门限上限
+#define POSITION_LOOP_VISION_VELOCITY_SIGMA_CMS     (50.0f)  // 相对速度预测不确定度
+#define POSITION_LOOP_VISION_ACCEL_SIGMA_CMS2       (300.0f) // 未建模相对加速度不确定度
+#define POSITION_LOOP_VISION_POSITION_VARIANCE_CM2  (25.0f)  // 视觉位置标准差5cm对应方差
+#define POSITION_LOOP_VISION_PROCESS_REFERENCE_S    (0.020f) // 50Hz视觉周期，用于连续过程噪声离散化
 #define POSITION_LOOP_EPSILON                      (0.0001f) // 二维距离归一化时的除零保护阈值
 #define POSITION_LOOP_YAW_RESET_THRESHOLD_DEG      (60.0f)   // 单个水平控制周期内超过该变化视为Yaw参考系重置
 #define POSITION_LOOP_EFFECTIVE_ACCEL_DEFAULT_CMS2  (200.0f)  // N1：A/J安全速度模型的有效加速度，单位cm/s^2
@@ -37,8 +51,10 @@ static volatile PositionLoopBrakeConfig_t g_brake_config = {
     POSITION_LOOP_SAFETY_BUFFER_DEFAULT_CM,
     POSITION_LOOP_BOOST_MARGIN_DEFAULT_CM
 };
-static volatile float g_car_ff_gain_x = POSITION_LOOP_CAR_FF_GAIN_DEFAULT;
-static volatile float g_car_ff_gain_y = POSITION_LOOP_CAR_FF_GAIN_DEFAULT;
+static volatile float g_car_velocity_ff_gain_x = POSITION_LOOP_CAR_VELOCITY_FF_GAIN_DEFAULT;
+static volatile float g_car_velocity_ff_gain_y = POSITION_LOOP_CAR_VELOCITY_FF_GAIN_DEFAULT;
+static volatile float g_car_accel_ff_gain_x = POSITION_LOOP_CAR_ACCEL_FF_GAIN_DEFAULT;
+static volatile float g_car_accel_ff_gain_y = POSITION_LOOP_CAR_ACCEL_FF_GAIN_DEFAULT;
 static volatile PositionLoopDiag_t g_diag;
 
 static float g_target_vx_earth_cms = 0.0f;
@@ -54,20 +70,29 @@ static float g_filtered_closing_speed_cms = 0.0f;
 static uint8 g_closing_speed_initialized = 0U;
 
 static uint8 g_last_pose_valid = 0U;
-static uint8 g_predict_hold_active = 0U;
 static float g_last_x_earth_cm = 0.0f;
 static float g_last_y_earth_cm = 0.0f;
-static float g_hold_start_x_earth_cm = 0.0f;
-static float g_hold_start_y_earth_cm = 0.0f;
-static float g_hold_dx_earth_cm = 0.0f;
-static float g_hold_dy_earth_cm = 0.0f;
+static float g_position_covariance_x_cm2 = POSITION_LOOP_VISION_POSITION_VARIANCE_CM2;
+static float g_position_covariance_y_cm2 = POSITION_LOOP_VISION_POSITION_VARIANCE_CM2;
+static uint8 g_position_estimator_initialized = 0U;
 static uint32 g_last_pose_seq = 0U;
 static uint32 g_last_rear_pose_seq = 0U;
 static uint8 g_vision_source = POSITION_LOOP_VISION_SOURCE_FRONT;
 static uint16 g_hold_elapsed_ms = 0U;
 static uint8 g_observation_state = POSITION_LOOP_OBSERVATION_INVALID;
 static uint8 g_reacquire_count = 0U;
+static uint8 g_reacquire_source = POSITION_LOOP_VISION_SOURCE_FRONT;
+static float g_reacquire_x_earth_cm = 0.0f;
+static float g_reacquire_y_earth_cm = 0.0f;
+static uint32 g_reacquire_first_time_us = 0U;
+static uint32 g_reacquire_last_time_us = 0U;
 static float g_vision_innovation_cm = 0.0f;
+static float g_vision_gate_cm = 0.0f;
+static float g_vision_observation_x_earth_cm = 0.0f;
+static float g_vision_observation_y_earth_cm = 0.0f;
+static uint16 g_vision_observation_age_ms = 0U;
+static uint8 g_vision_observation_accepted = 0U;
+static uint8 g_vision_observation_source = POSITION_LOOP_VISION_SOURCE_FRONT;
 static volatile uint8 g_frozen_hold_active = 0U;
 
 static float position_loop_limit_float(float value, float minimum, float maximum)
@@ -215,15 +240,14 @@ static void position_loop_update_brake_supervisor(
 static void position_loop_reset_reacquisition(void)
 {
     g_reacquire_count = 0U;
+    g_reacquire_x_earth_cm = 0.0f;
+    g_reacquire_y_earth_cm = 0.0f;
+    g_reacquire_first_time_us = 0U;
+    g_reacquire_last_time_us = 0U;
 }
 
 static void position_loop_reset_predict_hold(void)
 {
-    g_predict_hold_active = 0U;
-    g_hold_start_x_earth_cm = 0.0f;
-    g_hold_start_y_earth_cm = 0.0f;
-    g_hold_dx_earth_cm = 0.0f;
-    g_hold_dy_earth_cm = 0.0f;
     g_hold_elapsed_ms = 0U;
 }
 
@@ -293,17 +317,28 @@ static void position_loop_reset_runtime(uint8 reason)
     position_loop_reset_reacquisition();
     g_last_x_earth_cm = 0.0f;
     g_last_y_earth_cm = 0.0f;
+    g_position_covariance_x_cm2 = POSITION_LOOP_VISION_POSITION_VARIANCE_CM2;
+    g_position_covariance_y_cm2 = POSITION_LOOP_VISION_POSITION_VARIANCE_CM2;
+    g_position_estimator_initialized = 0U;
     /* 使用与观测快照一致的前/后摄帧序号，不混用全局视觉姿态序号。 */
     g_last_pose_seq = 0U;
     g_last_rear_pose_seq = 0U;
     g_vision_source = POSITION_LOOP_VISION_SOURCE_FRONT;
     g_observation_state = POSITION_LOOP_OBSERVATION_INVALID;
     g_vision_innovation_cm = 0.0f;
+    g_vision_gate_cm = 0.0f;
+    g_vision_observation_x_earth_cm = 0.0f;
+    g_vision_observation_y_earth_cm = 0.0f;
+    g_vision_observation_age_ms = 0U;
+    g_vision_observation_accepted = 0U;
+    g_vision_observation_source = POSITION_LOOP_VISION_SOURCE_FRONT;
     g_frozen_hold_active = 0U;
     g_diag = empty_diag;
     g_diag.enabled = g_enabled;
-    g_diag.car_ff_gain_x = g_car_ff_gain_x;
-    g_diag.car_ff_gain_y = g_car_ff_gain_y;
+    g_diag.car_velocity_ff_gain_x = g_car_velocity_ff_gain_x;
+    g_diag.car_velocity_ff_gain_y = g_car_velocity_ff_gain_y;
+    g_diag.car_accel_ff_gain_x = g_car_accel_ff_gain_x;
+    g_diag.car_accel_ff_gain_y = g_car_accel_ff_gain_y;
     g_diag.trajectory_reset_reason = g_trajectory_reset_reason;
     g_diag.trajectory_reset_count = g_trajectory_reset_count;
 }
@@ -326,106 +361,217 @@ static uint8 position_loop_get_front_frame(CrossCoreCameraFrontFrame_t *frame)
     return 1U;
 }
 
-static uint8 position_loop_get_rear_center(float *x_body,
-                                           float *y_body,
-                                           float *capture_yaw_deg,
-                                           uint32 *frame_seq)
+static uint8 position_loop_get_rear_follow_point(float *x_body,
+                                                 float *y_body,
+                                                 float *capture_yaw_deg,
+                                                 uint32 *capture_time_us,
+                                                 uint32 *frame_seq)
 {
     DualCameraFusionSnapshot_t snapshot = {0};
 
     if((x_body == NULL) || (y_body == NULL) ||
-       (capture_yaw_deg == NULL) || (frame_seq == NULL) ||
+       (capture_yaw_deg == NULL) || (capture_time_us == NULL) ||
+       (frame_seq == NULL) ||
        !DualCameraFusion_GetSnapshot(&snapshot) ||
        !snapshot.rear_car_valid ||
-       !snapshot.yaw_valid ||
-       !isfinite(snapshot.rear_car_x_cm) ||
-       !isfinite(snapshot.rear_car_y_cm) ||
-       !isfinite(snapshot.yaw_deg))
+       !snapshot.rear_car_raw_valid ||
+       !snapshot.rear_yaw_valid ||
+       (snapshot.rear_frame_seq == 0U) ||
+       (snapshot.rear_capture_time_us == 0U) ||
+       !isfinite(snapshot.rear_observation_x_cm) ||
+       !isfinite(snapshot.rear_observation_y_cm) ||
+       !isfinite(snapshot.rear_yaw_deg))
     {
         return 0U;
     }
 
-    *x_body = snapshot.rear_car_x_cm;
-    *y_body = snapshot.rear_car_y_cm;
-    *capture_yaw_deg = snapshot.yaw_deg;
-    *frame_seq = snapshot.reference_frame_seq;
+    *x_body = snapshot.rear_observation_x_cm;
+    *y_body = snapshot.rear_observation_y_cm;
+    *capture_yaw_deg = snapshot.rear_yaw_deg;
+    *capture_time_us = snapshot.rear_capture_time_us;
+    *frame_seq = snapshot.rear_frame_seq;
     return 1U;
 }
 
-static uint8 position_loop_accept_visual(float pose_x,
-                                         float pose_y,
-                                         float raw_x,
-                                         float raw_y,
-                                         float *accepted_x,
-                                         float *accepted_y)
+static float position_loop_visual_gate(float base_cm,
+                                       float maximum_cm,
+                                       float elapsed_s)
 {
-    float dx;
-    float dy;
+    float gate;
 
-    if(g_last_pose_valid)
-    {
-        dx = raw_x - g_last_x_earth_cm;
-        dy = raw_y - g_last_y_earth_cm;
-        g_vision_innovation_cm = sqrtf(dx * dx + dy * dy);
-    }
-    else
-    {
-        g_vision_innovation_cm = 0.0f;
-    }
-    *accepted_x = pose_x;
-    *accepted_y = pose_y;
-    position_loop_reset_reacquisition();
-    return 1U;
+    gate = base_cm + POSITION_LOOP_VISION_VELOCITY_SIGMA_CMS * elapsed_s +
+           0.5f * POSITION_LOOP_VISION_ACCEL_SIGMA_CMS2 * elapsed_s * elapsed_s;
+    return position_loop_limit_float(gate, base_cm, maximum_cm);
 }
 
-static uint8 position_loop_predict_hold(float measured_vx_earth,
-                                        float measured_vy_earth,
-                                        uint8 car_velocity_valid,
-                                        float car_vx_earth,
-                                        float car_vy_earth,
-                                        float dt_s,
-                                        float *position_x,
-                                        float *position_y)
+static void position_loop_predict_estimator(float relative_vx_earth,
+                                            float relative_vy_earth,
+                                            float dt_s)
 {
     uint16 elapsed_ms = (uint16)(dt_s * 1000.0f + 0.5f);
+    float process_variance;
 
-    if(elapsed_ms == 0U) elapsed_ms = 1U;
+    if(!g_position_estimator_initialized)
+    {
+        return;
+    }
+    g_last_x_earth_cm += relative_vx_earth * dt_s;
+    g_last_y_earth_cm += relative_vy_earth * dt_s;
+    process_variance = POSITION_LOOP_VISION_VELOCITY_SIGMA_CMS *
+                       POSITION_LOOP_VISION_VELOCITY_SIGMA_CMS *
+                       POSITION_LOOP_VISION_PROCESS_REFERENCE_S * dt_s;
+    g_position_covariance_x_cm2 += process_variance;
+    g_position_covariance_y_cm2 += process_variance;
+
     if(!g_last_pose_valid)
     {
-        return 0U;
+        return;
     }
-    if(!g_predict_hold_active)
-    {
-        g_hold_start_x_earth_cm = g_last_x_earth_cm;
-        g_hold_start_y_earth_cm = g_last_y_earth_cm;
-        g_hold_dx_earth_cm = 0.0f;
-        g_hold_dy_earth_cm = 0.0f;
-        g_hold_elapsed_ms = 0U;
-        g_predict_hold_active = 1U;
-    }
-    if(((uint32)g_hold_elapsed_ms + elapsed_ms) >
-       POSITION_LOOP_VISION_HOLD_MS)
+    if(elapsed_ms == 0U) elapsed_ms = 1U;
+    if(((uint32)g_hold_elapsed_ms + elapsed_ms) > POSITION_LOOP_VISION_HOLD_MS)
     {
         g_last_pose_valid = 0U;
-        position_loop_reset_predict_hold();
-        if(g_reacquire_count == 0U) g_observation_state = POSITION_LOOP_OBSERVATION_INVALID;
-        return 0U;
+        g_hold_elapsed_ms = POSITION_LOOP_VISION_HOLD_MS;
+        g_observation_state = (g_reacquire_count > 0U) ?
+            POSITION_LOOP_OBSERVATION_REACQUIRING :
+            POSITION_LOOP_OBSERVATION_INVALID;
+        return;
     }
 
     g_hold_elapsed_ms += elapsed_ms;
-    g_hold_dx_earth_cm += ((car_velocity_valid ? car_vx_earth : 0.0f) -
-                           measured_vx_earth) * dt_s;
-    g_hold_dy_earth_cm += ((car_velocity_valid ? car_vy_earth : 0.0f) -
-                           measured_vy_earth) * dt_s;
-    *position_x = g_hold_start_x_earth_cm + g_hold_dx_earth_cm;
-    *position_y = g_hold_start_y_earth_cm + g_hold_dy_earth_cm;
-    g_last_x_earth_cm = *position_x;
-    g_last_y_earth_cm = *position_y;
     if(g_observation_state != POSITION_LOOP_OBSERVATION_REACQUIRING)
     {
         g_observation_state = POSITION_LOOP_OBSERVATION_HOLD;
     }
-    return 1U;
+}
+
+static uint8 position_loop_update_visual_estimator(float observation_x_earth,
+                                                    float observation_y_earth,
+                                                    uint32 capture_time_us,
+                                                    uint32 now_us,
+                                                    float relative_vx_earth,
+                                                    float relative_vy_earth,
+                                                    uint8 source)
+{
+    uint32 age_us;
+    uint32 candidate_span_us;
+    float age_s;
+    float dx;
+    float dy;
+    float gain_x;
+    float gain_y;
+
+    g_vision_observation_accepted = 0U;
+    g_vision_observation_source = source;
+    if((capture_time_us == 0U) ||
+       !isfinite(observation_x_earth) || !isfinite(observation_y_earth))
+    {
+        return g_last_pose_valid;
+    }
+    age_us = (uint32)(now_us - capture_time_us);
+    if(age_us > (uint32)POSITION_LOOP_VISION_MAX_AGE_MS * 1000U)
+    {
+        g_vision_observation_age_ms = (age_us / 1000U > 0xFFFFU) ?
+                                      0xFFFFU : (uint16)(age_us / 1000U);
+        return g_last_pose_valid;
+    }
+
+    age_s = (float)age_us * 0.000001f;
+    g_vision_observation_age_ms = (uint16)(age_us / 1000U);
+    observation_x_earth += relative_vx_earth * age_s;
+    observation_y_earth += relative_vy_earth * age_s;
+    g_vision_observation_x_earth_cm = observation_x_earth;
+    g_vision_observation_y_earth_cm = observation_y_earth;
+
+    dx = observation_x_earth - g_last_x_earth_cm;
+    dy = observation_y_earth - g_last_y_earth_cm;
+    g_vision_innovation_cm = g_position_estimator_initialized ?
+        sqrtf(dx * dx + dy * dy) : 0.0f;
+    g_vision_gate_cm = position_loop_visual_gate(
+        POSITION_LOOP_VISION_LIVE_GATE_BASE_CM,
+        POSITION_LOOP_VISION_LIVE_GATE_MAX_CM,
+        age_s);
+    if(g_position_estimator_initialized && g_last_pose_valid &&
+       (g_vision_innovation_cm <= g_vision_gate_cm))
+    {
+        gain_x = g_position_covariance_x_cm2 /
+                 (g_position_covariance_x_cm2 +
+                  POSITION_LOOP_VISION_POSITION_VARIANCE_CM2);
+        gain_y = g_position_covariance_y_cm2 /
+                 (g_position_covariance_y_cm2 +
+                  POSITION_LOOP_VISION_POSITION_VARIANCE_CM2);
+        g_last_x_earth_cm += gain_x * dx;
+        g_last_y_earth_cm += gain_y * dy;
+        g_position_covariance_x_cm2 *= 1.0f - gain_x;
+        g_position_covariance_y_cm2 *= 1.0f - gain_y;
+        g_vision_observation_accepted = 1U;
+        g_vision_source = source;
+        g_observation_state = POSITION_LOOP_OBSERVATION_LIVE;
+        position_loop_reset_predict_hold();
+        position_loop_reset_reacquisition();
+        return 1U;
+    }
+
+    candidate_span_us = (g_reacquire_count == 0U) ? 0U :
+                        (uint32)(now_us - g_reacquire_first_time_us);
+    if((g_reacquire_count == 0U) || (g_reacquire_source != source) ||
+       (candidate_span_us >
+        (uint32)POSITION_LOOP_VISION_REACQUIRE_SPAN_MS * 1000U))
+    {
+        g_reacquire_count = 1U;
+        g_reacquire_source = source;
+        g_reacquire_first_time_us = now_us;
+        g_vision_gate_cm = POSITION_LOOP_VISION_REACQUIRE_GATE_BASE_CM;
+    }
+    else
+    {
+        float candidate_dt_s = (float)(uint32)(now_us - g_reacquire_last_time_us) *
+                               0.000001f;
+        float span_s = (float)candidate_span_us * 0.000001f;
+        float predicted_x = g_reacquire_x_earth_cm +
+                            relative_vx_earth * candidate_dt_s;
+        float predicted_y = g_reacquire_y_earth_cm +
+                            relative_vy_earth * candidate_dt_s;
+        float candidate_dx = observation_x_earth - predicted_x;
+        float candidate_dy = observation_y_earth - predicted_y;
+        float candidate_residual = sqrtf(candidate_dx * candidate_dx +
+                                         candidate_dy * candidate_dy);
+
+        g_vision_gate_cm = position_loop_visual_gate(
+            POSITION_LOOP_VISION_REACQUIRE_GATE_BASE_CM,
+            POSITION_LOOP_VISION_REACQUIRE_GATE_MAX_CM,
+            span_s);
+        if(candidate_residual <= g_vision_gate_cm)
+        {
+            if(g_reacquire_count < 0xFFU) g_reacquire_count++;
+        }
+        else
+        {
+            g_reacquire_count = 1U;
+            g_reacquire_first_time_us = now_us;
+            g_vision_gate_cm = POSITION_LOOP_VISION_REACQUIRE_GATE_BASE_CM;
+        }
+    }
+    g_reacquire_x_earth_cm = observation_x_earth;
+    g_reacquire_y_earth_cm = observation_y_earth;
+    g_reacquire_last_time_us = now_us;
+    g_observation_state = POSITION_LOOP_OBSERVATION_REACQUIRING;
+
+    if(g_reacquire_count >= POSITION_LOOP_VISION_REACQUIRE_FRAMES)
+    {
+        g_last_x_earth_cm = observation_x_earth;
+        g_last_y_earth_cm = observation_y_earth;
+        g_position_covariance_x_cm2 = POSITION_LOOP_VISION_POSITION_VARIANCE_CM2;
+        g_position_covariance_y_cm2 = POSITION_LOOP_VISION_POSITION_VARIANCE_CM2;
+        g_position_estimator_initialized = 1U;
+        g_last_pose_valid = 1U;
+        g_vision_observation_accepted = 1U;
+        g_vision_source = source;
+        g_observation_state = POSITION_LOOP_OBSERVATION_LIVE;
+        position_loop_reset_predict_hold();
+        position_loop_reset_reacquisition();
+    }
+    return g_last_pose_valid;
 }
 
 static uint8 position_loop_update_frozen_hold(float measured_vx_earth,
@@ -546,20 +692,40 @@ uint8 Position_Loop_Is_Frozen_Hold_Active(void)
 
 uint8 Position_Loop_Set_Car_Velocity_Feedforward_Gain(uint8 axis, float gain)
 {
-    if(!isfinite(gain) || (gain < 0.0f) || (gain > POSITION_LOOP_CAR_FF_GAIN_MAX))
+    if(!isfinite(gain) || (gain < 0.0f) ||
+       (gain > POSITION_LOOP_CAR_VELOCITY_FF_GAIN_MAX))
     {
         return 0U;
     }
-    if(axis == 0U) g_car_ff_gain_x = gain;
-    else if(axis == 1U) g_car_ff_gain_y = gain;
+    if(axis == 0U) g_car_velocity_ff_gain_x = gain;
+    else if(axis == 1U) g_car_velocity_ff_gain_y = gain;
     else return 0U;
     return 1U;
 }
 
 void Position_Loop_Get_Car_Velocity_Feedforward_Gain(float *gain_x, float *gain_y)
 {
-    if(gain_x != NULL) *gain_x = g_car_ff_gain_x;
-    if(gain_y != NULL) *gain_y = g_car_ff_gain_y;
+    if(gain_x != NULL) *gain_x = g_car_velocity_ff_gain_x;
+    if(gain_y != NULL) *gain_y = g_car_velocity_ff_gain_y;
+}
+
+uint8 Position_Loop_Set_Car_Acceleration_Feedforward_Gain(uint8 axis, float gain)
+{
+    if(!isfinite(gain) || (gain < 0.0f) ||
+       (gain > POSITION_LOOP_CAR_ACCEL_FF_GAIN_MAX))
+    {
+        return 0U;
+    }
+    if(axis == 0U) g_car_accel_ff_gain_x = gain;
+    else if(axis == 1U) g_car_accel_ff_gain_y = gain;
+    else return 0U;
+    return 1U;
+}
+
+void Position_Loop_Get_Car_Acceleration_Feedforward_Gain(float *gain_x, float *gain_y)
+{
+    if(gain_x != NULL) *gain_x = g_car_accel_ff_gain_x;
+    if(gain_y != NULL) *gain_y = g_car_accel_ff_gain_y;
 }
 
 uint8 Position_Loop_Set_Trajectory_Config(const PositionLoopTrajectoryConfig_t *config)
@@ -659,6 +825,8 @@ void Position_Loop_Update_Velocity_Target(uint8 velocity_ready,
     float car_actual_ay_earth = 0.0f;
     float car_ax_earth = 0.0f;
     float car_ay_earth = 0.0f;
+    float relative_target_vx_earth = 0.0f;
+    float relative_target_vy_earth = 0.0f;
     float position_x = 0.0f;
     float position_y = 0.0f;
     float desired_vx = 0.0f;
@@ -682,12 +850,12 @@ void Position_Loop_Update_Velocity_Target(uint8 velocity_ready,
     uint8 flags = 0U;
     uint8 brake_diag_flags = 0U;
     uint8 sqrt_controller_active = 0U;
-    uint8 raw_visual_valid;
     uint8 new_visual_pose;
     uint8 rear_frame_valid = 0U;
     uint8 new_rear_pose;
     CrossCoreCameraFrontFrame_t front_frame = {0};
     uint8 front_frame_valid = 0U;
+    uint32 now_us = 0U;
 
     if((target_vx_earth_cms == NULL) || (target_vy_earth_cms == NULL) ||
        (target_ax_earth_cms2 == NULL) || (target_ay_earth_cms2 == NULL)) return;
@@ -748,47 +916,68 @@ void Position_Loop_Update_Velocity_Target(uint8 velocity_ready,
     brake_config = g_brake_config;
     if(!g_frozen_hold_active && (feedforward != NULL) &&
        feedforward->velocity_valid &&
-       isfinite(feedforward->vx_uav_cms) && isfinite(feedforward->vy_uav_cms))
+       isfinite(feedforward->vx_cms) && isfinite(feedforward->vy_cms))
     {
-        float gained_body_x;
-        float gained_body_y;
+        if(feedforward->earth_frame)
+        {
+            car_actual_vx_earth = feedforward->vx_cms;
+            car_actual_vy_earth = feedforward->vy_cms;
+            car_vx_earth = feedforward->vx_cms * g_car_velocity_ff_gain_x;
+            car_vy_earth = feedforward->vy_cms * g_car_velocity_ff_gain_y;
+        }
+        else
+        {
+            float gained_body_x = feedforward->vx_cms *
+                                  g_car_velocity_ff_gain_x;
+            float gained_body_y = feedforward->vy_cms *
+                                  g_car_velocity_ff_gain_y;
 
-        position_loop_body_to_earth(feedforward->vx_uav_cms,
-                                    feedforward->vy_uav_cms,
-                                    yaw_deg,
-                                    &car_actual_vx_earth,
-                                    &car_actual_vy_earth);
-        gained_body_x = feedforward->vx_uav_cms * g_car_ff_gain_x;
-        gained_body_y = feedforward->vy_uav_cms * g_car_ff_gain_y;
-        position_loop_body_to_earth(gained_body_x, gained_body_y, yaw_deg,
-                                    &car_vx_earth, &car_vy_earth);
+            position_loop_body_to_earth(feedforward->vx_cms,
+                                        feedforward->vy_cms,
+                                        yaw_deg,
+                                        &car_actual_vx_earth,
+                                        &car_actual_vy_earth);
+            position_loop_body_to_earth(gained_body_x, gained_body_y, yaw_deg,
+                                        &car_vx_earth, &car_vy_earth);
+        }
         car_velocity_valid = 1U;
         flags |= POSITION_LOOP_STATUS_CAR_FF_VALID;
     }
     if(!g_frozen_hold_active && (feedforward != NULL) &&
        feedforward->acceleration_valid &&
-       isfinite(feedforward->ax_uav_cms2) &&
-       isfinite(feedforward->ay_uav_cms2))
+       isfinite(feedforward->ax_cms2) &&
+       isfinite(feedforward->ay_cms2))
     {
-        float gained_body_x = feedforward->ax_uav_cms2 * g_car_ff_gain_x;
-        float gained_body_y = feedforward->ay_uav_cms2 * g_car_ff_gain_y;
+        if(feedforward->earth_frame)
+        {
+            car_actual_ax_earth = feedforward->ax_cms2;
+            car_actual_ay_earth = feedforward->ay_cms2;
+            car_ax_earth = feedforward->ax_cms2 * g_car_accel_ff_gain_x;
+            car_ay_earth = feedforward->ay_cms2 * g_car_accel_ff_gain_y;
+        }
+        else
+        {
+            float gained_body_x = feedforward->ax_cms2 *
+                                  g_car_accel_ff_gain_x;
+            float gained_body_y = feedforward->ay_cms2 *
+                                  g_car_accel_ff_gain_y;
 
-        position_loop_body_to_earth(feedforward->ax_uav_cms2,
-                                    feedforward->ay_uav_cms2,
-                                    yaw_deg,
-                                    &car_actual_ax_earth,
-                                    &car_actual_ay_earth);
-        position_loop_body_to_earth(gained_body_x, gained_body_y, yaw_deg,
-                                    &car_ax_earth, &car_ay_earth);
+            position_loop_body_to_earth(feedforward->ax_cms2,
+                                        feedforward->ay_cms2,
+                                        yaw_deg,
+                                        &car_actual_ax_earth,
+                                        &car_actual_ay_earth);
+            position_loop_body_to_earth(gained_body_x, gained_body_y, yaw_deg,
+                                        &car_ax_earth, &car_ay_earth);
+        }
         car_acceleration_valid = 1U;
     }
 
-    front_frame_valid = (uint8)(!g_frozen_hold_active &&
-                                position_loop_get_front_frame(&front_frame));
-    raw_visual_valid = front_frame_valid;
-    new_visual_pose = (uint8)(raw_visual_valid &&
-                              (front_frame.frame_seq != g_last_pose_seq));
-    new_rear_pose = 0U;
+    relative_target_vx_earth = (car_velocity_valid ? car_actual_vx_earth : 0.0f) -
+                               measured_vx_earth_cms;
+    relative_target_vy_earth = (car_velocity_valid ? car_actual_vy_earth : 0.0f) -
+                               measured_vy_earth_cms;
+    now_us = CameraBoardLink_TimeNowUs();
     if(g_frozen_hold_active)
     {
         position_valid = position_loop_update_frozen_hold(measured_vx_earth_cms,
@@ -797,164 +986,86 @@ void Position_Loop_Update_Velocity_Target(uint8 velocity_ready,
                                                           &position_x,
                                                           &position_y);
     }
-    else if((g_vision_source == POSITION_LOOP_VISION_SOURCE_FRONT) &&
-            new_visual_pose)
-    {
-        float pose_x_body;
-        float pose_y_body;
-        float raw_x_body;
-        float raw_y_body;
-        float pose_x_earth;
-        float pose_y_earth;
-        float raw_x_earth;
-        float raw_y_earth;
-        g_last_pose_seq = front_frame.frame_seq;
-        if(VehicleMarkerLocalization_GetFollowPoint(&front_frame.car_pose,
-                                                    &pose_x_body, &pose_y_body,
-                                                    &raw_x_body, &raw_y_body))
-        {
-            /* 位置坐标与该视觉帧的采集Yaw同源，不能使用当前控制Yaw替代。 */
-            position_loop_body_to_earth(pose_x_body, pose_y_body,
-                                        front_frame.yaw_deg,
-                                        &pose_x_earth, &pose_y_earth);
-            position_loop_body_to_earth(raw_x_body, raw_y_body,
-                                        front_frame.yaw_deg,
-                                        &raw_x_earth, &raw_y_earth);
-            position_valid = position_loop_accept_visual(
-                pose_x_earth, pose_y_earth,
-                raw_x_earth, raw_y_earth,
-                &position_x, &position_y);
-        }
-        if(position_valid)
-        {
-            g_last_pose_valid = 1U;
-            g_last_x_earth_cm = position_x;
-            g_last_y_earth_cm = position_y;
-            g_observation_state = POSITION_LOOP_OBSERVATION_LIVE;
-            position_loop_reset_predict_hold();
-        }
-    }
-    else if((g_vision_source == POSITION_LOOP_VISION_SOURCE_FRONT) &&
-            !front_frame_valid)
+    else
     {
         float rear_x_body;
         float rear_y_body;
         float rear_capture_yaw_deg = 0.0f;
+        uint32 rear_capture_time_us = 0U;
         uint32 rear_frame_seq = 0U;
-        float rear_x_earth;
-        float rear_y_earth;
+        uint8 process_front = 0U;
+        uint8 process_rear = 0U;
 
-        rear_frame_valid = position_loop_get_rear_center(
+        position_loop_predict_estimator(relative_target_vx_earth,
+                                        relative_target_vy_earth,
+                                        dt_s);
+        front_frame_valid = position_loop_get_front_frame(&front_frame);
+        new_visual_pose = (uint8)(front_frame_valid &&
+                                  (front_frame.frame_seq != g_last_pose_seq));
+        rear_frame_valid = position_loop_get_rear_follow_point(
             &rear_x_body, &rear_y_body,
-            &rear_capture_yaw_deg, &rear_frame_seq);
+            &rear_capture_yaw_deg, &rear_capture_time_us,
+            &rear_frame_seq);
         new_rear_pose = (uint8)(rear_frame_valid &&
                                 (rear_frame_seq != g_last_rear_pose_seq));
-        if(new_rear_pose)
-        {
-            g_vision_source = POSITION_LOOP_VISION_SOURCE_REAR;
-            g_last_rear_pose_seq = rear_frame_seq;
-            position_loop_body_to_earth(rear_x_body, rear_y_body,
-                                        rear_capture_yaw_deg,
-                                        &rear_x_earth, &rear_y_earth);
-            position_valid = position_loop_accept_visual(
-                rear_x_earth, rear_y_earth,
-                rear_x_earth, rear_y_earth,
-                &position_x, &position_y);
-            if(position_valid)
-            {
-                g_last_pose_valid = 1U;
-                g_last_x_earth_cm = position_x;
-                g_last_y_earth_cm = position_y;
-                g_observation_state = POSITION_LOOP_OBSERVATION_LIVE;
-                position_loop_reset_predict_hold();
-            }
-        }
-    }
-    else if(g_vision_source == POSITION_LOOP_VISION_SOURCE_REAR)
-    {
-        float rear_x_body;
-        float rear_y_body;
-        float rear_capture_yaw_deg = 0.0f;
-        uint32 rear_frame_seq = 0U;
-        float rear_x_earth;
-        float rear_y_earth;
 
-        rear_frame_valid = position_loop_get_rear_center(
-            &rear_x_body, &rear_y_body,
-            &rear_capture_yaw_deg, &rear_frame_seq);
-        new_rear_pose = (uint8)(rear_frame_valid &&
-                                (rear_frame_seq != g_last_rear_pose_seq));
-        if(new_rear_pose)
+        if(g_vision_source == POSITION_LOOP_VISION_SOURCE_FRONT)
         {
-            g_last_rear_pose_seq = rear_frame_seq;
-            position_loop_body_to_earth(rear_x_body, rear_y_body,
-                                        rear_capture_yaw_deg,
-                                        &rear_x_earth, &rear_y_earth);
-            position_valid = position_loop_accept_visual(
-                rear_x_earth, rear_y_earth,
-                rear_x_earth, rear_y_earth,
-                &position_x, &position_y);
-            if(position_valid)
-            {
-                g_last_pose_valid = 1U;
-                g_last_x_earth_cm = position_x;
-                g_last_y_earth_cm = position_y;
-                g_observation_state = POSITION_LOOP_OBSERVATION_LIVE;
-                position_loop_reset_predict_hold();
-            }
+            process_front = new_visual_pose;
+            process_rear = (uint8)(!process_front && new_rear_pose);
         }
-        else if(!rear_frame_valid && front_frame_valid)
+        else
         {
-            g_vision_source = POSITION_LOOP_VISION_SOURCE_FRONT;
-            if(new_visual_pose)
-            {
-                float pose_x_body;
-                float pose_y_body;
-                float raw_x_body;
-                float raw_y_body;
-                float pose_x_earth;
-                float pose_y_earth;
-                float raw_x_earth;
-                float raw_y_earth;
+            process_rear = new_rear_pose;
+            process_front = (uint8)(!process_rear && new_visual_pose);
+        }
 
-                g_last_pose_seq = front_frame.frame_seq;
-                if(VehicleMarkerLocalization_GetFollowPoint(
-                       &front_frame.car_pose,
-                       &pose_x_body, &pose_y_body,
-                       &raw_x_body, &raw_y_body))
-                {
-                    position_loop_body_to_earth(
-                        pose_x_body, pose_y_body, front_frame.yaw_deg,
-                        &pose_x_earth, &pose_y_earth);
-                    position_loop_body_to_earth(
-                        raw_x_body, raw_y_body, front_frame.yaw_deg,
-                        &raw_x_earth, &raw_y_earth);
-                    position_valid = position_loop_accept_visual(
-                        pose_x_earth, pose_y_earth,
-                        raw_x_earth, raw_y_earth,
-                        &position_x, &position_y);
-                }
-                if(position_valid)
-                {
-                    g_last_pose_valid = 1U;
-                    g_last_x_earth_cm = position_x;
-                    g_last_y_earth_cm = position_y;
-                    g_observation_state = POSITION_LOOP_OBSERVATION_LIVE;
-                    position_loop_reset_predict_hold();
-                }
+        if(process_front)
+        {
+            float follow_x_body;
+            float follow_y_body;
+            float observation_x_earth;
+            float observation_y_earth;
+
+            g_last_pose_seq = front_frame.frame_seq;
+            if(VehicleMarkerLocalization_GetFollowPoint(
+                   &front_frame.car_pose,
+                   &follow_x_body, &follow_y_body,
+                   NULL, NULL))
+            {
+                /* 位置与Yaw必须来自同一采集帧，再进入惯性系估计器。 */
+                position_loop_body_to_earth(
+                    follow_x_body, follow_y_body, front_frame.yaw_deg,
+                    &observation_x_earth, &observation_y_earth);
+                (void)position_loop_update_visual_estimator(
+                    observation_x_earth, observation_y_earth,
+                    front_frame.capture_time_us, now_us,
+                    relative_target_vx_earth, relative_target_vy_earth,
+                    POSITION_LOOP_VISION_SOURCE_FRONT);
             }
         }
-    }
-    if(!position_valid && !g_frozen_hold_active)
-    {
-        position_valid = position_loop_predict_hold(measured_vx_earth_cms,
-                                                    measured_vy_earth_cms,
-                                                    car_velocity_valid,
-                                                    car_actual_vx_earth,
-                                                    car_actual_vy_earth,
-                                                    dt_s,
-                                                    &position_x,
-                                                    &position_y);
+        else if(process_rear)
+        {
+            float observation_x_earth;
+            float observation_y_earth;
+
+            g_last_rear_pose_seq = rear_frame_seq;
+            position_loop_body_to_earth(
+                rear_x_body, rear_y_body, rear_capture_yaw_deg,
+                &observation_x_earth, &observation_y_earth);
+            (void)position_loop_update_visual_estimator(
+                observation_x_earth, observation_y_earth,
+                rear_capture_time_us, now_us,
+                relative_target_vx_earth, relative_target_vy_earth,
+                POSITION_LOOP_VISION_SOURCE_REAR);
+        }
+
+        position_valid = g_last_pose_valid;
+        if(g_position_estimator_initialized)
+        {
+            position_x = g_last_x_earth_cm;
+            position_y = g_last_y_earth_cm;
+        }
     }
 
     if(position_valid)
@@ -1069,8 +1180,10 @@ void Position_Loop_Update_Velocity_Target(uint8 velocity_ready,
     g_diag.car_ff_raw_ay_cms2 = car_actual_ay_earth;
     g_diag.car_ff_applied_ax_cms2 = g_target_ax_earth_cms2;
     g_diag.car_ff_applied_ay_cms2 = g_target_ay_earth_cms2;
-    g_diag.car_ff_gain_x = g_car_ff_gain_x;
-    g_diag.car_ff_gain_y = g_car_ff_gain_y;
+    g_diag.car_velocity_ff_gain_x = g_car_velocity_ff_gain_x;
+    g_diag.car_velocity_ff_gain_y = g_car_velocity_ff_gain_y;
+    g_diag.car_accel_ff_gain_x = g_car_accel_ff_gain_x;
+    g_diag.car_accel_ff_gain_y = g_car_accel_ff_gain_y;
     g_diag.desired_vx_cms = desired_vx;
     g_diag.desired_vy_cms = desired_vy;
     g_diag.target_accel_x_cms2 = g_target_ax_earth_cms2;
@@ -1089,9 +1202,18 @@ void Position_Loop_Update_Velocity_Target(uint8 velocity_ready,
     g_diag.brake_allowed_speed_cms = brake_allowed_speed;
     g_diag.trajectory_dt_s = dt_s;
     g_diag.vision_innovation_cm = g_vision_innovation_cm;
+    g_diag.vision_gate_cm = g_vision_gate_cm;
+    g_diag.vision_observation_x_cm = g_vision_observation_x_earth_cm;
+    g_diag.vision_observation_y_cm = g_vision_observation_y_earth_cm;
+    g_diag.vision_covariance_x_cm2 = g_position_covariance_x_cm2;
+    g_diag.vision_covariance_y_cm2 = g_position_covariance_y_cm2;
     g_diag.vision_hold_age_ms = g_hold_elapsed_ms;
+    g_diag.vision_observation_age_ms = g_vision_observation_age_ms;
     g_diag.vision_observation_state = g_observation_state;
     g_diag.vision_reacquire_count = g_reacquire_count;
+    g_diag.vision_observation_accepted = g_vision_observation_accepted;
+    g_diag.vision_observation_source = g_vision_observation_source;
+    g_diag.vision_estimator_initialized = g_position_estimator_initialized;
     g_diag.car_ff_valid = car_velocity_valid;
     g_diag.car_accel_ff_valid = (uint8)(position_valid &&
                                         car_acceleration_valid);

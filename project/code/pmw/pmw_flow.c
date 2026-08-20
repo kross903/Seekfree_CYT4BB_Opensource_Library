@@ -614,6 +614,7 @@ static float pmw_flow_pi_update_axis(PMWFlowPIAxis_t *axis,
                                      float dt_s)
 {
     float innovation_cms;
+    float correction_innovation_cms;
     float correction_cms;
     float correction_dt_s;
     float correction_limit_cms;
@@ -626,12 +627,19 @@ static float pmw_flow_pi_update_axis(PMWFlowPIAxis_t *axis,
     innovation_cms = measurement_cms - prediction_cms;
     pmw_flow_pi_update_evidence(axis, innovation_cms, dt_s);
 
+    /*
+     * 原始创新量保留给诊断和证据计算；实际比例修正使用已有的创新低通，
+     * 避免单个光流噪声帧直接形成融合速度台阶。IMU预测支路不经过这里，
+     * 因此不会降低对真实短时加速度的响应速度。
+     */
+    correction_innovation_cms = axis->innovation_lp_cms;
+
     axis->alpha = pmw_flow_pi_calc_alpha(dt_s);
     axis->bias_ki = PMW_FLOW_FUSION_BIAS_KI;
 
     correction_dt_s = (dt_s > 0.0f) ? dt_s : FLOW_SENSOR_NOMINAL_DT_S;
     correction_limit_cms = PMW_FLOW_FUSION_CORRECTION_LIMIT_CMS2 * correction_dt_s;
-    correction_cms = pmw_flow_limit_float(axis->alpha * innovation_cms,
+    correction_cms = pmw_flow_limit_float(axis->alpha * correction_innovation_cms,
                                           -correction_limit_cms,
                                           correction_limit_cms);
 
@@ -1578,15 +1586,42 @@ void PMW_Flow_PredictVelocity(float accel_x_body_cms2,
 
 void PMW_Flow_ClearFault(void)
 {
+    PMWFlowState_t cleared_state = {0};
+    uint32 irq_state = __get_PRIMASK();
+
+    __disable_irq();
     g_pmw_flow_fusion_fault_latched = 0U;
     g_pmw_flow_fusion_observation_age_s = 0.0f;
     g_pmw_flow_fusion_init = 0U;
     g_pmw_flow_fused_vx_cms = 0.0f;
     g_pmw_flow_fused_vy_cms = 0.0f;
     g_pmw_flow_fusion_no_observation_frames = 0U;
+    g_pmw_flow_fusion_residual_reset_count = 0U;
     g_pmw_flow_fusion_imu_delta_x_accum_cms = 0.0f;
     g_pmw_flow_fusion_imu_delta_y_accum_cms = 0.0f;
+    g_pmw_flow_fusion_accel_x_earth_cms2 = 0.0f;
+    g_pmw_flow_fusion_accel_y_earth_cms2 = 0.0f;
+    g_pmw_flow_fusion_bias_x_earth_cms2 = 0.0f;
+    g_pmw_flow_fusion_bias_y_earth_cms2 = 0.0f;
+    g_pmw_flow_fusion_accel_valid = 0U;
+    g_pmw_flow_last_accepted_frame_seq = 0U;
+    g_pmw_flow_last_received_accepted = 0U;
+    pmw_flow_pi_clear_evidence(&g_pmw_flow_pi_x);
+    pmw_flow_pi_clear_evidence(&g_pmw_flow_pi_y);
     pmw_flow_kalman_reset();
+
+    /* 清除发布缓存，避免复位后的未初始化模式夹带复位前的有效标志。 */
+    g_pmw_flow_publish_slots[0] = cleared_state;
+    g_pmw_flow_publish_slots[1] = cleared_state;
+    g_pmw_flow_publish_index = 0U;
+    g_pmw_flow_publish_seq = 0U;
+    g_pmw_flow_mainloop_state = cleared_state;
+    g_pmw_flow_mainloop_seq = 0U;
+
+    if(irq_state == 0U)
+    {
+        __enable_irq();
+    }
 }
 
 void PMW_Flow_ResetWorldPosition(void)
@@ -1905,11 +1940,17 @@ void PMW_Flow_SyncMainLoopBuffer(void)
 
 void PMW_Flow_GetState(PMWFlowState_t *state)
 {
+    uint32 irq_state;
+
     if(state == NULL)
     {
         return;
     }
 
+    irq_state = __get_PRIMASK();
+    __disable_irq();
+
+    /* 发布状态和4 kHz融合量必须在同一临界区取样，避免诊断字段跨周期撕裂。 */
     PMW_Flow_SyncMainLoopBuffer();
     *state = g_pmw_flow_mainloop_state;
     pmw_flow_sync_kalman_diag(state);
@@ -1932,29 +1973,15 @@ void PMW_Flow_GetState(PMWFlowState_t *state)
     state->fusion_imu_delta_x_cms = g_pmw_flow_fusion_imu_delta_x_accum_cms;
     state->fusion_imu_delta_y_cms = g_pmw_flow_fusion_imu_delta_y_accum_cms;
 
+    state->velocity_x_fused_cms = g_pmw_flow_fused_vx_cms;
+    state->velocity_y_fused_cms = g_pmw_flow_fused_vy_cms;
+
     if(pmw_flow_fusion_predict_hold_active())
     {
-        state->velocity_x_fused_cms = g_pmw_flow_fused_vx_cms;
-        state->velocity_y_fused_cms = g_pmw_flow_fused_vy_cms;
-        state->velocity_x_fused_residual_cms = state->velocity_x_flow_earth_cms -
-                                               state->velocity_x_fused_cms;
-        state->velocity_y_fused_residual_cms = state->velocity_y_flow_earth_cms -
-                                               state->velocity_y_fused_cms;
-        state->flow_residual_norm_cms = sqrtf(state->velocity_x_fused_residual_cms *
-                                              state->velocity_x_fused_residual_cms +
-                                              state->velocity_y_fused_residual_cms *
-                                              state->velocity_y_fused_residual_cms);
         state->acc_used = g_pmw_flow_fusion_accel_valid;
         state->fused_velocity_valid = 1U;
     }
-    else if(g_pmw_flow_fusion_init)
-    {
-        state->flow_used = 0U;
-        state->acc_used = 0U;
-        state->fused_velocity_valid = 0U;
-    }
-
-    if(g_pmw_flow_fusion_fault_latched)
+    else
     {
         state->flow_used = 0U;
         state->acc_used = 0U;
@@ -1976,6 +2003,29 @@ void PMW_Flow_GetState(PMWFlowState_t *state)
     else
     {
         state->fusion_mode = PMW_FLOW_FUSION_MODE_INERTIAL_HOLD;
+    }
+
+    if(irq_state == 0U)
+    {
+        __enable_irq();
+    }
+
+    if(state->fused_velocity_valid)
+    {
+        state->velocity_x_fused_residual_cms = state->velocity_x_flow_earth_cms -
+                                               state->velocity_x_fused_cms;
+        state->velocity_y_fused_residual_cms = state->velocity_y_flow_earth_cms -
+                                               state->velocity_y_fused_cms;
+        state->flow_residual_norm_cms = sqrtf(state->velocity_x_fused_residual_cms *
+                                              state->velocity_x_fused_residual_cms +
+                                              state->velocity_y_fused_residual_cms *
+                                              state->velocity_y_fused_residual_cms);
+    }
+    else
+    {
+        state->velocity_x_fused_residual_cms = 0.0f;
+        state->velocity_y_fused_residual_cms = 0.0f;
+        state->flow_residual_norm_cms = 0.0f;
     }
 }
 

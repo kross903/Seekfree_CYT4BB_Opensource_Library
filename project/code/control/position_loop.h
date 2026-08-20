@@ -36,10 +36,11 @@ typedef struct
 {
     uint8 velocity_valid;
     uint8 acceleration_valid;
-    float vx_uav_cms;
-    float vy_uav_cms;
-    float ax_uav_cms2;
-    float ay_uav_cms2;
+    uint8 earth_frame;
+    float vx_cms;
+    float vy_cms;
+    float ax_cms2;
+    float ay_cms2;
 } PositionLoopFeedforwardInput_t;
 
 typedef struct
@@ -79,8 +80,10 @@ typedef struct
     float car_ff_raw_ay_cms2;
     float car_ff_applied_ax_cms2;
     float car_ff_applied_ay_cms2;
-    float car_ff_gain_x;
-    float car_ff_gain_y;
+    float car_velocity_ff_gain_x;
+    float car_velocity_ff_gain_y;
+    float car_accel_ff_gain_x;
+    float car_accel_ff_gain_y;
     float desired_vx_cms;
     float desired_vy_cms;
     float target_accel_x_cms2;
@@ -98,10 +101,19 @@ typedef struct
     float brake_allowed_speed_cms;
     float trajectory_dt_s;
     float vision_innovation_cm;
+    float vision_gate_cm;
+    float vision_observation_x_cm;
+    float vision_observation_y_cm;
+    float vision_covariance_x_cm2;
+    float vision_covariance_y_cm2;
     uint32 trajectory_reset_count;
     uint16 vision_hold_age_ms;
+    uint16 vision_observation_age_ms;
     uint8 vision_observation_state;
     uint8 vision_reacquire_count;
+    uint8 vision_observation_accepted;
+    uint8 vision_observation_source;
+    uint8 vision_estimator_initialized;
     uint8 car_ff_valid;
     uint8 car_accel_ff_valid;
     uint8 limit_flags;
@@ -131,6 +143,8 @@ void Position_Loop_Update_Velocity_Target(uint8 velocity_ready,
                                           float *target_ay_earth_cms2);
 uint8 Position_Loop_Set_Car_Velocity_Feedforward_Gain(uint8 axis, float gain);
 void Position_Loop_Get_Car_Velocity_Feedforward_Gain(float *gain_x, float *gain_y);
+uint8 Position_Loop_Set_Car_Acceleration_Feedforward_Gain(uint8 axis, float gain);
+void Position_Loop_Get_Car_Acceleration_Feedforward_Gain(float *gain_x, float *gain_y);
 void Position_Loop_Reset_Car_Velocity_Feedforward(void);
 uint8 Position_Loop_Begin_Frozen_Hold(void);
 void Position_Loop_End_Frozen_Hold(void);
