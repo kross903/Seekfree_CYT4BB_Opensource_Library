@@ -40,6 +40,7 @@ typedef struct
     uint8 endpoint_count;
     uint8 contour_closed;
     uint8 contour_overflow;
+    uint8 boundary_touched;
     uint8 target;
     uint8 yaw_assisted;
     uint8 beacon_area_rejected;

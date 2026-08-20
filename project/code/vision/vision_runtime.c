@@ -169,10 +169,52 @@ static void vision_fill_physical_metrics(VisionBlob_t *blob)
 
 static uint8 vision_beacon_physical_gate(VisionBlob_t *blob)
 {
+    float center_col;
+    float center_row;
+    float normalized_col;
+    float normalized_row;
+    float radius2;
+    float strict_radius2;
+    float disabled_radius2;
+    float relaxation;
+    float min_scale;
+    float max_scale;
+    float min_area;
+    float max_area;
+    if(blob == NULL) return 0U;
     vision_fill_physical_metrics(blob);
-    return (uint8)(blob != NULL && blob->physical_valid &&
-        blob->physical_area_cm2 >= VISION_RUNTIME_BEACON_MIN_AREA_CM2 &&
-        blob->physical_area_cm2 <= VISION_RUNTIME_BEACON_MAX_AREA_CM2);
+    center_col = ((float)VISION_RUNTIME_FINE_WIDTH - 1.0f) * 0.5f;
+    center_row = ((float)VISION_RUNTIME_FINE_HEIGHT - 1.0f) * 0.5f;
+    normalized_col = (blob->centroid_col - center_col) / center_col;
+    normalized_row = (blob->centroid_row - center_row) / center_row;
+    radius2 = normalized_col * normalized_col +
+              normalized_row * normalized_row;
+    strict_radius2 = VISION_RUNTIME_BEACON_AREA_STRICT_RADIUS *
+                     VISION_RUNTIME_BEACON_AREA_STRICT_RADIUS;
+    disabled_radius2 = VISION_RUNTIME_BEACON_AREA_DISABLED_RADIUS *
+                       VISION_RUNTIME_BEACON_AREA_DISABLED_RADIUS;
+    /* 外围候选仍需通过其他轮廓条件；这里只是不再用不可信面积拒绝。 */
+    if(radius2 >= disabled_radius2) return blob->world_valid;
+    if(!blob->physical_valid) return 0U;
+    if(radius2 <= strict_radius2)
+    {
+        relaxation = 0.0f;
+    }
+    else
+    {
+        relaxation = (radius2 - strict_radius2) /
+                     (disabled_radius2 - strict_radius2);
+    }
+    min_scale = VISION_RUNTIME_BEACON_AREA_MIN_SCALE + relaxation *
+        (VISION_RUNTIME_BEACON_AREA_EDGE_MIN_SCALE -
+         VISION_RUNTIME_BEACON_AREA_MIN_SCALE);
+    max_scale = VISION_RUNTIME_BEACON_AREA_MAX_SCALE + relaxation *
+        (VISION_RUNTIME_BEACON_AREA_EDGE_MAX_SCALE -
+         VISION_RUNTIME_BEACON_AREA_MAX_SCALE);
+    min_area = VISION_RUNTIME_BEACON_NOMINAL_AREA_CM2 * min_scale;
+    max_area = VISION_RUNTIME_BEACON_NOMINAL_AREA_CM2 * max_scale;
+    return (uint8)(blob->physical_area_cm2 >= min_area &&
+                   blob->physical_area_cm2 <= max_area);
 }
 
 static void vision_fill_beacon_confidence(VisionBlob_t *blob)

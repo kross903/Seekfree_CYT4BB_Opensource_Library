@@ -11,10 +11,10 @@
   "ideal_target": {
     "type": "理想箭头",
     "background": "去畸变灰度图",
-    "roll_deg": -0.61908,
-    "pitch_deg": -9.027393,
-    "uav_yaw_deg": -94.891739,
-    "height_cm": 153.973923,
+    "roll_deg": -3.894145,
+    "pitch_deg": -4.050711,
+    "uav_yaw_deg": 45.947006,
+    "height_cm": 25.924427,
     "car_yaw_deg": 0.0,
     "car_yaw_relative": false,
     "mount_roll_deg": 15.0,
@@ -24,7 +24,7 @@
     "arrow_angle_deg": 70.0,
     "arrow_plane_height_cm": 17.0,
     "arrow_opening_offset_deg": 180.0,
-    "beacon_diameter_cm": 15.0,
+    "beacon_diameter_cm": 20.0,
     "beacon_plane_height_cm": 0.0,
     "near_shape_variance_enabled": false,
     "sampling": {
@@ -105,7 +105,7 @@
       "min_aspect_ratio": 0.15,
       "max_aspect_ratio": 1.0,
       "min_circularity": 0.0,
-      "max_circularity": 0.82,
+      "max_circularity": 0.9,
       "min_solidity": 0.0,
       "max_solidity": 0.92,
       "min_radial_cv": 0.08,
@@ -142,9 +142,9 @@
       ]
     },
     "beacon": {
-      "min_contour_points": 8,
+      "min_contour_points": 7,
       "min_gray_contrast": 5.0,
-      "min_aspect_ratio": 0.5,
+      "min_aspect_ratio": 0.4,
       "max_aspect_ratio": 1.0,
       "min_circularity": 0.35,
       "max_circularity": 1.0,
@@ -184,7 +184,7 @@
     },
     "beacon_physical_area": {
       "min_scale": 0.3,
-      "max_scale": 10.0
+      "max_scale": 3.0
     },
     "split_arrow": {
       "enabled": true,

@@ -200,6 +200,10 @@ BEACON_ACCEPT_LIMIT_MIN = 1
 BEACON_ACCEPT_LIMIT_MAX = 16
 BEACON_AREA_MIN_SCALE_DEFAULT = 0.75
 BEACON_AREA_MAX_SCALE_DEFAULT = 1.25
+BEACON_AREA_STRICT_RADIUS = 0.35
+BEACON_AREA_DISABLED_RADIUS = 0.80
+BEACON_AREA_EDGE_MIN_SCALE = 0.25
+BEACON_AREA_EDGE_MAX_SCALE = 8.0
 SPLIT_ARROW_DEFAULT_ENABLED = True
 SPLIT_ARROW_MIN_AREA = 15
 SPLIT_ARROW_MAX_CENTROID_DISTANCE_CM = 30.0
@@ -2624,8 +2628,40 @@ class PictureViewerApp:
         max_scale: float,
     ) -> tuple[bool, float | None, float, float, str | None]:
         nominal_area = math.pi * 0.25 * diameter_cm * diameter_cm
-        minimum = nominal_area * min_scale
-        maximum = nominal_area * max_scale
+        output_width = max(2, context.projection_calibration.output_width)
+        output_height = max(2, context.projection_calibration.output_height)
+        image_center_x = (output_width - 1.0) * 0.5
+        image_center_y = (output_height - 1.0) * 0.5
+        normalized_x = (
+            component.centroid_x - image_center_x
+        ) / image_center_x
+        normalized_y = (
+            component.centroid_y - image_center_y
+        ) / image_center_y
+        radius2 = normalized_x * normalized_x + normalized_y * normalized_y
+        strict_radius2 = BEACON_AREA_STRICT_RADIUS * BEACON_AREA_STRICT_RADIUS
+        disabled_radius2 = (
+            BEACON_AREA_DISABLED_RADIUS * BEACON_AREA_DISABLED_RADIUS
+        )
+        gate_disabled = radius2 >= disabled_radius2
+        if radius2 <= strict_radius2:
+            relaxation = 0.0
+        else:
+            relaxation = min(
+                1.0,
+                (radius2 - strict_radius2) /
+                (disabled_radius2 - strict_radius2),
+            )
+        edge_min_scale = min(min_scale, BEACON_AREA_EDGE_MIN_SCALE)
+        edge_max_scale = max(max_scale, BEACON_AREA_EDGE_MAX_SCALE)
+        effective_min_scale = min_scale + relaxation * (
+            edge_min_scale - min_scale
+        )
+        effective_max_scale = max_scale + relaxation * (
+            edge_max_scale - max_scale
+        )
+        minimum = nominal_area * effective_min_scale
+        maximum = nominal_area * effective_max_scale
         projector = TargetPlaneProjector(
             context.projection_calibration,
             context.mount_roll_deg,
@@ -2633,7 +2669,16 @@ class PictureViewerApp:
             context.mount_yaw_deg,
         )
         center = (component.centroid_x, component.centroid_y)
-        points = tuple(
+        center_world = projector.image_to_plane(
+            center,
+            context.roll_deg,
+            context.pitch_deg,
+            context.height_cm,
+            context.beacon_plane_height_cm,
+        )
+        if center_world is None:
+            return False, None, minimum, maximum, "信标：中心位置投影无效"
+        neighbor_world = tuple(
             projector.image_to_plane(
                 point,
                 context.roll_deg,
@@ -2641,13 +2686,15 @@ class PictureViewerApp:
                 context.height_cm,
                 context.beacon_plane_height_cm,
             )
-            for point in (center, (center[0] + 1.0, center[1]),
+            for point in ((center[0] + 1.0, center[1]),
                           (center[0], center[1] + 1.0))
         )
-        if any(point is None for point in points):
-            return False, None, minimum, maximum, "信标：姿态/高度投影无效"
-        center_world, x_world, y_world = points
-        assert center_world is not None and x_world is not None and y_world is not None
+        if any(point is None for point in neighbor_world):
+            if gate_disabled:
+                return True, None, minimum, maximum, None
+            return False, None, minimum, maximum, "信标：局部面积投影无效"
+        x_world, y_world = neighbor_world
+        assert x_world is not None and y_world is not None
         ux = x_world[0] - center_world[0]
         uy = x_world[1] - center_world[1]
         vx = y_world[0] - center_world[0]
@@ -2655,7 +2702,11 @@ class PictureViewerApp:
         cell_area = abs(ux * vy - uy * vx)
         area = float(component.area) * cell_area
         if not math.isfinite(area) or cell_area <= 0.0:
+            if gate_disabled:
+                return True, None, minimum, maximum, None
             return False, None, minimum, maximum, "信标：局部物理比例无效"
+        if gate_disabled:
+            return True, area, minimum, maximum, None
         if area < minimum:
             return False, area, minimum, maximum, (
                 f"信标：物理面积 {area:.1f} cm² < {minimum:.1f} cm²"
@@ -3441,6 +3492,7 @@ class PictureViewerApp:
                 negative_turn_window_points=(
                     config.beacon_thresholds.direction_window_points
                 ),
+                is_valid_pixel=self.undistorter.is_valid_output_pixel,
             )
             beacon_yaw_rejected, _beacon_yaw_error, _beacon_yaw_source, _ = (
                 self.evaluate_contour_beacon_yaw_rejection(
@@ -3940,6 +3992,7 @@ class PictureViewerApp:
                     negative_turn_window_points=(
                         thresholds[TARGET_BEACON].direction_window_points
                     ),
+                    is_valid_pixel=self.undistorter.is_valid_output_pixel,
                 )
             except (ValueError, OverflowError) as exc:
                 results[component.label] = BeaconRecognitionResult(

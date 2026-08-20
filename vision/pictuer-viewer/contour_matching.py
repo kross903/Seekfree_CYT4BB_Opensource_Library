@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, fields
 import math
-from typing import Mapping, Sequence
+from typing import Callable, Mapping, Sequence
 
 from PIL import Image, ImageDraw
 
@@ -694,6 +694,7 @@ def calculate_contour_metrics(
     binary: Image.Image,
     turn_thresholds: ContourThresholds | None = None,
     negative_turn_window_points: int | None = None,
+    is_valid_pixel: Callable[[int, int], bool] | None = None,
 ) -> ContourMetrics:
     points = list(component.contour_points)
     if len(points) >= 2 and points[0] == points[-1]:
@@ -797,6 +798,19 @@ def calculate_contour_metrics(
         _gray_statistics(component, gray, binary)
     )
     width, height = gray.size
+    boundary_clipped = (
+        component.min_x <= 0
+        or component.min_y <= 0
+        or component.max_x >= width - 1
+        or component.max_y >= height - 1
+    )
+    if not boundary_clipped and is_valid_pixel is not None:
+        boundary_clipped = any(
+            not is_valid_pixel(point_x + offset_x, point_y + offset_y)
+            for point_x, point_y in points
+            for offset_x, offset_y in ((0, -1), (1, 0), (0, 1), (-1, 0))
+        )
+
     return ContourMetrics(
         contour_points=len(points),
         area=component.area,
@@ -830,12 +844,7 @@ def calculate_contour_metrics(
         gray_contrast=contrast,
         foreground_samples=foreground_count,
         background_samples=background_count,
-        boundary_clipped=(
-            component.min_x <= 0
-            or component.min_y <= 0
-            or component.max_x >= width - 1
-            or component.max_y >= height - 1
-        ),
+        boundary_clipped=boundary_clipped,
         contour_closed=component.contour_closed,
         contour_overflow=component.contour_overflow,
     )
@@ -852,6 +861,8 @@ def evaluate_contour_metrics(
         failures.append("轮廓未闭合")
     if metrics.contour_overflow:
         failures.append("轮廓跟踪步数溢出")
+    if metrics.boundary_clipped:
+        failures.append("轮廓接触图像有效边界")
     if (
         "min_contour_points" in enabled
         and metrics.contour_points < thresholds.min_contour_points

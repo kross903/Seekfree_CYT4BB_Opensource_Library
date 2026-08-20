@@ -50,6 +50,14 @@ static uint8 contour_in_bounds(int x, int y)
                    y < (int)VISION_RUNTIME_FINE_HEIGHT);
 }
 
+static uint8 contour_mapping_valid(int x, int y)
+{
+    uint16 source_x_q8;
+    uint16 source_y_q8;
+    return CameraCalibration_FullRectifiedPixelToSourceQ8(
+        x, y, &source_x_q8, &source_y_q8);
+}
+
 static uint8 contour_sample(int x, int y)
 {
     uint16 sx_q8;
@@ -247,6 +255,29 @@ static uint8 contour_trace(int start_x, int start_y,
         ++s_overflow_count;
     }
     return 1U;
+}
+
+static uint8 contour_touches_image_boundary(const VisionContour_t *contour)
+{
+    static const int8 neighbor_x[4] = {0, 1, 0, -1};
+    static const int8 neighbor_y[4] = {-1, 0, 1, 0};
+    uint16 i;
+    uint8 direction;
+    if(contour == NULL) return 1U;
+    for(i = 0U; i < contour->point_count; ++i)
+    {
+        int x = (int)contour->point_x[i];
+        int y = (int)contour->point_y[i];
+        if(x <= 0 || y <= 0 ||
+           x >= (int)VISION_RUNTIME_FINE_WIDTH - 1 ||
+           y >= (int)VISION_RUNTIME_FINE_HEIGHT - 1) return 1U;
+        for(direction = 0U; direction < 4U; ++direction)
+        {
+            if(!contour_mapping_valid(x + neighbor_x[direction],
+                                      y + neighbor_y[direction])) return 1U;
+        }
+    }
+    return 0U;
 }
 
 static void contour_mark_processed(const VisionContour_t *contour)
@@ -686,7 +717,8 @@ static uint8 contour_base_gate(const VisionContourCandidate_t *candidate,
 {
     uint32 mask;
     if(candidate == NULL || thresholds == NULL ||
-       !candidate->contour_closed || candidate->contour_overflow)
+       !candidate->contour_closed || candidate->contour_overflow ||
+       candidate->boundary_touched)
         return 0U;
     mask = thresholds->enabled_mask;
     if((mask & VISION_CONTOUR_GATE_MIN_POINTS) &&
@@ -941,9 +973,16 @@ static uint8 contour_try_point(int x, int y,
     candidate = &result->candidate[result->candidate_count];
     if(!contour_trace(boundary_x, boundary_y, back_x, back_y, candidate))
         return 0U;
+    candidate->boundary_touched =
+        contour_touches_image_boundary(&candidate->contour);
     contour_fill_blob(candidate);
     contour_mark_processed(&candidate->contour);
     if(candidate->blob.area < CONTOUR_MIN_AREA) return 0U;
+    if(candidate->boundary_touched)
+    {
+        ++result->candidate_count;
+        return 1U;
+    }
     contour_extract_turn_features(candidate, config->arrow_thresholds,
                                   config->beacon_thresholds);
     contour_classify(candidate, config, (uint8)(result->arrow_count != 0U));
