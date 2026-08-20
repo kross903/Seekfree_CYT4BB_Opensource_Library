@@ -58,7 +58,7 @@
 #define PMW_FLOW_VEL_SLEW_MIN_STEP_CMS      (12.0f)
 #define PMW_FLOW_VEL_OUTPUT_SLEW_LIMIT_CMS2 PMW_FLOW_GRAVITY_CMS2
 /* 速度版Mahony：IMU负责短期预测，光流只以固定低带宽修正速度与加速度零偏。 */
-#define PMW_FLOW_FUSION_SETTLE95_S          (0.80f)
+#define PMW_FLOW_FUSION_SETTLE95_S          (0.10f)
 #define PMW_FLOW_FUSION_BIAS_KI             (0.02f)
 #define PMW_FLOW_FUSION_CORRECTION_LIMIT_CMS2 (100.0f)
 #define PMW_FLOW_FUSION_ACCEL_BIAS_LIMIT_CMS2 (30.0f)

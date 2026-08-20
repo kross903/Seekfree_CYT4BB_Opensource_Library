@@ -80,6 +80,8 @@ typedef struct
     float correction_accel_target_y_cms2;
     float shaped_correction_ax_cms2;
     float shaped_correction_ay_cms2;
+    float correction_shaper_jerk_x_cms3;
+    float correction_shaper_jerk_y_cms3;
     float correction_shaper_accel_max_cms2;
     float correction_shaper_jerk_max_cms3;
     float car_ff_raw_vx_cms;
@@ -142,6 +144,7 @@ typedef struct
     uint8 sqrt_controller_active;
     uint8 frozen_hold_active;
     uint8 correction_shaper_initialized;
+    uint8 correction_shaper_phase;
 } PositionLoopDiag_t;
 
 void Position_Loop_Set_Enabled(uint8 enabled);
