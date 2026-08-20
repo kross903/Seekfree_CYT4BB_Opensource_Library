@@ -165,5 +165,11 @@ void PMW_Flow_ResetWorldPosition(void);
 /* 陀螺去旋转增益（按轴独立）。kx 或 ky 传负值表示该轴保持不变。 */
 void PMW_Flow_SetGyroCompGain(float kx, float ky);
 void PMW_Flow_GetGyroCompGain(float *kx, float *ky);
+/* 运行时光流PI融合参数：1=收敛时间，2=修正限幅，3=创新低通，4=偏置Ki。 */
+uint8 PMW_Flow_SetFusionTuning(uint8 item, float value);
+void PMW_Flow_GetFusionTuning(float *settle95_s,
+                              float *correction_limit_cms2,
+                              float *innovation_lp_tau_s,
+                              float *bias_ki);
 
 #endif

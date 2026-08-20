@@ -63,6 +63,14 @@
 #define PMW_FLOW_FUSION_CORRECTION_LIMIT_CMS2 (100.0f)
 #define PMW_FLOW_FUSION_ACCEL_BIAS_LIMIT_CMS2 (30.0f)
 #define PMW_FLOW_FUSION_INNOV_LP_TAU_S      (0.10f)
+#define PMW_FLOW_FUSION_SETTLE95_MIN_S      (0.10f)
+#define PMW_FLOW_FUSION_SETTLE95_MAX_S      (3.00f)
+#define PMW_FLOW_FUSION_CORRECTION_MIN_CMS2 (10.0f)
+#define PMW_FLOW_FUSION_CORRECTION_MAX_CMS2 (500.0f)
+#define PMW_FLOW_FUSION_INNOV_LP_MIN_S      (0.02f)
+#define PMW_FLOW_FUSION_INNOV_LP_MAX_S      (0.50f)
+#define PMW_FLOW_FUSION_BIAS_KI_MIN         (0.0f)
+#define PMW_FLOW_FUSION_BIAS_KI_MAX         (0.50f)
 #define PMW_FLOW_FUSION_INNOV_EVIDENCE_LOW_CMS  (10.0f)
 #define PMW_FLOW_FUSION_INNOV_EVIDENCE_HIGH_CMS (50.0f)
 #define PMW_FLOW_CONFIDENCE_MIN_UPDATE      (0.10f)
@@ -176,6 +184,12 @@ static uint8 g_pmw_flow_vel_output_init = 0U;
 static uint8 g_pmw_flow_invalid_sample_count = 0U;
 static float g_pmw_flow_fused_vx_cms = 0.0f;
 static float g_pmw_flow_fused_vy_cms = 0.0f;
+static volatile float g_pmw_flow_fusion_settle95_s = PMW_FLOW_FUSION_SETTLE95_S;
+static volatile float g_pmw_flow_fusion_correction_limit_cms2 =
+    PMW_FLOW_FUSION_CORRECTION_LIMIT_CMS2;
+static volatile float g_pmw_flow_fusion_innov_lp_tau_s =
+    PMW_FLOW_FUSION_INNOV_LP_TAU_S;
+static volatile float g_pmw_flow_fusion_bias_ki = PMW_FLOW_FUSION_BIAS_KI;
 static float g_pmw_flow_fusion_imu_delta_x_accum_cms = 0.0f;
 static float g_pmw_flow_fusion_imu_delta_y_accum_cms = 0.0f;
 static float g_pmw_flow_fusion_accel_x_earth_cms2 = 0.0f;
@@ -534,7 +548,7 @@ static float pmw_flow_pi_calc_alpha(float dt_s)
     }
 
     return pmw_flow_limit_float(1.0f - expf((-3.0f * dt_s) /
-                                            PMW_FLOW_FUSION_SETTLE95_S),
+                                            g_pmw_flow_fusion_settle95_s),
                                 0.0f,
                                 1.0f);
 }
@@ -551,7 +565,8 @@ static void pmw_flow_pi_update_evidence(PMWFlowPIAxis_t *axis,
         return;
     }
 
-    innovation_lpf_alpha = 1.0f - expf(-dt_s / PMW_FLOW_FUSION_INNOV_LP_TAU_S);
+    innovation_lpf_alpha = 1.0f - expf(-dt_s /
+                                        g_pmw_flow_fusion_innov_lp_tau_s);
     innovation_lpf_alpha = pmw_flow_limit_float(innovation_lpf_alpha, 0.0f, 1.0f);
     axis->innovation_lp_cms += innovation_lpf_alpha *
                                (innovation_cms - axis->innovation_lp_cms);
@@ -574,7 +589,7 @@ static void pmw_flow_pi_reset_axis(PMWFlowPIAxis_t *axis)
     axis->innovation_evidence = 0.0f;
     axis->innovation_lp_cms = 0.0f;
     axis->alpha = pmw_flow_pi_calc_alpha(FLOW_SENSOR_NOMINAL_DT_S);
-    axis->bias_ki = PMW_FLOW_FUSION_BIAS_KI;
+    axis->bias_ki = g_pmw_flow_fusion_bias_ki;
 }
 
 static void pmw_flow_pi_note_invalid(PMWFlowPIAxis_t *axis, float dt_s)
@@ -590,7 +605,7 @@ static void pmw_flow_pi_note_invalid(PMWFlowPIAxis_t *axis, float dt_s)
     }
 
     axis->alpha = pmw_flow_pi_calc_alpha(dt_s);
-    axis->bias_ki = PMW_FLOW_FUSION_BIAS_KI;
+    axis->bias_ki = g_pmw_flow_fusion_bias_ki;
 }
 
 static void pmw_flow_pi_clear_evidence(PMWFlowPIAxis_t *axis)
@@ -603,7 +618,7 @@ static void pmw_flow_pi_clear_evidence(PMWFlowPIAxis_t *axis)
     axis->innovation_evidence = 0.0f;
     axis->innovation_lp_cms = 0.0f;
     axis->alpha = pmw_flow_pi_calc_alpha(FLOW_SENSOR_NOMINAL_DT_S);
-    axis->bias_ki = PMW_FLOW_FUSION_BIAS_KI;
+    axis->bias_ki = g_pmw_flow_fusion_bias_ki;
 }
 
 static float pmw_flow_pi_update_axis(PMWFlowPIAxis_t *axis,
@@ -633,10 +648,11 @@ static float pmw_flow_pi_update_axis(PMWFlowPIAxis_t *axis,
     correction_innovation_cms = axis->innovation_lp_cms;
 
     axis->alpha = pmw_flow_pi_calc_alpha(dt_s);
-    axis->bias_ki = PMW_FLOW_FUSION_BIAS_KI;
+    axis->bias_ki = g_pmw_flow_fusion_bias_ki;
 
     correction_dt_s = (dt_s > 0.0f) ? dt_s : FLOW_SENSOR_NOMINAL_DT_S;
-    correction_limit_cms = PMW_FLOW_FUSION_CORRECTION_LIMIT_CMS2 * correction_dt_s;
+    correction_limit_cms = g_pmw_flow_fusion_correction_limit_cms2 *
+                           correction_dt_s;
     correction_cms = pmw_flow_limit_float(axis->alpha * correction_innovation_cms,
                                           -correction_limit_cms,
                                           correction_limit_cms);
@@ -2056,4 +2072,57 @@ void PMW_Flow_GetGyroCompGain(float *kx, float *ky)
 {
     if(kx != NULL) *kx = g_pmw_flow_gyro_comp_gain_x;
     if(ky != NULL) *ky = g_pmw_flow_gyro_comp_gain_y;
+}
+
+uint8 PMW_Flow_SetFusionTuning(uint8 item, float value)
+{
+    if(!pmw_flow_is_valid_number(value))
+    {
+        return 0U;
+    }
+
+    switch(item)
+    {
+        case '1':
+            if((value < PMW_FLOW_FUSION_SETTLE95_MIN_S) ||
+               (value > PMW_FLOW_FUSION_SETTLE95_MAX_S)) return 0U;
+            g_pmw_flow_fusion_settle95_s = value;
+            break;
+        case '2':
+            if((value < PMW_FLOW_FUSION_CORRECTION_MIN_CMS2) ||
+               (value > PMW_FLOW_FUSION_CORRECTION_MAX_CMS2)) return 0U;
+            g_pmw_flow_fusion_correction_limit_cms2 = value;
+            break;
+        case '3':
+            if((value < PMW_FLOW_FUSION_INNOV_LP_MIN_S) ||
+               (value > PMW_FLOW_FUSION_INNOV_LP_MAX_S)) return 0U;
+            g_pmw_flow_fusion_innov_lp_tau_s = value;
+            break;
+        case '4':
+            if((value < PMW_FLOW_FUSION_BIAS_KI_MIN) ||
+               (value > PMW_FLOW_FUSION_BIAS_KI_MAX)) return 0U;
+            g_pmw_flow_fusion_bias_ki = value;
+            break;
+        default:
+            return 0U;
+    }
+
+    return 1U;
+}
+
+void PMW_Flow_GetFusionTuning(float *settle95_s,
+                              float *correction_limit_cms2,
+                              float *innovation_lp_tau_s,
+                              float *bias_ki)
+{
+    if(settle95_s != NULL) *settle95_s = g_pmw_flow_fusion_settle95_s;
+    if(correction_limit_cms2 != NULL)
+    {
+        *correction_limit_cms2 = g_pmw_flow_fusion_correction_limit_cms2;
+    }
+    if(innovation_lp_tau_s != NULL)
+    {
+        *innovation_lp_tau_s = g_pmw_flow_fusion_innov_lp_tau_s;
+    }
+    if(bias_ki != NULL) *bias_ki = g_pmw_flow_fusion_bias_ki;
 }

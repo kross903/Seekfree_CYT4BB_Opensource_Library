@@ -465,6 +465,11 @@ static uint8 set_pmw_flow_gyro_gain_value(uint8 item, float value)
     }
 }
 
+static uint8 set_pmw_flow_fusion_tuning_value(uint8 item, float value)
+{
+    return PMW_Flow_SetFusionTuning(item, value);
+}
+
 static uint8 set_beacon_search_value(uint8 item, float value)
 {
     switch(item)
@@ -647,6 +652,25 @@ static void send_pid_data_back(uint8 command)
             float gy_now = 0.0f;
             PMW_Flow_GetGyroCompGain(&gx_now, &gy_now);
             send_four_date(gx_now, gy_now, 0, 0, 0, 0, 0, 0);
+            return;
+        }
+
+        case 'K':
+        {
+            float settle95_s = 0.0f;
+            float correction_limit_cms2 = 0.0f;
+            float innovation_lp_tau_s = 0.0f;
+            float bias_ki = 0.0f;
+
+            PMW_Flow_GetFusionTuning(&settle95_s,
+                                     &correction_limit_cms2,
+                                     &innovation_lp_tau_s,
+                                     &bias_ki);
+            send_four_date(settle95_s,
+                           correction_limit_cms2,
+                           innovation_lp_tau_s,
+                           bias_ki,
+                           0, 0, 0, 0);
             return;
         }
 
@@ -1491,6 +1515,15 @@ void USART_PID_Adjust(void)
             }
             send_back_command = 'G';
             reply_command = 'G';
+            break;
+
+        case 'K':
+            if(has_value)
+            {
+                write_success = set_pmw_flow_fusion_tuning_value(item, data_get);
+            }
+            send_back_command = 'K';
+            reply_command = 'K';
             break;
 
         case 'Q':
