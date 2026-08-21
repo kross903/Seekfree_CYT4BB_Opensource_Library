@@ -45,6 +45,8 @@ typedef struct
 {
     uint32 reference_time_us;
     uint32 reference_frame_seq;
+    /* 任一相机输入新帧时递增，用于区分同一参考帧重新融合出的新结果。 */
+    uint32 fusion_revision;
     uint32 front_capture_time_us;
     uint32 rear_capture_time_us;
     uint32 front_frame_seq;

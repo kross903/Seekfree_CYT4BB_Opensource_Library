@@ -104,6 +104,7 @@ static uint8 s_rear_head;
 static uint8 s_rear_count;
 static uint32 s_last_front_service_seq;
 static uint32 s_last_rear_service_seq;
+static uint32 s_fusion_revision;
 static uint16 s_last_reset_generation;
 static uint8 s_reset_generation_valid;
 static DualCameraFusionTrack_t s_tracks[DUAL_CAMERA_FUSION_TRACK_COUNT];
@@ -1025,6 +1026,7 @@ void DualCameraFusion_Init(void)
     s_rear_count = 0U;
     s_last_front_service_seq = 0U;
     s_last_rear_service_seq = 0U;
+    s_fusion_revision = 0U;
     s_last_reset_generation = 0U;
     s_reset_generation_valid = 0U;
     s_residual_head = 0U;
@@ -1160,7 +1162,14 @@ void DualCameraFusion_ServiceInputs(void)
         input_changed = 1U;
     }
     if(input_changed)
+    {
+        s_fusion_revision++;
+        if(0U == s_fusion_revision)
+        {
+            s_fusion_revision = 1U;
+        }
         DualCameraFusion_BuildSnapshot(CameraBoardLink_TimeNowUs());
+    }
 }
 
 void DualCameraFusion_BuildSnapshot(uint32 now_us)
@@ -1188,6 +1197,7 @@ void DualCameraFusion_BuildSnapshot(uint32 now_us)
     float car_measurement_variance_cm2;
 
     memset(&s_snapshot, 0, sizeof(s_snapshot));
+    s_snapshot.fusion_revision = s_fusion_revision;
     memset(candidate, 0, sizeof(candidate));
     memset(&link_diag, 0, sizeof(link_diag));
     s_diag.build_count++;

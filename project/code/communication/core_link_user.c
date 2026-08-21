@@ -600,7 +600,7 @@ static void core_link_user_build_beacon_observations(
             s_core_link_user_tracker_reset_pending = 0U;
         }
         BeaconSearch_OnObservationFrame(packet,
-                                        (uint32)fusion_snapshot.reference_frame_seq);
+                                        fusion_snapshot.fusion_revision);
         packet->frame_flags |= BeaconSearch_GetFrameFlags();
         return;
     }
