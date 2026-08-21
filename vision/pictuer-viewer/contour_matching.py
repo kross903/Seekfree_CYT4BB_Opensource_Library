@@ -446,6 +446,144 @@ def _signed_direction_differences(
     return window, signed_angles
 
 
+_FIRMWARE_ATAN_LUT_DEG = (
+    0, 2, 4, 5, 7, 9, 11, 12, 14, 16, 17, 19, 21, 22, 24, 25, 27,
+    28, 29, 31, 32, 33, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45,
+)
+
+
+def _firmware_unsigned_angle_deg(cross_abs: int, dot: int) -> int:
+    a = abs(int(cross_abs))
+    b = abs(int(dot))
+    if a == 0:
+        return 180 if dot < 0 else 0
+    if b == 0:
+        return 90
+    if a <= b:
+        ratio = min(32, (a * 32 + b // 2) // b)
+        acute = _FIRMWARE_ATAN_LUT_DEG[ratio]
+    else:
+        ratio = min(32, (b * 32 + a // 2) // a)
+        acute = 90 - _FIRMWARE_ATAN_LUT_DEG[ratio]
+    return 180 - acute if dot < 0 else acute
+
+
+def _firmware_turns(
+    points: Sequence[tuple[int, int]],
+    requested_window: int,
+) -> tuple[int, list[int]]:
+    count = len(points)
+    if count < 5:
+        return 0, [0] * count
+    window = max(2, int(requested_window))
+    window = min(window, (count - 1) // 4)
+    if window < 2:
+        return 0, [0] * count
+    area_twice = sum(
+        first[0] * second[1] - first[1] * second[0]
+        for first, second in zip(points, (*points[1:], points[0]))
+    )
+    orientation = 1 if area_twice >= 0 else -1
+    edges: list[tuple[int, int]] = []
+    for first, second in zip(points, (*points[1:], points[0])):
+        dx = second[0] - first[0]
+        dy = second[1] - first[1]
+        if dx and dy:
+            edges.append((181 if dx > 0 else -181, 181 if dy > 0 else -181))
+        else:
+            edges.append((256 if dx > 0 else -256 if dx < 0 else 0,
+                          256 if dy > 0 else -256 if dy < 0 else 0))
+    turns: list[int] = []
+    for index in range(count):
+        before = [edges[(index - window + offset) % count] for offset in range(window)]
+        after = [edges[(index + offset) % count] for offset in range(window)]
+        before_x = sum(vector[0] for vector in before)
+        before_y = sum(vector[1] for vector in before)
+        after_x = sum(vector[0] for vector in after)
+        after_y = sum(vector[1] for vector in after)
+        dot = before_x * after_x + before_y * after_y
+        cross = before_x * after_y - before_y * after_x
+        angle = _firmware_unsigned_angle_deg(abs(cross), dot)
+        turns.append(angle if orientation * cross >= 0 else -angle)
+    return window, turns
+
+
+def _firmware_positive_region_peaks(
+    turns: Sequence[int],
+    minimum: float,
+    maximum: float,
+) -> list[int]:
+    mask = [minimum <= turn <= maximum for turn in turns]
+    peaks: list[int] = []
+    for region in _circular_regions(mask):
+        peaks.append(max(region, key=turns.__getitem__))
+    return sorted(peaks, key=turns.__getitem__, reverse=True)
+
+
+def _extract_firmware_turn_geometry(
+    points: Sequence[tuple[int, int]],
+    thresholds: ContourThresholds,
+    negative_turn_window_points: int | None,
+) -> tuple[
+    int,
+    tuple[tuple[int, int], ...],
+    tuple[float, ...],
+    tuple[int, int] | None,
+    float | None,
+    tuple[int, int] | None,
+    float | None,
+    float,
+    float | None,
+    float | None,
+    int,
+]:
+    window, turns = _firmware_turns(points, thresholds.direction_window_points)
+    if window == 0:
+        return 0, (), (), None, None, None, None, 0.0, None, None, 0
+    endpoint_indices = _firmware_positive_region_peaks(
+        turns, thresholds.min_endpoint_turn_deg, 180.0
+    )[:2]
+    vertex_indices = _firmware_positive_region_peaks(
+        turns, thresholds.min_vertex_turn_deg, thresholds.max_vertex_turn_deg
+    )
+    vertex_index = vertex_indices[0] if vertex_indices else None
+    notch_index = min(range(len(turns)), key=turns.__getitem__)
+    if turns[notch_index] >= 0:
+        notch_index = None
+    endpoints = tuple(points[index] for index in endpoint_indices)
+    endpoint_angles = tuple(float(turns[index]) for index in endpoint_indices)
+    vertex_point = points[vertex_index] if vertex_index is not None else None
+    vertex_turn = float(turns[vertex_index]) if vertex_index is not None else None
+    notch_point = points[notch_index] if notch_index is not None else None
+    notch_turn = float(turns[notch_index]) if notch_index is not None else None
+    arm_balance = None
+    if vertex_point is not None and len(endpoints) == 2:
+        lengths = (math.dist(vertex_point, endpoints[0]),
+                   math.dist(vertex_point, endpoints[1]))
+        if min(lengths) > 0.0:
+            arm_balance = min(lengths) / max(lengths)
+    negative_window = window
+    negative_turns = turns
+    if negative_turn_window_points is not None:
+        negative_window, negative_turns = _firmware_turns(
+            points, negative_turn_window_points
+        )
+    max_negative = max(0.0, float(-min(negative_turns, default=0)))
+    return (
+        window,
+        endpoints,
+        endpoint_angles,
+        vertex_point,
+        vertex_turn,
+        notch_point,
+        notch_turn,
+        max_negative,
+        180.0 - vertex_turn if vertex_turn is not None else None,
+        arm_balance,
+        negative_window,
+    )
+
+
 def _circular_regions(mask: Sequence[bool]) -> list[tuple[int, ...]]:
     count = len(mask)
     if count == 0 or not any(mask):
@@ -699,13 +837,16 @@ def calculate_contour_metrics(
     points = list(component.contour_points)
     if len(points) >= 2 and points[0] == points[-1]:
         points.pop()
+    firmware_equivalent = component.extraction_method == "on-demand-contour"
     hull = _convex_hull(points)
     hull_perimeter = _polygon_perimeter(hull)
     # Pixel centres define the hull. The half-perimeter and one-pixel terms turn
     # its continuous area into a closer approximation of the enclosed pixel cells.
     hull_cell_area = _polygon_area(hull) + hull_perimeter * 0.5 + 1.0
     solidity = (
-        min(1.0, component.area / hull_cell_area)
+        component.firmware_solidity
+        if firmware_equivalent and component.firmware_solidity is not None
+        else min(1.0, component.area / hull_cell_area)
         if hull_cell_area > 0.0
         else 0.0
     )
@@ -725,31 +866,50 @@ def calculate_contour_metrics(
         )
     concavity_ratio = max_concavity / diagonal if diagonal > 0.0 else 0.0
     geometry_thresholds = turn_thresholds or ARROW_DEFAULT_THRESHOLDS
-    (
-        effective_window,
-        arm_tip_points,
-        endpoint_turn_angles,
-        vertex_point,
-        vertex_turn_angle,
-        deepest_point,
-        notch_turn_angle,
-        max_negative_turn_deg,
-        vertex_angle_deg,
-        arm_balance,
-    ) = _extract_arrow_turn_geometry(points, geometry_thresholds)
-    effective_negative_window = effective_window
-    if (
-        negative_turn_window_points is not None
-        and int(negative_turn_window_points) != effective_window
-    ):
-        effective_negative_window, negative_angles = _signed_direction_differences(
+    if firmware_equivalent:
+        (
+            effective_window,
+            arm_tip_points,
+            endpoint_turn_angles,
+            vertex_point,
+            vertex_turn_angle,
+            deepest_point,
+            notch_turn_angle,
+            max_negative_turn_deg,
+            vertex_angle_deg,
+            arm_balance,
+            effective_negative_window,
+        ) = _extract_firmware_turn_geometry(
             points,
-            int(negative_turn_window_points),
+            geometry_thresholds,
+            negative_turn_window_points,
         )
-        max_negative_turn_deg = max(
-            0.0,
-            -min(negative_angles, default=0.0),
-        )
+    else:
+        (
+            effective_window,
+            arm_tip_points,
+            endpoint_turn_angles,
+            vertex_point,
+            vertex_turn_angle,
+            deepest_point,
+            notch_turn_angle,
+            max_negative_turn_deg,
+            vertex_angle_deg,
+            arm_balance,
+        ) = _extract_arrow_turn_geometry(points, geometry_thresholds)
+        effective_negative_window = effective_window
+        if (
+            negative_turn_window_points is not None
+            and int(negative_turn_window_points) != effective_window
+        ):
+            effective_negative_window, negative_angles = _signed_direction_differences(
+                points,
+                int(negative_turn_window_points),
+            )
+            max_negative_turn_deg = max(
+                0.0,
+                -min(negative_angles, default=0.0),
+            )
 
     radial_distances = [
         math.hypot(x - component.centroid_x, y - component.centroid_y)

@@ -26,6 +26,12 @@ CONTOUR_DIRECTIONS: tuple[tuple[int, int], ...] = (
     (-1, -1),
 )
 CONTOUR_MAX_STEPS = 65536
+FIRMWARE_MAX_CANDIDATES = 8
+FIRMWARE_HISTORY_SEARCH_RADIUS = 32
+FIRMWARE_SOURCE_REFINE_RADIUS = 2
+FIRMWARE_SEED_TARGET_LIMIT = 2
+FIRMWARE_HULL_SAMPLE_POINTS = 96
+FIRMWARE_CONTOUR_MAX_POINTS = 640
 
 
 @dataclass(frozen=True)
@@ -294,6 +300,7 @@ class ConnectedComponent:
     contour_closed: bool = True
     contour_overflow: bool = False
     extraction_method: str = "rle"
+    firmware_solidity: float | None = None
 
     @property
     def width(self) -> int:
@@ -318,8 +325,8 @@ def component_centroid_is_foreground(
     width, height = binary.size
     if width <= 0 or height <= 0:
         return False
-    x = max(0, min(width - 1, int(round(component.centroid_x))))
-    y = max(0, min(height - 1, int(round(component.centroid_y))))
+    x = max(0, min(width - 1, int(component.centroid_x + 0.5)))
+    y = max(0, min(height - 1, int(component.centroid_y + 0.5)))
     return binary.getpixel((x, y)) != 0
 
 
@@ -556,23 +563,26 @@ def _build_contour_spans(
         min_y = max(0, min(y for _, y in points))
         max_y = min(height - 1, max(y for _, y in points))
         for row in range(min_y, max_y + 1):
-            scan_y = row + 0.5
-            intersections: list[float] = []
+            scan_y2 = row * 2 + 1
+            intersections: list[int] = []
             for (x0, y0), (x1, y1) in edges:
                 if y0 == y1:
                     continue
-                if not (min(y0, y1) <= scan_y < max(y0, y1)):
+                if not (2 * min(y0, y1) <= scan_y2 < 2 * max(y0, y1)):
                     continue
-                intersections.append(
-                    x0 + (scan_y - y0) * (x1 - x0) / (y1 - y0)
+                if len(intersections) >= 64:
+                    break
+                numerator = (scan_y2 - 2 * y0) * (x1 - x0) * 128
+                denominator = y1 - y0
+                quotient = (
+                    abs(numerator) // abs(denominator)
+                    * (1 if numerator * denominator >= 0 else -1)
                 )
+                intersections.append(x0 * 256 + quotient)
             intersections.sort()
             for index in range(0, len(intersections) - 1, 2):
-                start_x = max(0, int(math.ceil(intersections[index] - 1e-9)))
-                end_x = min(
-                    width - 1,
-                    int(math.floor(intersections[index + 1] + 1e-9)),
-                )
+                start_x = max(0, (intersections[index] + 255) >> 8)
+                end_x = min(width - 1, intersections[index + 1] >> 8)
                 if start_x <= end_x:
                     spans_by_row.setdefault(row, []).append((start_x, end_x))
 
@@ -744,6 +754,16 @@ class OnDemandContourExtractor:
         value = self._sample(x, y)
         return value is not None and self._foreground[y * self.width + x] != 0
 
+    def _is_coarse_foreground(self, x: int, y: int) -> bool:
+        """Firmware history-seed precheck: Q8 map with one nearest sample."""
+        value = self.undistorter.sample_bytes(
+            self._source,
+            x,
+            y,
+            UNDISTORT_NEAREST,
+        )
+        return value is not None and value >= self.threshold
+
     def _is_processed(self, x: int, y: int) -> bool:
         return (
             0 <= x < self.width
@@ -763,9 +783,11 @@ class OnDemandContourExtractor:
         self,
         center: tuple[int, int],
         max_radius: int,
-    ) -> tuple[int, int] | None:
-        cx = max(0, min(self.width - 1, int(round(center[0]))))
-        cy = max(0, min(self.height - 1, int(round(center[1]))))
+    ) -> tuple[tuple[int, int], tuple[int, int]] | None:
+        cx = int(center[0] + 0.5)
+        cy = int(center[1] + 0.5)
+        if not (0 <= cx < self.width and 0 <= cy < self.height):
+            return None
         seen: set[tuple[int, int]] = set()
         for radius in range(max(0, int(max_radius)) + 1):
             candidates: list[tuple[int, int]] = []
@@ -789,25 +811,26 @@ class OnDemandContourExtractor:
                     next_y = current_y + 1
                     if (next_y >= self.height or
                             not self._is_foreground(x, next_y)):
-                        return x, current_y
+                        return (x, current_y), (x, next_y)
                     current_y = next_y
         return None
 
-    def _trace(self, start: tuple[int, int]) -> tuple[list[tuple[int, int]], list[int], bool, bool]:
+    def _trace(
+        self,
+        start: tuple[int, int],
+        initial_backtrack: tuple[int, int],
+    ) -> tuple[list[tuple[int, int]], list[int], bool, bool]:
         direction_by_offset = {
             offset: index for index, offset in enumerate(CONTOUR_DIRECTIONS)
         }
         current = start
-        backtrack = (start[0] - 1, start[1])
-        for dx, dy in CONTOUR_DIRECTIONS:
-            candidate_backtrack = (start[0] + dx, start[1] + dy)
-            if not self._is_foreground(*candidate_backtrack):
-                backtrack = candidate_backtrack
-                break
+        backtrack = initial_backtrack
         points = [start]
         directions: list[int] = []
 
         for _ in range(self.max_trace_steps):
+            if len(points) >= FIRMWARE_CONTOUR_MAX_POINTS:
+                return points, directions, False, True
             back_offset = (
                 backtrack[0] - current[0],
                 backtrack[1] - current[1],
@@ -835,6 +858,58 @@ class OnDemandContourExtractor:
             points.append(current)
         return points, directions, False, True
 
+    @staticmethod
+    def _firmware_hull_solidity(
+        points: list[tuple[int, int]],
+        area: int,
+    ) -> float:
+        """Mirror contour_solidity_q8(), including its 96-point sampling."""
+        if len(points) < 3:
+            return 0.0
+        sample_count = min(len(points), FIRMWARE_HULL_SAMPLE_POINTS)
+        sampled = [
+            points[index * len(points) // sample_count]
+            for index in range(sample_count)
+        ]
+        sampled.sort()
+
+        def cross(first, second, third) -> int:
+            return (
+                (second[0] - first[0]) * (third[1] - first[1])
+                - (second[1] - first[1]) * (third[0] - first[0])
+            )
+
+        lower: list[tuple[int, int]] = []
+        for point in sampled:
+            while len(lower) >= 2 and cross(lower[-2], lower[-1], point) <= 0:
+                lower.pop()
+            lower.append(point)
+        upper: list[tuple[int, int]] = []
+        for point in reversed(sampled):
+            while len(upper) >= 2 and cross(upper[-2], upper[-1], point) <= 0:
+                upper.pop()
+            upper.append(point)
+        hull = lower[:-1] + upper[:-1]
+        if len(hull) < 3:
+            return 0.0
+        area_twice = 0
+        perimeter_q8 = 0
+        for first, second in zip(hull, (*hull[1:], hull[0])):
+            area_twice += first[0] * second[1] - first[1] * second[0]
+            perimeter_q8 += int(
+                math.hypot(second[0] - first[0], second[1] - first[1])
+                * 256.0
+                + 0.5
+            )
+        hull_cell_area_q8 = abs(area_twice) * 128 + perimeter_q8 // 2 + 256
+        if hull_cell_area_q8 == 0:
+            return 0.0
+        solidity_q8 = min(
+            256,
+            (area * 65536 + hull_cell_area_q8 // 2) // hull_cell_area_q8,
+        )
+        return solidity_q8 / 256.0
+
     def _materialize_component(self, component: ConnectedComponent, padding: int = 4) -> None:
         min_x = max(0, component.min_x - padding)
         max_x = min(self.width - 1, component.max_x + padding)
@@ -856,11 +931,8 @@ class OnDemandContourExtractor:
             points,
             self.width,
             self.height,
-            fill_interior=closed,
+            fill_interior=True,
         )
-        area = 0
-        x_sum = 0
-        y_sum = 0
         min_x = self.width
         min_y = self.height
         max_x = -1
@@ -873,29 +945,51 @@ class OnDemandContourExtractor:
                 self._processed[row_offset + start_x : row_offset + end_x + 1] = (
                     b"\x01" * run_length
                 )
-                area += run_length
-                x_sum += (start_x + end_x) * run_length // 2
-                y_sum += row * run_length
                 min_x = min(min_x, start_x)
                 max_x = max(max_x, end_x)
                 min_y = min(min_y, row)
                 max_y = max(max_y, row)
                 max_horizontal_run = max(max_horizontal_run, run_length)
+        direction_counts = [0] * 8
+        direction_by_offset = {
+            offset: index for index, offset in enumerate(CONTOUR_DIRECTIONS)
+        }
+        area_twice = 0
+        centroid_x_sum = 0
+        centroid_y_sum = 0
+        perimeter_q8 = 0
+        for first, second in zip(points, (*points[1:], points[0])):
+            cross_value = first[0] * second[1] - first[1] * second[0]
+            area_twice += cross_value
+            centroid_x_sum += (first[0] + second[0]) * cross_value
+            centroid_y_sum += (first[1] + second[1]) * cross_value
+            perimeter_q8 += int(
+                math.hypot(second[0] - first[0], second[1] - first[1])
+                * 256.0
+                + 0.5
+            )
+            direction_index = direction_by_offset.get((
+                second[0] - first[0], second[1] - first[1]
+            ))
+            if direction_index is not None:
+                direction_counts[direction_index] += 1
+        area = abs(area_twice) // 2 + perimeter_q8 // 512 + 1
         if area < max(1, int(min_area)):
             return None
-        direction_counts = [0] * 8
-        perimeter_q8 = 0
-        for direction in directions:
-            direction_counts[direction] += 1
-            perimeter_q8 += 362 if direction % 2 else 256
         perimeter = perimeter_q8 / 256.0
         boundary_pixels = len(set(points))
         box_area = (max_x - min_x + 1) * (max_y - min_y + 1)
-        circularity = (
-            min(1.0, 4.0 * math.pi * area / (perimeter * perimeter))
-            if perimeter > 0.0
-            else 0.0
+        circularity_q8 = (
+            min(256, (3217 * area * 65536) // (perimeter_q8 * perimeter_q8))
+            if perimeter_q8 > 0
+            else 0
         )
+        if area_twice:
+            centroid_x = centroid_x_sum / (3.0 * area_twice)
+            centroid_y = centroid_y_sum / (3.0 * area_twice)
+        else:
+            centroid_x = 0.5 * (min_x + max_x)
+            centroid_y = 0.5 * (min_y + max_y)
         component = ConnectedComponent(
             label=0,
             area=area,
@@ -903,11 +997,11 @@ class OnDemandContourExtractor:
             min_y=min_y,
             max_x=max_x,
             max_y=max_y,
-            centroid_x=x_sum / area,
-            centroid_y=y_sum / area,
+            centroid_x=centroid_x,
+            centroid_y=centroid_y,
             max_horizontal_run=max_horizontal_run,
             boundary_pixels=boundary_pixels,
-            circularity=circularity,
+            circularity=circularity_q8 / 256.0,
             occupancy=area / box_area if box_area else 0.0,
             contour_points=tuple(points),
             contour_directions=tuple(directions),
@@ -916,6 +1010,7 @@ class OnDemandContourExtractor:
             contour_closed=closed,
             contour_overflow=overflow,
             extraction_method="on-demand-contour",
+            firmware_solidity=self._firmware_hull_solidity(points, area),
         )
         self._materialize_component(component)
         return component
@@ -924,37 +1019,152 @@ class OnDemandContourExtractor:
         self,
         seed_points: list[tuple[float, float]],
         min_area: int = 1,
-        max_components: int = 16,
-        search_radius: int = 32,
+        max_components: int = FIRMWARE_MAX_CANDIDATES,
+        search_radius: int = FIRMWARE_HISTORY_SEARCH_RADIUS,
+        source_refine_radius: int = FIRMWARE_SOURCE_REFINE_RADIUS,
+        candidate_classifier=None,
+        force_global_search: bool = False,
+        beacon_limit: int = 6,
     ) -> OnDemandContourResult:
         components: list[ConnectedComponent] = []
         seed_hits = 0
         stopped_early = False
-        def process_seed(seed: tuple[float, float]) -> bool:
-            nonlocal seed_hits
+        arrow_count = 0
+        beacon_count = 0
+
+        def current_images() -> tuple[Image.Image, Image.Image]:
+            gray = Image.frombytes(
+                "L", (self.width, self.height), bytes(self._gray)
+            )
+            binary = Image.frombytes(
+                "L",
+                (self.width, self.height),
+                bytes(255 if value else 0 for value in self._foreground),
+            )
+            return gray, binary
+
+        def process_point(
+            point: tuple[float, float],
+            refine_radius: int,
+            coarse_precheck: bool,
+        ) -> str | None:
+            nonlocal arrow_count, beacon_count
             if len(components) >= max(1, int(max_components)):
-                return False
-            boundary_seed = self._find_boundary_seed(seed, search_radius)
-            if boundary_seed is None:
-                return True
-            seed_hits += 1
+                return "stop"
+            point_x = int(point[0] + 0.5)
+            point_y = int(point[1] + 0.5)
+            if coarse_precheck and not self._is_coarse_foreground(point_x, point_y):
+                return None
+            boundary = self._find_boundary_seed(point, refine_radius)
+            if boundary is None:
+                return None
+            boundary_seed, initial_backtrack = boundary
             if self._is_processed(*boundary_seed):
-                return True
-            points, directions, closed, overflow = self._trace(boundary_seed)
+                return None
+            points, directions, closed, overflow = self._trace(
+                boundary_seed,
+                initial_backtrack,
+            )
             component = self._component_from_trace(
                 points, directions, closed, overflow, min_area
             )
-            if component is not None:
-                components.append(component)
-            return True
+            if component is None:
+                return None
+            components.append(component)
+            target = None
+            if candidate_classifier is not None:
+                gray, binary = current_images()
+                target = candidate_classifier(
+                    component,
+                    gray,
+                    binary,
+                    bool(arrow_count),
+                )
+            if target == "arrow":
+                arrow_count = 1
+            elif target == "beacon" and beacon_count < beacon_limit:
+                beacon_count += 1
+            return target or "candidate"
+
+        def process_source_point(point: tuple[float, float]) -> str | None:
+            """Mirror contour_try_source_point()'s radius-2 ring order."""
+            center_x = int(point[0] + 0.5)
+            center_y = int(point[1] + 0.5)
+            for radius in range(max(0, int(source_refine_radius)) + 1):
+                for x in range(center_x - radius, center_x + radius + 1):
+                    target = process_point((x, center_y - radius), 0, False)
+                    if target is not None:
+                        return target
+                    if radius:
+                        target = process_point((x, center_y + radius), 0, False)
+                        if target is not None:
+                            return target
+                for y in range(center_y - radius + 1, center_y + radius):
+                    target = process_point((center_x - radius, y), 0, False)
+                    if target is not None:
+                        return target
+                    if radius:
+                        target = process_point((center_x + radius, y), 0, False)
+                        if target is not None:
+                            return target
+            return None
 
         seeds = list(seed_points)
-        if seeds:
-            for seed in seeds:
-                if not process_seed(seed):
-                    stopped_early = True
+        for seed in seeds:
+            before = len(components)
+            seed_target_count = 0
+            seed_arrow_found = False
+            center_x = int(seed[0] + 0.5)
+            center_y = int(seed[1] + 0.5)
+            stop_seed = False
+            for radius in range(max(0, int(search_radius)) + 1):
+                ring: list[tuple[int, int]] = []
+                if radius == 0:
+                    ring.append((center_x, center_y))
+                else:
+                    ring.extend(
+                        (x, center_y - radius)
+                        for x in range(center_x - radius, center_x + radius + 1)
+                    )
+                    ring.extend(
+                        (x, center_y + radius)
+                        for x in range(center_x - radius, center_x + radius + 1)
+                    )
+                    ring.extend(
+                        (center_x - radius, y)
+                        for y in range(center_y - radius + 1, center_y + radius)
+                    )
+                    ring.extend(
+                        (center_x + radius, y)
+                        for y in range(center_y - radius + 1, center_y + radius)
+                    )
+                for point in ring:
+                    target = process_point(point, 0, True)
+                    if target in {"arrow", "beacon"}:
+                        seed_target_count += 1
+                    if target == "arrow":
+                        seed_arrow_found = True
+                    if len(components) >= max(1, int(max_components)):
+                        break
+                if (
+                    seed_arrow_found
+                    or seed_target_count >= FIRMWARE_SEED_TARGET_LIMIT
+                    or len(components) >= max(1, int(max_components))
+                ):
+                    stop_seed = True
+                if stop_seed:
                     break
-        else:
+            if len(components) > before:
+                seed_hits += 1
+            if len(components) >= max(1, int(max_components)):
+                stopped_early = True
+                break
+
+        run_global = (
+            len(components) < max(1, int(max_components))
+            and (force_global_search or not seeds or beacon_count == 0)
+        )
+        if run_global:
             raw_width = self.undistorter.calibration.image_width
             raw_height = self.undistorter.calibration.image_height
             raw_cx = raw_width // 2
@@ -986,21 +1196,21 @@ class OnDemandContourExtractor:
                     )
                     if rectified is None:
                         continue
-                    if not process_seed((rectified[0], rectified[1])):
+                    target = process_source_point((rectified[0], rectified[1]))
+                    if target == "stop":
                         stopped_early = True
                         break
                 if stopped_early:
+                    break
+                if arrow_count and beacon_count >= beacon_limit:
+                    stopped_early = True
                     break
         for label, component in enumerate(components, start=1):
             component.label = label
         return OnDemandContourResult(
             components=tuple(components),
-            gray=Image.frombytes("L", (self.width, self.height), bytes(self._gray)),
-            binary=Image.frombytes(
-                "L",
-                (self.width, self.height),
-                bytes(255 if value else 0 for value in self._foreground),
-            ),
+            gray=current_images()[0],
+            binary=current_images()[1],
             sampled_pixels=self.sampled_pixels,
             seed_hits=seed_hits,
             stopped_early=stopped_early,

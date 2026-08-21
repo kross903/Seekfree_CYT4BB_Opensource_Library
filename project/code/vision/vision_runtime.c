@@ -20,8 +20,10 @@
 #define VISION_ARROW_MEMBER_CORRIDOR_PX     (5.0f)
 #define VISION_ARROW_MEMBER_MAX_SAMPLES     (24U)
 #define VISION_ARROW_MEMBER_MIN_RATIO_Q8    (77U)
+#define VISION_ARROW_EACH_ARM_CORRIDOR_PX   (2.0f)
+#define VISION_ARROW_EACH_ARM_MIN_RATIO_Q8  (77U)
 #define VISION_SPLIT_ARROW_PRIMARY_MIN_POINTS (15U)
-#define VISION_SPLIT_ARROW_PARTNER_MIN_POINTS (10U)
+#define VISION_SPLIT_ARROW_PARTNER_MIN_POINTS (8U)
 #define VISION_SPLIT_ARROW_MIN_DISTANCE_CM    (9.5f)
 #define VISION_SPLIT_ARROW_MAX_DISTANCE_CM    (30.0f)
 #define VISION_SPLIT_ARROW_OPENING_DEG         (70.0f)
@@ -947,6 +949,63 @@ static uint8 vision_candidate_follows_arrow_arms(
         (uint32)sampled * VISION_ARROW_MEMBER_MIN_RATIO_Q8);
 }
 
+static uint8 vision_candidate_supports_both_arrow_arms(
+    const VisionContourCandidate_t *candidate,
+    const VehicleMarkerPoint2D_t *apex,
+    const VehicleMarkerPoint2D_t *left,
+    const VehicleMarkerPoint2D_t *right)
+{
+    uint16 step;
+    uint16 i;
+    uint16 sampled = 0U;
+    uint16 left_hits = 0U;
+    uint16 right_hits = 0U;
+    if(candidate == NULL || apex == NULL || left == NULL || right == NULL ||
+       candidate->contour.point_count == 0U) return 0U;
+    step = (uint16)((candidate->contour.point_count +
+                     VISION_ARROW_MEMBER_MAX_SAMPLES - 1U) /
+                    VISION_ARROW_MEMBER_MAX_SAMPLES);
+    if(step == 0U) step = 1U;
+    for(i = 0U; i < candidate->contour.point_count; i = (uint16)(i + step))
+    {
+        float point_x = (float)candidate->contour.point_x[i];
+        float point_y = (float)candidate->contour.point_y[i];
+        ++sampled;
+        if(vision_split_point_segment_distance(
+               point_x, point_y, apex, left) <=
+           VISION_ARROW_EACH_ARM_CORRIDOR_PX) ++left_hits;
+        if(vision_split_point_segment_distance(
+               point_x, point_y, apex, right) <=
+           VISION_ARROW_EACH_ARM_CORRIDOR_PX) ++right_hits;
+    }
+    return (uint8)(sampled != 0U &&
+        (uint32)left_hits * 256U >=
+            (uint32)sampled * VISION_ARROW_EACH_ARM_MIN_RATIO_Q8 &&
+        (uint32)right_hits * 256U >=
+            (uint32)sampled * VISION_ARROW_EACH_ARM_MIN_RATIO_Q8);
+}
+
+static uint8 vision_candidate_axis_matches_arrow_arm(
+    const VisionContourCandidate_t *candidate)
+{
+    VisionSplitArrowAxis_t axis;
+    VehicleMarkerPoint2D_t apex;
+    VehicleMarkerPoint2D_t left;
+    VehicleMarkerPoint2D_t right;
+    float left_error;
+    float right_error;
+    if(candidate == NULL ||
+       !vision_split_arrow_axis(candidate, &axis) ||
+       axis.axis_dominance < VISION_SPLIT_ARROW_MIN_AXIS_DOMINANCE ||
+       !vision_build_arrow_points(candidate, &apex, &left, &right)) return 0U;
+    left_error = vision_split_axis_error_deg(
+        axis.axis_x, axis.axis_y, left.u - apex.u, left.v - apex.v);
+    right_error = vision_split_axis_error_deg(
+        axis.axis_x, axis.axis_y, right.u - apex.u, right.v - apex.v);
+    return (uint8)(left_error <= (float)VISION_YAW_TOLERANCE_DEG ||
+                   right_error <= (float)VISION_YAW_TOLERANCE_DEG);
+}
+
 static void vision_update_nearest_beacon(uint8 beacon_count)
 {
     uint8 i;
@@ -992,6 +1051,32 @@ static void vision_process_result(VisionContourFrameResult_t *result)
     memset(s_beacon_slots, 0, sizeof(s_beacon_slots));
     memset(s_diag.blob_area_rank, 0, sizeof(s_diag.blob_area_rank));
     s_previous_seed_count = 0U;
+    result->arrow_count = 0U;
+    result->beacon_count = 0U;
+    for(i = 0U; i < result->candidate_count; ++i)
+    {
+        VisionContourCandidate_t *candidate = &result->candidate[i];
+        if(candidate->target == VISION_CONTOUR_TARGET_ARROW &&
+           !candidate->yaw_assisted)
+        {
+            VehicleMarkerPoint2D_t apex;
+            VehicleMarkerPoint2D_t left;
+            VehicleMarkerPoint2D_t right;
+            if(!vision_build_arrow_points(candidate, &apex, &left, &right) ||
+               !vision_candidate_supports_both_arrow_arms(
+                   candidate, &apex, &left, &right))
+                candidate->target = VISION_CONTOUR_TARGET_NONE;
+        }
+        else if(candidate->target == VISION_CONTOUR_TARGET_BEACON &&
+                vision_candidate_axis_matches_arrow_arm(candidate))
+        {
+            candidate->target = VISION_CONTOUR_TARGET_NONE;
+        }
+        if(candidate->target == VISION_CONTOUR_TARGET_ARROW)
+            result->arrow_count = 1U;
+        else if(candidate->target == VISION_CONTOUR_TARGET_BEACON)
+            ++result->beacon_count;
+    }
     split_arrow_valid = vision_try_split_arrow(
         result, split_arrow_points, &split_arrow_primary);
 

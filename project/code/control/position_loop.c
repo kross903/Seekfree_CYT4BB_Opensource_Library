@@ -8,7 +8,7 @@
 #define POSITION_LOOP_CAR_VELOCITY_FF_GAIN_MAX     (1.0f)   // M1/M2：小车X/Y速度前馈增益允许上限
 #define POSITION_LOOP_CAR_ACCEL_FF_GAIN_DEFAULT    (0.4f)   // M6/M7：小车X/Y计划加速度前馈增益上电默认值
 #define POSITION_LOOP_CAR_ACCEL_FF_GAIN_MAX        (1.0f)   // M6/M7：小车X/Y加速度前馈增益允许上限
-#define POSITION_LOOP_POSITION_KP_DEFAULT          (0.4f)    // M3：二维位置P增益默认值，单位s^-1
+#define POSITION_LOOP_POSITION_KP_DEFAULT          (0.2f)    // M3：二维位置P增益默认值，单位s^-1
 #define POSITION_LOOP_CORRECTION_MAX_DEFAULT_CMS   (100.0f)   // M4：位置修正速度模长上限，单位cm/s
 #define POSITION_LOOP_TARGET_MAX_DEFAULT_CMS       (300.0f)   // M5：合成后目标速度模长上限，单位cm/s
 #define POSITION_LOOP_CORRECTION_ACCEL_DEFAULT_CMS2 (35.0f)  // M8：P/Sqrt位置纠偏包络加速度，单位cm/s^2
