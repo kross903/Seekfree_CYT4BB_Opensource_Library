@@ -73,8 +73,39 @@ typedef struct
     uint8 rear_yaw_valid;
     uint8 yaw_valid;
     uint8 target_count;
+    uint8 car_observation_valid;
+    uint8 car_estimate_valid;
+    uint8 car_exclusion_valid;
+    uint8 car_estimate_source;
+    uint16 car_prediction_age_ms;
+    float car_observation_x_cm;
+    float car_observation_y_cm;
+    float car_position_sigma_cm;
+    float car_innovation_cm;
+    float car_observation_weight;
     DualCameraFusionTarget_t target[DUAL_CAMERA_FUSION_MAX_TARGETS];
 } DualCameraFusionSnapshot_t;
+
+typedef struct
+{
+    uint32 state_time_us;
+    uint32 observation_time_us;
+    float x_earth_cm;
+    float y_earth_cm;
+    float covariance_x_cm2;
+    float covariance_y_cm2;
+    float innovation_cm;
+    float adaptive_gate_cm;
+    float observation_x_earth_cm;
+    float observation_y_earth_cm;
+    float observation_weight;
+    uint16 prediction_age_ms;
+    uint8 valid;
+    uint8 exclusion_valid;
+    uint8 observation_applied;
+    uint8 observation_source;
+    uint8 initialized;
+} DualCameraFusionCarEstimate_t;
 
 typedef struct
 {
@@ -127,6 +158,14 @@ void DualCameraFusion_PushFrontFrame(const CrossCoreCameraFrontFrame_t *frame);
 void DualCameraFusion_PushRearFrame(const CameraBoardVisionFrame_t *frame);
 void DualCameraFusion_BuildSnapshot(uint32 now_us);
 uint8 DualCameraFusion_GetSnapshot(DualCameraFusionSnapshot_t *snapshot);
+void DualCameraFusion_UpdateCarPrediction(uint32 now_us,
+                                          float yaw_deg,
+                                          uint8 motion_valid,
+                                          float relative_vx_earth_cms,
+                                          float relative_vy_earth_cms,
+                                          uint8 car_velocity_valid);
+uint8 DualCameraFusion_GetCarEstimate(DualCameraFusionCarEstimate_t *estimate);
+void DualCameraFusion_ResetCarEstimate(void);
 void DualCameraFusion_GetDiag(DualCameraFusionDiag_t *diag);
 
 #endif /* DUAL_CAMERA_FUSION_H_ */

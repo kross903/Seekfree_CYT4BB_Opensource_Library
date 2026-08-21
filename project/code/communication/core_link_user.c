@@ -568,7 +568,7 @@ static void core_link_user_build_beacon_observations(
                 if(core_link_user_beacon_overlaps_car(
                        fusion_snapshot.target[i].x_cm,
                        fusion_snapshot.target[i].y_cm,
-                       fusion_snapshot.car_valid,
+                       fusion_snapshot.car_exclusion_valid,
                        fusion_snapshot.car_x_cm,
                        fusion_snapshot.car_y_cm))
                 {

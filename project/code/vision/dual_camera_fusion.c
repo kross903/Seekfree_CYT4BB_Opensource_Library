@@ -16,6 +16,17 @@
 #define DUAL_CAMERA_FUSION_DEG_TO_RAD             (0.017453292519943295f)
 #define DUAL_CAMERA_FUSION_FRONT_WEIGHT           (0.75f)
 #define DUAL_CAMERA_FUSION_REAR_WEIGHT            (0.25f)
+#define DUAL_CAMERA_FUSION_CAR_VARIANCE_BOTH_CM2  (25.0f)
+#define DUAL_CAMERA_FUSION_CAR_VARIANCE_ONE_CM2   (64.0f)
+#define DUAL_CAMERA_FUSION_CAR_VARIANCE_MAX_CM2   (40000.0f)
+#define DUAL_CAMERA_FUSION_CAR_VALID_VARIANCE_CM2 (10000.0f)
+#define DUAL_CAMERA_FUSION_CAR_EXCLUSION_VARIANCE_CM2 (1225.0f)
+#define DUAL_CAMERA_FUSION_CAR_SIGMA_MOTION_CMS   (80.0f)
+#define DUAL_CAMERA_FUSION_CAR_SIGMA_STATIC_CMS   (35.0f)
+#define DUAL_CAMERA_FUSION_CAR_SIGMA_VELOCITY_CMS (25.0f)
+#define DUAL_CAMERA_FUSION_CAR_ROBUST_NIS         (9.0f)
+#define DUAL_CAMERA_FUSION_CAR_WEIGHT_MIN         (0.05f)
+#define DUAL_CAMERA_FUSION_CAR_YAW_RESET_DEG      (60.0f)
 /* Residual rear-board translation after each board's own camera extrinsic. */
 #define DUAL_CAMERA_FUSION_REAR_RESIDUAL_X_CM     (20.0f)
 #define DUAL_CAMERA_FUSION_REAR_RESIDUAL_Y_CM     (30.0f)
@@ -59,6 +70,32 @@ typedef struct
     float y_cm;
 } DualCameraFusionTrack_t;
 
+typedef struct
+{
+    uint8 initialized;
+    uint8 motion_valid;
+    uint8 car_velocity_valid;
+    uint8 yaw_valid;
+    uint8 observation_applied;
+    uint8 observation_source;
+    uint32 state_time_us;
+    uint32 observation_time_us;
+    uint32 last_front_frame_seq;
+    uint32 last_rear_frame_seq;
+    float x_earth_cm;
+    float y_earth_cm;
+    float covariance_x_cm2;
+    float covariance_y_cm2;
+    float relative_vx_earth_cms;
+    float relative_vy_earth_cms;
+    float yaw_deg;
+    float innovation_cm;
+    float adaptive_gate_cm;
+    float observation_x_earth_cm;
+    float observation_y_earth_cm;
+    float observation_weight;
+} DualCameraFusionCarEstimator_t;
+
 static DualCameraFusionFrame_t s_front_cache[DUAL_CAMERA_FUSION_CACHE_SIZE];
 static DualCameraFusionFrame_t s_rear_cache[DUAL_CAMERA_FUSION_CACHE_SIZE];
 static uint8 s_front_head;
@@ -76,12 +113,410 @@ static DualCameraFusionDiag_t s_diag;
 static float s_residual_history[DUAL_CAMERA_FUSION_RESIDUAL_HISTORY_SIZE];
 static uint8 s_residual_head;
 static uint8 s_residual_count;
+static DualCameraFusionCarEstimator_t s_car_estimator;
 
 static float DualCameraFusion_Wrap180(float angle_deg)
 {
     while(angle_deg > 180.0f) angle_deg -= 360.0f;
     while(angle_deg < -180.0f) angle_deg += 360.0f;
     return angle_deg;
+}
+
+static float DualCameraFusion_LimitFloat(float value,
+                                          float minimum,
+                                          float maximum)
+{
+    if(value > maximum) return maximum;
+    if(value < minimum) return minimum;
+    return value;
+}
+
+static void DualCameraFusion_BodyToEarth(float body_x,
+                                          float body_y,
+                                          float yaw_deg,
+                                          float *earth_x,
+                                          float *earth_y)
+{
+    float yaw_rad = yaw_deg * DUAL_CAMERA_FUSION_DEG_TO_RAD;
+    float cosine = cosf(yaw_rad);
+    float sine = sinf(yaw_rad);
+
+    *earth_x = cosine * body_x - sine * body_y;
+    *earth_y = sine * body_x + cosine * body_y;
+}
+
+static void DualCameraFusion_EarthToBody(float earth_x,
+                                          float earth_y,
+                                          float yaw_deg,
+                                          float *body_x,
+                                          float *body_y)
+{
+    float yaw_rad = yaw_deg * DUAL_CAMERA_FUSION_DEG_TO_RAD;
+    float cosine = cosf(yaw_rad);
+    float sine = sinf(yaw_rad);
+
+    *body_x = cosine * earth_x + sine * earth_y;
+    *body_y = -sine * earth_x + cosine * earth_y;
+}
+
+static void DualCameraFusion_ResetCarEstimateUnlocked(void)
+{
+    memset(&s_car_estimator, 0, sizeof(s_car_estimator));
+    s_car_estimator.covariance_x_cm2 =
+        DUAL_CAMERA_FUSION_CAR_VARIANCE_ONE_CM2;
+    s_car_estimator.covariance_y_cm2 =
+        DUAL_CAMERA_FUSION_CAR_VARIANCE_ONE_CM2;
+}
+
+static float DualCameraFusion_CarProcessSigma(void)
+{
+    if(!s_car_estimator.motion_valid)
+        return DUAL_CAMERA_FUSION_CAR_SIGMA_MOTION_CMS;
+    if(!s_car_estimator.car_velocity_valid)
+        return DUAL_CAMERA_FUSION_CAR_SIGMA_STATIC_CMS;
+    return DUAL_CAMERA_FUSION_CAR_SIGMA_VELOCITY_CMS;
+}
+
+static void DualCameraFusion_PredictCarToUnlocked(uint32 now_us)
+{
+    uint32 elapsed_us;
+    float dt_s;
+    float position_dt_s;
+    float sigma;
+    float process_variance;
+
+    if(s_car_estimator.state_time_us == 0U)
+    {
+        s_car_estimator.state_time_us = now_us;
+        return;
+    }
+    elapsed_us = (uint32)(now_us - s_car_estimator.state_time_us);
+    if(elapsed_us == 0U) return;
+    dt_s = (float)elapsed_us * 0.000001f;
+    position_dt_s = (dt_s > 10.0f) ? 10.0f : dt_s;
+
+    if(s_car_estimator.initialized && s_car_estimator.motion_valid)
+    {
+        s_car_estimator.x_earth_cm +=
+            s_car_estimator.relative_vx_earth_cms * position_dt_s;
+        s_car_estimator.y_earth_cm +=
+            s_car_estimator.relative_vy_earth_cms * position_dt_s;
+    }
+    if(s_car_estimator.initialized)
+    {
+        sigma = DualCameraFusion_CarProcessSigma();
+        process_variance = sigma * sigma * dt_s;
+        s_car_estimator.covariance_x_cm2 = DualCameraFusion_LimitFloat(
+            s_car_estimator.covariance_x_cm2 + process_variance,
+            0.0f, DUAL_CAMERA_FUSION_CAR_VARIANCE_MAX_CM2);
+        s_car_estimator.covariance_y_cm2 = DualCameraFusion_LimitFloat(
+            s_car_estimator.covariance_y_cm2 + process_variance,
+            0.0f, DUAL_CAMERA_FUSION_CAR_VARIANCE_MAX_CM2);
+    }
+    s_car_estimator.state_time_us = now_us;
+}
+
+static void DualCameraFusion_UpdateCarObservation(
+    uint32 now_us,
+    uint32 capture_time_us,
+    uint32 front_frame_seq,
+    uint32 rear_frame_seq,
+    float yaw_deg,
+    float body_x_cm,
+    float body_y_cm,
+    float measurement_variance_cm2,
+    uint8 source)
+{
+    uint32 irq_state;
+    uint32 age_us;
+    float observation_x;
+    float observation_y;
+    float dx;
+    float dy;
+    float innovation_squared;
+    float normalized_innovation;
+    float effective_variance;
+    float gain_x;
+    float gain_y;
+    float weight;
+    float inflation;
+    float average_innovation_variance;
+
+    if((capture_time_us == 0U) || !isfinite(yaw_deg) ||
+       !isfinite(body_x_cm) || !isfinite(body_y_cm) ||
+       !isfinite(measurement_variance_cm2) ||
+       !(measurement_variance_cm2 > 0.0f))
+    {
+        return;
+    }
+
+    DualCameraFusion_BodyToEarth(body_x_cm, body_y_cm, yaw_deg,
+                                 &observation_x, &observation_y);
+
+    irq_state = __get_PRIMASK();
+    __disable_irq();
+    DualCameraFusion_PredictCarToUnlocked(now_us);
+    s_car_estimator.observation_applied = 0U;
+    if((front_frame_seq == s_car_estimator.last_front_frame_seq) &&
+       (rear_frame_seq == s_car_estimator.last_rear_frame_seq))
+    {
+        if(irq_state == 0U) __enable_irq();
+        return;
+    }
+
+    age_us = ((int32)(now_us - capture_time_us) > 0) ?
+             (uint32)(now_us - capture_time_us) : 0U;
+    if(s_car_estimator.motion_valid)
+    {
+        float age_s = (float)age_us * 0.000001f;
+        observation_x += s_car_estimator.relative_vx_earth_cms * age_s;
+        observation_y += s_car_estimator.relative_vy_earth_cms * age_s;
+    }
+    s_car_estimator.observation_x_earth_cm = observation_x;
+    s_car_estimator.observation_y_earth_cm = observation_y;
+
+    if(!s_car_estimator.initialized ||
+       (0.5f * (s_car_estimator.covariance_x_cm2 +
+                s_car_estimator.covariance_y_cm2) >
+        DUAL_CAMERA_FUSION_CAR_VALID_VARIANCE_CM2))
+    {
+        s_car_estimator.x_earth_cm = observation_x;
+        s_car_estimator.y_earth_cm = observation_y;
+        s_car_estimator.covariance_x_cm2 = measurement_variance_cm2;
+        s_car_estimator.covariance_y_cm2 = measurement_variance_cm2;
+        s_car_estimator.innovation_cm = 0.0f;
+        s_car_estimator.adaptive_gate_cm =
+            3.0f * sqrtf(measurement_variance_cm2);
+        s_car_estimator.observation_weight = 1.0f;
+        s_car_estimator.initialized = 1U;
+    }
+    else
+    {
+        dx = observation_x - s_car_estimator.x_earth_cm;
+        dy = observation_y - s_car_estimator.y_earth_cm;
+        innovation_squared = dx * dx + dy * dy;
+        average_innovation_variance = 0.5f *
+            (s_car_estimator.covariance_x_cm2 +
+             s_car_estimator.covariance_y_cm2) + measurement_variance_cm2;
+        if(average_innovation_variance < 1.0f)
+            average_innovation_variance = 1.0f;
+        normalized_innovation = innovation_squared /
+                                average_innovation_variance;
+        weight = (normalized_innovation <=
+                  DUAL_CAMERA_FUSION_CAR_ROBUST_NIS) ? 1.0f :
+            DUAL_CAMERA_FUSION_CAR_ROBUST_NIS / normalized_innovation;
+        weight = DualCameraFusion_LimitFloat(
+            weight, DUAL_CAMERA_FUSION_CAR_WEIGHT_MIN, 1.0f);
+        effective_variance = measurement_variance_cm2 / weight;
+        gain_x = s_car_estimator.covariance_x_cm2 /
+            (s_car_estimator.covariance_x_cm2 + effective_variance);
+        gain_y = s_car_estimator.covariance_y_cm2 /
+            (s_car_estimator.covariance_y_cm2 + effective_variance);
+        s_car_estimator.x_earth_cm += gain_x * dx;
+        s_car_estimator.y_earth_cm += gain_y * dy;
+        inflation = (1.0f - weight) * measurement_variance_cm2;
+        s_car_estimator.covariance_x_cm2 = DualCameraFusion_LimitFloat(
+            (1.0f - gain_x) * s_car_estimator.covariance_x_cm2 + inflation,
+            0.0f, DUAL_CAMERA_FUSION_CAR_VARIANCE_MAX_CM2);
+        s_car_estimator.covariance_y_cm2 = DualCameraFusion_LimitFloat(
+            (1.0f - gain_y) * s_car_estimator.covariance_y_cm2 + inflation,
+            0.0f, DUAL_CAMERA_FUSION_CAR_VARIANCE_MAX_CM2);
+        s_car_estimator.innovation_cm = sqrtf(innovation_squared);
+        s_car_estimator.adaptive_gate_cm =
+            3.0f * sqrtf(average_innovation_variance);
+        s_car_estimator.observation_weight = weight;
+    }
+
+    s_car_estimator.observation_time_us = capture_time_us;
+    s_car_estimator.last_front_frame_seq = front_frame_seq;
+    s_car_estimator.last_rear_frame_seq = rear_frame_seq;
+    s_car_estimator.observation_source = source;
+    s_car_estimator.observation_applied = 1U;
+    if(irq_state == 0U) __enable_irq();
+}
+
+void DualCameraFusion_ResetCarEstimate(void)
+{
+    uint32 irq_state = __get_PRIMASK();
+
+    __disable_irq();
+    DualCameraFusion_ResetCarEstimateUnlocked();
+    if(irq_state == 0U) __enable_irq();
+}
+
+void DualCameraFusion_UpdateCarPrediction(uint32 now_us,
+                                          float yaw_deg,
+                                          uint8 motion_valid,
+                                          float relative_vx_earth_cms,
+                                          float relative_vy_earth_cms,
+                                          uint8 car_velocity_valid)
+{
+    uint32 irq_state;
+
+    if(now_us == 0U) return;
+    irq_state = __get_PRIMASK();
+    __disable_irq();
+    DualCameraFusion_PredictCarToUnlocked(now_us);
+
+    if(isfinite(yaw_deg))
+    {
+        if(s_car_estimator.yaw_valid &&
+           (fabsf(DualCameraFusion_Wrap180(
+                yaw_deg - s_car_estimator.yaw_deg)) >
+            DUAL_CAMERA_FUSION_CAR_YAW_RESET_DEG))
+        {
+            DualCameraFusion_ResetCarEstimateUnlocked();
+            s_car_estimator.state_time_us = now_us;
+        }
+        s_car_estimator.yaw_deg = yaw_deg;
+        s_car_estimator.yaw_valid = 1U;
+    }
+    else
+    {
+        s_car_estimator.yaw_valid = 0U;
+    }
+
+    s_car_estimator.motion_valid = (uint8)(motion_valid &&
+        isfinite(relative_vx_earth_cms) &&
+        isfinite(relative_vy_earth_cms));
+    s_car_estimator.car_velocity_valid =
+        (uint8)(s_car_estimator.motion_valid && car_velocity_valid);
+    if(s_car_estimator.motion_valid)
+    {
+        s_car_estimator.relative_vx_earth_cms = relative_vx_earth_cms;
+        s_car_estimator.relative_vy_earth_cms = relative_vy_earth_cms;
+    }
+    else
+    {
+        s_car_estimator.relative_vx_earth_cms = 0.0f;
+        s_car_estimator.relative_vy_earth_cms = 0.0f;
+    }
+    if(irq_state == 0U) __enable_irq();
+}
+
+uint8 DualCameraFusion_GetCarEstimate(DualCameraFusionCarEstimate_t *estimate)
+{
+    DualCameraFusionCarEstimator_t state;
+    uint32 irq_state;
+    uint32 now_us;
+    uint32 elapsed_us;
+    float dt_s;
+    float position_dt_s;
+    float sigma;
+    float average_variance;
+
+    if(estimate == NULL) return 0U;
+    memset(estimate, 0, sizeof(*estimate));
+    irq_state = __get_PRIMASK();
+    __disable_irq();
+    state = s_car_estimator;
+    if(irq_state == 0U) __enable_irq();
+    if(!state.initialized) return 0U;
+
+    now_us = CameraBoardLink_TimeNowUs();
+    elapsed_us = (state.state_time_us == 0U) ? 0U :
+                 (uint32)(now_us - state.state_time_us);
+    dt_s = (float)elapsed_us * 0.000001f;
+    position_dt_s = (dt_s > 10.0f) ? 10.0f : dt_s;
+    estimate->x_earth_cm = state.x_earth_cm;
+    estimate->y_earth_cm = state.y_earth_cm;
+    if(state.motion_valid)
+    {
+        estimate->x_earth_cm += state.relative_vx_earth_cms * position_dt_s;
+        estimate->y_earth_cm += state.relative_vy_earth_cms * position_dt_s;
+    }
+    sigma = !state.motion_valid ? DUAL_CAMERA_FUSION_CAR_SIGMA_MOTION_CMS :
+        (!state.car_velocity_valid ?
+         DUAL_CAMERA_FUSION_CAR_SIGMA_STATIC_CMS :
+         DUAL_CAMERA_FUSION_CAR_SIGMA_VELOCITY_CMS);
+    estimate->covariance_x_cm2 = DualCameraFusion_LimitFloat(
+        state.covariance_x_cm2 + sigma * sigma * dt_s,
+        0.0f, DUAL_CAMERA_FUSION_CAR_VARIANCE_MAX_CM2);
+    estimate->covariance_y_cm2 = DualCameraFusion_LimitFloat(
+        state.covariance_y_cm2 + sigma * sigma * dt_s,
+        0.0f, DUAL_CAMERA_FUSION_CAR_VARIANCE_MAX_CM2);
+    average_variance = 0.5f * (estimate->covariance_x_cm2 +
+                               estimate->covariance_y_cm2);
+    estimate->valid = (uint8)(isfinite(estimate->x_earth_cm) &&
+        isfinite(estimate->y_earth_cm) &&
+        (average_variance <= DUAL_CAMERA_FUSION_CAR_VALID_VARIANCE_CM2));
+    estimate->exclusion_valid = (uint8)(estimate->valid &&
+        (average_variance <=
+         DUAL_CAMERA_FUSION_CAR_EXCLUSION_VARIANCE_CM2));
+    estimate->state_time_us = now_us;
+    estimate->observation_time_us = state.observation_time_us;
+    if(state.observation_time_us != 0U)
+    {
+        uint32 age_ms = ((int32)(now_us - state.observation_time_us) > 0) ?
+            (uint32)(now_us - state.observation_time_us) / 1000U : 0U;
+        estimate->prediction_age_ms = (uint16)(
+            (age_ms > 0xFFFFU) ? 0xFFFFU : age_ms);
+    }
+    else
+    {
+        estimate->prediction_age_ms = 0xFFFFU;
+    }
+    estimate->innovation_cm = state.innovation_cm;
+    estimate->adaptive_gate_cm = state.adaptive_gate_cm;
+    estimate->observation_x_earth_cm = state.observation_x_earth_cm;
+    estimate->observation_y_earth_cm = state.observation_y_earth_cm;
+    estimate->observation_weight = state.observation_weight;
+    estimate->observation_applied = state.observation_applied;
+    estimate->observation_source = state.observation_source;
+    estimate->initialized = state.initialized;
+    return estimate->valid;
+}
+
+static void DualCameraFusion_ApplyCarEstimateToSnapshot(
+    DualCameraFusionSnapshot_t *snapshot,
+    uint32 now_us)
+{
+    DualCameraFusionCarEstimate_t estimate;
+    DualCameraFusionCarEstimator_t state;
+    uint32 irq_state;
+    uint32 reference_age_us;
+    float reference_x_earth;
+    float reference_y_earth;
+    float average_variance;
+
+    if(snapshot == NULL) return;
+    (void)DualCameraFusion_GetCarEstimate(&estimate);
+    snapshot->car_estimate_valid = estimate.valid;
+    snapshot->car_exclusion_valid = estimate.exclusion_valid;
+    snapshot->car_estimate_source = estimate.observation_source;
+    snapshot->car_prediction_age_ms = estimate.prediction_age_ms;
+    snapshot->car_innovation_cm = estimate.innovation_cm;
+    snapshot->car_observation_weight = estimate.observation_weight;
+    average_variance = 0.5f * (estimate.covariance_x_cm2 +
+                               estimate.covariance_y_cm2);
+    snapshot->car_position_sigma_cm =
+        (average_variance > 0.0f) ? sqrtf(average_variance) : 0.0f;
+    snapshot->car_valid = estimate.valid;
+    if(!estimate.valid || !snapshot->yaw_valid ||
+       (snapshot->reference_time_us == 0U))
+    {
+        return;
+    }
+
+    irq_state = __get_PRIMASK();
+    __disable_irq();
+    state = s_car_estimator;
+    if(irq_state == 0U) __enable_irq();
+    reference_x_earth = estimate.x_earth_cm;
+    reference_y_earth = estimate.y_earth_cm;
+    reference_age_us =
+        ((int32)(now_us - snapshot->reference_time_us) > 0) ?
+        (uint32)(now_us - snapshot->reference_time_us) : 0U;
+    if(state.motion_valid)
+    {
+        float reference_age_s = (float)reference_age_us * 0.000001f;
+        reference_x_earth -= state.relative_vx_earth_cms * reference_age_s;
+        reference_y_earth -= state.relative_vy_earth_cms * reference_age_s;
+    }
+    DualCameraFusion_EarthToBody(reference_x_earth, reference_y_earth,
+                                 snapshot->yaw_deg,
+                                 &snapshot->car_x_cm,
+                                 &snapshot->car_y_cm);
 }
 
 static void DualCameraFusion_ApplySourceResidual(uint8 source_id,
@@ -594,6 +1029,7 @@ void DualCameraFusion_Init(void)
     s_reset_generation_valid = 0U;
     s_residual_head = 0U;
     s_residual_count = 0U;
+    DualCameraFusion_ResetCarEstimateUnlocked();
     s_diag.output_mode = VISION_FUSION_OUTPUT_MODE;
     DualCameraFusion_ResetTracks();
 }
@@ -707,19 +1143,24 @@ void DualCameraFusion_ServiceInputs(void)
 {
     CrossCoreCameraFrontFrame_t front;
     CameraBoardVisionFrame_t rear;
+    uint8 input_changed = 0U;
 
     if(CrossCoreCamera_ControlCoreGetFrontFrame(&front) &&
        (front.frame_seq != s_last_front_service_seq))
     {
         s_last_front_service_seq = front.frame_seq;
         DualCameraFusion_PushFrontFrame(&front);
+        input_changed = 1U;
     }
     if(CameraBoardLink_GetLatestRearFrame(&rear) &&
        (rear.camera_frame_seq != s_last_rear_service_seq))
     {
         s_last_rear_service_seq = rear.camera_frame_seq;
         DualCameraFusion_PushRearFrame(&rear);
+        input_changed = 1U;
     }
+    if(input_changed)
+        DualCameraFusion_BuildSnapshot(CameraBoardLink_TimeNowUs());
 }
 
 void DualCameraFusion_BuildSnapshot(uint32 now_us)
@@ -741,6 +1182,10 @@ void DualCameraFusion_BuildSnapshot(uint32 now_us)
     uint8 candidate_count = 0U;
     uint8 output_count;
     uint8 i;
+    uint8 front_car_observation_valid;
+    uint8 rear_car_observation_valid;
+    uint8 car_observation_source;
+    float car_measurement_variance_cm2;
 
     memset(&s_snapshot, 0, sizeof(s_snapshot));
     memset(candidate, 0, sizeof(candidate));
@@ -905,39 +1350,73 @@ void DualCameraFusion_BuildSnapshot(uint32 now_us)
             s_snapshot.rear_yaw_valid = display_rear->yaw_valid;
         }
 
-        /* Both board positions are already aligned to the reference UAV axes. */
-        if(s_snapshot.front_car_valid && s_snapshot.rear_car_valid)
+        front_car_observation_valid = (uint8)(
+            s_snapshot.front_car_valid && s_snapshot.front_car_raw_valid);
+        rear_car_observation_valid = (uint8)(
+            s_snapshot.rear_car_valid && s_snapshot.rear_car_raw_valid);
+        car_observation_source = DUAL_CAMERA_FUSION_SOURCE_NONE;
+        car_measurement_variance_cm2 =
+            DUAL_CAMERA_FUSION_CAR_VARIANCE_ONE_CM2;
+
+        /* Only raw detections update the estimator. Board-side held poses must
+         * not be counted as new measurements. */
+        if(front_car_observation_valid && rear_car_observation_valid)
         {
+            float board_dx = s_snapshot.front_car_x_cm -
+                             s_snapshot.rear_car_x_cm;
+            float board_dy = s_snapshot.front_car_y_cm -
+                             s_snapshot.rear_car_y_cm;
+
             s_snapshot.car_x_cm =
                 DUAL_CAMERA_FUSION_FRONT_WEIGHT * s_snapshot.front_car_x_cm +
                 DUAL_CAMERA_FUSION_REAR_WEIGHT * s_snapshot.rear_car_x_cm;
             s_snapshot.car_y_cm =
                 DUAL_CAMERA_FUSION_FRONT_WEIGHT * s_snapshot.front_car_y_cm +
                 DUAL_CAMERA_FUSION_REAR_WEIGHT * s_snapshot.rear_car_y_cm;
-            s_snapshot.car_valid = 1U;
-            s_snapshot.car_raw_valid = (uint8)(
-                s_snapshot.front_car_raw_valid ||
-                s_snapshot.rear_car_raw_valid);
+            s_snapshot.car_observation_valid = 1U;
+            car_observation_source =
+                DUAL_CAMERA_FUSION_SOURCE_BOTH_FRONT;
+            car_measurement_variance_cm2 = DualCameraFusion_LimitFloat(
+                DUAL_CAMERA_FUSION_CAR_VARIANCE_BOTH_CM2 +
+                0.0625f * (board_dx * board_dx + board_dy * board_dy),
+                DUAL_CAMERA_FUSION_CAR_VARIANCE_BOTH_CM2,
+                400.0f);
         }
-        else if(s_snapshot.front_car_valid)
+        else if(front_car_observation_valid)
         {
             s_snapshot.car_x_cm = s_snapshot.front_car_x_cm;
             s_snapshot.car_y_cm = s_snapshot.front_car_y_cm;
-            s_snapshot.car_valid = 1U;
-            s_snapshot.car_raw_valid = s_snapshot.front_car_raw_valid;
+            s_snapshot.car_observation_valid = 1U;
+            car_observation_source = DUAL_CAMERA_FUSION_SOURCE_FRONT;
         }
-        else if(s_snapshot.rear_car_valid)
+        else if(rear_car_observation_valid)
         {
             s_snapshot.car_x_cm = s_snapshot.rear_car_x_cm;
             s_snapshot.car_y_cm = s_snapshot.rear_car_y_cm;
-            s_snapshot.car_valid = 1U;
-            s_snapshot.car_raw_valid = s_snapshot.rear_car_raw_valid;
+            s_snapshot.car_observation_valid = 1U;
+            car_observation_source = DUAL_CAMERA_FUSION_SOURCE_REAR;
         }
         else
         {
-            s_snapshot.car_valid = 0U;
-            s_snapshot.car_raw_valid = 0U;
+            s_snapshot.car_observation_valid = 0U;
         }
+        s_snapshot.car_raw_valid = s_snapshot.car_observation_valid;
+        if(s_snapshot.car_observation_valid)
+        {
+            s_snapshot.car_observation_x_cm = s_snapshot.car_x_cm;
+            s_snapshot.car_observation_y_cm = s_snapshot.car_y_cm;
+            DualCameraFusion_UpdateCarObservation(
+                now_us,
+                s_snapshot.reference_time_us,
+                front_car_observation_valid ? s_snapshot.front_frame_seq : 0U,
+                rear_car_observation_valid ? s_snapshot.rear_frame_seq : 0U,
+                s_snapshot.yaw_deg,
+                s_snapshot.car_x_cm,
+                s_snapshot.car_y_cm,
+                car_measurement_variance_cm2,
+                car_observation_source);
+        }
+        DualCameraFusion_ApplyCarEstimateToSnapshot(&s_snapshot, now_us);
 
         if(s_snapshot.car_valid)
         {
@@ -985,7 +1464,9 @@ uint8 DualCameraFusion_GetSnapshot(DualCameraFusionSnapshot_t *snapshot)
 {
     if(snapshot == NULL) return 0U;
     *snapshot = s_snapshot;
-    return s_snapshot.valid;
+    DualCameraFusion_ApplyCarEstimateToSnapshot(
+        snapshot, CameraBoardLink_TimeNowUs());
+    return snapshot->valid;
 }
 
 void DualCameraFusion_GetDiag(DualCameraFusionDiag_t *diag)
