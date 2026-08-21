@@ -3,7 +3,7 @@
 #include <math.h>
 #include <string.h>
 
-#define BEACON_SEARCH_LOSS_DELAY_MS             (300U)   /* 视觉丢失后等待进入自搜索的延时 */
+#define BEACON_SEARCH_LOSS_DELAY_MS             (500U)   /* 视觉丢失后等待进入自搜索的延时 */
 #define BEACON_SEARCH_STARTUP_ALIGN_DEG           (90.0f)/* 缓启动结束后相机长轴对准赛道的转角 */
 #define BEACON_SEARCH_STARTUP_HOLD_MS            (8000U) /* 首次对准后等待信标的最长时间 */
 #define BEACON_SEARCH_POST_TURN_HOLD_MS          (3000U) /* 完成一周旋转后再次摆扫前的等待时间 */
