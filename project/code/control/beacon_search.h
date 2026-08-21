@@ -39,6 +39,18 @@ typedef enum
     BEACON_SEARCH_FAILURE_FULL_TURN
 } BeaconSearchFailure_t;
 
+typedef enum
+{
+    BEACON_SEARCH_PHASE_STARTUP_ALIGN = 0,
+    BEACON_SEARCH_PHASE_STARTUP_HOLD,
+    BEACON_SEARCH_PHASE_SWEEP_TO_FIRST,
+    BEACON_SEARCH_PHASE_SWEEP_HOLD_FIRST,
+    BEACON_SEARCH_PHASE_SWEEP_TO_SECOND,
+    BEACON_SEARCH_PHASE_SWEEP_HOLD_SECOND,
+    BEACON_SEARCH_PHASE_FULL_TURN,
+    BEACON_SEARCH_PHASE_POST_TURN_HOLD
+} BeaconSearchPhase_t;
+
 typedef struct
 {
     uint32 vision_process_count;
@@ -80,6 +92,10 @@ typedef struct
     uint8 sweep_round_count;
     uint8 final_turn_active;
     uint8 terminal_latched;
+    uint8 sweep_phase;
+    uint8 startup_alignment_complete;
+    uint8 startup_sequence_complete;
+    uint16 phase_hold_elapsed_ms;
     float search_origin_yaw_deg;
     float final_turn_progress_deg;
 } BeaconSearchDiag_t;
@@ -108,7 +124,6 @@ float BeaconSearch_GetSweepHalfAngleDeg(void);
 float BeaconSearch_GetSweepAngleDeg(void);
 float BeaconSearch_LimitYawRate(float yaw_rate_dps);
 uint8 BeaconSearch_IsPausedByBlindBoxTask(void);
-uint8 BeaconSearch_ShouldSuppressObservations(void);
 uint8 BeaconSearch_GetFrameFlags(void);
 void BeaconSearch_GetDiag(BeaconSearchDiag_t *diag);
 

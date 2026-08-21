@@ -458,8 +458,7 @@ static void core_link_user_send_beacon_observations(
         return;
     }
 
-    observation_count = BeaconSearch_ShouldSuppressObservations() ?
-                        0U : packet->count;
+    observation_count = packet->count;
 
     core_link_user_write_u16_le(&payload[0], packet->sequence);
     payload[2] = observation_count;

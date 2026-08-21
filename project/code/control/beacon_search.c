@@ -4,16 +4,14 @@
 #include <string.h>
 
 #define BEACON_SEARCH_LOSS_DELAY_MS             (300U)   /* 视觉丢失后等待进入自搜索的延时 */
-#define BEACON_SEARCH_VERIFY_TIMEOUT_MS         (300U)   /* 搜索中看到信标后，连续确认的最长等待时间 */
-#define BEACON_SEARCH_CONFIRM_FRAMES              (3U)   /* 判定可信信标所需的连续确认帧数 */
-#define BEACON_SEARCH_MIN_CONFIDENCE              (96U)  /* 信标可信判断的最低识别置信度 */
-#define BEACON_SEARCH_MIN_SIGMA_CM                 (5U)  /* 信标位置sigma下限，过滤异常过小估计 */
-#define BEACON_SEARCH_MAX_SIGMA_CM                (15U)  /* 信标位置sigma上限，过滤定位发散目标 */
+#define BEACON_SEARCH_STARTUP_ALIGN_DEG           (90.0f)/* 缓启动结束后相机长轴对准赛道的转角 */
+#define BEACON_SEARCH_STARTUP_HOLD_MS            (8000U) /* 首次对准后等待信标的最长时间 */
+#define BEACON_SEARCH_POST_TURN_HOLD_MS          (3000U) /* 完成一周旋转后再次摆扫前的等待时间 */
 #define BEACON_SEARCH_ENDPOINT_HOLD_MS           (200U)  /* 到达搜索端点后的短暂停留时间 */
 #define BEACON_SEARCH_ENDPOINT_TOLERANCE_DEG       (2.0f)/* 判定到达目标Yaw端点的角度容差 */
 #define BEACON_SEARCH_MAX_YAW_STEP_DEG           (10.0f) /* 单周期Yaw跳变过滤阈值，避免IMU突变误计 */
-#define BEACON_SEARCH_MAX_SWEEP_ROUNDS             (5U)  /* 完成五轮+/-90度摆扫后进入最终旋转 */
-#define BEACON_SEARCH_FINAL_TURN_DEG              (360.0f)/* 最终旋转仅执行一周 */
+#define BEACON_SEARCH_MAX_SWEEP_ROUNDS             (3U)  /* 完成三轮+/-90度摆扫后旋转一周 */
+#define BEACON_SEARCH_FINAL_TURN_DEG              (360.0f)/* 每个搜索循环的一周旋转角度 */
 
 typedef enum
 {
@@ -21,16 +19,6 @@ typedef enum
     BEACON_SEARCH_CONTROL_SPIN,
     BEACON_SEARCH_CONTROL_HOLD
 } BeaconSearchControl_t;
-
-typedef enum
-{
-    BEACON_SEARCH_SWEEP_TO_FIRST = 0,
-    BEACON_SEARCH_SWEEP_HOLD_FIRST,
-    BEACON_SEARCH_SWEEP_TO_SECOND,
-    BEACON_SEARCH_SWEEP_HOLD_SECOND,
-    BEACON_SEARCH_SWEEP_FINAL_TURN,
-    BEACON_SEARCH_SWEEP_FINAL_HOLD
-} BeaconSearchSweepPhase_t;
 
 static volatile BeaconSearchState_t s_state = BEACON_SEARCH_DISABLED;
 static volatile BeaconSearchControl_t s_control = BEACON_SEARCH_CONTROL_NONE;
@@ -41,29 +29,29 @@ static volatile float s_turn_progress_deg = 0.0f;
 static volatile float s_yaw_rate_dps = BEACON_SEARCH_YAW_RATE_DEFAULT_DPS;
 static volatile float s_sweep_half_angle_deg =
     BEACON_SEARCH_SWEEP_HALF_ANGLE_DEFAULT_DEG;
-static volatile BeaconSearchSweepPhase_t s_sweep_phase =
-    BEACON_SEARCH_SWEEP_TO_FIRST;
+static volatile BeaconSearchPhase_t s_sweep_phase =
+    BEACON_SEARCH_PHASE_STARTUP_ALIGN;
 static float s_endpoint_hold_elapsed_s = 0.0f;
 static volatile float s_search_origin_yaw_deg = 0.0f;
 static volatile float s_first_endpoint_yaw_deg = 90.0f;
 static volatile float s_second_endpoint_yaw_deg = -90.0f;
 static volatile uint8 s_sweep_round_count = 0U;
 static volatile uint8 s_final_turn_active = 0U;
-static volatile uint8 s_final_turn_complete_pending = 0U;
-static volatile uint8 s_search_terminal_latched = 0U;
 static volatile float s_final_turn_progress_deg = 0.0f;
+static uint8 s_startup_alignment_started = 0U;
+static volatile uint8 s_startup_alignment_complete = 0U;
+static volatile uint8 s_startup_sequence_complete = 0U;
+static volatile uint16 s_phase_hold_elapsed_ms = 0U;
 
 static uint8 s_was_armed = 0U;
 static uint8 s_eligible = 0U;
 static uint8 s_ever_seen = 0U;
 static uint8 s_candidate_track_id = 0U;
 static uint8 s_candidate_confirm_count = 0U;
-static uint8 s_verify_from_failed = 0U;
 static uint8 s_process_count_valid = 0U;
 static uint32 s_last_process_count = 0U;
 static uint16 s_loss_age_ms = 0U;
 static uint16 s_search_elapsed_ms = 0U;
-static uint16 s_verify_elapsed_ms = 0U;
 static uint16 s_car_link_age_ms = 60000U;
 static uint8 s_position_window[BEACON_SEARCH_POSITION_WINDOW_FRAMES] = {0};
 static uint8 s_position_window_head = 0U;
@@ -161,8 +149,6 @@ static void beacon_search_clear_candidate(void)
 {
     s_candidate_track_id = 0U;
     s_candidate_confirm_count = 0U;
-    s_verify_elapsed_ms = 0U;
-    s_verify_from_failed = 0U;
 }
 
 static void beacon_search_clear_position_window(void)
@@ -334,17 +320,56 @@ static void beacon_search_reset_session(void)
     s_search_origin_yaw_deg = 0.0f;
     s_first_endpoint_yaw_deg = 90.0f;
     s_second_endpoint_yaw_deg = -90.0f;
-    s_sweep_phase = BEACON_SEARCH_SWEEP_TO_FIRST;
+    s_sweep_phase = BEACON_SEARCH_PHASE_STARTUP_ALIGN;
     s_sweep_round_count = 0U;
     s_final_turn_active = 0U;
-    s_final_turn_complete_pending = 0U;
-    s_search_terminal_latched = 0U;
     s_final_turn_progress_deg = 0.0f;
+    s_startup_alignment_started = 0U;
+    s_startup_alignment_complete = 0U;
+    s_startup_sequence_complete = 0U;
+    s_phase_hold_elapsed_ms = 0U;
     beacon_search_clear_candidate();
     beacon_search_reset_stability();
 }
 
-static void beacon_search_begin(float current_yaw_deg)
+static void beacon_search_begin_startup_alignment(float current_yaw_deg)
+{
+    if(!isfinite(current_yaw_deg))
+    {
+        current_yaw_deg = 0.0f;
+    }
+
+    s_state = BEACON_SEARCH_SPINNING;
+    s_control = BEACON_SEARCH_CONTROL_SPIN;
+    s_search_elapsed_ms = 0U;
+    s_loss_age_ms = 0U;
+    s_failure_reason = BEACON_SEARCH_FAILURE_NONE;
+    s_search_generation++;
+    s_search_origin_yaw_deg = beacon_search_wrap_deg(current_yaw_deg);
+    s_first_endpoint_yaw_deg = beacon_search_wrap_deg(
+        s_search_origin_yaw_deg + BEACON_SEARCH_STARTUP_ALIGN_DEG);
+    s_startup_alignment_started = 1U;
+    s_startup_alignment_complete = 0U;
+    s_sweep_phase = BEACON_SEARCH_PHASE_STARTUP_ALIGN;
+    s_sweep_round_count = 0U;
+    s_final_turn_active = 0U;
+    s_final_turn_progress_deg = 0.0f;
+    s_phase_hold_elapsed_ms = 0U;
+    beacon_search_clear_candidate();
+}
+
+static void beacon_search_resume_startup_sequence(void)
+{
+    s_state = BEACON_SEARCH_SPINNING;
+    s_control = BEACON_SEARCH_CONTROL_SPIN;
+    s_search_generation++;
+    s_sweep_phase = s_startup_alignment_complete ?
+                    BEACON_SEARCH_PHASE_STARTUP_HOLD :
+                    BEACON_SEARCH_PHASE_STARTUP_ALIGN;
+    s_phase_hold_elapsed_ms = 0U;
+}
+
+static void beacon_search_begin_sweep(float current_yaw_deg)
 {
     float half_angle_deg = BeaconSearch_GetSweepHalfAngleDeg();
 
@@ -364,94 +389,66 @@ static void beacon_search_begin(float current_yaw_deg)
         s_search_origin_yaw_deg + half_angle_deg);
     s_second_endpoint_yaw_deg = beacon_search_wrap_deg(
         s_search_origin_yaw_deg - half_angle_deg);
-    s_sweep_phase = BEACON_SEARCH_SWEEP_TO_FIRST;
+    s_sweep_phase = BEACON_SEARCH_PHASE_SWEEP_TO_FIRST;
     s_sweep_round_count = 0U;
     s_final_turn_active = 0U;
-    s_final_turn_complete_pending = 0U;
     s_final_turn_progress_deg = 0.0f;
+    s_phase_hold_elapsed_ms = 0U;
     beacon_search_clear_candidate();
 }
 
-static void beacon_search_fail(BeaconSearchFailure_t reason)
+static void beacon_search_restart_sweep_cycle(void)
 {
-    s_state = BEACON_SEARCH_FAILED;
-    s_control = BEACON_SEARCH_CONTROL_HOLD;
-    s_failure_reason = reason;
+    s_state = BEACON_SEARCH_SPINNING;
+    s_control = BEACON_SEARCH_CONTROL_SPIN;
+    s_search_generation++;
+    s_sweep_phase = BEACON_SEARCH_PHASE_SWEEP_TO_FIRST;
+    s_sweep_round_count = 0U;
+    s_turn_progress_deg = 0.0f;
+    s_final_turn_active = 0U;
+    s_final_turn_progress_deg = 0.0f;
+    s_phase_hold_elapsed_ms = 0U;
     beacon_search_clear_candidate();
 }
 
-/* 这里只处理正常信标观测，起飞后360度预扫由盲盒任务模块管理。 */
-static uint8 beacon_search_observation_is_trusted(
-    const BeaconObservation *observation)
+static void beacon_search_track_observation(void)
 {
-    if(NULL == observation)
-    {
-        return 0U;
-    }
-
-    return (uint8)((observation->track_id != 0U) &&
-                   (observation->flags & CORE_LINK_BEACON_OBSERVATION_FLAG_LIT) &&
-                   (observation->detection_confidence >=
-                    BEACON_SEARCH_MIN_CONFIDENCE) &&
-                   (observation->position_sigma_cm >=
-                    BEACON_SEARCH_MIN_SIGMA_CM) &&
-                   (observation->position_sigma_cm <=
-                    BEACON_SEARCH_MAX_SIGMA_CM));
+    s_ever_seen = 1U;
+    s_state = BEACON_SEARCH_TRACKING;
+    s_control = BEACON_SEARCH_CONTROL_NONE;
+    s_loss_age_ms = 0U;
+    s_search_elapsed_ms = 0U;
+    s_failure_reason = BEACON_SEARCH_FAILURE_NONE;
+    s_sweep_round_count = 0U;
+    s_final_turn_active = 0U;
+    s_final_turn_progress_deg = 0.0f;
+    s_phase_hold_elapsed_ms = 0U;
 }
 
-static uint8 beacon_search_select_trusted_track(
+/* packet由视觉融合层生成；进入packet的目标已经通过视觉算法有效性判定。
+ * 搜索层只做数据完整性检查，不再重复置信度、sigma或连续帧门控。 */
+static uint8 beacon_search_select_valid_track(
     const core_link_beacon_observation_packet_struct *packet)
 {
-    uint8 first_track_id = 0U;
     uint8 i;
 
-    if(NULL == packet)
+    if((NULL == packet) ||
+       (packet->count > CORE_LINK_BEACON_OBSERVATION_MAX_COUNT))
     {
         return 0U;
     }
 
     for(i = 0U; i < packet->count; ++i)
     {
-        if(!beacon_search_observation_is_trusted(&packet->observation[i]))
+        if((packet->observation[i].track_id != 0U) &&
+           (packet->observation[i].flags &
+            CORE_LINK_BEACON_OBSERVATION_FLAG_LIT))
         {
-            continue;
-        }
-        if(0U == first_track_id)
-        {
-            first_track_id = packet->observation[i].track_id;
-        }
-        if(packet->observation[i].track_id == s_candidate_track_id)
-        {
-            return s_candidate_track_id;
+            return packet->observation[i].track_id;
         }
     }
 
-    return first_track_id;
-}
-
-static uint8 beacon_search_confirm_candidate(uint8 track_id)
-{
-    if(0U == track_id)
-    {
-        s_candidate_track_id = 0U;
-        s_candidate_confirm_count = 0U;
-        return 0U;
-    }
-
-    if(track_id == s_candidate_track_id)
-    {
-        if(s_candidate_confirm_count < 255U)
-        {
-            s_candidate_confirm_count++;
-        }
-    }
-    else
-    {
-        s_candidate_track_id = track_id;
-        s_candidate_confirm_count = 1U;
-    }
-
-    return (s_candidate_confirm_count >= BEACON_SEARCH_CONFIRM_FRAMES) ? 1U : 0U;
+    return 0U;
 }
 
 void BeaconSearch_Init(void)
@@ -461,7 +458,7 @@ void BeaconSearch_Init(void)
     s_current_yaw_deg = 0.0f;
     s_target_yaw_deg = 0.0f;
     s_turn_progress_deg = 0.0f;
-    s_sweep_phase = BEACON_SEARCH_SWEEP_TO_FIRST;
+    s_sweep_phase = BEACON_SEARCH_PHASE_STARTUP_ALIGN;
     s_endpoint_hold_elapsed_s = 0.0f;
     s_search_generation = 0U;
     beacon_search_reset_session();
@@ -481,6 +478,10 @@ void BeaconSearch_Tick(uint16 elapsed_ms,
     uint8 eligible;
 
     s_car_link_age_ms = car_link_age_ms;
+    if(isfinite(current_yaw_deg))
+    {
+        s_current_yaw_deg = current_yaw_deg;
+    }
     if(!armed_state)
     {
         s_was_armed = 0U;
@@ -494,14 +495,6 @@ void BeaconSearch_Tick(uint16 elapsed_ms,
         s_was_armed = 1U;
     }
 
-    if(s_final_turn_complete_pending)
-    {
-        s_final_turn_complete_pending = 0U;
-        s_final_turn_active = 0U;
-        s_search_terminal_latched = 1U;
-        beacon_search_fail(BEACON_SEARCH_FAILURE_FULL_TURN);
-    }
-
     eligible = (uint8)(angle_mode && flight_ready &&
                        !BlindBoxTasks_IsBeaconSearchPaused() &&
                        velocity_loop_enabled &&
@@ -511,41 +504,75 @@ void BeaconSearch_Tick(uint16 elapsed_ms,
     s_eligible = eligible;
     if(!eligible)
     {
-        if(s_search_terminal_latched)
-        {
-            s_state = BEACON_SEARCH_FAILED;
-            s_control = BEACON_SEARCH_CONTROL_HOLD;
-            s_failure_reason = BEACON_SEARCH_FAILURE_FULL_TURN;
-        }
-        else
-        {
-            s_state = BEACON_SEARCH_DISABLED;
-            s_control = BEACON_SEARCH_CONTROL_NONE;
-            s_failure_reason = BEACON_SEARCH_FAILURE_NONE;
-        }
+        s_state = BEACON_SEARCH_DISABLED;
+        s_control = BEACON_SEARCH_CONTROL_NONE;
+        s_failure_reason = BEACON_SEARCH_FAILURE_NONE;
         s_loss_age_ms = 0U;
         s_search_elapsed_ms = 0U;
+        s_final_turn_active = 0U;
+        s_final_turn_progress_deg = 0.0f;
+        s_phase_hold_elapsed_ms = 0U;
         beacon_search_clear_candidate();
         beacon_search_reset_stability();
         return;
     }
 
-    if(s_search_terminal_latched)
+    beacon_search_update_stability(elapsed_ms, stability_input);
+
+    /* 每次上锁仅执行一次赛道方向对准。对准转动必须完整完成；只有进入
+     * 8秒保持阶段后，新视觉帧中的有效信标才允许打断等待。 */
+    if(!s_startup_sequence_complete)
     {
-        beacon_search_fail(BEACON_SEARCH_FAILURE_FULL_TURN);
+        if((BEACON_SEARCH_DISABLED == s_state) ||
+           (BEACON_SEARCH_SPINNING != s_state) ||
+           ((BEACON_SEARCH_PHASE_STARTUP_ALIGN != s_sweep_phase) &&
+            (BEACON_SEARCH_PHASE_STARTUP_HOLD != s_sweep_phase)))
+        {
+            if(s_startup_alignment_started)
+            {
+                beacon_search_resume_startup_sequence();
+            }
+            else
+            {
+                beacon_search_begin_startup_alignment(current_yaw_deg);
+            }
+        }
+
+        s_search_elapsed_ms = beacon_search_add_ms(s_search_elapsed_ms,
+                                                   elapsed_ms);
+        if(BEACON_SEARCH_PHASE_STARTUP_HOLD == s_sweep_phase)
+        {
+            s_phase_hold_elapsed_ms = beacon_search_add_ms(
+                s_phase_hold_elapsed_ms, elapsed_ms);
+            if(s_phase_hold_elapsed_ms >= BEACON_SEARCH_STARTUP_HOLD_MS)
+            {
+                s_startup_sequence_complete = 1U;
+                s_state = BEACON_SEARCH_LOSS_WAIT;
+                s_control = BEACON_SEARCH_CONTROL_NONE;
+                s_loss_age_ms = 0U;
+                s_search_elapsed_ms = 0U;
+                s_phase_hold_elapsed_ms = 0U;
+            }
+        }
         return;
     }
 
-    if(s_final_turn_active && (BEACON_SEARCH_DISABLED == s_state))
+    if(BEACON_SEARCH_SPINNING == s_state)
     {
-        s_state = BEACON_SEARCH_SPINNING;
-        s_control = BEACON_SEARCH_CONTROL_SPIN;
+        s_search_elapsed_ms = beacon_search_add_ms(s_search_elapsed_ms,
+                                                   elapsed_ms);
+        if(BEACON_SEARCH_PHASE_POST_TURN_HOLD == s_sweep_phase)
+        {
+            s_phase_hold_elapsed_ms = beacon_search_add_ms(
+                s_phase_hold_elapsed_ms, elapsed_ms);
+            if(s_phase_hold_elapsed_ms >= BEACON_SEARCH_POST_TURN_HOLD_MS)
+            {
+                /* 不附加300 ms丢失延时，沿用本轮搜索中心直接开始下一组三轮。 */
+                beacon_search_restart_sweep_cycle();
+            }
+        }
+        return;
     }
-
-    beacon_search_update_stability(elapsed_ms, stability_input);
-
-    /* 仅在小车自动任务明确请求时累计；遥控器模式和链路失效不会触发搜索。 */
-    s_loss_age_ms = beacon_search_add_ms(s_loss_age_ms, elapsed_ms);
 
     if(BEACON_SEARCH_DISABLED == s_state)
     {
@@ -553,53 +580,19 @@ void BeaconSearch_Tick(uint16 elapsed_ms,
                                 BEACON_SEARCH_WAIT_FIRST;
     }
 
-    if((BEACON_SEARCH_SPINNING == s_state) ||
-       (BEACON_SEARCH_VERIFYING == s_state))
-    {
-        if(!car_link_valid)
-        {
-            beacon_search_fail(BEACON_SEARCH_FAILURE_CAR_LINK);
-            return;
-        }
-    }
-
-    if((BEACON_SEARCH_SPINNING == s_state) ||
-       ((BEACON_SEARCH_VERIFYING == s_state) && !s_verify_from_failed))
-    {
-        s_search_elapsed_ms = beacon_search_add_ms(s_search_elapsed_ms,
-                                                   elapsed_ms);
-    }
-
-    if(BEACON_SEARCH_VERIFYING == s_state)
-    {
-        s_verify_elapsed_ms = beacon_search_add_ms(s_verify_elapsed_ms,
-                                                   elapsed_ms);
-        if(s_verify_elapsed_ms >= BEACON_SEARCH_VERIFY_TIMEOUT_MS)
-        {
-            if(s_verify_from_failed)
-            {
-                beacon_search_fail(s_failure_reason);
-            }
-            else
-            {
-                s_state = BEACON_SEARCH_SPINNING;
-                s_control = BEACON_SEARCH_CONTROL_SPIN;
-                beacon_search_clear_candidate();
-            }
-        }
-        return;
-    }
-
+    /* 仅在小车自动任务明确请求时累计；遥控器模式和链路失效不会触发搜索。 */
+    s_loss_age_ms = beacon_search_add_ms(s_loss_age_ms, elapsed_ms);
     if((BEACON_SEARCH_WAIT_FIRST == s_state) ||
        (BEACON_SEARCH_TRACKING == s_state) ||
-       (BEACON_SEARCH_LOSS_WAIT == s_state))
+       (BEACON_SEARCH_LOSS_WAIT == s_state) ||
+       (BEACON_SEARCH_FAILED == s_state))
     {
         s_state = BEACON_SEARCH_LOSS_WAIT;
         if(s_loss_age_ms >= BEACON_SEARCH_LOSS_DELAY_MS)
         {
             if(s_start_gate_ready)
             {
-                beacon_search_begin(current_yaw_deg);
+                beacon_search_begin_sweep(current_yaw_deg);
             }
         }
     }
@@ -609,10 +602,9 @@ void BeaconSearch_OnObservationFrame(
     const core_link_beacon_observation_packet_struct *packet,
     uint32 vision_process_count)
 {
-    uint8 trusted_track_id;
+    uint8 valid_track_id;
 
     if((NULL == packet) || !s_eligible ||
-       BeaconSearch_ShouldSuppressObservations() ||
        BlindBoxTasks_IsBeaconSearchPaused())
     {
         return;
@@ -624,71 +616,34 @@ void BeaconSearch_OnObservationFrame(
     }
     s_process_count_valid = 1U;
     s_last_process_count = vision_process_count;
-    trusted_track_id = beacon_search_select_trusted_track(packet);
-    if(0U != trusted_track_id)
+    valid_track_id = beacon_search_select_valid_track(packet);
+    if(0U == valid_track_id)
     {
-        s_loss_age_ms = 0U;
-    }
-
-    if(BEACON_SEARCH_WAIT_FIRST == s_state)
-    {
-        if(beacon_search_confirm_candidate(trusted_track_id))
-        {
-            s_ever_seen = 1U;
-            s_state = BEACON_SEARCH_TRACKING;
-            beacon_search_clear_candidate();
-        }
         return;
     }
 
-    if((BEACON_SEARCH_TRACKING == s_state) ||
-       (BEACON_SEARCH_LOSS_WAIT == s_state))
+    /* +90度对准动作不允许被信标打断，但该帧已经被序号去重记录。
+     * 到位后的8秒保持、三轮摆扫、360度旋转及3秒保持均允许单帧打断。 */
+    if((BEACON_SEARCH_SPINNING == s_state) &&
+       (BEACON_SEARCH_PHASE_STARTUP_ALIGN == s_sweep_phase))
     {
-        if(0U != trusted_track_id)
-        {
-            s_state = BEACON_SEARCH_TRACKING;
-            beacon_search_clear_candidate();
-        }
         return;
     }
 
-    if(BEACON_SEARCH_SPINNING == s_state)
+    if((BEACON_SEARCH_SPINNING == s_state) &&
+       (BEACON_SEARCH_PHASE_STARTUP_HOLD == s_sweep_phase))
     {
-        if(0U != trusted_track_id)
-        {
-            s_state = BEACON_SEARCH_VERIFYING;
-            s_control = BEACON_SEARCH_CONTROL_HOLD;
-            s_verify_from_failed = 0U;
-            s_verify_elapsed_ms = 0U;
-            (void)beacon_search_confirm_candidate(trusted_track_id);
-        }
-        return;
+        s_startup_sequence_complete = 1U;
     }
 
-    if(BEACON_SEARCH_FAILED == s_state)
+    if((BEACON_SEARCH_WAIT_FIRST == s_state) ||
+       (BEACON_SEARCH_TRACKING == s_state) ||
+       (BEACON_SEARCH_LOSS_WAIT == s_state) ||
+       (BEACON_SEARCH_SPINNING == s_state) ||
+       (BEACON_SEARCH_VERIFYING == s_state) ||
+       (BEACON_SEARCH_FAILED == s_state))
     {
-        if(0U != trusted_track_id)
-        {
-            s_state = BEACON_SEARCH_VERIFYING;
-            s_control = BEACON_SEARCH_CONTROL_HOLD;
-            s_verify_from_failed = 1U;
-            s_verify_elapsed_ms = 0U;
-            (void)beacon_search_confirm_candidate(trusted_track_id);
-        }
-        return;
-    }
-
-    if(BEACON_SEARCH_VERIFYING == s_state)
-    {
-        if(beacon_search_confirm_candidate(trusted_track_id))
-        {
-            s_ever_seen = 1U;
-            s_state = BEACON_SEARCH_TRACKING;
-            s_control = BEACON_SEARCH_CONTROL_NONE;
-            s_search_elapsed_ms = 0U;
-            s_failure_reason = BEACON_SEARCH_FAILURE_NONE;
-            beacon_search_clear_candidate();
-        }
+        beacon_search_track_observation();
     }
 }
 
@@ -741,13 +696,14 @@ void BeaconSearch_ControlStep(float dt_s,
                                                 previous_yaw_deg);
         previous_yaw_deg = current_yaw_deg;
         if((fabsf(yaw_delta_deg) <= BEACON_SEARCH_MAX_YAW_STEP_DEG) &&
-           ((BEACON_SEARCH_SWEEP_TO_FIRST == s_sweep_phase) ||
-            (BEACON_SEARCH_SWEEP_TO_SECOND == s_sweep_phase)))
+           ((BEACON_SEARCH_PHASE_STARTUP_ALIGN == s_sweep_phase) ||
+            (BEACON_SEARCH_PHASE_SWEEP_TO_FIRST == s_sweep_phase) ||
+            (BEACON_SEARCH_PHASE_SWEEP_TO_SECOND == s_sweep_phase)))
         {
             s_turn_progress_deg += fabsf(yaw_delta_deg);
         }
         else if((fabsf(yaw_delta_deg) <= BEACON_SEARCH_MAX_YAW_STEP_DEG) &&
-                (BEACON_SEARCH_SWEEP_FINAL_TURN == s_sweep_phase))
+                (BEACON_SEARCH_PHASE_FULL_TURN == s_sweep_phase))
         {
             s_final_turn_progress_deg -= yaw_delta_deg;
             if(s_final_turn_progress_deg < 0.0f)
@@ -757,14 +713,16 @@ void BeaconSearch_ControlStep(float dt_s,
             if(s_final_turn_progress_deg >= BEACON_SEARCH_FINAL_TURN_DEG)
             {
                 s_final_turn_progress_deg = BEACON_SEARCH_FINAL_TURN_DEG;
-                s_final_turn_complete_pending = 1U;
-                s_sweep_phase = BEACON_SEARCH_SWEEP_FINAL_HOLD;
+                s_final_turn_active = 0U;
+                s_phase_hold_elapsed_ms = 0U;
+                s_sweep_phase = BEACON_SEARCH_PHASE_POST_TURN_HOLD;
+                *target_yaw_deg = current_yaw_deg;
             }
         }
 
         switch(s_sweep_phase)
         {
-        case BEACON_SEARCH_SWEEP_TO_FIRST:
+        case BEACON_SEARCH_PHASE_STARTUP_ALIGN:
             target_at_endpoint = beacon_search_step_target(
                 dt_s, s_first_endpoint_yaw_deg,
                 target_yaw_deg);
@@ -772,21 +730,40 @@ void BeaconSearch_ControlStep(float dt_s,
                beacon_search_yaw_at_endpoint(current_yaw_deg,
                                              s_first_endpoint_yaw_deg))
             {
-                s_sweep_phase = BEACON_SEARCH_SWEEP_HOLD_FIRST;
+                s_startup_alignment_complete = 1U;
+                s_sweep_phase = BEACON_SEARCH_PHASE_STARTUP_HOLD;
+                s_phase_hold_elapsed_ms = 0U;
                 s_endpoint_hold_elapsed_s = 0.0f;
             }
             break;
 
-        case BEACON_SEARCH_SWEEP_HOLD_FIRST:
+        case BEACON_SEARCH_PHASE_STARTUP_HOLD:
+            *target_yaw_deg = s_first_endpoint_yaw_deg;
+            break;
+
+        case BEACON_SEARCH_PHASE_SWEEP_TO_FIRST:
+            target_at_endpoint = beacon_search_step_target(
+                dt_s, s_first_endpoint_yaw_deg,
+                target_yaw_deg);
+            if(target_at_endpoint &&
+               beacon_search_yaw_at_endpoint(current_yaw_deg,
+                                             s_first_endpoint_yaw_deg))
+            {
+                s_sweep_phase = BEACON_SEARCH_PHASE_SWEEP_HOLD_FIRST;
+                s_endpoint_hold_elapsed_s = 0.0f;
+            }
+            break;
+
+        case BEACON_SEARCH_PHASE_SWEEP_HOLD_FIRST:
             if(beacon_search_hold_endpoint(dt_s, current_yaw_deg,
                                            s_first_endpoint_yaw_deg,
                                            target_yaw_deg))
             {
-                s_sweep_phase = BEACON_SEARCH_SWEEP_TO_SECOND;
+                s_sweep_phase = BEACON_SEARCH_PHASE_SWEEP_TO_SECOND;
             }
             break;
 
-        case BEACON_SEARCH_SWEEP_TO_SECOND:
+        case BEACON_SEARCH_PHASE_SWEEP_TO_SECOND:
             target_at_endpoint = beacon_search_step_target(
                 dt_s, s_second_endpoint_yaw_deg,
                 target_yaw_deg);
@@ -794,12 +771,12 @@ void BeaconSearch_ControlStep(float dt_s,
                beacon_search_yaw_at_endpoint(current_yaw_deg,
                                              s_second_endpoint_yaw_deg))
             {
-                s_sweep_phase = BEACON_SEARCH_SWEEP_HOLD_SECOND;
+                s_sweep_phase = BEACON_SEARCH_PHASE_SWEEP_HOLD_SECOND;
                 s_endpoint_hold_elapsed_s = 0.0f;
             }
             break;
 
-        case BEACON_SEARCH_SWEEP_HOLD_SECOND:
+        case BEACON_SEARCH_PHASE_SWEEP_HOLD_SECOND:
             if(beacon_search_hold_endpoint(dt_s, current_yaw_deg,
                                            s_second_endpoint_yaw_deg,
                                            target_yaw_deg))
@@ -807,19 +784,19 @@ void BeaconSearch_ControlStep(float dt_s,
                 s_sweep_round_count++;
                 if(s_sweep_round_count >= BEACON_SEARCH_MAX_SWEEP_ROUNDS)
                 {
-                    /* 最终一周从-90度端点继续沿负Yaw方向旋转，不再接收信标。 */
+                    /* 从-90度端点继续沿负Yaw方向旋转；有效信标可立即打断。 */
                     s_final_turn_active = 1U;
                     s_final_turn_progress_deg = 0.0f;
-                    s_sweep_phase = BEACON_SEARCH_SWEEP_FINAL_TURN;
+                    s_sweep_phase = BEACON_SEARCH_PHASE_FULL_TURN;
                 }
                 else
                 {
-                    s_sweep_phase = BEACON_SEARCH_SWEEP_TO_FIRST;
+                    s_sweep_phase = BEACON_SEARCH_PHASE_SWEEP_TO_FIRST;
                 }
             }
             break;
 
-        case BEACON_SEARCH_SWEEP_FINAL_TURN:
+        case BEACON_SEARCH_PHASE_FULL_TURN:
             if(isfinite(dt_s) && (dt_s > 0.0f))
             {
                 *target_yaw_deg = beacon_search_wrap_deg(
@@ -827,12 +804,12 @@ void BeaconSearch_ControlStep(float dt_s,
             }
             break;
 
-        case BEACON_SEARCH_SWEEP_FINAL_HOLD:
-            *target_yaw_deg = current_yaw_deg;
+        case BEACON_SEARCH_PHASE_POST_TURN_HOLD:
+            /* 保持完成360度时锁定的目标Yaw，等待Tick重启三轮摆扫。 */
             break;
 
         default:
-            s_sweep_phase = BEACON_SEARCH_SWEEP_TO_FIRST;
+            s_sweep_phase = BEACON_SEARCH_PHASE_SWEEP_TO_FIRST;
             break;
         }
     }
@@ -941,23 +918,15 @@ uint8 BeaconSearch_IsPausedByBlindBoxTask(void)
     return BlindBoxTasks_IsBeaconSearchPaused();
 }
 
-uint8 BeaconSearch_ShouldSuppressObservations(void)
-{
-    return (uint8)(s_final_turn_active || s_search_terminal_latched);
-}
-
 uint8 BeaconSearch_GetFrameFlags(void)
 {
     uint8 frame_flags = BlindBoxTasks_GetFrameFlags();
 
-    if(s_search_terminal_latched ||
-       (BEACON_SEARCH_FAILED == s_state) ||
-       ((BEACON_SEARCH_VERIFYING == s_state) && s_verify_from_failed))
+    if(BEACON_SEARCH_FAILED == s_state)
     {
         frame_flags |= CORE_LINK_BEACON_FRAME_FLAG_SEARCH_FAILED;
     }
-    if(s_final_turn_active ||
-       (BEACON_SEARCH_SPINNING == s_state) ||
+    if((BEACON_SEARCH_SPINNING == s_state) ||
        (BEACON_SEARCH_VERIFYING == s_state))
     {
         frame_flags |= CORE_LINK_BEACON_FRAME_FLAG_SEARCH_ACTIVE;
@@ -1003,7 +972,11 @@ void BeaconSearch_GetDiag(BeaconSearchDiag_t *diag)
     diag->start_gate_ready = s_start_gate_ready;
     diag->sweep_round_count = s_sweep_round_count;
     diag->final_turn_active = s_final_turn_active;
-    diag->terminal_latched = s_search_terminal_latched;
+    diag->terminal_latched = 0U;
+    diag->sweep_phase = (uint8)s_sweep_phase;
+    diag->startup_alignment_complete = s_startup_alignment_complete;
+    diag->startup_sequence_complete = s_startup_sequence_complete;
+    diag->phase_hold_elapsed_ms = s_phase_hold_elapsed_ms;
     diag->search_origin_yaw_deg = s_search_origin_yaw_deg;
     diag->final_turn_progress_deg = s_final_turn_progress_deg;
     if(0U == irq_state)
