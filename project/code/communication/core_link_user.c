@@ -617,6 +617,7 @@ static void core_link_user_send_beacon_observations(
 {
     uint8 payload[CORE_LINK_BEACON_OBSERVATION_PAYLOAD_MAX_LEN] = {0};
     uint8 payload_len;
+    uint8 observation_count;
     uint8 i;
 
     if((NULL == packet) ||
@@ -625,8 +626,11 @@ static void core_link_user_send_beacon_observations(
         return;
     }
 
+    observation_count = BeaconSearch_ShouldSuppressObservations() ?
+                        0U : packet->count;
+
     core_link_user_write_u16_le(&payload[0], packet->sequence);
-    payload[2] = packet->count;
+    payload[2] = observation_count;
     payload[3] = packet->frame_flags;
     payload[4] = packet->car_visible;
     payload[5] = packet->reserved;
@@ -634,7 +638,7 @@ static void core_link_user_send_beacon_observations(
     core_link_user_write_i16_le(&payload[8], packet->car_y_mm);
     core_link_user_write_i16_le(&payload[10], packet->uav_yaw_ddeg);
     core_link_user_write_i16_le(&payload[12], packet->car_yaw_rel_uav_ddeg);
-    for(i = 0U; i < packet->count; ++i)
+    for(i = 0U; i < observation_count; ++i)
     {
         uint8 offset = (uint8)(CORE_LINK_BEACON_OBSERVATION_HEADER_LEN +
                                i * CORE_LINK_BEACON_OBSERVATION_WIRE_LEN);
@@ -648,7 +652,8 @@ static void core_link_user_send_beacon_observations(
     }
 
     payload_len = (uint8)(CORE_LINK_BEACON_OBSERVATION_HEADER_LEN +
-                          packet->count * CORE_LINK_BEACON_OBSERVATION_WIRE_LEN);
+                          observation_count *
+                          CORE_LINK_BEACON_OBSERVATION_WIRE_LEN);
     core_link_send_frame(CORE_LINK_PROTOCOL_BEACON_OBSERVATIONS,
                          payload, payload_len);
 }
