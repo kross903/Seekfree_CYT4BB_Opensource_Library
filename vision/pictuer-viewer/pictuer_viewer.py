@@ -207,7 +207,7 @@ BEACON_AREA_EDGE_MIN_SCALE = 0.25
 BEACON_AREA_EDGE_MAX_SCALE = 8.0
 SPLIT_ARROW_DEFAULT_ENABLED = True
 SPLIT_ARROW_PRIMARY_MIN_POINTS = 15
-SPLIT_ARROW_PARTNER_MIN_POINTS = 8
+SPLIT_ARROW_PARTNER_MIN_POINTS = 10
 SPLIT_ARROW_MIN_DISTANCE_ARM_SCALE = 0.5
 SPLIT_ARROW_MAX_CENTROID_DISTANCE_CM = 30.0
 SPLIT_ARROW_ANGLE_TOLERANCE_DEG = 20.0
@@ -218,8 +218,6 @@ ARROW_CENTER_REFINE_PASSES = 2
 ARROW_CENTER_CONVERGENCE_CM = 0.05
 ARROW_MEMBER_CORRIDOR_PX = 5.0
 ARROW_MEMBER_MIN_CONTOUR_RATIO = 0.30
-ARROW_EACH_ARM_CORRIDOR_PX = 2.0
-ARROW_EACH_ARM_MIN_CONTOUR_RATIO = 0.30
 ARROW_MEMBER_MAX_CONTOUR_SAMPLES = 24
 ARROW_SHAPE_GATE_DEFAULT_ENABLED = True
 ARROW_MAX_OCCUPANCY_DEFAULT = 0.5
@@ -523,15 +521,10 @@ class PictureViewerApp:
                 ),
             ))
         )
-        split_partner_min_points = split_arrow_settings.get(
-            "partner_min_contour_points", SPLIT_ARROW_PARTNER_MIN_POINTS
-        )
-        # Migrate the previous built-in value so existing settings files also
-        # receive the new firmware-equivalent eight-point fragment threshold.
-        if split_partner_min_points == 10:
-            split_partner_min_points = SPLIT_ARROW_PARTNER_MIN_POINTS
         self.split_arrow_partner_min_points_var = tk.StringVar(
-            value=str(split_partner_min_points)
+            value=str(split_arrow_settings.get(
+                "partner_min_contour_points", SPLIT_ARROW_PARTNER_MIN_POINTS
+            ))
         )
         self.split_arrow_max_distance_var = tk.StringVar(
             value=str(split_arrow_settings.get(
@@ -585,8 +578,6 @@ class PictureViewerApp:
         self.batch_index = 0
         self.batch_config: BatchRecognitionConfig | None = None
         self.batch_run_id = 0
-        self.batch_on_demand_seeds: list[tuple[float, float]] = []
-        self.batch_firmware_frame_sequence = 0
 
         self.all_files: list[Path] = []
         self.visible_files: list[Path] = []
@@ -596,7 +587,6 @@ class PictureViewerApp:
         self.binary: Image.Image | None = None
         self.components: list[ConnectedComponent] = []
         self._on_demand_seed_points: list[tuple[float, float]] = []
-        self._firmware_frame_sequence = 0
         self.on_demand_sampled_pixels = 0
         self.on_demand_seed_hits = 0
         self.on_demand_elapsed_ms = 0.0
@@ -1317,7 +1307,6 @@ class PictureViewerApp:
     def load_path(self, path: Path) -> None:
         if path == self.current_path:
             return
-        previous_path = self.current_path
         try:
             self.status_var.set(f"正在加载并去畸变：{path.name}")
             self.root.update_idletasks()
@@ -1331,14 +1320,7 @@ class PictureViewerApp:
         self.current_path = path
         self.original = image
         self.undistorted = undistorted
-        continues_sequence = bool(
-            previous_path is not None
-            and previous_path.parent == path.parent
-            and path.name > previous_path.name
-        )
-        if not continues_sequence:
-            self._on_demand_seed_points = []
-            self._firmware_frame_sequence = 0
+        self._on_demand_seed_points = []
         self.on_demand_sampled_pixels = 0
         self.on_demand_seed_hits = 0
         self.selected_component = None
@@ -1713,51 +1695,6 @@ class PictureViewerApp:
         thresholds = ContourThresholds(**values)
         thresholds.validate()
         return thresholds
-
-    def firmware_contour_thresholds(self, target_kind: str) -> ContourThresholds:
-        """Return the thresholds compiled into vision_runtime.c."""
-        current = self.current_contour_thresholds(target_kind)
-        if target_kind == TARGET_ARROW:
-            return replace(
-                current,
-                enabled=(
-                    "min_contour_points", "min_circularity",
-                    "max_circularity", "min_solidity", "max_solidity",
-                    "min_vertex_angle_deg", "max_vertex_angle_deg",
-                    "min_endpoint_turn_deg", "min_vertex_turn_deg",
-                    "max_vertex_turn_deg", "min_notch_turn_deg",
-                    "max_negative_turn_deg",
-                ),
-                min_contour_points=20,
-                min_circularity=0.0,
-                max_circularity=230.0 / 256.0,
-                min_solidity=0.0,
-                max_solidity=236.0 / 256.0,
-                min_vertex_angle_deg=25.0,
-                max_vertex_angle_deg=130.0,
-                min_endpoint_turn_deg=120.0,
-                min_vertex_turn_deg=70.0,
-                max_vertex_turn_deg=100.0,
-                min_notch_turn_deg=10.0,
-                max_negative_turn_deg=180.0,
-                direction_window_points=6,
-            )
-        return replace(
-            current,
-            enabled=(
-                "min_contour_points", "min_aspect_ratio",
-                "min_circularity", "max_circularity",
-                "min_solidity", "max_solidity", "max_negative_turn_deg",
-            ),
-            min_contour_points=7,
-            min_aspect_ratio=102.0 / 256.0,
-            min_circularity=179.0 / 256.0,
-            max_circularity=1.0,
-            min_solidity=218.0 / 256.0,
-            max_solidity=1.0,
-            max_negative_turn_deg=50.0,
-            direction_window_points=12,
-        )
 
     def current_contour_yaw_assist(self) -> tuple[bool, float]:
         try:
@@ -2228,104 +2165,38 @@ class PictureViewerApp:
         self._threshold_job = self.root.after(80, self.run_analysis)
 
     def _on_demand_prediction_seeds(self) -> list[tuple[float, float]]:
-        # Firmware carries only committed arrow/beacon centroids to the next
-        # frame; rejected candidates never become prediction seeds.
-        return list(self._on_demand_seed_points[:7])
+        ordered: list[tuple[float, float]] = []
+        accepted_labels = [
+            label
+            for label, result in self.beacon_recognition_results.items()
+            if result.passed
+        ]
+        for label in accepted_labels:
+            component = next(
+                (item for item in self.components if item.label == label),
+                None,
+            )
+            if component is not None:
+                ordered.append((component.centroid_x, component.centroid_y))
+        for component in sorted(
+            self.components,
+            key=lambda item: item.area,
+            reverse=True,
+        ):
+            point = (component.centroid_x, component.centroid_y)
+            if point not in ordered:
+                ordered.append(point)
+        for point in self._on_demand_seed_points:
+            if point not in ordered:
+                ordered.append(point)
+        return ordered[: max(1, self.current_beacon_accept_limit() + 1)]
 
     def run_on_demand_analysis(self) -> bool:
         if self.original is None:
             return False
         seeds = self._on_demand_prediction_seeds()
         threshold = self.safe_int(self.threshold_var, 50, 0, 255)
-        min_area = 6
-        try:
-            thresholds = {
-                target_kind: self.firmware_contour_thresholds(target_kind)
-                for target_kind in MATCHING_TARGET_KINDS
-            }
-            yaw_assist_enabled, yaw_tolerance_deg = (
-                self.current_contour_yaw_assist()
-            )
-            yaw_context = self.current_contour_yaw_context()
-            beacon_diameter, beacon_area_min_scale, beacon_area_max_scale = (
-                self.current_beacon_area_gate()
-            )
-        except ValueError:
-            return False
-
-        def classify_for_firmware_search(
-            component: ConnectedComponent,
-            gray: Image.Image,
-            binary: Image.Image,
-            arrow_already_found: bool,
-        ) -> str | None:
-            try:
-                metrics = calculate_contour_metrics(
-                    component,
-                    gray,
-                    binary,
-                    thresholds[TARGET_ARROW],
-                    negative_turn_window_points=(
-                        thresholds[TARGET_BEACON].direction_window_points
-                    ),
-                    is_valid_pixel=self.undistorter.is_valid_output_pixel,
-                )
-            except (ValueError, OverflowError):
-                return None
-            if component_centroid_is_foreground(component, binary):
-                beacon_decision = evaluate_contour_metrics(
-                    metrics,
-                    thresholds[TARGET_BEACON],
-                )
-                beacon_yaw_rejected, _error, _source, _reason = (
-                    self.evaluate_contour_beacon_yaw_rejection(
-                        component,
-                        metrics,
-                        thresholds[TARGET_ARROW],
-                        yaw_assist_enabled,
-                        yaw_tolerance_deg,
-                        yaw_context,
-                    )
-                )
-                if beacon_decision.passed and not beacon_yaw_rejected:
-                    area_passed, _area, _minimum, _maximum, _failure = (
-                        self.evaluate_beacon_physical_area(
-                            component,
-                            yaw_context,
-                            beacon_diameter,
-                            beacon_area_min_scale,
-                            beacon_area_max_scale,
-                        )
-                    )
-                    if area_passed:
-                        return TARGET_BEACON
-            if not arrow_already_found:
-                arrow_passed, _failures, assisted, _error, _source = (
-                    self.evaluate_contour_arrow_with_yaw(
-                        component,
-                        metrics,
-                        thresholds[TARGET_ARROW],
-                        yaw_assist_enabled,
-                        yaw_tolerance_deg,
-                        yaw_context,
-                    )
-                )
-                if arrow_passed and not assisted:
-                    outline = self._fit_contour_arrow_outline(
-                        component,
-                        yaw_context,
-                    ) or self._project_ideal_arrow_outline(
-                        (component.centroid_x, component.centroid_y),
-                        yaw_context,
-                    ) or ()
-                    arrow_passed = self._component_supports_both_arrow_arms(
-                        component,
-                        tuple(outline),
-                    )
-                if arrow_passed:
-                    return TARGET_ARROW
-            return None
-
+        min_area = self.safe_int(self.min_area_var, 6, 1, 90240)
         started = perf_counter()
         extractor = OnDemandContourExtractor(
             self.original,
@@ -2336,22 +2207,21 @@ class PictureViewerApp:
         result = extractor.extract(
             seeds,
             min_area=min_area,
-            max_components=8,
-            candidate_classifier=classify_for_firmware_search,
-            force_global_search=(
-                not seeds or (self._firmware_frame_sequence % 15) == 0
-            ),
-            beacon_limit=self.current_beacon_accept_limit(),
+            max_components=max(1, self.current_beacon_accept_limit() + 1),
         )
-        self._firmware_frame_sequence += 1
         self.on_demand_elapsed_ms = (perf_counter() - started) * 1000.0
         self.on_demand_sampled_pixels = result.sampled_pixels
         self.on_demand_seed_hits = result.seed_hits
-        if not result.components:
+        expected = min(len(seeds), max(1, self.current_beacon_accept_limit() + 1))
+        if not result.components or (expected > 0 and result.seed_hits < expected):
             return False
         self.undistorted = result.gray
         self.binary = result.binary
         self.components = list(result.components)
+        self._on_demand_seed_points = [
+            (component.centroid_x, component.centroid_y)
+            for component in self.components
+        ]
         self.threshold_elapsed_ms = 0.0
         self.candidate_elapsed_ms = self.on_demand_elapsed_ms
         self.selected_component = None
@@ -2977,67 +2847,6 @@ class PictureViewerApp:
             len(sampled) * ARROW_MEMBER_MIN_CONTOUR_RATIO
         )
 
-    def _component_supports_both_arrow_arms(
-        self,
-        component: ConnectedComponent,
-        outline: tuple[tuple[float, float], ...],
-    ) -> bool:
-        """Require independent contour support on both projected arrow arms."""
-        if len(outline) != 3 or not component.contour_points:
-            return False
-        left_tip, apex, right_tip = outline
-        step = max(
-            1,
-            math.ceil(
-                len(component.contour_points) / ARROW_MEMBER_MAX_CONTOUR_SAMPLES
-            ),
-        )
-        sampled = component.contour_points[::step]
-        required = math.ceil(len(sampled) * ARROW_EACH_ARM_MIN_CONTOUR_RATIO)
-        left_hits = sum(
-            self._point_segment_distance(point, apex, left_tip)
-            <= ARROW_EACH_ARM_CORRIDOR_PX
-            for point in sampled
-        )
-        right_hits = sum(
-            self._point_segment_distance(point, apex, right_tip)
-            <= ARROW_EACH_ARM_CORRIDOR_PX
-            for point in sampled
-        )
-        return left_hits >= required and right_hits >= required
-
-    def _beacon_main_axis_arrow_error(
-        self,
-        component: ConnectedComponent,
-        context: ContourYawContext,
-    ) -> float | None:
-        """Return the undirected error to the nearer projected arrow arm."""
-        main_axis = self._contour_main_axis(component)
-        if main_axis is None or main_axis[1] < SPLIT_ARROW_MIN_AXIS_DOMINANCE:
-            return None
-        outline = self._fit_contour_arrow_outline(
-            component,
-            context,
-        ) or self._project_ideal_arrow_outline(
-            (component.centroid_x, component.centroid_y),
-            context,
-        )
-        if outline is None:
-            return None
-        left_tip, apex, right_tip = outline
-        arm_axes = (
-            math.degrees(math.atan2(
-                left_tip[1] - apex[1], left_tip[0] - apex[0]
-            )) % 180.0,
-            math.degrees(math.atan2(
-                right_tip[1] - apex[1], right_tip[0] - apex[0]
-            )) % 180.0,
-        )
-        return min(
-            self._axis_difference_deg(main_axis[0], arm_axis)
-            for arm_axis in arm_axes
-        )
-
     @staticmethod
     def _project_ideal_arrow_outline(
         center_image: tuple[float, float],
@@ -3341,15 +3150,7 @@ class PictureViewerApp:
                 outline = self._project_ideal_arrow_outline(center, context)
                 if outline is None:
                     continue
-                # Firmware IPM projection stores full-resolution image points
-                # as floor(value + 0.5) integers before fitting.
-                left_tip, apex, right_tip = tuple(
-                    (
-                        float(math.floor(point[0] + 0.5)),
-                        float(math.floor(point[1] + 0.5)),
-                    )
-                    for point in outline
-                )
+                left_tip, apex, right_tip = outline
                 ideal_axes = (
                     math.degrees(math.atan2(
                         left_tip[1] - apex[1], left_tip[0] - apex[0]
@@ -3383,19 +3184,9 @@ class PictureViewerApp:
                         best = candidate
         if best is None:
             return None
-        best_outline = self._project_ideal_arrow_outline(best[1], context)
-        if best_outline is not None:
-            best_outline = tuple(
-                (
-                    float(math.floor(point[0] + 0.5)),
-                    float(math.floor(point[1] + 0.5)),
-                )
-                for point in best_outline
-            )
         return {
             "center": best[1],
-            "outline": best_outline,
-            "score": best[0],
+            "outline": self._project_ideal_arrow_outline(best[1], context),
             "distance_cm": centroid_distance,
             "angle_deg": axis_angle,
             "fit_error_px": best[4],
@@ -3641,24 +3432,14 @@ class PictureViewerApp:
         """Apply the arrow-Yaw signature as an exclusion gate for beacons."""
         if not yaw_assist_enabled:
             return False, None, "", None
-        try:
-            context = yaw_context or self.current_contour_yaw_context()
-            axis_error = self._beacon_main_axis_arrow_error(component, context)
-        except (ValueError, OverflowError) as exc:
-            axis_error = None
-            axis_error_reason = str(exc)
-        else:
-            axis_error_reason = None
-        if axis_error is not None and axis_error <= yaw_tolerance_deg:
-            return True, axis_error, "主轴", None
         endpoint_count = len(metrics.arm_tip_points)
         direction_count = int(metrics.vertex_point is not None) + int(
             metrics.deepest_point is not None
         )
         if endpoint_count > 2 or endpoint_count + direction_count < 2:
-            return False, axis_error, "主轴" if axis_error is not None else "", axis_error_reason
+            return False, None, "", None
         if endpoint_count == 2 and direction_count == 0:
-            return False, axis_error, "主轴" if axis_error is not None else "", axis_error_reason
+            return False, None, "", None
         direction_free_thresholds = replace(
             thresholds,
             enabled=tuple(
@@ -3671,7 +3452,7 @@ class PictureViewerApp:
             metrics,
             direction_free_thresholds,
         ).passed:
-            return False, axis_error, "主轴" if axis_error is not None else "", axis_error_reason
+            return False, None, "", None
         try:
             direction_error, direction_source = self.contour_yaw_direction_error(
                 component,
@@ -3696,10 +3477,15 @@ class PictureViewerApp:
         return BatchRecognitionConfig(
             mode=self.batch_mode_var.get(),
             binary_threshold=self.safe_int(self.threshold_var, 50, 0, 255),
-            min_area=6,
+            min_area=self.safe_int(
+                self.min_area_var,
+                6,
+                1,
+                self.calibration.output_width * self.calibration.output_height,
+            ),
             undistort_interpolation=self.current_undistort_interpolation(),
-            arrow_thresholds=self.firmware_contour_thresholds(TARGET_ARROW),
-            beacon_thresholds=self.firmware_contour_thresholds(TARGET_BEACON),
+            arrow_thresholds=self.current_contour_thresholds(TARGET_ARROW),
+            beacon_thresholds=self.current_contour_thresholds(TARGET_BEACON),
             beacon_accept_limit=self.current_beacon_accept_limit(),
             yaw_assist_enabled=yaw_assist_enabled,
             yaw_tolerance_deg=yaw_tolerance_deg,
@@ -3729,114 +3515,22 @@ class PictureViewerApp:
         config: BatchRecognitionConfig,
     ) -> BatchRecognitionRow:
         gray = self.load_gray_image(path)
+        undistorted = self.undistorter.apply(
+            gray,
+            interpolation=config.undistort_interpolation,
+        )
+        binary = threshold_image(undistorted, config.binary_threshold)
+        components = find_contour_components(binary, min_area=config.min_area)
         yaw_context = (
             self.batch_yaw_context_for_path(path, config.yaw_context)
             if config.yaw_context is not None
             else None
         )
-        if yaw_context is None:
-            raise ValueError("无人机等价批量识别缺少姿态、高度或外参")
-
-        def classify_for_search(
-            component: ConnectedComponent,
-            sampled_gray: Image.Image,
-            sampled_binary: Image.Image,
-            arrow_already_found: bool,
-        ) -> str | None:
-            metrics = calculate_contour_metrics(
-                component,
-                sampled_gray,
-                sampled_binary,
-                config.arrow_thresholds,
-                negative_turn_window_points=(
-                    config.beacon_thresholds.direction_window_points
-                ),
-                is_valid_pixel=self.undistorter.is_valid_output_pixel,
-            )
-            beacon_yaw_rejected, _error, _source, _reason = (
-                self.evaluate_contour_beacon_yaw_rejection(
-                    component,
-                    metrics,
-                    config.arrow_thresholds,
-                    config.yaw_assist_enabled,
-                    config.yaw_tolerance_deg,
-                    yaw_context,
-                )
-            )
-            area_passed, _area, _minimum, _maximum, _reason = (
-                self.evaluate_beacon_physical_area(
-                    component,
-                    yaw_context,
-                    config.beacon_diameter_cm,
-                    config.beacon_area_min_scale,
-                    config.beacon_area_max_scale,
-                )
-            )
-            if (
-                config.mode != BATCH_MODE_ARROW
-                and component_centroid_is_foreground(component, sampled_binary)
-                and evaluate_contour_metrics(
-                    metrics, config.beacon_thresholds
-                ).passed
-                and not beacon_yaw_rejected
-                and area_passed
-            ):
-                return TARGET_BEACON
-            if config.mode != BATCH_MODE_BEACON and not arrow_already_found:
-                passed, _failures, assisted, _error, _source = (
-                    self.evaluate_contour_arrow_with_yaw(
-                        component,
-                        metrics,
-                        config.arrow_thresholds,
-                        config.yaw_assist_enabled,
-                        config.yaw_tolerance_deg,
-                        yaw_context,
-                    )
-                )
-                if passed and not assisted:
-                    outline = self._fit_contour_arrow_outline(
-                        component,
-                        yaw_context,
-                    ) or self._project_ideal_arrow_outline(
-                        (component.centroid_x, component.centroid_y),
-                        yaw_context,
-                    ) or ()
-                    passed = self._component_supports_both_arrow_arms(
-                        component,
-                        tuple(outline),
-                    )
-                if passed:
-                    return TARGET_ARROW
-            return None
-
-        extractor = OnDemandContourExtractor(
-            gray,
-            self.undistorter,
-            config.binary_threshold,
-            interpolation=config.undistort_interpolation,
-        )
-        extracted = extractor.extract(
-            self.batch_on_demand_seeds,
-            min_area=config.min_area,
-            max_components=8,
-            candidate_classifier=classify_for_search,
-            force_global_search=(
-                not self.batch_on_demand_seeds
-                or (self.batch_firmware_frame_sequence % 15) == 0
-            ),
-            beacon_limit=config.beacon_accept_limit,
-        )
-        self.batch_firmware_frame_sequence += 1
-        undistorted = extracted.gray
-        binary = extracted.binary
-        components = list(extracted.components)
         arrow_count = 0
         beacon_count = 0
         yaw_assisted_count = 0
         split_candidates: list[ConnectedComponent] = []
         beacon_labels: set[int] = set()
-        arrow_label: int | None = None
-        strong_arrow_found = False
         for component in components:
             metrics = calculate_contour_metrics(
                 component,
@@ -3896,49 +3590,27 @@ class PictureViewerApp:
                     )
                 )
                 if arrow_passed:
-                    outline = self._fit_contour_arrow_outline(
-                        component,
-                        yaw_context,
-                    ) or self._project_ideal_arrow_outline(
-                        (component.centroid_x, component.centroid_y),
-                        yaw_context,
-                    ) or ()
-                    if assisted or self._component_supports_both_arrow_arms(
-                        component,
-                        tuple(outline),
-                    ):
-                        arrow_count = 1
-                        arrow_label = component.label
-                        yaw_assisted_count += int(assisted)
-                        strong_arrow_found = not assisted
+                    arrow_count = 1
+                    yaw_assisted_count += int(assisted)
             if (
                 len(component.contour_points)
                 >= config.split_arrow_partner_min_points
-                and component.contour_closed
-                and not component.contour_overflow
-                and not metrics.boundary_clipped
             ):
                 split_candidates.append(component)
 
-        split_labels: tuple[int, int] | None = None
         if (
             config.split_arrow_enabled
-            and not strong_arrow_found
+            and arrow_count == 0
             and config.mode != BATCH_MODE_BEACON
             and yaw_context is not None
         ):
-            best_split: tuple[
-                ConnectedComponent,
-                ConnectedComponent,
-                dict[str, object],
-            ] | None = None
             for first_index, first in enumerate(split_candidates):
                 for second in split_candidates[first_index + 1:]:
                     if max(
                         len(first.contour_points), len(second.contour_points)
                     ) < config.split_arrow_primary_min_points:
                         continue
-                    match = self._split_arrow_match(
+                    if self._split_arrow_match(
                         first,
                         second,
                         yaw_context,
@@ -3946,48 +3618,15 @@ class PictureViewerApp:
                         config.split_arrow_max_distance_cm,
                         config.split_arrow_angle_tolerance_deg,
                         config.split_arrow_max_fit_error_px,
-                    )
-                    if match is None:
-                        continue
-                    if (
-                        best_split is None
-                        or float(match["score"]) < float(best_split[2]["score"])
-                    ):
-                        best_split = (first, second, match)
-            if best_split is not None:
-                first, second, _match = best_split
-                arrow_count = 1
-                yaw_assisted_count = 1
-                arrow_label = None
-                split_labels = (first.label, second.label)
-                beacon_labels.discard(first.label)
-                beacon_labels.discard(second.label)
-                beacon_count = len(beacon_labels)
-        seed_labels = set(beacon_labels)
-        if split_labels is not None:
-            first_label, second_label = split_labels
-            first_component = next(
-                component for component in components
-                if component.label == first_label
-            )
-            second_component = next(
-                component for component in components
-                if component.label == second_label
-            )
-            seed_labels.add(
-                first_label if first_component.area >= second_component.area
-                else second_label
-            )
-        elif arrow_label is not None:
-            seed_labels.add(arrow_label)
-        self.batch_on_demand_seeds = [
-            (
-                float(int(component.centroid_x + 0.5)),
-                float(int(component.centroid_y + 0.5)),
-            )
-            for component in components
-            if component.label in seed_labels
-        ][:7]
+                    ) is not None:
+                        arrow_count = 1
+                        yaw_assisted_count += 1
+                        beacon_labels.discard(first.label)
+                        beacon_labels.discard(second.label)
+                        beacon_count = len(beacon_labels)
+                        break
+                if arrow_count:
+                    break
         return BatchRecognitionRow(
             path=path,
             candidate_count=len(components),
@@ -4152,11 +3791,9 @@ class PictureViewerApp:
         except ValueError as exc:
             messagebox.showerror("批量识别参数错误", str(exc))
             return
-        self.batch_files = sorted(files, key=lambda item: str(item))
+        self.batch_files = list(files)
         self.batch_rows.clear()
         self.batch_index = 0
-        self.batch_on_demand_seeds = []
-        self.batch_firmware_frame_sequence = 0
         self.batch_config = config
         self.batch_run_id += 1
         run_id = self.batch_run_id
@@ -4379,11 +4016,7 @@ class PictureViewerApp:
 
         try:
             thresholds = {
-                target_kind: (
-                    self.firmware_contour_thresholds(target_kind)
-                    if on_demand
-                    else self.current_contour_thresholds(target_kind)
-                )
+                target_kind: self.current_contour_thresholds(target_kind)
                 for target_kind in MATCHING_TARGET_KINDS
             }
             yaw_assist_enabled, yaw_tolerance_deg = (
@@ -4623,55 +4256,14 @@ class PictureViewerApp:
                 physical_area_valid=physical_area_valid,
             )
 
-        for component in self.components:
-            recognition = results.get(component.label)
-            if (
-                recognition is None
-                or not recognition.passed
-                or recognition.target_kind != TARGET_ARROW
-                or recognition.yaw_assisted
-            ):
-                continue
-            if not self._component_supports_both_arrow_arms(
-                component,
-                recognition.projected_outline,
-            ):
-                results[component.label] = replace(
-                    recognition,
-                    passed=False,
-                    target_kind=None,
-                    attempts=recognition.attempts + (
-                        "箭头失败（理论左右臂未分别获得轮廓支撑）",
-                    ),
-                    failures=("箭头：理论左右臂未分别获得轮廓支撑",),
-                    projected_outline=(),
-                )
-        arrow_found = any(
-            recognition.passed and recognition.target_kind == TARGET_ARROW
-            for recognition in results.values()
-        )
-
         split_result: tuple[int, int, dict[str, object]] | None = None
-        strong_arrow_found = any(
-            recognition.passed
-            and recognition.target_kind == TARGET_ARROW
-            and not recognition.yaw_assisted
-            for recognition in results.values()
-        )
-        if (
-            split_settings["enabled"]
-            and not strong_arrow_found
-            and target_only != TARGET_BEACON
-        ):
+        if split_settings["enabled"] and not arrow_found and target_only != TARGET_BEACON:
             split_candidates: list[tuple[ConnectedComponent, ContourMetrics]] = []
             for component in self.components:
                 recognition = results.get(component.label)
                 if (
                     recognition is None
                     or recognition.contour_metrics is None
-                    or recognition.contour_metrics.boundary_clipped
-                    or not component.contour_closed
-                    or component.contour_overflow
                     or len(component.contour_points) < int(
                         split_settings["partner_min_contour_points"]
                     )
@@ -4696,25 +4288,13 @@ class PictureViewerApp:
                     )
                     if match is None:
                         continue
-                    if split_result is None or float(match["score"]) < float(
-                        split_result[2]["score"]
+                    if split_result is None or float(match["fit_error_px"]) < float(
+                        split_result[2]["fit_error_px"]
                     ):
                         split_result = (first.label, second.label, match)
 
         if split_result is not None:
             first_label, second_label, match = split_result
-            for label, recognition in tuple(results.items()):
-                if (
-                    recognition.passed
-                    and recognition.target_kind == TARGET_ARROW
-                    and recognition.yaw_assisted
-                ):
-                    results[label] = replace(
-                        recognition,
-                        passed=False,
-                        target_kind=None,
-                        projected_outline=(),
-                    )
             primary_label = (
                 first_label
                 if next(component for component in self.components if component.label == first_label).area
@@ -4818,16 +4398,6 @@ class PictureViewerApp:
                 )
             beacon_found_count = min(len(accepted_beacons), beacon_accept_limit)
 
-        self._on_demand_seed_points = [
-            (
-                float(int(component.centroid_x + 0.5)),
-                float(int(component.centroid_y + 0.5)),
-            )
-            for component in self.components
-            if (recognition := results.get(component.label)) is not None
-            and recognition.passed
-            and recognition.target_kind in {TARGET_ARROW, TARGET_BEACON}
-        ][:7]
         self.beacon_recognition_results = results
         self.update_component_tree()
         self.view_var.set("连通域候选")

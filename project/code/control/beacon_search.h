@@ -34,9 +34,9 @@ typedef enum
 {
     BEACON_SEARCH_FAILURE_NONE = 0,
     BEACON_SEARCH_FAILURE_SWEEP_COMPLETE,
-    BEACON_SEARCH_FAILURE_FULL_TURN = BEACON_SEARCH_FAILURE_SWEEP_COMPLETE,
     BEACON_SEARCH_FAILURE_TIMEOUT,
-    BEACON_SEARCH_FAILURE_CAR_LINK
+    BEACON_SEARCH_FAILURE_CAR_LINK,
+    BEACON_SEARCH_FAILURE_FULL_TURN
 } BeaconSearchFailure_t;
 
 typedef struct
@@ -77,7 +77,11 @@ typedef struct
     uint8 position_sample_valid;
     uint8 fused_velocity_valid;
     uint8 start_gate_ready;
+    uint8 sweep_round_count;
+    uint8 final_turn_active;
+    uint8 terminal_latched;
     float search_origin_yaw_deg;
+    float final_turn_progress_deg;
 } BeaconSearchDiag_t;
 
 void BeaconSearch_Init(void);
@@ -104,6 +108,7 @@ float BeaconSearch_GetSweepHalfAngleDeg(void);
 float BeaconSearch_GetSweepAngleDeg(void);
 float BeaconSearch_LimitYawRate(float yaw_rate_dps);
 uint8 BeaconSearch_IsPausedByBlindBoxTask(void);
+uint8 BeaconSearch_ShouldSuppressObservations(void);
 uint8 BeaconSearch_GetFrameFlags(void);
 void BeaconSearch_GetDiag(BeaconSearchDiag_t *diag);
 
