@@ -14,6 +14,8 @@
 #define DUAL_CAMERA_FUSION_TRACK_MAX_MISS         (5U)
 #define DUAL_CAMERA_FUSION_RESIDUAL_HISTORY_SIZE  (64U)
 #define DUAL_CAMERA_FUSION_DEG_TO_RAD             (0.017453292519943295f)
+#define DUAL_CAMERA_FUSION_FRONT_WEIGHT           (0.75f)
+#define DUAL_CAMERA_FUSION_REAR_WEIGHT            (0.25f)
 /* Residual rear-board translation after each board's own camera extrinsic. */
 #define DUAL_CAMERA_FUSION_REAR_RESIDUAL_X_CM     (20.0f)
 #define DUAL_CAMERA_FUSION_REAR_RESIDUAL_Y_CM     (30.0f)
@@ -412,7 +414,7 @@ static uint8 DualCameraFusion_BuildCandidates(
                 gate_cm += time_margin_cm;
                 if(gate_cm > DUAL_CAMERA_FUSION_DEDUP_GATE_MAX_CM)
                     gate_cm = DUAL_CAMERA_FUSION_DEDUP_GATE_MAX_CM;
-                if((distance_sq <= gate_cm * gate_cm) &&
+                if((distance_sq < gate_cm * gate_cm) &&
                    ((best_front == 0xFFU) || (distance_sq < best_distance_sq)))
                 {
                     best_front = i;
@@ -436,6 +438,18 @@ static uint8 DualCameraFusion_BuildCandidates(
             output[output_count] = rear_candidate[best_rear];
             output[output_count].source = DUAL_CAMERA_FUSION_SOURCE_BOTH_REAR;
         }
+        output[output_count].x_cm =
+            DUAL_CAMERA_FUSION_FRONT_WEIGHT * front_candidate[best_front].x_cm +
+            DUAL_CAMERA_FUSION_REAR_WEIGHT * rear_candidate[best_rear].x_cm;
+        output[output_count].y_cm =
+            DUAL_CAMERA_FUSION_FRONT_WEIGHT * front_candidate[best_front].y_cm +
+            DUAL_CAMERA_FUSION_REAR_WEIGHT * rear_candidate[best_rear].y_cm;
+        output[output_count].dx_cm =
+            DUAL_CAMERA_FUSION_FRONT_WEIGHT * front_candidate[best_front].dx_cm +
+            DUAL_CAMERA_FUSION_REAR_WEIGHT * rear_candidate[best_rear].dx_cm;
+        output[output_count].dy_cm =
+            DUAL_CAMERA_FUSION_FRONT_WEIGHT * front_candidate[best_front].dy_cm +
+            DUAL_CAMERA_FUSION_REAR_WEIGHT * rear_candidate[best_rear].dy_cm;
         s_diag.duplicate_residual_cm = sqrtf(best_distance_sq);
         DualCameraFusion_AddResidual(s_diag.duplicate_residual_cm);
         s_diag.duplicate_count++;
@@ -891,15 +905,47 @@ void DualCameraFusion_BuildSnapshot(uint32 now_us)
             s_snapshot.rear_yaw_valid = display_rear->yaw_valid;
         }
 
-        /* If the front reference has no car, promote the aligned rear car.
-         * Beacon coordinates and the promoted car position remain in the
-         * same reference frame; keep the reference UAV yaw unchanged. */
-        if(!s_snapshot.car_valid && s_snapshot.rear_car_valid)
+        /* Both board positions are already aligned to the reference UAV axes. */
+        if(s_snapshot.front_car_valid && s_snapshot.rear_car_valid)
+        {
+            s_snapshot.car_x_cm =
+                DUAL_CAMERA_FUSION_FRONT_WEIGHT * s_snapshot.front_car_x_cm +
+                DUAL_CAMERA_FUSION_REAR_WEIGHT * s_snapshot.rear_car_x_cm;
+            s_snapshot.car_y_cm =
+                DUAL_CAMERA_FUSION_FRONT_WEIGHT * s_snapshot.front_car_y_cm +
+                DUAL_CAMERA_FUSION_REAR_WEIGHT * s_snapshot.rear_car_y_cm;
+            s_snapshot.car_valid = 1U;
+            s_snapshot.car_raw_valid = (uint8)(
+                s_snapshot.front_car_raw_valid ||
+                s_snapshot.rear_car_raw_valid);
+        }
+        else if(s_snapshot.front_car_valid)
+        {
+            s_snapshot.car_x_cm = s_snapshot.front_car_x_cm;
+            s_snapshot.car_y_cm = s_snapshot.front_car_y_cm;
+            s_snapshot.car_valid = 1U;
+            s_snapshot.car_raw_valid = s_snapshot.front_car_raw_valid;
+        }
+        else if(s_snapshot.rear_car_valid)
         {
             s_snapshot.car_x_cm = s_snapshot.rear_car_x_cm;
             s_snapshot.car_y_cm = s_snapshot.rear_car_y_cm;
             s_snapshot.car_valid = 1U;
             s_snapshot.car_raw_valid = s_snapshot.rear_car_raw_valid;
+        }
+        else
+        {
+            s_snapshot.car_valid = 0U;
+            s_snapshot.car_raw_valid = 0U;
+        }
+
+        if(s_snapshot.car_valid)
+        {
+            for(i = 0U; i < candidate_count; i++)
+            {
+                candidate[i].dx_cm = candidate[i].x_cm - s_snapshot.car_x_cm;
+                candidate[i].dy_cm = candidate[i].y_cm - s_snapshot.car_y_cm;
+            }
         }
     }
 

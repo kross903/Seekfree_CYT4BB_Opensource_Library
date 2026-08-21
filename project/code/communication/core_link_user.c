@@ -7,9 +7,7 @@
 #define CORE_LINK_USER_BEACON_TIMEOUT_MS    (200U)
 #define CORE_LINK_USER_BEACON_TRACK_GATE_MIN_CM (30.0f)
 #define CORE_LINK_USER_BEACON_TRACK_MAX_MISS_FRAMES (5U)
-#define CORE_LINK_USER_BEACON_CAR_EXCLUSION_RADIUS_CM (20.0f)
-#define CORE_LINK_USER_NEAR_CAR_CONFIRM_RADIUS_CM (150.0f)
-#define CORE_LINK_USER_NEAR_CAR_CONFIRM_FRAMES (3U)
+#define CORE_LINK_USER_BEACON_CAR_EXCLUSION_RADIUS_CM (35.0f)
 #define CORE_LINK_USER_MOTION_STALE_MS      (80U)
 #define CORE_LINK_USER_MOTION_INVALID_MS    (130U)
 #define CORE_LINK_USER_PLAN_VEL_SLEW_ACCEL_CMS2 (200.0f)
@@ -27,13 +25,6 @@ typedef struct
     uint8 miss_count;
     uint8 valid;
 } core_link_user_beacon_track_struct;
-
-typedef struct
-{
-    uint8 track_id;
-    uint8 confirm_count;
-    uint8 valid;
-} core_link_user_near_beacon_confirm_struct;
 
 static volatile uint8 s_core_link_user_key_queue[CORE_LINK_USER_KEY_QUEUE_SIZE] = {0};
 static volatile uint8 s_core_link_user_key_queue_head = 0;
@@ -61,9 +52,6 @@ static float s_core_link_user_car_lpf_ay_cms2 = 0.0f;
 static volatile uint32 s_core_link_user_time_ms = 0U;
 static core_link_user_beacon_track_struct
     s_core_link_user_beacon_tracks[CORE_LINK_BEACON_TRACK_MAX_COUNT] = {0};
-static core_link_user_near_beacon_confirm_struct
-    s_core_link_user_near_beacon_confirms[CORE_LINK_BEACON_TRACK_MAX_COUNT] = {0};
-static uint32 s_core_link_user_near_beacon_last_rear_frame_seq = 0U;
 static uint16 s_core_link_user_beacon_sequence = 0U;
 static uint8 s_core_link_user_next_track_id = 1U;
 static uint8 s_core_link_user_tracker_reset_pending = 1U;
@@ -99,162 +87,6 @@ static uint8 core_link_user_beacon_overlaps_car(float beacon_x_cm,
     return (uint8)((dx * dx + dy * dy) <=
                    (CORE_LINK_USER_BEACON_CAR_EXCLUSION_RADIUS_CM *
                     CORE_LINK_USER_BEACON_CAR_EXCLUSION_RADIUS_CM));
-}
-
-static void core_link_user_clear_near_beacon_confirms(void)
-{
-    memset(s_core_link_user_near_beacon_confirms, 0,
-           sizeof(s_core_link_user_near_beacon_confirms));
-    s_core_link_user_near_beacon_last_rear_frame_seq = 0U;
-}
-
-static int8 core_link_user_find_near_beacon_confirm(uint8 track_id)
-{
-    uint8 i;
-
-    if(0U == track_id)
-    {
-        return -1;
-    }
-    for(i = 0U; i < CORE_LINK_BEACON_TRACK_MAX_COUNT; ++i)
-    {
-        if(s_core_link_user_near_beacon_confirms[i].valid &&
-           (s_core_link_user_near_beacon_confirms[i].track_id == track_id))
-        {
-            return (int8)i;
-        }
-    }
-    return -1;
-}
-
-static uint8 core_link_user_fusion_has_track(
-    const DualCameraFusionSnapshot_t *snapshot,
-    uint8 track_id)
-{
-    uint8 i;
-
-    if((NULL == snapshot) || (0U == track_id))
-    {
-        return 0U;
-    }
-    for(i = 0U; (i < snapshot->target_count) &&
-                (i < DUAL_CAMERA_FUSION_MAX_TARGETS); ++i)
-    {
-        if(snapshot->target[i].valid &&
-           (snapshot->target[i].track_id == track_id))
-        {
-            return 1U;
-        }
-    }
-    return 0U;
-}
-
-static int8 core_link_user_get_near_beacon_confirm(uint8 track_id)
-{
-    int8 index = core_link_user_find_near_beacon_confirm(track_id);
-    uint8 i;
-
-    if(index >= 0)
-    {
-        return index;
-    }
-    for(i = 0U; i < CORE_LINK_BEACON_TRACK_MAX_COUNT; ++i)
-    {
-        if(!s_core_link_user_near_beacon_confirms[i].valid)
-        {
-            memset(&s_core_link_user_near_beacon_confirms[i], 0,
-                   sizeof(s_core_link_user_near_beacon_confirms[i]));
-            s_core_link_user_near_beacon_confirms[i].valid = 1U;
-            s_core_link_user_near_beacon_confirms[i].track_id = track_id;
-            return (int8)i;
-        }
-    }
-    return -1;
-}
-
-static void core_link_user_update_near_beacon_confirms(
-    const DualCameraFusionSnapshot_t *snapshot,
-    uint8 target_allowed[DUAL_CAMERA_FUSION_MAX_TARGETS])
-{
-    uint8 new_rear_frame;
-    uint8 i;
-
-    if((NULL == snapshot) || (NULL == target_allowed))
-    {
-        return;
-    }
-    memset(target_allowed, 0, DUAL_CAMERA_FUSION_MAX_TARGETS);
-    /* The 50 ms downlink can reuse one cached rear-board image. Only a new
-     * rear camera sequence is allowed to advance or reset confirmation. */
-    new_rear_frame = (uint8)((0U != snapshot->rear_frame_seq) &&
-        (snapshot->rear_frame_seq !=
-         s_core_link_user_near_beacon_last_rear_frame_seq));
-    if(new_rear_frame)
-    {
-        for(i = 0U; i < CORE_LINK_BEACON_TRACK_MAX_COUNT; ++i)
-        {
-            if(s_core_link_user_near_beacon_confirms[i].valid &&
-               !core_link_user_fusion_has_track(
-                   snapshot,
-                   s_core_link_user_near_beacon_confirms[i].track_id))
-            {
-                memset(&s_core_link_user_near_beacon_confirms[i], 0,
-                       sizeof(s_core_link_user_near_beacon_confirms[i]));
-            }
-        }
-        s_core_link_user_near_beacon_last_rear_frame_seq =
-            snapshot->rear_frame_seq;
-    }
-
-    for(i = 0U; (i < snapshot->target_count) &&
-                (i < DUAL_CAMERA_FUSION_MAX_TARGETS); ++i)
-    {
-        const DualCameraFusionTarget_t *target = &snapshot->target[i];
-        core_link_user_near_beacon_confirm_struct *confirm;
-        float dx;
-        float dy;
-        int8 confirm_index;
-
-        if(!target->valid || (0U == target->track_id))
-        {
-            continue;
-        }
-        dx = target->x_cm - snapshot->car_x_cm;
-        dy = target->y_cm - snapshot->car_y_cm;
-
-        /* Front-only and dual-camera targets already have independent
-         * evidence; the three-frame gate is for rear-board-only targets. */
-        if((target->source != DUAL_CAMERA_FUSION_SOURCE_REAR) ||
-           !snapshot->car_valid ||
-           ((dx * dx + dy * dy) >=
-            (CORE_LINK_USER_NEAR_CAR_CONFIRM_RADIUS_CM *
-             CORE_LINK_USER_NEAR_CAR_CONFIRM_RADIUS_CM)))
-        {
-            target_allowed[i] = 1U;
-            confirm_index = core_link_user_get_near_beacon_confirm(
-                target->track_id);
-            if(confirm_index >= 0)
-            {
-                s_core_link_user_near_beacon_confirms[confirm_index].confirm_count =
-                    CORE_LINK_USER_NEAR_CAR_CONFIRM_FRAMES;
-            }
-            continue;
-        }
-        confirm_index = core_link_user_get_near_beacon_confirm(
-            target->track_id);
-        if(confirm_index < 0)
-        {
-            continue;
-        }
-        confirm = &s_core_link_user_near_beacon_confirms[confirm_index];
-        if(new_rear_frame &&
-           (confirm->confirm_count < CORE_LINK_USER_NEAR_CAR_CONFIRM_FRAMES))
-        {
-            confirm->confirm_count++;
-        }
-        target_allowed[i] = (uint8)(confirm->confirm_count >=
-            CORE_LINK_USER_NEAR_CAR_CONFIRM_FRAMES);
-    }
 }
 
 static int16 core_link_user_read_i16_le(const uint8 *data)
@@ -658,7 +490,6 @@ static void core_link_user_build_beacon_observations(
 {
 #if (VISION_FUSION_OUTPUT_MODE == VISION_FUSION_OUTPUT_LIVE)
     DualCameraFusionSnapshot_t fusion_snapshot = {0};
-    uint8 target_allowed[DUAL_CAMERA_FUSION_MAX_TARGETS] = {0};
 #else
     VehicleMarkerLossDebug_t loss_debug = {0};
     VisionRuntimeBeaconSlot_t slots[VISION_RUNTIME_BEACON_SLOT_COUNT] = {0};
@@ -688,7 +519,6 @@ static void core_link_user_build_beacon_observations(
     if(fusion_snapshot.tracker_reset_count !=
        s_core_link_user_live_fusion_reset_seen)
     {
-        core_link_user_clear_near_beacon_confirms();
         packet->frame_flags |= CORE_LINK_BEACON_FRAME_FLAG_TRACKER_RESET;
         s_core_link_user_live_fusion_reset_seen =
             fusion_snapshot.tracker_reset_count;
@@ -696,8 +526,6 @@ static void core_link_user_build_beacon_observations(
     }
     if(fusion_snapshot.valid)
     {
-        core_link_user_update_near_beacon_confirms(&fusion_snapshot,
-                                                   target_allowed);
         packet->car_visible = fusion_snapshot.car_valid;
         packet->car_x_mm = core_link_user_cm_to_mm_i16(fusion_snapshot.car_x_cm);
         packet->car_y_mm = core_link_user_cm_to_mm_i16(fusion_snapshot.car_y_cm);
@@ -737,7 +565,6 @@ static void core_link_user_build_beacon_observations(
 
                 if(!fusion_snapshot.target[i].valid ||
                    (fusion_snapshot.target[i].track_id == 0U)) continue;
-                if(!target_allowed[i]) continue;
                 if(core_link_user_beacon_overlaps_car(
                        fusion_snapshot.target[i].x_cm,
                        fusion_snapshot.target[i].y_cm,
@@ -963,7 +790,6 @@ void core_link_user_init (void)
     s_core_link_user_next_track_id = 1U;
     s_core_link_user_tracker_reset_pending = 1U;
     s_core_link_user_live_fusion_reset_seen = 0U;
-    core_link_user_clear_near_beacon_confirms();
     DualCameraFusion_Init();
     memset(s_core_link_user_beacon_tracks, 0,
            sizeof(s_core_link_user_beacon_tracks));
