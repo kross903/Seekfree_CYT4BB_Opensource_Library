@@ -477,7 +477,8 @@ static uint8 set_beacon_search_value(uint8 item, float value)
         case '1':
             return BeaconSearch_SetYawRateDps(value);
         case '2':
-            return BeaconSearch_SetSweepHalfAngleDeg(value);
+            /* Q2表示每轮单个方向累计的实际旋转角，不再是绝对Yaw半角。 */
+            return BeaconSearch_SetSweepDirectionAngleDeg(value);
         default:
             return 0U;
     }
@@ -677,16 +678,17 @@ static void send_pid_data_back(uint8 command)
         case 'Q':
         {
             float yaw_rate_dps = BeaconSearch_GetYawRateDps();
-            float half_angle_deg = BeaconSearch_GetSweepHalfAngleDeg();
+            float direction_angle_deg =
+                BeaconSearch_GetSweepDirectionAngleDeg();
 
             send_four_date(yaw_rate_dps,
-                           half_angle_deg,
-                           -half_angle_deg,
-                           half_angle_deg,
+                           direction_angle_deg,
+                           -direction_angle_deg,
+                           direction_angle_deg,
                            BeaconSearch_GetSweepAngleDeg(),
                            BEACON_SEARCH_YAW_RATE_MIN_DPS,
                            BEACON_SEARCH_YAW_RATE_MAX_DPS,
-                           BEACON_SEARCH_SWEEP_HALF_ANGLE_MAX_DEG);
+                           BEACON_SEARCH_SWEEP_DIRECTION_MAX_DEG);
             return;
         }
 
