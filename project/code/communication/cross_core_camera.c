@@ -24,6 +24,12 @@
 #define CROSS_CORE_CAMERA_SCREEN_OWNER_NONE         0U
 #define CROSS_CORE_CAMERA_SCREEN_OWNER_VISION       1U
 
+#define CROSS_CORE_CAMERA_SETTINGS_FLASH_PAGE       2U
+#define CROSS_CORE_CAMERA_SETTINGS_MAGIC            0x43414D31UL
+#define CROSS_CORE_CAMERA_SETTINGS_VERSION          1U
+#define CROSS_CORE_CAMERA_SETTINGS_CHECK_XOR        0xA5A55A5AUL
+#define CROSS_CORE_CAMERA_EXPOSURE_MIN              1U
+
 typedef struct
 {
     uint32 magic;
@@ -569,6 +575,51 @@ static uint8 s_control_binary_thresholds[VISION_BINARY_ZONE_COUNT] = {
     (uint8)VISION_BINARY_THRESHOLD_INNER,
     (uint8)VISION_BINARY_THRESHOLD_MIDDLE,
     (uint8)VISION_BINARY_THRESHOLD_OUTER};
+static uint16 s_control_exposure_time = MT9V03X_EXP_TIME_DEF;
+
+typedef struct
+{
+    uint32 magic;
+    uint16 version;
+    uint16 exposure_time;
+    uint32 checksum;
+} CrossCoreCameraSettingsRecord_t;
+
+static uint32 CrossCoreCamera_SettingsChecksum(
+    const CrossCoreCameraSettingsRecord_t *record)
+{
+    return record->magic ^
+           (((uint32)record->version << 16U) | (uint32)record->exposure_time) ^
+           CROSS_CORE_CAMERA_SETTINGS_CHECK_XOR;
+}
+
+static uint8 CrossCoreCamera_SettingsRecordValid(
+    const CrossCoreCameraSettingsRecord_t *record)
+{
+    if(record == NULL ||
+       record->magic != CROSS_CORE_CAMERA_SETTINGS_MAGIC ||
+       record->version != CROSS_CORE_CAMERA_SETTINGS_VERSION ||
+       record->exposure_time < CROSS_CORE_CAMERA_EXPOSURE_MIN)
+    {
+        return 0U;
+    }
+    return (uint8)(record->checksum ==
+                   CrossCoreCamera_SettingsChecksum(record));
+}
+
+static uint8 CrossCoreCamera_ReadSettings(
+    CrossCoreCameraSettingsRecord_t *record)
+{
+    if(record == NULL)
+    {
+        return 0U;
+    }
+    flash_read_page_to_buffer(
+        0U, CROSS_CORE_CAMERA_SETTINGS_FLASH_PAGE,
+        (sizeof(*record) + sizeof(uint32) - 1U) / sizeof(uint32));
+    memcpy(record, flash_union_buffer, sizeof(*record));
+    return CrossCoreCamera_SettingsRecordValid(record);
+}
 
 static void CrossCoreCamera_ControlCorePublishFrame(void)
 {
@@ -992,24 +1043,95 @@ void CrossCoreCamera_ControlCorePublishInput(float roll_deg,
 
 void CrossCoreCamera_ControlCoreSetBinaryThreshold(uint8 zone, uint8 threshold)
 {
-    if(zone >= VISION_BINARY_ZONE_COUNT)
+    uint8 index;
+    uint8 applied_threshold = (threshold == 0U) ? 1U : threshold;
+
+    (void)zone;
+    /* 当前按需轮廓链路只使用一个固定阈值。保留zone参数仅供旧调用兼容，
+     * 三个共享槽始终写成同一值，避免菜单显示值与实际识别值不一致。 */
+    for(index = 0U; index < VISION_BINARY_ZONE_COUNT; ++index)
     {
-        return;
+        s_control_binary_thresholds[index] = applied_threshold;
+        g_shared_vision_input->binary_thresholds[index] = applied_threshold;
     }
-    s_control_binary_thresholds[zone] = (threshold == 0U) ? 1U : threshold;
-    g_shared_vision_input->binary_thresholds[zone] =
-        s_control_binary_thresholds[zone];
     g_shared_vision_input->seq++;
     CrossCoreCamera_CleanInput();
 }
 
 uint8 CrossCoreCamera_ControlCoreGetBinaryThreshold(uint8 zone)
 {
-    if(zone >= VISION_BINARY_ZONE_COUNT)
+    (void)zone;
+    return s_control_binary_thresholds[VISION_BINARY_ZONE_MIDDLE];
+}
+
+void CrossCoreCamera_ControlCoreLoadExposureSetting(void)
+{
+    CrossCoreCameraSettingsRecord_t record;
+    uint16 exposure_time = MT9V03X_EXP_TIME_DEF;
+
+    if(CrossCoreCamera_ReadSettings(&record))
     {
-        zone = VISION_BINARY_ZONE_MIDDLE;
+        exposure_time = record.exposure_time;
     }
-    return s_control_binary_thresholds[zone];
+    if(mt9v03x_set_exposure_time(exposure_time) == 0U)
+    {
+        s_control_exposure_time = exposure_time;
+    }
+}
+
+uint8 CrossCoreCamera_ControlCoreSetExposureTime(uint16 exposure_time)
+{
+    uint8 result;
+
+    if(exposure_time < CROSS_CORE_CAMERA_EXPOSURE_MIN)
+    {
+        exposure_time = CROSS_CORE_CAMERA_EXPOSURE_MIN;
+    }
+    result = mt9v03x_set_exposure_time(exposure_time);
+    if(result == 0U)
+    {
+        s_control_exposure_time = exposure_time;
+    }
+    return result;
+}
+
+uint16 CrossCoreCamera_ControlCoreGetExposureTime(void)
+{
+    return s_control_exposure_time;
+}
+
+uint8 CrossCoreCamera_ControlCoreSaveExposureSetting(void)
+{
+    CrossCoreCameraSettingsRecord_t current_record;
+    CrossCoreCameraSettingsRecord_t write_record;
+
+    if(CrossCoreCamera_ReadSettings(&current_record) &&
+       current_record.exposure_time == s_control_exposure_time)
+    {
+        return 0U;
+    }
+
+    memset(&write_record, 0, sizeof(write_record));
+    write_record.magic = CROSS_CORE_CAMERA_SETTINGS_MAGIC;
+    write_record.version = CROSS_CORE_CAMERA_SETTINGS_VERSION;
+    write_record.exposure_time = s_control_exposure_time;
+    write_record.checksum = CrossCoreCamera_SettingsChecksum(&write_record);
+
+    memset(flash_union_buffer, 0xFF, sizeof(flash_union_buffer));
+    memcpy(flash_union_buffer, &write_record, sizeof(write_record));
+    flash_erase_page(0U, CROSS_CORE_CAMERA_SETTINGS_FLASH_PAGE);
+    if(flash_write_page_from_buffer(
+           0U, CROSS_CORE_CAMERA_SETTINGS_FLASH_PAGE,
+           (sizeof(write_record) + sizeof(uint32) - 1U) / sizeof(uint32)) != 0U)
+    {
+        return 1U;
+    }
+    if(!CrossCoreCamera_ReadSettings(&current_record) ||
+       current_record.exposure_time != s_control_exposure_time)
+    {
+        return 1U;
+    }
+    return 0U;
 }
 
 uint32 CrossCoreCamera_ControlCoreResultPending(void)

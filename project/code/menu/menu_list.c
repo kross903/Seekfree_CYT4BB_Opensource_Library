@@ -628,11 +628,17 @@ static void mt9v03x_adjust_page(void)
     if(!page_active)
     {
         page_active = 1U;
+        exposure_time = CrossCoreCamera_ControlCoreGetExposureTime();
+        set_result = 0U;
         key_flag = 0U;
     }
 
     if(key_flag == Button_4)
     {
+        if(!armed)
+        {
+            set_result = CrossCoreCamera_ControlCoreSaveExposureSetting();
+        }
         page_active = 0U;
         return;
     }
@@ -659,7 +665,7 @@ static void mt9v03x_adjust_page(void)
 
     if(next_exposure != exposure_time)
     {
-        set_result = mt9v03x_set_exposure_time(next_exposure);
+        set_result = CrossCoreCamera_ControlCoreSetExposureTime(next_exposure);
         if(set_result == 0U)
         {
             exposure_time = next_exposure;
@@ -691,24 +697,22 @@ static void mt9v03x_adjust_page(void)
     y = MT9V03X_ADJUST_HINT_Y;
     test_page_clear_line(y);
     ips200_set_color(RGB565_CYAN, RGB565_BLACK);
-    ips200_show_string(TEST_PAGE_X, y, "K1- K2+ K3 STEP K4 BACK");
+    ips200_show_string(TEST_PAGE_X, y, "K1- K2+ K3 STEP K4 SAVE");
     ips200_set_color(RGB565_WHITE, RGB565_BLACK);
 }
 
 static void binary_threshold_adjust_page(void)
 {
     static uint8 threshold = (uint8)VISION_BINARY_THRESHOLD_INNER;
-    static uint8 zone = VISION_BINARY_ZONE_INNER;
     static uint8 page_active = 0U;
     uint16 next_threshold = threshold;
     uint16 y;
-    const char *zone_text;
 
     if(!page_active)
     {
         page_active = 1U;
-        zone = VISION_BINARY_ZONE_INNER;
-        threshold = CrossCoreCamera_ControlCoreGetBinaryThreshold(zone);
+        threshold = CrossCoreCamera_ControlCoreGetBinaryThreshold(
+            VISION_BINARY_ZONE_MIDDLE);
         key_flag = 0U;
     }
     next_threshold = threshold;
@@ -735,16 +739,14 @@ static void binary_threshold_adjust_page(void)
     }
     else if(key_flag == Button_3)
     {
-        zone = (uint8)((zone + 1U) % VISION_BINARY_ZONE_COUNT);
-        threshold = CrossCoreCamera_ControlCoreGetBinaryThreshold(zone);
-        next_threshold = threshold;
+        /* 单阈值模式不再切换旧三圈，消费按键避免残留到菜单层。 */
         key_flag = 0U;
     }
-
     if(next_threshold != threshold)
     {
         threshold = (uint8)next_threshold;
-        CrossCoreCamera_ControlCoreSetBinaryThreshold(zone, threshold);
+        CrossCoreCamera_ControlCoreSetBinaryThreshold(
+            VISION_BINARY_ZONE_MIDDLE, threshold);
     }
 
     ips200_show_gray_image(0U, 0U, mt9v03x_image[0],
@@ -760,10 +762,8 @@ static void binary_threshold_adjust_page(void)
     y = BINARY_ADJUST_STEP_Y;
     test_page_clear_line(y);
     ips200_set_color(RGB565_WHITE, RGB565_BLACK);
-    zone_text = (zone == VISION_BINARY_ZONE_INNER) ? "INNER" :
-                ((zone == VISION_BINARY_ZONE_MIDDLE) ? "MIDDLE" : "OUTER");
-    ips200_show_string(TEST_PAGE_X, y, "ZONE:");
-    ips200_show_string(TEST_VALUE_X, y, zone_text);
+    ips200_show_string(TEST_PAGE_X, y, "MODE:");
+    ips200_show_string(TEST_VALUE_X, y, "SINGLE");
 
     y = BINARY_ADJUST_MODE_Y;
     test_page_clear_line(y);
@@ -773,7 +773,7 @@ static void binary_threshold_adjust_page(void)
     y = BINARY_ADJUST_HINT_Y;
     test_page_clear_line(y);
     ips200_set_color(RGB565_CYAN, RGB565_BLACK);
-    ips200_show_string(TEST_PAGE_X, y, "K1- K2+ K3 ZONE K4 BACK");
+    ips200_show_string(TEST_PAGE_X, y, "K1- K2+ K4 BACK");
     ips200_set_color(RGB565_WHITE, RGB565_BLACK);
 }
 

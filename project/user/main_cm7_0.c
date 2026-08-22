@@ -280,6 +280,7 @@ static void initialize_control_core_modules(void)
     core_link_init();
     core_link_user_init();
     flash_init();
+    CrossCoreCamera_ControlCoreLoadExposureSetting();
     Device_Init();
 
     VehicleMarkerLocalization_Init();
