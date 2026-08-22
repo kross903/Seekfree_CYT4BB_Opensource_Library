@@ -1216,7 +1216,7 @@ void VisionContourMatch_Process(const VisionContourFrameConfig_t *config,
         contour_search_around_seed(&config->seeds[i], config, result);
         if(result->candidate_count > before) ++result->seed_hits;
     }
-    if(config->force_global_search || result->beacon_count < 2U)
+    if(config->force_global_search || result->beacon_count < 0U)
     {
         contour_global_center_search(config, result);
     }
